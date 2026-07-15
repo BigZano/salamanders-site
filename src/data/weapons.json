@@ -1,0 +1,45 @@
+{
+  "categories": {
+    "primary": "Category:Primary Weapons",
+    "secondary": "Category:Secondary Weapons",
+    "melee": "Category:Melee Weapons"
+  },
+  "fallbackWeapons": {
+    "primary": [
+      "Auto Bolt Rifle",
+      "Bolt Rifle",
+      "Heavy Bolt Rifle",
+      "Stalker Bolt Rifle",
+      "Bolt Carbine",
+      "Instigator Bolt Carbine",
+      "Occulus Bolt Carbine",
+      "Bolt Sniper Rifle",
+      "Plasma Incinerator",
+      "Melta Rifle",
+      "Las Fusil",
+      "Pyreblaster",
+      "Heavy Bolter",
+      "Heavy Plasma Incinerator",
+      "Multi-Melta",
+      "Pyrecannon"
+    ],
+    "secondary": [
+      "Bolt Pistol",
+      "Heavy Bolt Pistol",
+      "Plasma Pistol",
+      "Inferno Pistol",
+      "Neo-Volkite Pistol",
+      "Bolt Carbine One-Handed"
+    ],
+    "melee": [
+      "Chainsword",
+      "Combat Knife",
+      "Power Fist",
+      "Power Sword",
+      "Thunder Hammer",
+      "Power Axe",
+      "Omnissiah Axe",
+      "Heavy Firearms Melee"
+    ]
+  }
+}

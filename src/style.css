@@ -1,0 +1,189 @@
+@import 'tailwindcss';
+
+/* ------------------------------------------------------------------ *
+ * Salamanders theme tokens — "cold armor, molten core"
+ * Palette carried over from the original planner + two ember hots.
+ * In Tailwind v4 these generate utilities: bg-obsidian, text-drake, etc.
+ * ------------------------------------------------------------------ */
+@theme {
+  --color-obsidian: #050a08;
+  --color-pitch: #07110d;
+  --color-basalt: #0b1511;
+  --color-basalt-2: #0e1c16;
+  --color-basalt-3: #111b18;
+  --color-ash: #26372f;
+  --color-ash-2: #3a5246;
+  --color-bone: #e8efe9;
+  --color-smoke: #96a59c;
+  --color-drake: #59d66c;
+  --color-drake-deep: #173c23;
+  --color-gold: #dfb85b;
+  --color-ember: #ff6a2b;
+  --color-magma: #e0431d;
+  --color-cobalt: #6cc4ef;
+  --color-violet: #bb82e0;
+
+  --font-display: 'Oswald Variable', 'Bahnschrift', 'DIN Condensed', 'Oswald',
+    'Arial Narrow', system-ui, sans-serif;
+  --font-sans: system-ui, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
+  --font-mono: 'Cascadia Code', 'Cascadia Mono', ui-monospace, Consolas, monospace;
+}
+
+/* ------------------------------------------------------------------ *
+ * Base
+ * ------------------------------------------------------------------ */
+@layer base {
+  :root {
+    color-scheme: dark;
+  }
+
+  html {
+    scroll-behavior: smooth;
+  }
+
+  body {
+    margin: 0;
+    min-height: 100svh;
+    overflow-x: hidden;
+    background: var(--color-obsidian);
+    color: var(--color-bone);
+    font-family: var(--font-sans);
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+    text-rendering: optimizeLegibility;
+  }
+
+  /* Ambient forge gradient behind everything — symmetric, so no side reads shadowed */
+  body::before {
+    content: '';
+    position: fixed;
+    inset: 0;
+    z-index: -1;
+    pointer-events: none;
+    background:
+      radial-gradient(120% 80% at 50% 118%, rgba(224, 67, 29, 0.13), transparent 60%),
+      radial-gradient(100% 70% at 50% -12%, rgba(89, 214, 108, 0.05), transparent 62%),
+      linear-gradient(180deg, var(--color-obsidian), var(--color-pitch));
+  }
+
+  ::selection {
+    background: rgba(255, 106, 43, 0.32);
+    color: var(--color-bone);
+  }
+
+  a {
+    color: inherit;
+    text-decoration: none;
+  }
+
+  :focus-visible {
+    outline: 2px solid var(--color-drake);
+    outline-offset: 2px;
+    border-radius: 2px;
+  }
+}
+
+/* ------------------------------------------------------------------ *
+ * Reusable theme utilities
+ * ------------------------------------------------------------------ */
+@layer components {
+  /* Display type: forged, uppercase, tight */
+  .font-forged {
+    font-family: var(--font-display);
+    text-transform: uppercase;
+    letter-spacing: 0.02em;
+    font-weight: 700;
+  }
+
+  /* Small technical eyebrow / data label */
+  .eyebrow {
+    font-family: var(--font-mono);
+    text-transform: uppercase;
+    letter-spacing: 0.32em;
+    font-size: 0.72rem;
+    color: var(--color-smoke);
+  }
+
+  /* Hairline forge divider */
+  .rule-forge {
+    height: 1px;
+    background: linear-gradient(
+      90deg,
+      transparent,
+      var(--color-ash-2),
+      var(--color-gold),
+      var(--color-ash-2),
+      transparent
+    );
+  }
+
+  /* Glass panel */
+  .panel-forge {
+    background: linear-gradient(180deg, rgba(14, 28, 22, 0.72), rgba(11, 21, 17, 0.72));
+    border: 1px solid var(--color-ash);
+    backdrop-filter: blur(6px);
+  }
+
+  /* Primary molten CTA */
+  .btn-ember {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.55rem;
+    font-family: var(--font-display);
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    font-weight: 700;
+    color: #1a0d06;
+    background: linear-gradient(180deg, #ffb066, var(--color-ember) 55%, var(--color-magma));
+    border: 1px solid rgba(255, 176, 102, 0.6);
+    box-shadow:
+      0 0 0 1px rgba(0, 0, 0, 0.3),
+      0 8px 30px -8px rgba(224, 67, 29, 0.7),
+      inset 0 1px 0 rgba(255, 255, 255, 0.35);
+    transition:
+      transform 0.15s ease,
+      box-shadow 0.25s ease,
+      filter 0.2s ease;
+  }
+  .btn-ember:hover {
+    transform: translateY(-1px);
+    filter: brightness(1.06);
+    box-shadow:
+      0 0 0 1px rgba(0, 0, 0, 0.3),
+      0 12px 40px -8px rgba(224, 67, 29, 0.85),
+      inset 0 1px 0 rgba(255, 255, 255, 0.45);
+  }
+  .btn-ember:active {
+    transform: translateY(0);
+  }
+
+  /* Secondary drake-outline button */
+  .btn-drake {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.5rem;
+    font-family: var(--font-display);
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    font-weight: 700;
+    color: var(--color-drake);
+    background: rgba(89, 214, 108, 0.06);
+    border: 1px solid rgba(89, 214, 108, 0.4);
+    transition:
+      background 0.2s ease,
+      border-color 0.2s ease;
+  }
+  .btn-drake:hover {
+    background: rgba(89, 214, 108, 0.12);
+    border-color: rgba(89, 214, 108, 0.7);
+  }
+}
+
+@layer utilities {
+  .text-emberglow {
+    text-shadow: 0 0 24px rgba(255, 106, 43, 0.45), 0 0 4px rgba(255, 106, 43, 0.5);
+  }
+  .text-drakeglow {
+    text-shadow: 0 0 22px rgba(89, 214, 108, 0.4);
+  }
+}

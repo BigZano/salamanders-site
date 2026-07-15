@@ -1,0 +1,393 @@
+{
+  "Tactical": {
+    "ability": "Auspex Scan",
+    "description": "A balanced frontline class built around accurate firepower and target amplification.",
+    "starting": "Any unequipped ranged weapon reloads automatically after 10 seconds.",
+    "weapons": {
+      "primary": [
+        "Auto Bolt Rifle",
+        "Bolt Rifle",
+        "Heavy Bolt Rifle",
+        "Stalker Bolt Rifle",
+        "Bolt Carbine",
+        "Plasma Incinerator",
+        "Melta Rifle",
+        "Pyreblaster"
+      ],
+      "secondary": [
+        "Bolt Pistol",
+        "Heavy Bolt Pistol",
+        "Plasma Pistol"
+      ],
+      "melee": [
+        "Combat Knife",
+        "Chainsword"
+      ]
+    },
+    "rows": [
+      [
+        "Balanced Distribution",
+        "Heightened Vigour",
+        "Emperor's Judgement",
+        "Secure Stockpile",
+        "Vital Data",
+        "Battle Focus",
+        "Close Targeting",
+        "Signal Jammer"
+      ],
+      [
+        "Plasma Boost",
+        "Relentless Pursuit",
+        "Steady Aim",
+        "Aligned Aim",
+        "Priority Targeting",
+        "Improved Efficiency",
+        "Expert Timing",
+        "Radiating Impact"
+      ],
+      [
+        "Kraken Penetrator Rounds",
+        "Versatility",
+        "Emperor's Vengeance",
+        "Transhuman Physiology",
+        "Target Lock",
+        "Precise Calibration",
+        "Concentrated Fire",
+        "Marked for Death"
+      ]
+    ]
+  },
+  "Assault": {
+    "ability": "Jump Pack",
+    "description": "A melee-focused shock class that uses powered leaps and dashes to engage or disengage rapidly.",
+    "starting": "Perfect Dodge timing increases by 50%.",
+    "weapons": {
+      "primary": [],
+      "secondary": [
+        "Bolt Pistol",
+        "Heavy Bolt Pistol",
+        "Plasma Pistol",
+        "Inferno Pistol",
+        "Neo-Volkite Pistol",
+        "Bolt Carbine One-Handed"
+      ],
+      "melee": [
+        "Chainsword",
+        "Thunder Hammer",
+        "Power Fist",
+        "Power Sword",
+        "Power Axe"
+      ]
+    },
+    "rows": [
+      [
+        "Winged Fury",
+        "Auxiliary Arsenal",
+        "Perseverance",
+        "Squad Cohesion",
+        "Smiting Angel",
+        "Wings of Flame",
+        "Pride in Duty",
+        "Ample Ammunition"
+      ],
+      [
+        "Overcharge",
+        "Defense Mechanism",
+        "Knowledge of the Enemy",
+        "Strategic Strikes",
+        "Strong Strikes",
+        "Manoeuvrability",
+        "Diligence",
+        "Ascension"
+      ],
+      [
+        "Armour Reinforcement",
+        "Consecutive Execution",
+        "Act of Attrition",
+        "Proven Efficiency",
+        "Precision Strike",
+        "Zealous Blow",
+        "Aerial Grace",
+        "Commitment"
+      ]
+    ]
+  },
+  "Vanguard": {
+    "ability": "Grapnel Launcher",
+    "description": "A high-mobility close-quarters class that uses the grapnel launcher to reach and eliminate priority targets.",
+    "starting": "Melee attacks restore 50% more Contested Health.",
+    "weapons": {
+      "primary": [
+        "Instigator Bolt Carbine",
+        "Bolt Carbine",
+        "Occulus Bolt Carbine",
+        "Melta Rifle"
+      ],
+      "secondary": [
+        "Bolt Pistol",
+        "Heavy Bolt Pistol",
+        "Inferno Pistol",
+        "Neo-Volkite Pistol"
+      ],
+      "melee": [
+        "Combat Knife",
+        "Chainsword",
+        "Power Axe"
+      ]
+    },
+    "rows": [
+      [
+        "Moving Target",
+        "Duellist",
+        "Retribution",
+        "Melee Champion",
+        "Restless Fortitude",
+        "Zone of Impact",
+        "Thrill of the Fight",
+        "Tactical Prowess"
+      ],
+      [
+        "Melee Mastery",
+        "Close-Combat Focus",
+        "Consecutive Execution",
+        "Unmatched Zeal",
+        "Shock Wave",
+        "Tenacity",
+        "Grim Determination",
+        "Emperor's Blessing"
+      ],
+      [
+        "Upper Hand",
+        "Conviction",
+        "Honed Reactions",
+        "Inner Fire",
+        "Collateral Damage",
+        "Tip of the Spear",
+        "Combat Readiness",
+        "Adrenaline Rush"
+      ]
+    ]
+  },
+  "Bulwark": {
+    "ability": "Chapter Banner",
+    "description": "A defensive melee class that protects the squad with a storm shield and armour-restoring banner.",
+    "starting": "Health increases by 30%.",
+    "weapons": {
+      "primary": [],
+      "secondary": [
+        "Bolt Pistol",
+        "Heavy Bolt Pistol",
+        "Plasma Pistol",
+        "Neo-Volkite Pistol",
+        "Bolt Carbine One-Handed"
+      ],
+      "melee": [
+        "Thunder Hammer",
+        "Chainsword",
+        "Power Fist",
+        "Power Sword",
+        "Power Axe"
+      ]
+    },
+    "rows": [
+      [
+        "Conviction",
+        "Armour of Contempt",
+        "Defensive Advantage",
+        "Focused Restoration",
+        "Purity of Purpose",
+        "Concussive Force",
+        "Rejuvenating Effect",
+        "Emergency Countermeasure"
+      ],
+      [
+        "Intimidating Aura",
+        "Shock and Awe",
+        "Steel Within",
+        "Advanced Conditioning",
+        "Rapid Regeneration",
+        "Glory's Shield",
+        "Merciless Resolve",
+        "Defensive Mastery"
+      ],
+      [
+        "Forward Momentum",
+        "Scrambled Targeting",
+        "Armour Reinforcement",
+        "Effective Formation",
+        "Focused Strength",
+        "Invigorating Icon",
+        "Inspiration",
+        "Armoured Advance"
+      ]
+    ]
+  },
+  "Sniper": {
+    "ability": "Camo Cloak",
+    "description": "A long-range precision specialist that uses camouflage to reposition and eliminate dangerous enemies.",
+    "starting": "Headshot Damage increases by 10%.",
+    "weapons": {
+      "primary": [
+        "Stalker Bolt Rifle",
+        "Instigator Bolt Carbine",
+        "Bolt Sniper Rifle",
+        "Bolt Carbine",
+        "Las Fusil"
+      ],
+      "secondary": [
+        "Bolt Pistol",
+        "Heavy Bolt Pistol",
+        "Inferno Pistol"
+      ],
+      "melee": [
+        "Combat Knife"
+      ]
+    },
+    "rows": [
+      [
+        "Block Break",
+        "High Capacity",
+        "Iron Grip",
+        "Marksmanship",
+        "Purification",
+        "Guardian Protocol",
+        "Persistence",
+        "Evasion"
+      ],
+      [
+        "Melee Mastery",
+        "Vantage Point",
+        "Dexterous Hands",
+        "Precision Targeting",
+        "Efficient Readiness",
+        "Targeted Shot",
+        "Lingering Concealment",
+        "Emergency Override"
+      ],
+      [
+        "Medicae Adept",
+        "Adaptability",
+        "Lethal Efficiency",
+        "Squad Renewal",
+        "Renewal",
+        "Tactical Ambush",
+        "Ambush",
+        "Pattern of Excellence"
+      ]
+    ]
+  },
+  "Heavy": {
+    "ability": "Iron Halo",
+    "description": "A heavy-firepower support class with crowd-control weapons and a barrier that blocks incoming ranged fire.",
+    "starting": "While Iron Halo is active, squad members within 50 metres take 10% less ranged damage.",
+    "weapons": {
+      "primary": [
+        "Heavy Bolt Rifle",
+        "Heavy Bolter",
+        "Heavy Plasma Incinerator",
+        "Multi-Melta",
+        "Pyrecannon"
+      ],
+      "secondary": [
+        "Bolt Pistol",
+        "Heavy Bolt Pistol",
+        "Plasma Pistol",
+        "Inferno Pistol"
+      ],
+      "melee": [
+        "Heavy Firearms Melee"
+      ]
+    },
+    "rows": [
+      [
+        "Restoration",
+        "Thermal Boost",
+        "Enhanced Force",
+        "Encompassing Aegis",
+        "Adamant Will",
+        "Obdurate Bastion",
+        "Saving Grace",
+        "Offensive Capability"
+      ],
+      [
+        "Multi-Kill",
+        "Fortitude",
+        "Overwhelming Power",
+        "Additional Supplies",
+        "Consecutive Execution",
+        "Field Adjustment",
+        "Brute Force",
+        "Coolant Reserve"
+      ],
+      [
+        "Auxiliary Ammunition",
+        "Strategic Stand",
+        "Versatility",
+        "Bonds of Brotherhood",
+        "Emperor's Protection",
+        "Power Regulator",
+        "Wrath of the Imperium",
+        "Conversion Field"
+      ]
+    ]
+  },
+  "Techmarine": {
+    "ability": "Servo-Gun",
+    "description": "A zone-control specialist with automated servo weaponry and the ability to activate Tarantula Sentry Guns.",
+    "starting": "The current wiki page does not list a separate starting perk.",
+    "weapons": {
+      "primary": [
+        "Auto Bolt Rifle",
+        "Bolt Rifle",
+        "Heavy Bolt Rifle",
+        "Plasma Incinerator",
+        "Occulus Bolt Carbine"
+      ],
+      "secondary": [
+        "Bolt Pistol",
+        "Heavy Bolt Pistol",
+        "Plasma Pistol",
+        "Inferno Pistol",
+        "Neo-Volkite Pistol"
+      ],
+      "melee": [
+        "Combat Knife",
+        "Power Sword",
+        "Power Axe",
+        "Omnissiah Axe"
+      ]
+    },
+    "rows": [
+      [
+        "Explosive Enfilade",
+        "Arc Cleave",
+        "Explosives Adept",
+        "Reinforced Position",
+        "Designated Target",
+        "Augmented Ammunition Feed",
+        "Counteroffensive Protocols",
+        "Decapitating Stratagem"
+      ],
+      [
+        "Precision Enhancement",
+        "Methodical Destruction",
+        "Push the Advantage",
+        "Battlefield Repairs",
+        "Inexorable Salvo",
+        "Augmented Tarantula",
+        "Fortifying Salvo",
+        "Lethal Perimeter"
+      ],
+      [
+        "Plasma Enhancement",
+        "Omnissian Axe Deflection",
+        "Long-Range Barrage",
+        "Combat Squad Resupply",
+        "Synergistic Arsenal",
+        "Replenishing Salvo",
+        "Strategic Gun Strike",
+        "Omnissiah's Fury"
+      ]
+    ]
+  }
+}
