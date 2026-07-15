@@ -1,19 +1,7 @@
 <script setup>
-import { computed } from 'vue'
-import classes from '../data/classes.json'
+import builds from '../data/builds.json'
 
-// Rough starter loadouts derived from class data. Placeholders for the
-// Chapter to curate — flagged clearly so admins comment, not take as final.
-const builds = computed(() =>
-  Object.entries(classes).map(([name, c]) => ({
-    name,
-    ability: c.ability,
-    primary: c.weapons.primary?.[0] || '—',
-    secondary: c.weapons.secondary?.[0] || '—',
-    melee: c.weapons.melee?.[0] || '—',
-    perks: [c.rows?.[0]?.[0], c.rows?.[1]?.[0], c.rows?.[2]?.[0]].filter(Boolean),
-  })),
-)
+const DISCORD = 'https://discord.gg/salamanders'
 </script>
 
 <template>
@@ -22,33 +10,46 @@ const builds = computed(() =>
       <p class="eyebrow">Field-tested</p>
       <h1 class="b-title">Recommended Builds</h1>
       <p class="b-intro">
-        Starter loadouts, one per class. These are
-        <strong class="draft-word">draft templates</strong> auto-filled from class data —
-        for the Chapter to review and replace with real recommendations.
+        Loadouts the Chapter runs on the hardest difficulties.
       </p>
     </header>
 
-    <div class="b-grid">
-      <article v-for="b in builds" :key="b.name" class="b-card panel-forge">
+    <!-- Populated builds -->
+    <div v-if="builds.length" class="b-grid">
+      <article v-for="b in builds" :key="b.id" class="b-card panel-forge">
         <div class="b-card-top">
-          <h2 class="b-name">{{ b.name }}</h2>
-          <span class="b-tag">Draft</span>
+          <h2 class="b-name">{{ b.title }}</h2>
+          <span v-if="b.class" class="b-class">{{ b.class }}</span>
         </div>
-        <p class="b-ability">{{ b.ability }}</p>
+        <p v-if="b.author" class="b-author">by {{ b.author }}</p>
 
-        <dl class="b-load">
-          <div><dt>Primary</dt><dd>{{ b.primary }}</dd></div>
-          <div><dt>Secondary</dt><dd>{{ b.secondary }}</dd></div>
-          <div><dt>Melee</dt><dd>{{ b.melee }}</dd></div>
+        <dl v-if="b.primary || b.secondary || b.melee" class="b-load">
+          <div v-if="b.primary"><dt>Primary</dt><dd>{{ b.primary }}</dd></div>
+          <div v-if="b.secondary"><dt>Secondary</dt><dd>{{ b.secondary }}</dd></div>
+          <div v-if="b.melee"><dt>Melee</dt><dd>{{ b.melee }}</dd></div>
         </dl>
 
-        <p class="b-perks-k">Key perks</p>
-        <div class="b-perks">
+        <div v-if="b.perks?.length" class="b-perks">
           <span v-for="p in b.perks" :key="p" class="b-perk">{{ p }}</span>
         </div>
 
-        <RouterLink to="/planner" class="b-edit">Open in builder →</RouterLink>
+        <p v-if="b.notes" class="b-notes">{{ b.notes }}</p>
       </article>
+    </div>
+
+    <!-- Empty state -->
+    <div v-else class="b-empty panel-forge">
+      <div class="b-empty-mark" aria-hidden="true">
+        <span /><span /><span />
+      </div>
+      <h2 class="b-empty-title">No builds forged yet</h2>
+      <p class="b-empty-body">
+        The Chapter's builds live in our Discord. Once we migrate them, they'll appear
+        here — searchable, by class, with weapons and perks.
+      </p>
+      <a class="btn-ember b-empty-cta" :href="DISCORD" target="_blank" rel="noopener">
+        Find builds in Discord
+      </a>
     </div>
   </section>
 </template>
@@ -72,10 +73,6 @@ const builds = computed(() =>
   max-width: 58ch;
   line-height: 1.6;
 }
-.draft-word {
-  color: var(--color-gold);
-  font-weight: 600;
-}
 
 .b-grid {
   display: grid;
@@ -93,31 +90,34 @@ const builds = computed(() =>
   display: flex;
   align-items: center;
   justify-content: space-between;
+  gap: 0.6rem;
 }
 .b-name {
   font-family: var(--font-display);
   text-transform: uppercase;
   font-weight: 700;
-  font-size: 1.35rem;
-  color: var(--color-drake);
+  font-size: 1.25rem;
+  color: var(--color-bone);
+  line-height: 1.1;
 }
-.b-tag {
+.b-class {
+  flex: none;
   font-family: var(--font-mono);
   text-transform: uppercase;
-  letter-spacing: 0.14em;
-  font-size: 0.58rem;
-  color: var(--color-gold);
-  border: 1px solid rgba(223, 184, 91, 0.4);
+  letter-spacing: 0.1em;
+  font-size: 0.6rem;
+  color: var(--color-drake);
+  border: 1px solid rgba(89, 214, 108, 0.35);
   border-radius: 2px;
   padding: 2px 6px;
 }
-.b-ability {
+.b-author {
   color: var(--color-smoke);
-  font-size: 0.85rem;
-  margin: 0.3rem 0 1rem;
+  font-size: 0.82rem;
+  margin: 0.3rem 0 0.9rem;
 }
 .b-load {
-  margin: 0 0 1rem;
+  margin: 0 0 0.9rem;
   display: grid;
   gap: 0.4rem;
 }
@@ -141,20 +141,10 @@ const builds = computed(() =>
   color: var(--color-bone);
   text-align: right;
 }
-.b-perks-k {
-  font-family: var(--font-mono);
-  text-transform: uppercase;
-  letter-spacing: 0.16em;
-  font-size: 0.6rem;
-  color: var(--color-gold);
-  margin-bottom: 0.5rem;
-}
 .b-perks {
   display: flex;
   flex-wrap: wrap;
   gap: 0.35rem;
-  flex-grow: 1;
-  align-content: flex-start;
 }
 .b-perk {
   font-size: 0.74rem;
@@ -164,12 +154,54 @@ const builds = computed(() =>
   border-radius: 2px;
   padding: 0.2rem 0.5rem;
 }
-.b-edit {
-  margin-top: 1.1rem;
+.b-notes {
+  color: var(--color-smoke);
+  font-size: 0.85rem;
+  line-height: 1.5;
+  margin-top: 0.8rem;
+}
+
+/* Empty state */
+.b-empty {
+  margin-top: 2.5rem;
+  border-radius: 8px;
+  padding: 3.5rem 1.5rem;
+  text-align: center;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+}
+.b-empty-mark {
+  display: flex;
+  gap: 0.5rem;
+  margin-bottom: 1.4rem;
+}
+.b-empty-mark span {
+  width: 9px;
+  height: 9px;
+  transform: rotate(45deg);
+  background: linear-gradient(180deg, #ffb066, #ff6a2b);
+  box-shadow: 0 0 12px rgba(255, 106, 43, 0.6);
+  opacity: 0.5;
+}
+.b-empty-mark span:nth-child(2) {
+  opacity: 1;
+}
+.b-empty-title {
   font-family: var(--font-display);
   text-transform: uppercase;
-  letter-spacing: 0.06em;
-  font-size: 0.78rem;
-  color: var(--color-drake);
+  font-weight: 700;
+  font-size: 1.6rem;
+  color: var(--color-bone);
+}
+.b-empty-body {
+  color: var(--color-smoke);
+  max-width: 42ch;
+  line-height: 1.6;
+  margin: 0.6rem 0 1.6rem;
+}
+.b-empty-cta {
+  padding: 0.85rem 1.5rem;
+  border-radius: 2px;
 }
 </style>
