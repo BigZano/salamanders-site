@@ -37,6 +37,10 @@ export const usePlanner = defineStore('planner', {
     weapons: {},
     // saved "recommended" builds (personal library, like the original)
     savedBuilds: [],
+    // weapon perk-tree selections: { [weapon]: { [perkId]: true } }
+    weaponPerks: {},
+    // per-weapon point budgets: { [weapon]: number }
+    weaponBudgets: {},
   }),
 
   getters: {
@@ -131,6 +135,32 @@ export const usePlanner = defineStore('planner', {
       this.persist()
     },
 
+    // ---- weapon perk trees ----
+    weaponBudget(weapon, fallback = 10) {
+      return this.weaponBudgets[weapon] ?? fallback
+    },
+    weaponUsed(weapon) {
+      return Object.keys(this.weaponPerks[weapon] || {}).length
+    },
+    toggleWeaponPerk(weapon, perkId, budget = 10) {
+      this.weaponPerks[weapon] ??= {}
+      const sel = this.weaponPerks[weapon]
+      if (sel[perkId]) {
+        delete sel[perkId]
+      } else if (Object.keys(sel).length < this.weaponBudget(weapon, budget)) {
+        sel[perkId] = true
+      }
+      this.persist()
+    },
+    setWeaponBudget(weapon, n) {
+      this.weaponBudgets[weapon] = Math.max(1, Math.min(40, Number(n) || 1))
+      this.persist()
+    },
+    resetWeaponTree(weapon) {
+      delete this.weaponPerks[weapon]
+      this.persist()
+    },
+
     // ---- persistence + share ----
     persist() {
       try {
@@ -142,6 +172,8 @@ export const usePlanner = defineStore('planner', {
             selectedPerks: this.selectedPerks,
             weapons: this.weapons,
             savedBuilds: this.savedBuilds,
+            weaponPerks: this.weaponPerks,
+            weaponBudgets: this.weaponBudgets,
           }),
         )
       } catch {}
