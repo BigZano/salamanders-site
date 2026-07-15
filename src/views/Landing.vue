@@ -12,13 +12,13 @@ const ops = [
     to: '/armoury',
     kite: 'Wargear',
     title: 'Weapon Armoury',
-    body: 'Primary, secondary and melee weapon trees with full perk paths.',
+    body: 'Every weapon by slot — primary, secondary, melee — and the classes that bear it.',
   },
   {
     to: '/builds',
     kite: 'Field-tested',
     title: 'Recommended Builds',
-    body: 'Curated loadouts the Chapter runs on Ruthless and Lethal.',
+    body: 'Save your class loadouts, then apply or share them in a click.',
   },
   {
     to: '/companies',

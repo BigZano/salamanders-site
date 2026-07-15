@@ -35,6 +35,8 @@ export const usePlanner = defineStore('planner', {
     selectedPerks: {},
     // { [className]: { primary, secondary, melee } }
     weapons: {},
+    // saved "recommended" builds (personal library, like the original)
+    savedBuilds: [],
   }),
 
   getters: {
@@ -98,6 +100,37 @@ export const usePlanner = defineStore('planner', {
       this.persist()
     },
 
+    // ---- saved builds library ----
+    saveBuild({ title, role, notes } = {}) {
+      const b = this.build
+      this.savedBuilds.unshift({
+        id: Date.now(),
+        title: (title || '').trim() || `${b.className} Build`,
+        role: (role || '').trim(),
+        notes: (notes || '').trim(),
+        className: this.activeClass,
+        level: this.level,
+        perks: b.slots.map((s) => s.name),
+        perkIds: { ...(this.selectedPerks[this.activeClass] || {}) },
+        weapons: { ...(this.weapons[this.activeClass] || {}) },
+      })
+      this.persist()
+    },
+    applyBuild(id) {
+      const r = this.savedBuilds.find((x) => x.id === id)
+      if (!r) return
+      this.activeClass = r.className
+      this.level = r.level
+      this.selectedPerks[r.className] = { ...r.perkIds }
+      this.weapons[r.className] = { ...r.weapons }
+      this.enforceLevel()
+      this.persist()
+    },
+    deleteBuild(id) {
+      this.savedBuilds = this.savedBuilds.filter((x) => x.id !== id)
+      this.persist()
+    },
+
     // ---- persistence + share ----
     persist() {
       try {
@@ -108,6 +141,7 @@ export const usePlanner = defineStore('planner', {
             level: this.level,
             selectedPerks: this.selectedPerks,
             weapons: this.weapons,
+            savedBuilds: this.savedBuilds,
           }),
         )
       } catch {}

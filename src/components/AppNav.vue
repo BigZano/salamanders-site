@@ -36,7 +36,7 @@ watch(
           :key="l.to"
           :to="l.to"
           class="nav-link"
-          active-class="is-active"
+          exact-active-class="is-active"
         >
           {{ l.label }}
         </RouterLink>
@@ -65,7 +65,7 @@ watch(
           :key="l.to"
           :to="l.to"
           class="nav-mobile-link"
-          active-class="is-active"
+          exact-active-class="is-active"
         >
           {{ l.label }}
         </RouterLink>
@@ -131,6 +131,7 @@ watch(
   gap: 0.35rem;
 }
 .nav-link {
+  position: relative;
   font-family: var(--font-display);
   text-transform: uppercase;
   letter-spacing: 0.08em;
@@ -146,6 +147,16 @@ watch(
 }
 .nav-link.is-active {
   color: var(--color-drake);
+}
+.nav-link.is-active::after {
+  content: '';
+  position: absolute;
+  left: 0.7rem;
+  right: 0.7rem;
+  bottom: -0.2rem;
+  height: 2px;
+  background: var(--color-ember);
+  box-shadow: 0 0 8px rgba(255, 106, 43, 0.6);
 }
 .nav-cta {
   padding: 0.5rem 1.1rem;

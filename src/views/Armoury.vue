@@ -9,15 +9,18 @@ const cats = [
   { key: 'melee', label: 'Melee' },
 ]
 const active = ref('primary')
+const q = ref('')
 
 const classNames = Object.keys(classes)
 
-// weapon -> [classes that can equip it] for the active category
+// weapon -> [classes that can equip it] for the active category, filtered by search
 const list = computed(() =>
-  weapons.fallbackWeapons[active.value].map((w) => ({
-    name: w,
-    users: classNames.filter((c) => classes[c].weapons[active.value]?.includes(w)),
-  })),
+  weapons.fallbackWeapons[active.value]
+    .filter((w) => w.toLowerCase().includes(q.value.trim().toLowerCase()))
+    .map((w) => ({
+      name: w,
+      users: classNames.filter((c) => classes[c].weapons[active.value]?.includes(w)),
+    })),
 )
 </script>
 
@@ -27,10 +30,17 @@ const list = computed(() =>
       <p class="eyebrow">Wargear</p>
       <h1 class="a-title">Weapon Armoury</h1>
       <p class="a-intro">
-        Every weapon of the Chapter, by slot, and the classes that bear it. Full perk
-        trees land in a later pass.
+        Every weapon of the Chapter, by slot, and the classes that bear it.
       </p>
     </header>
+
+    <input
+      v-model="q"
+      class="w-search"
+      type="search"
+      placeholder="Search weapons…"
+      aria-label="Search weapons"
+    />
 
     <div class="catbar" role="tablist" aria-label="Weapon categories">
       <button
@@ -62,6 +72,13 @@ const list = computed(() =>
         <p v-else class="w-users-none">No class in the current data</p>
       </article>
     </div>
+
+    <p v-if="!list.length" class="w-empty">No weapons match “{{ q }}”.</p>
+
+    <p class="w-note">
+      <span class="w-note-dot" /> Per-weapon perk trees — quality tiers, point budgets and
+      node paths — sync from the game wiki. That build is next.
+    </p>
   </section>
 </template>
 
@@ -83,6 +100,43 @@ const list = computed(() =>
   color: var(--color-smoke);
   max-width: 54ch;
   line-height: 1.6;
+}
+.w-search {
+  margin-top: 1.4rem;
+  width: 100%;
+  max-width: 24rem;
+  padding: 0.65rem 1rem;
+  background: rgba(14, 28, 22, 0.6);
+  border: 1px solid var(--color-ash);
+  border-radius: 3px;
+  color: var(--color-bone);
+  font-size: 0.95rem;
+}
+.w-search::placeholder {
+  color: #5f6f66;
+}
+.w-empty {
+  color: var(--color-smoke);
+  padding: 1.5rem 0;
+}
+.w-note {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  margin-top: 1.5rem;
+  padding-top: 1.2rem;
+  border-top: 1px solid var(--color-ash);
+  color: var(--color-smoke);
+  font-size: 0.85rem;
+  line-height: 1.5;
+}
+.w-note-dot {
+  flex: none;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--color-gold);
+  box-shadow: 0 0 8px rgba(223, 184, 91, 0.6);
 }
 
 .catbar {
