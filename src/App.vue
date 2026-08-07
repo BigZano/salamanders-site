@@ -9,11 +9,14 @@ const year = new Date().getFullYear()
   <AppNav />
 
   <main>
-    <RouterView v-slot="{ Component }">
-      <transition name="fade" mode="out-in">
-        <component :is="Component" />
-      </transition>
-    </RouterView>
+    <!--
+      No <Transition> around the view. `mode="out-in"` deadlocked here: on a cold
+      load of a lazy route the outgoing child is a comment placeholder that never
+      fires a transition end, so the incoming view never mounted (every route but
+      "/" rendered blank). The enter animation below gives the same feel with no
+      dependency on a leave completing.
+    -->
+    <RouterView />
   </main>
 
   <footer class="site-footer">
@@ -41,6 +44,17 @@ const year = new Date().getFullYear()
 <style scoped>
 main {
   min-height: 60svh;
+}
+/* Route enter animation — replaces the old RouterView transition. Each route's
+   root element is a fresh node, so this replays on every navigation. */
+main > * {
+  animation: view-in 0.22s ease-out both;
+}
+@keyframes view-in {
+  from {
+    opacity: 0;
+    transform: translateY(6px);
+  }
 }
 .site-footer {
   margin-top: 4rem;
@@ -95,18 +109,9 @@ main {
   line-height: 1.5;
 }
 
-.fade-enter-active,
-.fade-leave-active {
-  transition: opacity 0.18s ease;
-}
-.fade-enter-from,
-.fade-leave-to {
-  opacity: 0;
-}
 @media (prefers-reduced-motion: reduce) {
-  .fade-enter-active,
-  .fade-leave-active {
-    transition: none;
+  main > * {
+    animation: none;
   }
 }
 </style>

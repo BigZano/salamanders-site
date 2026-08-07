@@ -30,22 +30,25 @@ const ops = [
 </script>
 
 <template>
-  <HeroForge />
+  <!-- Single root: a multi-root view can't be animated or transitioned by App.vue. -->
+  <div class="landing">
+    <HeroForge />
 
-  <section class="ops">
-    <div class="ops-head">
-      <p class="eyebrow">Operations Planner</p>
-      <h2 class="ops-title">Muster the Chapter</h2>
-    </div>
-    <div class="ops-grid">
-      <RouterLink v-for="o in ops" :key="o.to" :to="o.to" class="ops-card panel-forge">
-        <p class="ops-kite">{{ o.kite }}</p>
-        <h3 class="ops-card-title">{{ o.title }}</h3>
-        <p class="ops-body">{{ o.body }}</p>
-        <span class="ops-go">Enter →</span>
-      </RouterLink>
-    </div>
-  </section>
+    <section class="ops">
+      <div class="ops-head">
+        <p class="eyebrow">Operations Planner</p>
+        <h2 class="ops-title">Muster the Chapter</h2>
+      </div>
+      <div class="ops-grid">
+        <RouterLink v-for="o in ops" :key="o.to" :to="o.to" class="ops-card panel-forge">
+          <p class="ops-kite">{{ o.kite }}</p>
+          <h3 class="ops-card-title">{{ o.title }}</h3>
+          <p class="ops-body">{{ o.body }}</p>
+          <span class="ops-go">Enter →</span>
+        </RouterLink>
+      </div>
+    </section>
+  </div>
 </template>
 
 <style scoped>

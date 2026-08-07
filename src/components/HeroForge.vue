@@ -45,23 +45,55 @@ const DISCORD = 'https://discord.gg/salamanders'
 .hero-inner {
   position: relative;
   z-index: 2;
-  max-width: 60rem;
+  /* Wide enough that the wordmark never reaches the edge. At 60rem the glyphs
+     measured 997px inside a 960px box and .hero's overflow:hidden clipped the
+     final S. */
+  max-width: 68rem;
   width: 100%;
 }
 .wordmark {
   font-family: var(--font-display);
   text-transform: uppercase;
   font-weight: 700;
-  line-height: 0.9;
+  line-height: 0.95;
   letter-spacing: 0.02em;
-  font-size: clamp(3.4rem, 14vw, 10rem);
+  /* Capped so 11 glyphs + tracking stay inside .hero-inner at every width. */
+  font-size: clamp(2.5rem, 12.5vw, 9.5rem);
   margin: 0.6rem 0 0;
-  background: linear-gradient(180deg, #fff2e0 0%, #ffd6a0 40%, #ff8a3d 100%);
+
+  /* Embers drifting up through the letterforms. The gradient stack is clipped
+     to the text, so the fire only ever shows inside the glyphs. */
+  background-image:
+    radial-gradient(closest-side circle at 22% 80%, rgba(255, 226, 176, 0.95), rgba(255, 138, 61, 0) 70%),
+    radial-gradient(closest-side circle at 70% 45%, rgba(255, 186, 102, 0.9), rgba(255, 106, 43, 0) 72%),
+    radial-gradient(closest-side circle at 44% 18%, rgba(255, 130, 55, 0.85), rgba(224, 67, 29, 0) 75%),
+    radial-gradient(closest-side circle at 86% 70%, rgba(255, 205, 140, 0.8), rgba(255, 106, 43, 0) 70%),
+    linear-gradient(180deg, #fff2e0 0%, #ffd6a0 40%, #ff8a3d 100%);
+  background-size:
+    240px 300px,
+    330px 430px,
+    190px 250px,
+    280px 360px,
+    100% 100%;
+  background-repeat: repeat, repeat, repeat, repeat, no-repeat;
   -webkit-background-clip: text;
   background-clip: text;
   color: transparent;
   /* drop-shadow (not text-shadow) — clean glow on gradient-clipped text */
   filter: drop-shadow(0 0 26px rgba(255, 106, 43, 0.28));
+  animation: ember-flow 11s linear infinite;
+}
+/* Each layer travels exactly one tile height, so the loop is seamless; the
+   differing tile sizes make them drift at different speeds. */
+@keyframes ember-flow {
+  to {
+    background-position:
+      14px -300px,
+      -20px -430px,
+      8px -250px,
+      -12px -360px,
+      0 0;
+  }
 }
 .ember-rule {
   display: flex;
@@ -110,6 +142,12 @@ const DISCORD = 'https://discord.gg/salamanders'
 @media (max-width: 768px) {
   .hero {
     padding: 5rem 1.25rem 3rem;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .wordmark {
+    animation: none;
   }
 }
 </style>

@@ -1,7 +1,8 @@
 <script setup>
 import { ref, computed, onMounted } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { usePlanner, CLASS_NAMES } from '../stores/planner'
+import { usePlanner, CLASS_NAMES, describePerk, MAX_PRESTIGE } from '../stores/planner'
+import WeaponSlot from '../components/WeaponSlot.vue'
 
 const planner = usePlanner()
 const route = useRoute()
@@ -26,6 +27,29 @@ function inspect(perk) {
   inspected.value = perk
 }
 const detail = computed(() => inspected.value)
+const detailText = computed(() =>
+  detail.value ? describePerk(planner.activeClass, detail.value.name) : '',
+)
+const prestigeRanks = Array.from({ length: MAX_PRESTIGE + 1 }, (_, i) => i)
+const ROMAN = { 1: 'I', 2: 'II', 3: 'III', 4: 'IV' }
+
+// Save-to-library, inline in the build panel.
+const saveDetails = ref(false)
+const saveForm = ref({ title: '', role: '', notes: '' })
+
+function submitSave() {
+  planner.saveBuild(saveForm.value)
+  const name = saveForm.value.title.trim() || `${planner.activeClass} Build`
+  saveForm.value = { title: '', role: '', notes: '' }
+  saveDetails.value = false
+  flash(`Saved “${name}” to your library`)
+}
+
+// Weapon perks picked for the weapon currently in a given slot.
+function weaponPerkCount(slotKey) {
+  const w = planner.activeWeapons[slotKey]
+  return w ? planner.weaponUsed(w) : 0
+}
 
 const isSelected = (perk) => planner.selected[perk.col] === perk.name
 
@@ -115,18 +139,11 @@ onMounted(() => {
             <option v-for="l in levels" :key="l" :value="l">{{ l }}</option>
           </select>
         </label>
-        <label v-for="s in slots" :key="s.key" class="field">
-          <span>{{ s.label }}</span>
-          <select
-            :value="planner.activeWeapons[s.key] || ''"
-            :disabled="!planner.meta.weapons[s.key]?.length"
-            @change="planner.setWeapon(s.key, $event.target.value)"
-          >
-            <option value="">
-              {{ planner.meta.weapons[s.key]?.length ? 'None selected' : 'Not available' }}
-            </option>
-            <option v-for="w in planner.meta.weapons[s.key] || []" :key="w" :value="w">
-              {{ w }}
+        <label class="field">
+          <span>Prestige rank</span>
+          <select :value="planner.activePrestige" @change="planner.setPrestige($event.target.value)">
+            <option v-for="r in prestigeRanks" :key="r" :value="r">
+              {{ r === 0 ? 'Not prestiged' : `Prestige ${r}` }}
             </option>
           </select>
         </label>
@@ -142,6 +159,7 @@ onMounted(() => {
               v-for="c in planner.columns"
               :key="c.col"
               class="perk-col"
+              :class="{ picked: !!planner.selected[c.col] }"
               :data-cat="c.cat"
             >
               <div class="perk-col-head">{{ c.head }}</div>
@@ -158,11 +176,11 @@ onMounted(() => {
                   @focus="inspect(perk)"
                 >
                   <span v-if="perk.level > planner.level" class="lock">LV {{ perk.level }}</span>
+                  <span v-if="isSelected(perk)" class="pick-mark" aria-hidden="true" />
                   <span class="perk-icon">{{ initials(perk.name) }}</span>
                   <span class="perk-name">{{ perk.name }}</span>
                 </button>
               </div>
-              <div class="col-level">First unlock<strong>{{ 2 + c.col }}</strong></div>
             </section>
           </div>
         </div>
@@ -176,9 +194,9 @@ onMounted(() => {
               {{ CAT_LABEL[detail.col] }} perk · Column {{ detail.col + 1 }} · Unlocks at level
               {{ detail.level }}
             </p>
-            <p class="detail-note">
-              Tap to slot it into your build. Full perk descriptions come from the wiki in a
-              later pass.
+            <p v-if="detailText" class="detail-note">{{ detailText }}</p>
+            <p v-else class="detail-note detail-note-empty">
+              No description on the wiki yet. Re-run the perk bake after the next patch.
             </p>
           </div>
         </div>
@@ -205,10 +223,66 @@ onMounted(() => {
         <div class="build-summary">
           <p class="bs-line"><strong>{{ planner.build.ability }}</strong></p>
           <p class="bs-line">Starting: {{ planner.build.starting }}</p>
-          <p class="bs-line">Primary: {{ planner.build.weapons.primary || '—' }}</p>
-          <p class="bs-line">Secondary: {{ planner.build.weapons.secondary || '—' }}</p>
-          <p class="bs-line">Melee: {{ planner.build.weapons.melee || '—' }}</p>
+          <p v-if="planner.activePrestige" class="bs-line">
+            Prestige {{ planner.activePrestige }} ·
+            {{ planner.activePrestigePicks.length }}/{{ planner.activePrestige }} perks
+          </p>
+          <p v-if="planner.activePrestigePicks.length" class="bs-line bs-picks">
+            {{ planner.activePrestigePicks.join(', ') }}
+          </p>
         </div>
+
+        <div class="build-gear">
+          <div v-for="s in slots" :key="s.key" class="bg-row">
+            <span class="bg-slot">{{ s.label.replace(' Weapon', '') }}</span>
+            <span class="bg-name" :class="{ empty: !planner.build.weapons[s.key] }">
+              {{ planner.build.weapons[s.key] || 'None selected' }}
+            </span>
+            <span v-if="weaponPerkCount(s.key)" class="bg-pts">
+              +{{ weaponPerkCount(s.key) }}
+            </span>
+          </div>
+        </div>
+
+        <!-- Save where the build is made. Name stays visible so it's obvious the
+             build gets a name, rather than hiding behind the button. -->
+        <form class="save" @submit.prevent="submitSave">
+          <label class="save-label" for="build-name">Build name</label>
+          <input
+            id="build-name"
+            v-model="saveForm.title"
+            class="fld"
+            type="text"
+            :placeholder="`${planner.activeClass} build`"
+          />
+
+          <button
+            v-if="!saveDetails"
+            type="button"
+            class="save-more"
+            @click="saveDetails = true"
+          >
+            + Add role and notes
+          </button>
+          <template v-else>
+            <input
+              v-model="saveForm.role"
+              class="fld"
+              type="text"
+              placeholder="Role (e.g. Frontline)"
+              aria-label="Role"
+            />
+            <textarea
+              v-model="saveForm.notes"
+              class="fld"
+              rows="2"
+              placeholder="Notes — how it plays, when to use it"
+              aria-label="Notes"
+            />
+          </template>
+
+          <button type="submit" class="btn-ember btn-sm save-go">Save to library</button>
+        </form>
 
         <div class="build-actions">
           <button class="btn-drake btn-sm" @click="copyBuild">Copy build</button>
@@ -217,6 +291,87 @@ onMounted(() => {
         </div>
       </aside>
     </div>
+
+    <!-- Loadout: weapons and their perk trees, so a build is complete in one place. -->
+    <section class="loadout">
+      <div class="lo-head">
+        <div>
+          <p class="eyebrow">Wargear</p>
+          <h2 class="lo-title">Loadout</h2>
+        </div>
+        <p class="lo-note">
+          Pick a weapon per slot, then open its tree to spend perk points. Trees come from
+          the wiki and are cached for a day.
+        </p>
+      </div>
+      <WeaponSlot v-for="s in slots" :key="s.key" :slot="s.key" :label="s.label" />
+    </section>
+
+    <!-- Prestige perks: earned past level 25, so they sit outside the 8-column grid. -->
+    <section class="prestige">
+      <div class="pr-head">
+        <div>
+          <p class="eyebrow">Past the anvil</p>
+          <h2 class="pr-title">Prestige Perks</h2>
+        </div>
+        <div class="pr-meta">
+          <span class="pr-count" :class="{ full: planner.prestigePicksLeft === 0 && planner.activePrestige > 0 }">
+            {{ planner.activePrestigePicks.length }} / {{ planner.activePrestige }} picked
+          </span>
+          <p class="pr-note">
+            One perk per prestige rank, up to {{ MAX_PRESTIGE }}. Set your rank with
+            Prestige above.
+          </p>
+        </div>
+      </div>
+
+      <!-- One slot per rank: this is the real shape of the mechanic. -->
+      <ol class="pr-ranks">
+        <li
+          v-for="s in planner.prestigeSlots"
+          :key="s.rank"
+          class="pr-rank"
+          :class="{ locked: !s.unlocked, filled: !!s.perk }"
+        >
+          <span class="pr-rank-mark">{{ ROMAN[s.rank] }}</span>
+          <div class="pr-rank-body">
+            <p class="pr-rank-label">Prestige {{ s.rank }}</p>
+            <p v-if="s.perk" class="pr-rank-perk">{{ s.perk.name }}</p>
+            <p v-else class="pr-rank-perk empty">
+              {{ s.unlocked ? 'Choose a perk below' : 'Not reached' }}
+            </p>
+          </div>
+          <button
+            v-if="s.perk"
+            class="pr-rank-clear"
+            :aria-label="`Clear the Prestige ${s.rank} perk`"
+            @click="planner.clearPrestigeSlot(s.rank)"
+          >
+            ×
+          </button>
+        </li>
+      </ol>
+
+      <p class="pr-pool-label">
+        Seven perks per class · pick one each time you prestige
+      </p>
+      <div class="pr-grid">
+        <button
+          v-for="p in planner.prestigePool"
+          :key="p.name"
+          type="button"
+          class="pr-card"
+          :class="{ picked: p.picked }"
+          :disabled="p.disabled"
+          :aria-pressed="p.picked"
+          @click="planner.togglePrestigePerk(p.name)"
+        >
+          <span v-if="p.picked" class="pr-mark" aria-hidden="true" />
+          <h3 class="pr-name">{{ p.name }}</h3>
+          <p class="pr-desc">{{ p.description }}</p>
+        </button>
+      </div>
+    </section>
 
     <transition name="toast">
       <div v-if="toast" class="toast">{{ toast }}</div>
@@ -365,6 +520,11 @@ onMounted(() => {
 }
 
 /* perk tree */
+/* Grid items default to min-width:auto, so the 900px tree below would stretch
+   this column and push the whole page sideways on narrow screens. */
+.tree-wrap {
+  min-width: 0;
+}
 .tree-scroll {
   overflow-x: auto;
   border: 1px solid var(--color-ash);
@@ -380,9 +540,9 @@ onMounted(() => {
 }
 .perk-col {
   position: relative;
-  padding-bottom: 2.6rem;
 }
 .perk-col-head {
+  position: relative;
   text-align: center;
   font-family: var(--font-display);
   font-size: 0.72rem;
@@ -390,6 +550,18 @@ onMounted(() => {
   letter-spacing: 0.1em;
   color: var(--color-cobalt);
   margin-bottom: 0.8rem;
+  padding-bottom: 0.4rem;
+}
+/* A column with a pick lights its head — read your whole build across the tree. */
+.perk-col.picked .perk-col-head::after {
+  content: '';
+  position: absolute;
+  left: 15%;
+  right: 15%;
+  bottom: 0;
+  height: 2px;
+  background: linear-gradient(90deg, transparent, var(--color-ember), transparent);
+  box-shadow: 0 0 8px rgba(255, 106, 43, 0.7);
 }
 .perk-col[data-cat='team'] .perk-col-head {
   color: var(--color-drake);
@@ -446,11 +618,32 @@ onMounted(() => {
 .perk[data-cat='signature'] .perk-icon {
   background: linear-gradient(145deg, #5b376f, #281733);
 }
-.perk.selected .perk-icon {
+/* Selected reads as forged: lit card, ember ring, gold name, diamond marker. */
+.perk.selected {
+  border-color: var(--color-ember);
+  background: rgba(255, 106, 43, 0.12);
   box-shadow:
-    0 0 0 3px #0c1d10,
-    0 0 0 5px var(--color-ember),
-    0 0 16px rgba(255, 106, 43, 0.6);
+    inset 0 0 0 1px rgba(255, 106, 43, 0.35),
+    0 0 22px -6px rgba(255, 106, 43, 0.55);
+}
+.perk.selected:hover:not(:disabled) {
+  border-color: var(--color-ember);
+  background: rgba(255, 106, 43, 0.16);
+}
+/* clip-path clips box-shadow away, which is why the old ember ring never showed.
+   drop-shadow follows the clipped hex silhouette. */
+.perk.selected .perk-icon {
+  filter: drop-shadow(0 0 7px rgba(255, 106, 43, 0.85));
+}
+.pick-mark {
+  position: absolute;
+  top: 6px;
+  left: 6px;
+  width: 9px;
+  height: 9px;
+  transform: rotate(45deg);
+  background: linear-gradient(180deg, #ffb066, #ff6a2b);
+  box-shadow: 0 0 10px rgba(255, 106, 43, 0.8);
 }
 .perk-name {
   display: block;
@@ -459,7 +652,8 @@ onMounted(() => {
   color: #c3d0c6;
 }
 .perk.selected .perk-name {
-  color: var(--color-bone);
+  color: var(--color-gold);
+  font-weight: 600;
 }
 .lock {
   position: absolute;
@@ -472,22 +666,6 @@ onMounted(() => {
   border-radius: 2px;
   padding: 0 3px;
 }
-.col-level {
-  position: absolute;
-  bottom: 0.5rem;
-  left: 0;
-  right: 0;
-  text-align: center;
-  color: #728078;
-  font-size: 0.62rem;
-  font-family: var(--font-mono);
-}
-.col-level strong {
-  display: block;
-  color: var(--color-gold);
-  font-size: 0.95rem;
-}
-
 /* perk detail */
 .perk-detail {
   display: flex;
@@ -624,11 +802,102 @@ onMounted(() => {
 .bs-line strong {
   color: var(--color-drake);
 }
+.bs-picks {
+  color: var(--color-gold);
+  font-size: 0.76rem;
+}
+.build-gear {
+  margin-top: 0.8rem;
+  padding-top: 0.8rem;
+  border-top: 1px solid var(--color-ash);
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+}
+.bg-row {
+  display: flex;
+  align-items: baseline;
+  gap: 0.5rem;
+}
+.bg-slot {
+  flex: none;
+  width: 4.6rem;
+  font-family: var(--font-mono);
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+  font-size: 0.54rem;
+  color: var(--color-smoke);
+}
+.bg-name {
+  flex: 1;
+  font-size: 0.8rem;
+  color: var(--color-bone);
+  line-height: 1.3;
+}
+.bg-name.empty {
+  color: #5f6f66;
+}
+.bg-pts {
+  flex: none;
+  font-family: var(--font-mono);
+  font-size: 0.58rem;
+  color: var(--color-ember);
+  border: 1px solid rgba(255, 106, 43, 0.4);
+  border-radius: 2px;
+  padding: 1px 4px;
+}
+.save {
+  margin-top: 1rem;
+  padding-top: 0.9rem;
+  border-top: 1px solid var(--color-ash);
+  display: grid;
+  gap: 0.4rem;
+}
+.save-label {
+  font-family: var(--font-mono);
+  text-transform: uppercase;
+  letter-spacing: 0.14em;
+  font-size: 0.54rem;
+  color: var(--color-smoke);
+}
+.save-more {
+  justify-self: start;
+  font-family: var(--font-mono);
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+  font-size: 0.56rem;
+  color: var(--color-drake);
+  background: transparent;
+  border: 0;
+  padding: 0.15rem 0;
+  cursor: pointer;
+}
+.save-more:hover {
+  color: var(--color-bone);
+}
+.save-go {
+  justify-content: center;
+  margin-top: 0.2rem;
+}
+.save .fld {
+  width: 100%;
+  background: rgba(5, 10, 8, 0.7);
+  border: 1px solid var(--color-ash);
+  color: var(--color-bone);
+  border-radius: 2px;
+  padding: 0.5rem 0.6rem;
+  font-size: 0.82rem;
+  font-family: var(--font-sans);
+  resize: vertical;
+}
+.save .fld::placeholder {
+  color: #5f6f66;
+}
 .build-actions {
   display: flex;
   flex-wrap: wrap;
   gap: 0.4rem;
-  margin-top: 1rem;
+  margin-top: 0.7rem;
 }
 .btn-sm {
   padding: 0.5rem 0.8rem;
@@ -648,6 +917,226 @@ onMounted(() => {
 .btn-ghost:hover {
   color: var(--color-bone);
   border-color: var(--color-ash-2);
+}
+
+/* loadout */
+.loadout {
+  margin-top: 2.6rem;
+  padding-top: 2rem;
+  border-top: 1px solid var(--color-ash);
+}
+.lo-head,
+.pr-head {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 1rem;
+  flex-wrap: wrap;
+  margin-bottom: 1.4rem;
+}
+.lo-title,
+.pr-title {
+  font-family: var(--font-display);
+  text-transform: uppercase;
+  font-weight: 700;
+  font-size: clamp(1.5rem, 4vw, 2.1rem);
+  color: var(--color-bone);
+  margin-top: 0.3rem;
+}
+.lo-note {
+  max-width: 38ch;
+  color: var(--color-smoke);
+  font-size: 0.8rem;
+  line-height: 1.5;
+}
+
+/* prestige */
+.prestige {
+  margin-top: 2.6rem;
+  padding-top: 2rem;
+  border-top: 1px solid var(--color-ash);
+}
+.pr-meta {
+  text-align: right;
+}
+.pr-count {
+  font-family: var(--font-display);
+  font-weight: 700;
+  font-size: 1.05rem;
+  color: var(--color-gold);
+}
+.pr-count.full {
+  color: var(--color-ember);
+}
+.pr-note {
+  max-width: 34ch;
+  color: var(--color-smoke);
+  font-size: 0.8rem;
+  line-height: 1.5;
+  margin-top: 0.2rem;
+}
+/* rank rail */
+.pr-ranks {
+  list-style: none;
+  margin: 0 0 1.6rem;
+  padding: 0;
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(13rem, 1fr));
+  gap: 0.6rem;
+}
+.pr-rank {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 0.7rem;
+  padding: 0.8rem 0.9rem;
+  border: 1px solid var(--color-ash);
+  border-radius: 5px;
+  background: rgba(7, 17, 13, 0.5);
+}
+.pr-rank.locked {
+  opacity: 0.45;
+}
+.pr-rank.filled {
+  border-color: rgba(255, 106, 43, 0.55);
+  background: rgba(255, 106, 43, 0.08);
+}
+.pr-rank-body {
+  min-width: 0;
+}
+.pr-rank-label {
+  font-family: var(--font-mono);
+  text-transform: uppercase;
+  letter-spacing: 0.14em;
+  font-size: 0.54rem;
+  color: var(--color-smoke);
+}
+.pr-rank-perk {
+  font-family: var(--font-display);
+  text-transform: uppercase;
+  font-weight: 700;
+  font-size: 0.95rem;
+  color: var(--color-gold);
+  line-height: 1.15;
+  margin-top: 0.15rem;
+}
+.pr-rank-perk.empty {
+  font-family: var(--font-sans);
+  text-transform: none;
+  font-weight: 400;
+  font-size: 0.8rem;
+  color: #5f6f66;
+}
+.pr-rank-clear {
+  margin-left: auto;
+  flex: none;
+  width: 1.4rem;
+  height: 1.4rem;
+  line-height: 1;
+  font-size: 1rem;
+  color: var(--color-smoke);
+  background: transparent;
+  border: 1px solid var(--color-ash);
+  border-radius: 2px;
+  cursor: pointer;
+}
+.pr-rank-clear:hover {
+  color: var(--color-bone);
+  border-color: var(--color-ember);
+}
+.pr-pool-label {
+  font-family: var(--font-mono);
+  text-transform: uppercase;
+  letter-spacing: 0.14em;
+  font-size: 0.58rem;
+  color: var(--color-smoke);
+  margin-bottom: 0.6rem;
+}
+.pr-rank-mark {
+  display: grid;
+  place-items: center;
+  min-width: 2rem;
+  height: 2rem;
+  padding: 0 0.4rem;
+  font-family: var(--font-display);
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  font-size: 0.85rem;
+  color: var(--color-gold);
+  border: 1px solid rgba(223, 184, 91, 0.45);
+  clip-path: polygon(15% 0, 85% 0, 100% 50%, 85% 100%, 15% 100%, 0 50%);
+  background: rgba(223, 184, 91, 0.1);
+}
+.pr-rank.locked .pr-rank-mark {
+  color: var(--color-smoke);
+  border-color: var(--color-ash);
+  background: transparent;
+}
+.pr-rank.filled .pr-rank-mark {
+  color: var(--color-ember);
+  border-color: rgba(255, 106, 43, 0.5);
+  background: rgba(255, 106, 43, 0.12);
+}
+.pr-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(15rem, 1fr));
+  gap: 0.7rem;
+}
+.pr-card {
+  position: relative;
+  border: 1px solid var(--color-ash);
+  border-left: 2px solid var(--color-gold);
+  border-radius: 4px;
+  background: rgba(7, 17, 13, 0.5);
+  padding: 0.9rem 1rem;
+  text-align: left;
+  font: inherit;
+  cursor: pointer;
+  transition: 0.15s;
+}
+.pr-card:hover:not(:disabled) {
+  border-color: var(--color-ash-2);
+  border-left-color: var(--color-gold);
+  background: rgba(14, 28, 22, 0.7);
+}
+.pr-card:disabled {
+  cursor: not-allowed;
+  opacity: 0.4;
+}
+.pr-card.picked {
+  border-color: var(--color-ember);
+  border-left-color: var(--color-ember);
+  background: rgba(255, 106, 43, 0.12);
+  box-shadow:
+    inset 0 0 0 1px rgba(255, 106, 43, 0.35),
+    0 0 22px -6px rgba(255, 106, 43, 0.55);
+  opacity: 1;
+}
+.pr-card.picked .pr-name {
+  color: var(--color-gold);
+}
+.pr-mark {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  width: 9px;
+  height: 9px;
+  transform: rotate(45deg);
+  background: linear-gradient(180deg, #ffb066, #ff6a2b);
+  box-shadow: 0 0 10px rgba(255, 106, 43, 0.8);
+}
+.pr-name {
+  font-family: var(--font-display);
+  text-transform: uppercase;
+  font-weight: 700;
+  font-size: 1rem;
+  color: var(--color-bone);
+  margin-bottom: 0.3rem;
+}
+.pr-desc {
+  color: #c3d0c6;
+  font-size: 0.83rem;
+  line-height: 1.5;
 }
 
 /* toast */

@@ -1,12 +1,49 @@
 <script setup>
-import { ref } from 'vue'
+import { ref, computed } from 'vue'
 import { useRouter } from 'vue-router'
-import { usePlanner } from '../stores/planner'
+import { usePlanner, CLASS_NAMES } from '../stores/planner'
 
 const planner = usePlanner()
 const router = useRouter()
 
-const form = ref({ title: '', role: '', notes: '' })
+const slots = [
+  { key: 'primary', label: 'Primary' },
+  { key: 'secondary', label: 'Secondary' },
+  { key: 'melee', label: 'Melee' },
+]
+
+const query = ref('')
+const classFilter = ref('')
+
+/** Everything a build is made of is searchable: name, role, notes, perks, weapons. */
+function haystack(b) {
+  return [
+    b.title,
+    b.role,
+    b.notes,
+    b.className,
+    ...(b.perks || []),
+    ...(b.prestigePicks || []),
+    ...Object.values(b.weapons || {}),
+  ]
+    .filter(Boolean)
+    .join(' ')
+    .toLowerCase()
+}
+
+const filtered = computed(() => {
+  const q = query.value.trim().toLowerCase()
+  return planner.savedBuilds.filter(
+    (b) =>
+      (!classFilter.value || b.className === classFilter.value) &&
+      (!q || haystack(b).includes(q)),
+  )
+})
+
+// Only offer class chips for classes the library actually contains.
+const usedClasses = computed(() =>
+  CLASS_NAMES.filter((c) => planner.savedBuilds.some((b) => b.className === c)),
+)
 
 const toast = ref('')
 let t
@@ -16,14 +53,13 @@ function flash(m) {
   t = setTimeout(() => (toast.value = ''), 1800)
 }
 
-function save() {
-  planner.saveBuild(form.value)
-  form.value = { title: '', role: '', notes: '' }
-  flash('Build saved')
-}
 function apply(id) {
   planner.applyBuild(id)
   router.push('/planner')
+}
+function remove(b) {
+  planner.deleteBuild(b.id)
+  flash(`Deleted “${b.title}”`)
 }
 </script>
 
@@ -34,42 +70,75 @@ function apply(id) {
       <h1 class="b-title">Recommended Builds</h1>
       <p class="b-intro">
         Your saved loadouts. Build one in the
-        <RouterLink to="/planner" class="ilink">Perk Builder</RouterLink>, then name and
-        save it here to share with the Chapter.
+        <RouterLink to="/planner" class="ilink">Perk Builder</RouterLink> and save it from
+        the Your Build panel — it lands here.
       </p>
     </header>
 
-    <!-- Save current build -->
-    <div class="save-card panel-forge">
-      <div class="save-current">
-        <p class="save-k">Current build</p>
-        <p class="save-v">
-          {{ planner.build.className }} · Level {{ planner.build.level }} ·
-          {{ planner.build.count }}/8 perks
-        </p>
+    <!-- Search + filter -->
+    <div v-if="planner.savedBuilds.length" class="b-tools">
+      <input
+        v-model="query"
+        class="b-search"
+        type="search"
+        placeholder="Search builds, perks, weapons, notes…"
+        aria-label="Search builds"
+      />
+      <div class="b-filters" role="group" aria-label="Filter by class">
+        <button
+          class="b-chip"
+          :class="{ on: !classFilter }"
+          @click="classFilter = ''"
+        >
+          All
+          <span class="b-chip-n">{{ planner.savedBuilds.length }}</span>
+        </button>
+        <button
+          v-for="c in usedClasses"
+          :key="c"
+          class="b-chip"
+          :class="{ on: classFilter === c }"
+          @click="classFilter = classFilter === c ? '' : c"
+        >
+          {{ c }}
+          <span class="b-chip-n">
+            {{ planner.savedBuilds.filter((b) => b.className === c).length }}
+          </span>
+        </button>
       </div>
-      <div class="save-fields">
-        <input v-model="form.title" class="fld" type="text" placeholder="Build name (e.g. Lethal Bulwark)" />
-        <input v-model="form.role" class="fld fld-sm" type="text" placeholder="Role (optional)" />
-      </div>
-      <textarea v-model="form.notes" class="fld fld-area" rows="2" placeholder="Notes (optional) — how it plays, when to use it…" />
-      <button class="btn-ember btn-save" @click="save">Save current build</button>
     </div>
 
+    <p v-if="planner.savedBuilds.length && !filtered.length" class="b-none">
+      No builds match that search.
+    </p>
+
     <!-- Saved builds -->
-    <div v-if="planner.savedBuilds.length" class="b-grid">
-      <article v-for="r in planner.savedBuilds" :key="r.id" class="b-card panel-forge">
+    <div v-if="filtered.length" class="b-grid">
+      <article v-for="r in filtered" :key="r.id" class="b-card panel-forge">
         <div class="b-card-top">
           <h2 class="b-name">{{ r.title }}</h2>
           <span class="b-class">{{ r.className }}</span>
         </div>
-        <p class="b-meta">Level {{ r.level }}<span v-if="r.role"> · {{ r.role }}</span></p>
+        <p class="b-meta">
+          Level {{ r.level }}<span v-if="r.prestige"> · Prestige {{ r.prestige }}</span
+          ><span v-if="r.role"> · {{ r.role }}</span>
+        </p>
         <p v-if="r.notes" class="b-notes">{{ r.notes }}</p>
 
         <dl class="b-load">
-          <div><dt>Primary</dt><dd>{{ r.weapons.primary || '—' }}</dd></div>
-          <div><dt>Secondary</dt><dd>{{ r.weapons.secondary || '—' }}</dd></div>
-          <div><dt>Melee</dt><dd>{{ r.weapons.melee || '—' }}</dd></div>
+          <div v-for="s in slots" :key="s.key">
+            <dt>{{ s.label }}</dt>
+            <dd>
+              <RouterLink
+                v-if="r.weapons[s.key]"
+                class="b-weapon"
+                :to="{ path: '/armoury', query: { w: r.weapons[s.key] } }"
+              >
+                {{ r.weapons[s.key] }}
+              </RouterLink>
+              <span v-else>—</span>
+            </dd>
+          </div>
         </dl>
 
         <div class="b-perks">
@@ -78,19 +147,19 @@ function apply(id) {
         </div>
 
         <div class="b-actions">
-          <button class="btn-drake btn-sm" @click="apply(r.id)">Apply build</button>
-          <button class="btn-ghost btn-sm" @click="planner.deleteBuild(r.id)">Delete</button>
+          <button class="btn-drake btn-sm" @click="apply(r.id)">Open in builder</button>
+          <button class="btn-ghost btn-sm" @click="remove(r)">Delete</button>
         </div>
       </article>
     </div>
 
     <!-- Empty state -->
-    <div v-else class="b-empty panel-forge">
+    <div v-else-if="!planner.savedBuilds.length" class="b-empty panel-forge">
       <div class="b-empty-mark" aria-hidden="true"><span /><span /><span /></div>
       <h2 class="b-empty-title">No builds saved yet</h2>
       <p class="b-empty-body">
-        Configure a class build in the Perk Builder, name it above, and save it. Builds
-        stay in your browser — sharing with the Chapter comes next.
+        Build a loadout in the Perk Builder, then hit Save to library in the Your Build
+        panel. Builds stay in your browser — sharing with the Chapter comes next.
       </p>
       <RouterLink to="/planner" class="btn-ember b-empty-cta">Open the Perk Builder</RouterLink>
     </div>
@@ -125,58 +194,64 @@ function apply(id) {
   border-bottom: 1px solid rgba(89, 214, 108, 0.4);
 }
 
-/* save card */
-.save-card {
-  margin: 2rem 0;
-  border-radius: 8px;
-  padding: 1.3rem;
-  display: grid;
-  gap: 0.7rem;
-}
-.save-k {
-  font-family: var(--font-mono);
-  text-transform: uppercase;
-  letter-spacing: 0.16em;
-  font-size: 0.6rem;
-  color: var(--color-gold);
-}
-.save-v {
-  font-family: var(--font-display);
-  text-transform: uppercase;
-  color: var(--color-bone);
-  font-size: 1.05rem;
-}
-.save-fields {
+/* search + filter */
+.b-tools {
+  margin: 2rem 0 1.4rem;
   display: flex;
-  gap: 0.6rem;
-  flex-wrap: wrap;
+  flex-direction: column;
+  gap: 0.8rem;
 }
-.fld {
-  background: rgba(5, 10, 8, 0.7);
+.b-search {
+  width: 100%;
+  max-width: 28rem;
+  padding: 0.65rem 0.9rem;
+  background: rgba(14, 28, 22, 0.6);
   border: 1px solid var(--color-ash);
+  border-radius: 3px;
   color: var(--color-bone);
-  border-radius: 2px;
-  padding: 0.6rem 0.75rem;
-  font-size: 0.9rem;
-  font-family: var(--font-sans);
+  font-size: 0.92rem;
 }
-.fld::placeholder {
+.b-search::placeholder {
   color: #5f6f66;
 }
-.save-fields .fld {
-  flex: 1 1 14rem;
+.b-filters {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.35rem;
 }
-.fld-sm {
-  flex: 0 1 12rem !important;
-}
-.fld-area {
-  width: 100%;
-  resize: vertical;
-}
-.btn-save {
-  justify-self: start;
-  padding: 0.7rem 1.3rem;
+.b-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  font-family: var(--font-display);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  font-size: 0.76rem;
+  color: var(--color-smoke);
+  background: rgba(14, 28, 22, 0.5);
+  border: 1px solid var(--color-ash);
   border-radius: 2px;
+  padding: 0.35rem 0.7rem;
+  cursor: pointer;
+  transition: 0.12s;
+}
+.b-chip:hover {
+  color: var(--color-bone);
+  border-color: var(--color-ash-2);
+}
+.b-chip.on {
+  color: #1a0d06;
+  background: linear-gradient(180deg, #ffb066, #ff6a2b);
+  border-color: rgba(255, 176, 102, 0.6);
+}
+.b-chip-n {
+  font-family: var(--font-mono);
+  font-size: 0.66rem;
+  opacity: 0.75;
+}
+.b-none {
+  color: var(--color-smoke);
+  padding: 1.5rem 0;
 }
 
 /* grid */
@@ -251,6 +326,14 @@ function apply(id) {
   font-size: 0.82rem;
   color: var(--color-bone);
   text-align: right;
+}
+.b-weapon {
+  color: var(--color-drake);
+  border-bottom: 1px solid rgba(89, 214, 108, 0.35);
+}
+.b-weapon:hover {
+  color: var(--color-bone);
+  border-bottom-color: var(--color-bone);
 }
 .b-perks {
   display: flex;

@@ -12,6 +12,12 @@ const filtered = computed(() => {
   )
 })
 
+// Scroll to a company. Can't use href="#id" here: the app runs on hash history,
+// so a bare fragment overwrites the route hash and navigates nowhere.
+function jumpTo(id) {
+  document.getElementById(id)?.scrollIntoView()
+}
+
 // Initials from first + last word of a name, for the member badge.
 function initials(name) {
   const words = name.replace(/[",]/g, '').trim().split(/\s+/)
@@ -41,10 +47,16 @@ function initials(name) {
 
     <!-- Company index -->
     <nav class="c-index" aria-label="Jump to company">
-      <a v-for="c in filtered" :key="c.id" :href="`#${c.id}`" class="c-chip">
+      <button
+        v-for="c in filtered"
+        :key="c.id"
+        type="button"
+        class="c-chip"
+        @click="jumpTo(c.id)"
+      >
         <span class="c-chip-sigil">{{ c.sigil }}</span>
         <span>{{ c.title.replace(/ — .*/, '') }}</span>
-      </a>
+      </button>
     </nav>
 
     <p v-if="!filtered.length" class="c-empty">No companies match “{{ query }}”.</p>
@@ -141,6 +153,9 @@ function initials(name) {
   border-radius: 999px;
   font-size: 0.8rem;
   color: var(--color-smoke);
+  background: transparent;
+  font-family: inherit;
+  cursor: pointer;
   transition: border-color 0.15s ease, color 0.15s ease;
 }
 .c-chip:hover {

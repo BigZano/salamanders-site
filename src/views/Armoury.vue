@@ -1,10 +1,11 @@
 <script setup>
-import { ref, computed } from 'vue'
+import { ref, computed, onMounted, watch } from 'vue'
+import { useRoute } from 'vue-router'
 import weapons from '../data/weapons.json'
 import classes from '../data/classes.json'
 import { usePlanner } from '../stores/planner'
-import { fetchWeapon, WIKI } from '../lib/wiki'
-import { fallbackWeaponData } from '../data/weapon-fallbacks'
+import { WIKI } from '../lib/wiki'
+import { resolveWeapon, SOURCE_LABEL, slotAverages, GAUGE_MAX } from '../lib/weapons'
 import WeaponTree from '../components/WeaponTree.vue'
 
 const planner = usePlanner()
@@ -17,6 +18,9 @@ const cats = [
 const active = ref('primary')
 const q = ref('')
 const classNames = Object.keys(classes)
+
+const classesFor = (name) =>
+  classNames.filter((c) => classes[c].weapons[active.value]?.includes(name))
 
 const list = computed(() =>
   weapons.fallbackWeapons[active.value]
@@ -44,18 +48,17 @@ async function selectWeapon(name) {
   activeWeapon.value = name
   status.value = 'loading'
   data.value = null
-  try {
-    data.value = await fetchWeapon(name)
+  const resolved = await resolveWeapon(name)
+  if (resolved) {
+    data.value = resolved
+    versionIndex.value = Math.max(
+      0,
+      (resolved.versions || []).findIndex((v) => v.quality === 'Standard'),
+    )
     status.value = 'ready'
-  } catch (e) {
-    const fb = fallbackWeaponData(name)
-    if (fb) {
-      data.value = fb
-      status.value = 'ready'
-    } else {
-      errorMsg.value = 'The live tree could not be loaded from the wiki.'
-      status.value = 'error'
-    }
+  } else {
+    errorMsg.value = 'No perk tree for this weapon yet — the wiki page has no perk table.'
+    status.value = 'error'
   }
 }
 
@@ -64,6 +67,34 @@ function setCat(key) {
   activeWeapon.value = null
   status.value = 'idle'
 }
+
+// ---- stats ----
+const versionIndex = ref(0)
+const versions = computed(() => data.value?.versions || [])
+const version = computed(() => versions.value[versionIndex.value] || null)
+
+// Slot average, so each bar reads against its peers rather than in a vacuum.
+const averages = computed(() => slotAverages(weapons.fallbackWeapons[active.value]))
+
+const gauges = computed(() => {
+  const g = version.value?.gauges
+  if (!g) return []
+  return Object.entries(g).map(([label, { value, raw }]) => {
+    const avg = averages.value[label]
+    const delta = typeof avg === 'number' ? value - avg : null
+    return {
+      label,
+      value,
+      raw,
+      pct: Math.min(100, (value / GAUGE_MAX) * 100),
+      avgPct: typeof avg === 'number' ? Math.min(100, (avg / GAUGE_MAX) * 100) : null,
+      delta,
+      trend: delta === null ? '' : delta > 0.25 ? 'over' : delta < -0.25 ? 'under' : 'par',
+    }
+  })
+})
+
+const figures = computed(() => Object.entries(version.value?.figures || {}))
 
 const canEquip = computed(
   () =>
@@ -76,6 +107,19 @@ function equip() {
   flash(`${activeWeapon.value} equipped for ${planner.activeClass}`)
 }
 const wikiUrl = (name) => WIKI + encodeURIComponent(name)
+
+// Deep link: /armoury?w=Bolt Rifle — used by the Builds page and share links.
+const route = useRoute()
+function openFromQuery(name) {
+  if (!name) return
+  const cat = cats.find((c) => weapons.fallbackWeapons[c.key].includes(name))
+  if (!cat) return
+  active.value = cat.key
+  q.value = ''
+  selectWeapon(name)
+}
+onMounted(() => openFromQuery(route.query.w))
+watch(() => route.query.w, openFromQuery)
 </script>
 
 <template>
@@ -84,8 +128,8 @@ const wikiUrl = (name) => WIKI + encodeURIComponent(name)
       <p class="eyebrow">Wargear</p>
       <h1 class="a-title">Weapon Armoury</h1>
       <p class="a-intro">
-        Every weapon of the Chapter. Pick one to plan its perk tree — synced live from
-        the Space Marine 2 wiki.
+        Every weapon of the Chapter. Pick one to plan its perk tree. Trees ship with the
+        site and are re-synced weekly.
       </p>
     </header>
 
@@ -152,15 +196,74 @@ const wikiUrl = (name) => WIKI + encodeURIComponent(name)
         <template v-else-if="status === 'ready' && data">
           <div class="w-hero">
             <div>
-              <p class="eyebrow">{{ active }} weapon</p>
+              <p class="eyebrow">
+                {{ data.meta?.slot || active }}<span v-if="data.meta?.category"> · {{ data.meta.category }}</span>
+              </p>
               <h2 class="w-hero-name">{{ activeWeapon }}</h2>
             </div>
-            <span class="w-src" :class="data.live ? 'live' : 'offline'">
-              {{ data.live ? 'Live · wiki' : 'Offline data' }}
+            <span class="w-src" :class="data.source">
+              {{ SOURCE_LABEL[data.source] }}
             </span>
           </div>
 
+          <dl class="w-tags">
+            <div v-if="data.meta?.damageType">
+              <dt>Damage</dt>
+              <dd>{{ data.meta.damageType }}</dd>
+            </div>
+            <div>
+              <dt>Classes</dt>
+              <dd>{{ classesFor(activeWeapon).join(', ') || 'None' }}</dd>
+            </div>
+          </dl>
+
           <p v-if="data.intro?.length" class="w-hero-intro">{{ data.intro.join(' ') }}</p>
+
+          <!-- Stat block -->
+          <section v-if="versions.length" class="stats">
+            <div class="stats-head">
+              <h3 class="stats-title">Statistics</h3>
+              <label class="stats-version">
+                <span>Version</span>
+                <select v-model.number="versionIndex">
+                  <option v-for="(v, i) in versions" :key="i" :value="i">
+                    {{ v.name }}<span v-if="v.quality"> — {{ v.quality }}</span>
+                  </option>
+                </select>
+              </label>
+            </div>
+
+            <ul class="gauges">
+              <li v-for="g in gauges" :key="g.label" class="gauge">
+                <span class="gauge-label">{{ g.label }}</span>
+                <span class="gauge-track">
+                  <span class="gauge-fill" :class="g.trend" :style="{ width: g.pct + '%' }" />
+                  <span
+                    v-if="g.avgPct !== null"
+                    class="gauge-avg"
+                    :style="{ left: g.avgPct + '%' }"
+                    :title="`Slot average ${g.delta >= 0 ? '' : ''}`"
+                  />
+                </span>
+                <span class="gauge-val">{{ g.raw }}</span>
+                <span class="gauge-delta" :class="g.trend">
+                  {{ g.delta === null ? '' : (g.delta > 0 ? '+' : '') + g.delta.toFixed(1) }}
+                </span>
+              </li>
+            </ul>
+
+            <p class="gauges-key">
+              Bars are the in-game 0–{{ GAUGE_MAX }} ratings. The notch marks the
+              {{ active }} average; the number is this weapon's difference from it.
+            </p>
+
+            <dl v-if="figures.length" class="figures">
+              <div v-for="[k, v] in figures" :key="k">
+                <dt>{{ k }}</dt>
+                <dd>{{ v }}</dd>
+              </div>
+            </dl>
+          </section>
 
           <div class="w-hero-actions">
             <button class="btn-ember btn-sm" :disabled="!canEquip" @click="equip">
@@ -381,14 +484,202 @@ const wikiUrl = (name) => WIKI + encodeURIComponent(name)
   border-radius: 2px;
   border: 1px solid var(--color-ash);
 }
-.w-src.live {
+.w-src.baked {
   color: var(--color-drake);
   border-color: rgba(89, 214, 108, 0.4);
+}
+.w-src.wiki {
+  color: var(--color-cobalt);
+  border-color: rgba(108, 196, 239, 0.4);
 }
 .w-src.offline {
   color: var(--color-gold);
   border-color: rgba(223, 184, 91, 0.4);
 }
+/* dossier tags */
+.w-tags {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  gap: 0.6rem 2rem;
+  margin: 0.8rem 0 0;
+}
+.w-tags > div {
+  min-width: 0;
+  flex: 0 1 auto;
+}
+.w-tags dt {
+  font-family: var(--font-mono);
+  text-transform: uppercase;
+  letter-spacing: 0.14em;
+  font-size: 0.54rem;
+  color: var(--color-smoke);
+}
+.w-tags dd {
+  margin: 0.15rem 0 0;
+  font-size: 0.82rem;
+  color: #c3d0c6;
+  max-width: 34ch;
+}
+
+/* stat block */
+.stats {
+  margin: 1.4rem 0 1.6rem;
+  padding: 1.1rem 1.2rem 1.2rem;
+  border: 1px solid var(--color-ash);
+  border-radius: 6px;
+  background: rgba(5, 10, 8, 0.45);
+}
+.stats-head {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 1rem;
+  flex-wrap: wrap;
+  margin-bottom: 1rem;
+}
+.stats-title {
+  font-family: var(--font-display);
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+  font-weight: 700;
+  font-size: 0.95rem;
+  color: var(--color-bone);
+}
+.stats-version {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+.stats-version span {
+  font-family: var(--font-mono);
+  text-transform: uppercase;
+  letter-spacing: 0.14em;
+  font-size: 0.54rem;
+  color: var(--color-smoke);
+}
+.stats-version select {
+  background: rgba(5, 10, 8, 0.8);
+  border: 1px solid var(--color-ash);
+  color: var(--color-bone);
+  border-radius: 2px;
+  padding: 0.35rem 0.5rem;
+  font-size: 0.82rem;
+  max-width: 16rem;
+}
+
+.gauges {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+.gauge {
+  display: grid;
+  grid-template-columns: 8.5rem 1fr 2.4rem 2.6rem;
+  align-items: center;
+  gap: 0.7rem;
+}
+.gauge-label {
+  font-family: var(--font-mono);
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+  font-size: 0.58rem;
+  color: var(--color-smoke);
+}
+/* Track is notched into ten segments, like a gauge struck on the anvil. */
+.gauge-track {
+  position: relative;
+  height: 12px;
+  border: 1px solid var(--color-ash);
+  border-radius: 2px;
+  background-image: repeating-linear-gradient(
+    90deg,
+    rgba(255, 255, 255, 0.05) 0 calc(10% - 1px),
+    transparent calc(10% - 1px) 10%
+  );
+  overflow: hidden;
+}
+.gauge-fill {
+  position: absolute;
+  inset: 0 auto 0 0;
+  background: linear-gradient(90deg, #8a4a1c, var(--color-ember));
+}
+.gauge-fill.over {
+  background: linear-gradient(90deg, #a35a1f, #ffb066);
+}
+.gauge-fill.under {
+  background: linear-gradient(90deg, #2f4438, #5d7767);
+}
+.gauge-avg {
+  position: absolute;
+  top: -2px;
+  bottom: -2px;
+  width: 2px;
+  transform: translateX(-1px);
+  background: var(--color-bone);
+  opacity: 0.75;
+}
+.gauge-val {
+  font-family: var(--font-mono);
+  font-size: 0.78rem;
+  color: var(--color-bone);
+  text-align: right;
+}
+.gauge-delta {
+  font-family: var(--font-mono);
+  font-size: 0.66rem;
+  text-align: right;
+}
+.gauge-delta.over {
+  color: var(--color-drake);
+}
+.gauge-delta.under {
+  color: #8b6f6f;
+}
+.gauge-delta.par {
+  color: var(--color-smoke);
+}
+.gauges-key {
+  margin-top: 0.8rem;
+  color: #728078;
+  font-size: 0.7rem;
+  line-height: 1.5;
+}
+
+.figures {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem 2rem;
+  margin: 0.9rem 0 0;
+  padding-top: 0.9rem;
+  border-top: 1px solid var(--color-ash);
+}
+.figures dt {
+  font-family: var(--font-mono);
+  text-transform: uppercase;
+  letter-spacing: 0.14em;
+  font-size: 0.54rem;
+  color: var(--color-smoke);
+}
+.figures dd {
+  margin: 0.15rem 0 0;
+  font-family: var(--font-display);
+  font-size: 1.1rem;
+  color: var(--color-gold);
+}
+
+@media (max-width: 560px) {
+  .gauge {
+    grid-template-columns: 7rem 1fr 2.2rem;
+  }
+  .gauge-delta {
+    display: none;
+  }
+}
+
 .w-hero-intro {
   color: #c3d0c6;
   line-height: 1.6;

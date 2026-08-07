@@ -1,0 +1,66 @@
+name: Weekly data check
+
+# Re-bakes perk and weapon data from the wiki and checks the official Space
+# Marine 2 announcement feed for new patches. If either turns up a change, it
+# opens a PR so the diff gets eyeballed before it reaches the live site.
+
+on:
+  schedule:
+    - cron: '0 7 * * 1' # Mondays 07:00 UTC
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+      - run: bun install --frozen-lockfile
+
+      - name: Check official patch feed
+        id: patch
+        run: node scripts/check-updates.mjs
+
+      - name: Re-bake perk and weapon data
+        run: bun run wiki:all
+
+      - name: Detect changes
+        id: diff
+        run: |
+          if git diff --quiet -- src/data; then
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+            echo "No data changes."
+          else
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+            {
+              echo "summary<<EOF"
+              git diff --stat -- src/data
+              echo "EOF"
+            } >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Open pull request
+        if: steps.diff.outputs.changed == 'true'
+        uses: peter-evans/create-pull-request@v6
+        with:
+          branch: data/weekly-sync
+          commit-message: 'data: weekly perk and weapon re-sync'
+          title: 'Data sync: perks and weapon trees'
+          body: |
+            Automated weekly re-bake of the wiki-sourced game data.
+
+            **Latest official patch:** ${{ steps.patch.outputs.patch_title || 'none found' }}${{ steps.patch.outputs.is_new == 'true' && ' — new since last check' || '' }}
+            ${{ steps.patch.outputs.patch_url }}
+
+            Changed files:
+
+            ```
+            ${{ steps.diff.outputs.summary }}
+            ```
+
+            Review the diff before merging — a bad wiki edit lands here too.
+            Merging deploys automatically.
