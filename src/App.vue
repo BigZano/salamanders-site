@@ -1,11 +1,22 @@
 <script setup>
+import { defineAsyncComponent } from 'vue'
 import AppNav from './components/AppNav.vue'
+import MountDeathfire from './components/MountDeathfire.vue'
+import { tuningEnabled } from './lib/fireTuning'
+
+// Dev-only slider panel, loaded only when ?tune=1 is present.
+const tuning = tuningEnabled()
+const FireTuner = tuning ? defineAsyncComponent(() => import('./components/FireTuner.vue')) : null
 
 const DISCORD = 'https://discord.gg/salamanders'
 const year = new Date().getFullYear()
 </script>
 
 <template>
+  <!-- Mount Deathfire behind every page; each route gets its own face of it. -->
+  <MountDeathfire />
+  <component :is="FireTuner" v-if="tuning" />
+
   <AppNav />
 
   <main>

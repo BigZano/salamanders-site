@@ -53,12 +53,13 @@
     text-rendering: optimizeLegibility;
   }
 
-  /* Ambient forge gradient behind everything — symmetric, so no side reads shadowed */
+  /* Ambient forge gradient behind everything — symmetric, so no side reads
+     shadowed. Sits below the furnace canvas, which claims -1. */
   body::before {
     content: '';
     position: fixed;
     inset: 0;
-    z-index: -1;
+    z-index: -2;
     pointer-events: none;
     background:
       radial-gradient(120% 80% at 50% 118%, rgba(224, 67, 29, 0.13), transparent 60%),

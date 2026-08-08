@@ -1,15 +1,25 @@
 <script setup>
-import ForgeCanvas from './ForgeCanvas.vue'
+import FireText from './FireText.vue'
+import { fireTuning } from '../lib/fireTuning'
 
 const DISCORD = 'https://discord.gg/salamanders'
 </script>
 
 <template>
   <section class="hero">
-    <ForgeCanvas :intensity="1" />
     <div class="hero-inner">
       <p class="eyebrow">XVIII Legion · Sons of Vulkan</p>
-      <h1 class="wordmark">Salamanders</h1>
+      <h1 class="wordmark">
+        <FireText
+          text="Salamanders"
+          :pixel="fireTuning.text.pixel"
+          :speed="fireTuning.text.speed"
+          :max-height="fireTuning.text.maxHeight"
+          :variation="fireTuning.text.variation"
+          :intensity="fireTuning.text.intensity"
+          :base="fireTuning.text.base"
+        />
+      </h1>
       <div class="ember-rule" aria-hidden="true">
         <span /><span /><span />
       </div>
@@ -60,40 +70,9 @@ const DISCORD = 'https://discord.gg/salamanders'
   /* Capped so 11 glyphs + tracking stay inside .hero-inner at every width. */
   font-size: clamp(2.5rem, 12.5vw, 9.5rem);
   margin: 0.6rem 0 0;
-
-  /* Embers drifting up through the letterforms. The gradient stack is clipped
-     to the text, so the fire only ever shows inside the glyphs. */
-  background-image:
-    radial-gradient(closest-side circle at 22% 80%, rgba(255, 226, 176, 0.95), rgba(255, 138, 61, 0) 70%),
-    radial-gradient(closest-side circle at 70% 45%, rgba(255, 186, 102, 0.9), rgba(255, 106, 43, 0) 72%),
-    radial-gradient(closest-side circle at 44% 18%, rgba(255, 130, 55, 0.85), rgba(224, 67, 29, 0) 75%),
-    radial-gradient(closest-side circle at 86% 70%, rgba(255, 205, 140, 0.8), rgba(255, 106, 43, 0) 70%),
-    linear-gradient(180deg, #fff2e0 0%, #ffd6a0 40%, #ff8a3d 100%);
-  background-size:
-    240px 300px,
-    330px 430px,
-    190px 250px,
-    280px 360px,
-    100% 100%;
-  background-repeat: repeat, repeat, repeat, repeat, no-repeat;
-  -webkit-background-clip: text;
-  background-clip: text;
-  color: transparent;
-  /* drop-shadow (not text-shadow) — clean glow on gradient-clipped text */
-  filter: drop-shadow(0 0 26px rgba(255, 106, 43, 0.28));
-  animation: ember-flow 11s linear infinite;
-}
-/* Each layer travels exactly one tile height, so the loop is seamless; the
-   differing tile sizes make them drift at different speeds. */
-@keyframes ember-flow {
-  to {
-    background-position:
-      14px -300px,
-      -20px -430px,
-      8px -250px,
-      -12px -360px,
-      0 0;
-  }
+  /* The fill is painted by FireText on a canvas; this element only sets the
+     type. drop-shadow (not text-shadow) so the glow follows the fire. */
+  filter: drop-shadow(0 0 30px rgba(255, 106, 43, 0.35));
 }
 .ember-rule {
   display: flex;
@@ -145,9 +124,4 @@ const DISCORD = 'https://discord.gg/salamanders'
   }
 }
 
-@media (prefers-reduced-motion: reduce) {
-  .wordmark {
-    animation: none;
-  }
-}
 </style>
