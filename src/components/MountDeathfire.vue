@@ -2,7 +2,7 @@
 import { ref, computed, watch, onMounted, onBeforeUnmount } from 'vue'
 import { useRoute } from 'vue-router'
 import { motionAllowed } from '../lib/doomfire'
-import { fireTuning, randomize } from '../lib/fireTuning'
+import { fireTuning, randomize, profileFor, NEUTRAL_PROFILE } from '../lib/fireTuning'
 
 /**
  * Mount Deathfire — the great volcano of Nocturne, sitting behind every page.
@@ -14,6 +14,14 @@ import { fireTuning, randomize } from '../lib/fireTuning'
  * The peak is deliberately set off-centre so it never sits directly behind the
  * centred hero wordmark, and the whole thing is anchored low — this is the
  * horizon of the world the site lives on, not the subject of the page.
+ *
+ * The landing page is the baked reference: fireTuning's DEFAULTS describe it
+ * exactly. Every other route is a departure from it, declared as a profile of
+ * bearing (where you stand), variance (how far the seeded detail strays) and
+ * density (how loud the plume, ash and sky are). The hero's profile is
+ * 0 / 1 / 1, which is neutral in every expression below — so `/` consumes the
+ * identical sequence of seeded random numbers it did before profiles existed
+ * and renders unchanged. Keep it that way when editing here.
  */
 
 const tune = fireTuning.bed
@@ -72,29 +80,55 @@ let rng = mulberry32(1)
 /** Seeded generation randomness. */
 const grand = (a, b) => a + rng() * (b - a)
 
+/**
+ * This route's departure from the hero. Held as a plain binding rather than
+ * read through the reactive store inside the build functions, so a whole
+ * mountain is always generated against one consistent profile.
+ */
+let prof = NEUTRAL_PROFILE
+
+/**
+ * Pull a seeded value back toward the neutral (hero-symmetric) one.
+ *
+ * `grand` is still called either way, so the number of draws from the seeded
+ * stream never changes — only how far the result is allowed to travel. That's
+ * what lets variance vary per page without reshuffling any other page.
+ */
+const stray = (neutral, seeded) => neutral + (seeded - neutral) * prof.variance
+
 // Where this page's peak sits, derived from the route seed around tune.offsetX.
 // Reactive so the painted sky glow follows it.
 const face = ref(0.5)
 let faceOffset = 0.5
 
 /**
- * Reseed for the current route. tune.offsetX is the centre of the range and
- * faceSpread is how far a page may wander from it, so spread 0 puts every page
- * on the same face and larger values give each page its own side of the peak.
+ * Reseed for the current route.
+ *
+ * Position is two parts: the profile's bearing, which is a designed choice
+ * about where this page stands, and a seeded wander of up to faceSpread on top
+ * of it, which is the random part. The hero's bearing is 0 and its variance 1,
+ * so it lands exactly where tune.offsetX plus its own seed put it.
  */
 function seedForRoute() {
+  prof = profileFor(route.path)
   rng = mulberry32(hashString(route.path || '/') ^ 0x5a1a)
   const spread = randomize.offsetX ? tune.faceSpread : 0
-  faceOffset = Math.max(0.1, Math.min(0.9, tune.offsetX + grand(-spread, spread)))
+  const wander = grand(-spread, spread) * prof.variance
+  faceOffset = Math.max(0.1, Math.min(0.9, tune.offsetX + prof.bearing + wander))
   face.value = faceOffset
 }
 
-const glowStyle = computed(() => ({
-  background: `radial-gradient(90% 55% at ${(face.value * 100).toFixed(0)}% 100%,
-    rgba(224, 67, 29, ${tune.glow}),
-    rgba(150, 35, 15, ${(tune.glow * 0.35).toFixed(3)}) 40%,
+// Read through profileFor rather than the `prof` binding so the painted sky
+// tracks a profile edit in the tuning panel without waiting for a rebuild.
+const glowStyle = computed(() => {
+  const g = tune.glow * profileFor(route.path).density
+  return {
+    background: `radial-gradient(90% 55% at ${(face.value * 100).toFixed(0)}% 100%,
+    rgba(224, 67, 29, ${g.toFixed(3)}),
+    rgba(150, 35, 15, ${(g * 0.35).toFixed(3)}) 40%,
     transparent 72%)`,
-}))
+  }
+})
 
 function makeGlow() {
   const s = 64
@@ -117,19 +151,24 @@ function makeGlow() {
  * and the jitter shrinks near the summit where the rock is younger.
  */
 function buildMountain(w, h) {
+  // How tall this page stands the peak. Everything derived from height scales
+  // with it, or the crater and the jitter stay hero-sized on a distant cone.
+  const height = tune.height * prof.scale
   const peakX = w * faceOffset
-  const peakY = h - tune.height
+  const peakY = h - height
   const halfBase = (w * tune.width) / 2
-  const craterHalf = Math.max(18, tune.height * 0.13)
+  const craterHalf = Math.max(18, height * 0.13)
 
-  // The cone's own profile. Static by default: varying it per route stops it
-  // being Deathfire seen from another side and makes it a different mountain.
-  // Turn on "Cone profile" in the panel to let each face reshape it.
+  // The cone's own profile. Reshaping it per route is what stops the site
+  // feeling like one flat backdrop, but pushed too far it stops being Deathfire
+  // seen from another side and becomes a different mountain — so the profile's
+  // variance pulls each draw back toward the neutral cone. The hero runs at
+  // full stray; the reading-heavy pages sit much closer to symmetric.
   const vary = randomize.asymmetry
-  const leftSpread = vary ? grand(0.78, 1.24) : 1
-  const rightSpread = vary ? grand(0.78, 1.24) : 1
-  const leftCurve = vary ? grand(1.3, 1.7) : 1.45
-  const rightCurve = vary ? grand(1.3, 1.7) : 1.45
+  const leftSpread = vary ? stray(1, grand(0.78, 1.24)) : 1
+  const rightSpread = vary ? stray(1, grand(0.78, 1.24)) : 1
+  const leftCurve = vary ? stray(1.45, grand(1.3, 1.7)) : 1.45
+  const rightCurve = vary ? stray(1.45, grand(1.3, 1.7)) : 1.45
 
   const flank = (dir) => {
     const pts = []
@@ -141,9 +180,9 @@ function buildMountain(w, h) {
       // Concave profile: volcanoes flare out as they descend.
       const eased = Math.pow(f, curve)
       const x = peakX + dir * (craterHalf + eased * (halfBase * spread - craterHalf))
-      const y = peakY + f * tune.height
+      const y = peakY + f * height
       // Less jitter high up, more on the old broken skirts below.
-      const jitter = (vary ? grand(-1, 1) : 0) * tune.height * 0.03 * (0.25 + f)
+      const jitter = (vary ? grand(-1, 1) : 0) * prof.variance * height * 0.03 * (0.25 + f)
       pts.push({ x, y: y + jitter })
     }
     return pts
@@ -159,8 +198,8 @@ function buildMountain(w, h) {
     left,
     right,
     // Crater rim dips slightly on one side, as if blown out.
-    rimL: { x: peakX - craterHalf, y: peakY + (vary ? grand(0, 6) : 2) },
-    rimR: { x: peakX + craterHalf, y: peakY + (vary ? grand(4, 12) : 8) },
+    rimL: { x: peakX - craterHalf, y: peakY + (vary ? stray(2, grand(0, 6)) : 2) },
+    rimR: { x: peakX + craterHalf, y: peakY + (vary ? stray(8, grand(4, 12)) : 8) },
   }
 }
 
@@ -168,10 +207,10 @@ function buildMountain(w, h) {
 function buildRidges(w, h) {
   const count = Math.max(0, Math.round(tune.ridges))
   return Array.from({ length: count }, () => {
-    const height = tune.height * grand(0.22, 0.42)
+    const height = tune.height * prof.scale * grand(0.22, 0.42)
     // Bias away from the main peak so the far range isn't swallowed by it.
     const side = rng() < 0.5 ? -1 : 1
-    const parallax = randomize.ridges ? grand(-0.18, 0.18) : 0
+    const parallax = randomize.ridges ? grand(-0.18, 0.18) * prof.variance : 0
     const peakX = (faceOffset + side * grand(0.32, 0.72) + parallax) * w
     const halfBase = grand(w * 0.16, w * 0.4)
     const pts = []
@@ -209,7 +248,10 @@ function buildFlows() {
 
   for (let i = 0; i < count; i++) {
     // Where it leaves the crater, as a fraction of the rim (-1 left, 1 right).
-    let u = randomize.flows ? grand(-0.85, 0.85) : -0.85 + (i / Math.max(1, count - 1)) * 1.7
+    // Neutral is an even fan across the rim; the seed scatters them, and the
+    // profile's variance decides how much of that scatter this page gets.
+    const even = -0.85 + (i / Math.max(1, count - 1)) * 1.7
+    let u = randomize.flows ? stray(even, grand(-0.85, 0.85)) : even
     const endAt = grand(0.45, 1)
     const pts = []
 
@@ -223,7 +265,7 @@ function buildFlows() {
 
       // Gentle meander, and lava tends to run away from the centreline as the
       // slope broadens rather than tracking straight down.
-      u += grand(-0.05, 0.05) + Math.sign(u) * 0.012
+      u += grand(-0.05, 0.05) * prof.variance + Math.sign(u) * 0.012
       u = Math.max(-0.94, Math.min(0.94, u))
 
       pts.push({ x: cx + u * halfW, y: (l.y + r.y) / 2 })
@@ -378,10 +420,12 @@ function layout() {
   burst = []
   // Honour the slider. This used to be min(w/16, count), which silently capped
   // a requested 112 to 94 on a 1500px screen and made the plume look thin.
-  const n = Math.round(tune.count * (mobile ? 0.45 : 1))
+  // Profile density thins the plume and ash on pages that are mostly reading.
+  const n = Math.round(tune.count * prof.density * (mobile ? 0.45 : 1))
   drift = Array.from({ length: n }, () => spawnDrift(w, h, false))
-  ash = Array.from({ length: Math.round(tune.ash * (mobile ? 0.5 : 1)) }, () =>
-    spawnAsh(w, h, false),
+  ash = Array.from(
+    { length: Math.round(tune.ash * prof.density * (mobile ? 0.5 : 1)) },
+    () => spawnAsh(w, h, false),
   )
   return true
 }
@@ -440,7 +484,9 @@ function draw(dt) {
   // 2. Light thrown up out of the caldera, behind the rock.
   const flare = m.flare || 0
   const breathe = 0.6 + Math.sin(t * 0.45) * 0.4
-  const calderaHeat = (tune.caldera * breathe + flare * 0.7) * 1.1
+  // Lava and the caldera are the brightest things on screen, so profile density
+  // has to reach them — thinning the plume alone leaves a reading page glowing.
+  const calderaHeat = (tune.caldera * breathe + flare * 0.7) * 1.1 * prof.density
   ctx.globalCompositeOperation = 'lighter'
   const cs = m.craterHalf * (7 + flare * 2)
   ctx.globalAlpha = Math.max(0, calderaHeat * 0.5)
@@ -458,7 +504,7 @@ function draw(dt) {
   ctx.lineJoin = 'round'
   for (const f of flows) {
     const pulse = 0.45 + Math.sin(t * f.rate + f.phase) * 0.55
-    const heat = f.heat * pulse * tune.flowHeat
+    const heat = f.heat * pulse * tune.flowHeat * prof.density
     if (heat <= 0.01) continue
     ctx.beginPath()
     ctx.moveTo(f.pts[0].x, f.pts[0].y)
@@ -597,6 +643,11 @@ watch(
     randomize.flows,
     randomize.ridges,
     randomize.asymmetry,
+    // This page's profile, so tuning it in the panel rebuilds immediately.
+    profileFor(route.path).bearing,
+    profileFor(route.path).scale,
+    profileFor(route.path).variance,
+    profileFor(route.path).density,
   ],
   () => {
     if (layout()) draw(1)

@@ -1,15 +1,30 @@
 <script setup>
 import { ref, computed } from 'vue'
-import { fireTuning, randomize, resetTuning, DEFAULTS, RANDOMIZE_DEFAULTS } from '../lib/fireTuning'
+import { useRoute } from 'vue-router'
+import {
+  fireTuning,
+  randomize,
+  resetTuning,
+  routeProfiles,
+  profileFor,
+  DEFAULTS,
+  RANDOMIZE_DEFAULTS,
+  ROUTE_PROFILE_DEFAULTS,
+} from '../lib/fireTuning'
 
 /**
  * Dev-only slider panel for the fire effects, shown at ?tune=1.
  *
  * Dial the look in the browser, hit Copy values, and paste the result into
- * DEFAULTS in lib/fireTuning.js. Never rendered for ordinary visitors.
+ * DEFAULTS and ROUTE_PROFILE_DEFAULTS in lib/fireTuning.js. Never rendered for
+ * ordinary visitors.
+ *
+ * The top three sections are global and describe the baked hero. "This page"
+ * edits only the route you're currently on, so navigate first, then tune.
  */
 const open = ref(true)
 const copied = ref(false)
+const route = useRoute()
 
 const TEXT_FIELDS = [
   { key: 'pixel', label: 'Pixel size', min: 1, max: 12, step: 1 },
@@ -20,27 +35,45 @@ const TEXT_FIELDS = [
   { key: 'base', label: 'Base brightness', min: 0, max: 1, step: 0.05 },
 ]
 
+// Several of these ceilings were hit dead-on during the last tuning pass —
+// flows, ridges, ash and plume count all ended pinned at max, which means the
+// slider was the limit, not the eye. Raised so there's headroom above the
+// baked values rather than a wall at them.
 const CRUST_FIELDS = [
-  { key: 'height', label: 'Peak height', min: 60, max: 800, step: 10 },
+  { key: 'height', label: 'Peak height', min: 60, max: 1200, step: 10 },
   { key: 'width', label: 'Base width', min: 0.2, max: 2, step: 0.02 },
   { key: 'offsetX', label: 'Peak position', min: 0, max: 1, step: 0.02 },
   { key: 'faceSpread', label: 'Face variation', min: 0, max: 0.45, step: 0.01 },
-  { key: 'flows', label: 'Lava flows', min: 0, max: 24, step: 1 },
-  { key: 'flowHeat', label: 'Lava heat', min: 0, max: 1.5, step: 0.05 },
-  { key: 'caldera', label: 'Caldera heat', min: 0, max: 1.5, step: 0.05 },
-  { key: 'ridges', label: 'Distant ridges', min: 0, max: 8, step: 1 },
-  { key: 'glow', label: 'Sky glow', min: 0, max: 0.8, step: 0.02 },
-  { key: 'ash', label: 'Falling ash', min: 0, max: 160, step: 4 },
+  { key: 'flows', label: 'Lava flows', min: 0, max: 48, step: 1 },
+  { key: 'flowHeat', label: 'Lava heat', min: 0, max: 2, step: 0.05 },
+  { key: 'caldera', label: 'Caldera heat', min: 0, max: 2, step: 0.05 },
+  { key: 'ridges', label: 'Distant ridges', min: 0, max: 16, step: 1 },
+  { key: 'glow', label: 'Sky glow', min: 0, max: 1.2, step: 0.02 },
+  { key: 'ash', label: 'Falling ash', min: 0, max: 400, step: 4 },
 ]
 
 const BED_FIELDS = [
   { key: 'eruptRate', label: 'Eruption rate', min: 0, max: 4, step: 0.1 },
-  { key: 'sparks', label: 'Sparks per pulse', min: 0, max: 3, step: 0.1 },
-  { key: 'count', label: 'Plume count', min: 0, max: 200, step: 4 },
+  { key: 'sparks', label: 'Sparks per pulse', min: 0, max: 4, step: 0.1 },
+  { key: 'count', label: 'Plume count', min: 0, max: 500, step: 4 },
   { key: 'sparkMix', label: 'Sparks vs embers', min: 0, max: 1, step: 0.05 },
-  { key: 'speed', label: 'Rise speed', min: 0.1, max: 3, step: 0.05 },
-  { key: 'scale', label: 'Particle scale', min: 0.2, max: 4, step: 0.1 },
+  { key: 'speed', label: 'Rise speed', min: 0.1, max: 4, step: 0.05 },
+  { key: 'scale', label: 'Particle scale', min: 0.2, max: 5, step: 0.1 },
 ]
+
+// Per-route departure from the baked hero.
+const PROFILE_FIELDS = [
+  { key: 'bearing', label: 'Bearing', min: -0.6, max: 0.6, step: 0.01, hint: 'where you stand' },
+  { key: 'scale', label: 'Scale', min: 0.15, max: 1.4, step: 0.02, hint: 'how far away it is' },
+  { key: 'variance', label: 'Variance', min: 0, max: 1.5, step: 0.05, hint: 'how far detail strays' },
+  { key: 'density', label: 'Density', min: 0, max: 1.5, step: 0.05, hint: 'plume, ash, sky and lava heat' },
+]
+
+const profile = computed(() => profileFor(route.path))
+/** Which entry is actually being edited — '*' when the route has none. */
+const profileKey = computed(() => (routeProfiles[route.path] ? route.path : '*'))
+const profileChanged = (key) =>
+  profile.value[key] !== ROUTE_PROFILE_DEFAULTS[profileKey.value]?.[key]
 
 // What a route's seed may vary. Everything else is identical on every page.
 const RANDOM_FIELDS = [
@@ -54,7 +87,8 @@ const snippet = computed(
   () =>
     `text: ${JSON.stringify(fireTuning.text, null, 2)},\n` +
     `bed: ${JSON.stringify(fireTuning.bed, null, 2)},\n` +
-    `randomize: ${JSON.stringify(randomize, null, 2)},`,
+    `randomize: ${JSON.stringify(randomize, null, 2)},\n` +
+    `profiles: ${JSON.stringify(routeProfiles, null, 2)},`,
 )
 
 async function copyValues() {
@@ -141,6 +175,29 @@ const changed = (group, key) => fireTuning[group][key] !== DEFAULTS[group][key]
         </label>
       </section>
 
+      <section>
+        <h3 class="tuner-group">
+          This page <span class="tuner-route">{{ profileKey }}</span>
+        </h3>
+        <p v-if="profileKey === '/'" class="tuner-hint">
+          The baked hero. 0 / 1 / 1 / 1 is the anchor every other page is
+          measured from — move the global sliders above instead.
+        </p>
+        <label v-for="f in PROFILE_FIELDS" :key="f.key" class="row">
+          <span class="row-label" :class="{ on: profileChanged(f.key) }" :title="f.hint">
+            {{ f.label }}
+          </span>
+          <input
+            v-model.number="profile[f.key]"
+            type="range"
+            :min="f.min"
+            :max="f.max"
+            :step="f.step"
+          />
+          <span class="row-val">{{ profile[f.key] }}</span>
+        </label>
+      </section>
+
       <div class="tuner-actions">
         <button class="btn-ember btn-xs" @click="copyValues">
           {{ copied ? 'Copied' : 'Copy values' }}
@@ -150,8 +207,8 @@ const changed = (group, key) => fireTuning[group][key] !== DEFAULTS[group][key]
       <p class="tuner-note">
         Lettering only redraws on the hero. Peak height, width, position, face
         variation, lava flows, ridges, ash and plume count rebuild the mountain;
-        the rest apply live. Each route gets its own seeded face — navigate to
-        see them.
+        the rest apply live. "This page" edits only the route you're on, so
+        navigate first, then tune — Copy values emits every page's profile.
       </p>
     </div>
   </aside>
@@ -211,6 +268,18 @@ const changed = (group, key) => fireTuning[group][key] !== DEFAULTS[group][key]
   font-size: 0.54rem;
   color: var(--color-smoke);
   margin: 0.5rem 0 0.45rem;
+}
+.tuner-route {
+  font-family: var(--font-mono);
+  letter-spacing: 0;
+  text-transform: none;
+  color: var(--color-ember);
+}
+.tuner-hint {
+  color: #728078;
+  font-size: 0.6rem;
+  line-height: 1.4;
+  margin-bottom: 0.4rem;
 }
 .row {
   display: grid;
