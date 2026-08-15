@@ -1,5 +1,10 @@
 import { createRouter, createWebHashHistory } from 'vue-router'
 import Landing from './views/Landing.vue'
+import { scrubCallbackHash } from './lib/discordAuth'
+
+// Must run before createWebHashHistory() below reads location.hash — see
+// discordAuth.js for why this can't just happen in main.js.
+scrubCallbackHash()
 
 const routes = [
   { path: '/', name: 'home', component: Landing, meta: { title: 'Home' } },
