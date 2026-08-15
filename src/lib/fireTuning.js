@@ -32,7 +32,10 @@ export const DEFAULTS = {
   // Mount Deathfire, the great volcano of Nocturne, behind every page.
   // Not Doom fire — at background scale the pixel grid read as noise.
   bed: {
-    // Height of the peak above the bottom of the viewport.
+    // Height of the peak above the bottom of the viewport, measured against the
+    // 1600x1000 reference viewport in MountDeathfire and scaled from there.
+    // Taken as raw pixels it walked the summit off the top of any shorter
+    // window, taking the crater and the eruptions with it.
     height: 690,
     // Base width as a fraction of the viewport.
     width: 0.6,
@@ -53,8 +56,13 @@ export const DEFAULTS = {
     // Eruption pulses: how often, and how many sparks each throws.
     eruptRate: 1,
     sparks: 1.6,
-    // Volcanic ash falling against the rising sparks.
-    ash: 160,
+    // Volcanic ash falling against the rising sparks, per the 1600x1000
+    // reference viewport — the count now scales with screen area, so this is a
+    // density rather than a headcount. 160 was not a chosen number: it was the
+    // old slider ceiling, and the tuning pass ended pinned against it. Same
+    // story as flows/ridges/count, which all still sit at exactly half their
+    // raised maximum and are worth a second pass at the panel.
+    ash: 460,
     // Continuous plume off the summit.
     count: 200,
     speed: 2.35,
@@ -113,24 +121,27 @@ export const ROUTE_PROFILE_DEFAULTS = {
 
   // Perk Builder: an eight-column hex tree spanning the full width, the densest
   // screen on the site. Nowhere to hide a mountain sideways, so it drops to a
-  // low horizon and the lava comes right down.
-  '/planner': { bearing: -0.02, scale: 0.34, variance: 0.45, density: 0.35 },
+  // low horizon and the lava comes right down. Small and dim compound: at low
+  // scale the dark rock is already hard to read against a dark page, so density
+  // — the lava/glow/ash that actually catches the eye — has to stay well above
+  // where a full-height cone would need it, or the mountain just disappears.
+  '/planner': { bearing: -0.02, scale: 0.4, variance: 0.45, density: 0.6 },
 
   // Armoury: weapon list and detail panel together span most of the width, so
   // this is a horizon too, just a nearer one than the planner's.
-  '/armoury': { bearing: 0.3, scale: 0.45, variance: 0.6, density: 0.45 },
+  '/armoury': { bearing: 0.3, scale: 0.5, variance: 0.6, density: 0.65 },
 
   // Builds: empty until you save one, so it can carry a bolder horizon — but
   // the page is short, which puts the footer over the peak, and the footer
   // background is only 60% opaque. Density is what keeps the fine print legible.
-  '/builds': { bearing: 0.34, scale: 0.5, variance: 0.9, density: 0.45 },
+  '/builds': { bearing: 0.34, scale: 0.55, variance: 0.9, density: 0.6 },
 
   // Companies: a left-aligned reading column with the whole right half empty.
   // The mountain belongs in that empty half, not under the text.
-  '/companies': { bearing: 0.52, scale: 0.6, variance: 0.75, density: 0.55 },
+  '/companies': { bearing: 0.52, scale: 0.65, variance: 0.75, density: 0.7 },
 
   // Anything unrouted — the 404. Somewhere you haven't been before.
-  '*': { bearing: 0.3, scale: 0.85, variance: 1, density: 0.8 },
+  '*': { bearing: 0.3, scale: 0.85, variance: 1, density: 0.85 },
 }
 
 const clone = (o) => JSON.parse(JSON.stringify(o))

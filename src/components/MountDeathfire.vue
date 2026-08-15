@@ -44,12 +44,46 @@ let flows = [] // lava running down the flanks
 let silhouette = null // cached rock, redrawn only on resize
 let drift = [] // continuous sparks/embers off the summit
 let burst = [] // sparks thrown by an eruption pulse
-let ash = []
+let ashBack = [] // ash falling behind the rock
+let ashFront = [] // ash falling between the rock and the viewer
 let spriteGlow = null
 let nextPulse = 0
+let relayoutPending = 0
+let resizeObserver = null
+let lastW = 0
+let lastH = 0
 
 // Runtime randomness — particles, which should never repeat.
 const rand = (a, b) => a + Math.random() * (b - a)
+
+/**
+ * The viewport the tuning panel's numbers were dialled in against.
+ *
+ * bed.height was being used as raw pixels, so the cone kept one absolute height
+ * while its base width stayed a fraction of the viewport. On anything shorter
+ * than the tuning window the summit walked off the top — a 640px-tall viewport
+ * put the peak at y = -50, which is why the crater, the caldera light and every
+ * eruption were invisible and the mountain read as bare lava streaks. Heights
+ * are now measured against this reference and scaled, so the cone keeps its
+ * proportions at every size and `/` renders exactly as tuned at 1600x1000.
+ */
+const REF = { w: 1600, h: 1000 }
+const REF_AREA = REF.w * REF.h
+
+/** Fraction of the viewport kept clear above the summit, for the plume. */
+const HEADROOM = 0.3
+
+/**
+ * The cone's height in this viewport: tuned height, scaled, then clamped.
+ *
+ * Non-finite input collapses to the floor rather than propagating — an emptied
+ * number field in the tuning panel hands over NaN, and NaN here reaches the
+ * canvas as a thrown gradient rather than as a visibly wrong mountain.
+ */
+function peakHeight(h) {
+  const wanted = tune.height * prof.scale * (h / REF.h)
+  return Math.max(40, Math.min(Number.isFinite(wanted) ? wanted : 0, h * (1 - HEADROOM)))
+}
 
 /**
  * Terrain randomness is *seeded*, so each route gets its own face of the
@@ -153,10 +187,15 @@ function makeGlow() {
 function buildMountain(w, h) {
   // How tall this page stands the peak. Everything derived from height scales
   // with it, or the crater and the jitter stay hero-sized on a distant cone.
-  const height = tune.height * prof.scale
+  const height = peakHeight(h)
   const peakX = w * faceOffset
   const peakY = h - height
-  const halfBase = (w * tune.width) / 2
+  // Base width is a fraction of the viewport *width* while height follows its
+  // *height*, so on a narrow window the cone sharpened into a lit chimney. The
+  // floor holds it to the slope it was tuned at (halfBase ~= 0.7 * height at
+  // 1600x1000), and only bites below about 4:3 — every desktop width keeps the
+  // fraction it had before, so the hero is untouched.
+  const halfBase = Math.max((w * tune.width) / 2, height * 0.6)
   const craterHalf = Math.max(18, height * 0.13)
 
   // The cone's own profile. Reshaping it per route is what stops the site
@@ -170,6 +209,16 @@ function buildMountain(w, h) {
   const leftCurve = vary ? stray(1.45, grand(1.3, 1.7)) : 1.45
   const rightCurve = vary ? stray(1.45, grand(1.3, 1.7)) : 1.45
 
+  // The crater rim. This is the brightest line in the scene, so it has to read
+  // level. It used to drop by two independent draws — 0..6px on the left and
+  // 4..12px on the right — which both tilted the lit mouth (3.3px over a 179px
+  // span on the hero seed) and, because the flanks were jittered separately at
+  // the same x, stepped the rock outline 3-4px at each corner. One seeded dip,
+  // mirrored, keeps the "blown out on one side" character without the tilt.
+  const rimDip = vary ? stray(0, grand(-1.5, 1.5)) : 0
+  const rimL = { x: peakX - craterHalf, y: peakY - rimDip }
+  const rimR = { x: peakX + craterHalf, y: peakY + rimDip }
+
   const flank = (dir) => {
     const pts = []
     const steps = 26
@@ -181,33 +230,28 @@ function buildMountain(w, h) {
       const eased = Math.pow(f, curve)
       const x = peakX + dir * (craterHalf + eased * (halfBase * spread - craterHalf))
       const y = peakY + f * height
-      // Less jitter high up, more on the old broken skirts below.
-      const jitter = (vary ? grand(-1, 1) : 0) * prof.variance * height * 0.03 * (0.25 + f)
+      // Less jitter high up, more on the old broken skirts below. The taper runs
+      // all the way to zero at the rim (it used to floor at 0.25) so the flank
+      // meets the crater mouth exactly instead of stepping off it.
+      const jitter = (vary ? grand(-1, 1) : 0) * prof.variance * height * 0.03 * f
       pts.push({ x, y: y + jitter })
     }
+    // Share the rim's own point, so silhouette and lit mouth cannot disagree.
+    pts[0] = dir < 0 ? { ...rimL } : { ...rimR }
     return pts
   }
 
   const left = flank(-1)
   const right = flank(1)
 
-  return {
-    peakX,
-    peakY,
-    craterHalf,
-    left,
-    right,
-    // Crater rim dips slightly on one side, as if blown out.
-    rimL: { x: peakX - craterHalf, y: peakY + (vary ? stray(2, grand(0, 6)) : 2) },
-    rimR: { x: peakX + craterHalf, y: peakY + (vary ? stray(8, grand(4, 12)) : 8) },
-  }
+  return { peakX, peakY, craterHalf, left, right, rimL, rimR }
 }
 
 /** Lower, dimmer cones behind the main peak so the horizon has depth. */
 function buildRidges(w, h) {
   const count = Math.max(0, Math.round(tune.ridges))
   return Array.from({ length: count }, () => {
-    const height = tune.height * prof.scale * grand(0.22, 0.42)
+    const height = peakHeight(h) * grand(0.22, 0.42)
     // Bias away from the main peak so the far range isn't swallowed by it.
     const side = rng() < 0.5 ? -1 : 1
     const parallax = randomize.ridges ? grand(-0.18, 0.18) * prof.variance : 0
@@ -344,16 +388,27 @@ function lifeFade(e) {
   return 1
 }
 
-function spawnAsh(w, h, atTop) {
+/**
+ * A falling flake.
+ *
+ * `front` flakes are drawn after the rock instead of behind it. Ash only ever
+ * fell behind the silhouette, and the cone covers most of the lower screen, so
+ * a large share of every flake spawned was painted over and lost — the fall
+ * read as a thin band of sky rather than weather across the whole window.
+ * Nearer flakes are bigger and faster, which is what makes the two layers read
+ * as depth rather than as one layer at two brightnesses.
+ */
+function spawnAsh(w, h, atTop, front) {
   return {
+    front,
     x: rand(-30, w + 30),
     y: atTop ? rand(-60, -10) : rand(0, h),
-    vy: rand(0.12, 0.42),
-    drift: rand(-0.22, 0.22),
-    size: rand(1, 2.6),
+    vy: front ? rand(0.34, 0.86) : rand(0.12, 0.42),
+    drift: rand(-0.22, 0.22) * (front ? 1.5 : 1),
+    size: front ? rand(1.6, 3.8) : rand(1, 2.6),
     phase: rand(0, Math.PI * 2),
     sway: rand(0.4, 1.5),
-    alpha: rand(0.1, 0.32),
+    alpha: front ? rand(0.14, 0.4) : rand(0.1, 0.32),
   }
 }
 
@@ -401,7 +456,12 @@ function layout() {
   if (!cv) return false
   const w = window.innerWidth
   const h = window.innerHeight
-  if (w < 2 || h < 2) return false
+  // Finite check first: `NaN < 2` is false, so a non-finite viewport used to
+  // walk straight past this guard and NaN-poison the whole build, throwing on
+  // createLinearGradient once it reached the silhouette.
+  if (!Number.isFinite(w) || !Number.isFinite(h) || w < 2 || h < 2) return false
+  lastW = w
+  lastH = h
 
   const dpr = Math.min(window.devicePixelRatio || 1, 2)
   cv.width = Math.ceil(w * dpr)
@@ -423,11 +483,34 @@ function layout() {
   // Profile density thins the plume and ash on pages that are mostly reading.
   const n = Math.round(tune.count * prof.density * (mobile ? 0.45 : 1))
   drift = Array.from({ length: n }, () => spawnDrift(w, h, false))
-  ash = Array.from(
-    { length: Math.round(tune.ash * prof.density * (mobile ? 0.5 : 1)) },
-    () => spawnAsh(w, h, false),
-  )
+
+  // Ash is weather: it has to hold the same density per screen area at every
+  // size. A flat count spread the same handful of flakes over a 2M-pixel
+  // desktop as over a phone, which is what made it look muted on a wide window.
+  const areaScale = (w * h) / REF_AREA
+  const total = Math.round(tune.ash * prof.density * areaScale * (mobile ? 0.5 : 1))
+  const frontCount = Math.round(total * 0.4)
+  ashBack = Array.from({ length: total - frontCount }, () => spawnAsh(w, h, false, false))
+  ashFront = Array.from({ length: frontCount }, () => spawnAsh(w, h, false, true))
   return true
+}
+
+/**
+ * Rebuild for a new viewport, at most once a frame.
+ *
+ * layout() throws away the cached silhouette and every particle, so running it
+ * raw on a resize stream meant a full rebuild per event for the length of a
+ * drag. Coalescing to the next frame and skipping same-size events keeps a
+ * resize cheap; mobile chrome in particular fires resize constantly as the URL
+ * bar slides without the viewport really changing.
+ */
+function relayout() {
+  if (relayoutPending) return
+  relayoutPending = requestAnimationFrame(() => {
+    relayoutPending = 0
+    if (window.innerWidth === lastW && window.innerHeight === lastH) return
+    if (layout()) draw(1)
+  })
 }
 
 /** A pulse from the vent: a burst of sparks straight up out of the crater. */
@@ -468,18 +551,22 @@ function draw(dt) {
   ctx.setTransform(dpr, 0, 0, dpr, 0, 0)
   ctx.clearRect(0, 0, w, h)
 
-  // 1. Ash, falling behind the mountain.
-  ctx.globalCompositeOperation = 'source-over'
-  for (const a of ash) {
-    a.y += a.vy * dt
-    a.phase += 0.02 * dt
-    a.x += (a.drift + Math.sin(a.phase) * 0.2 * a.sway) * dt
-    if (a.y > h + 20) Object.assign(a, spawnAsh(w, h, true))
-    ctx.globalAlpha = a.alpha
+  const fallAsh = (flakes) => {
+    ctx.globalCompositeOperation = 'source-over'
     ctx.fillStyle = '#6b6560'
-    ctx.fillRect(a.x, a.y, a.size, a.size)
+    for (const a of flakes) {
+      a.y += a.vy * dt
+      a.phase += 0.02 * dt
+      a.x += (a.drift + Math.sin(a.phase) * 0.2 * a.sway) * dt
+      if (a.y > h + 20) Object.assign(a, spawnAsh(w, h, true, a.front))
+      ctx.globalAlpha = a.alpha
+      ctx.fillRect(a.x, a.y, a.size, a.size)
+    }
+    ctx.globalAlpha = 1
   }
-  ctx.globalAlpha = 1
+
+  // 1. Ash, falling behind the mountain. The nearer layer falls in step 5b.
+  fallAsh(ashBack)
 
   // 2. Light thrown up out of the caldera, behind the rock.
   const flare = m.flare || 0
@@ -536,6 +623,10 @@ function draw(dt) {
   const ms = m.craterHalf * 2.6
   ctx.globalAlpha = Math.max(0, calderaHeat * 0.85)
   ctx.drawImage(spriteGlow, m.peakX - ms / 2, m.peakY - ms * 0.35, ms, ms * 0.7)
+
+  // 5b. The near ash, in front of the rock — this is the half that makes the
+  // fall read across the whole window rather than only in the open sky.
+  fallAsh(ashFront)
 
   // 6. The plume: continuous sparks and embers off the summit.
   ctx.lineCap = 'round'
@@ -657,6 +748,18 @@ watch(
 onMounted(() => {
   if (!layout()) return
 
+  // Resize handling is set up before the reduced-motion branch: a still frame
+  // still has to be the right size. It used to be registered only on the live
+  // path, so with reduced motion on, the mountain kept whatever dimensions the
+  // first paint gave it for the life of the page.
+  window.addEventListener('resize', relayout, { passive: true })
+  // The window event misses anything that changes the box without resizing the
+  // window — an embedded context, or a scrollbar coming and going.
+  if ('ResizeObserver' in window && host.value) {
+    resizeObserver = new ResizeObserver(relayout)
+    resizeObserver.observe(host.value)
+  }
+
   if (!motionAllowed()) {
     t = 2.5
     draw(1)
@@ -666,21 +769,25 @@ onMounted(() => {
 
   mode.value = 'live'
   raf = requestAnimationFrame(frame)
-  window.addEventListener('resize', layout, { passive: true })
   document.addEventListener('visibilitychange', onVisibility)
 })
 
 onBeforeUnmount(() => {
   stopped = true
   cancelAnimationFrame(raf)
-  window.removeEventListener('resize', layout)
+  cancelAnimationFrame(relayoutPending)
+  relayoutPending = 0
+  window.removeEventListener('resize', relayout)
+  resizeObserver?.disconnect()
+  resizeObserver = null
   document.removeEventListener('visibilitychange', onVisibility)
   mountain = null
   ridges = []
   flows = []
   drift = []
   burst = []
-  ash = []
+  ashBack = []
+  ashFront = []
   silhouette = null
 })
 </script>

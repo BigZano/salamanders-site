@@ -49,7 +49,10 @@ const CRUST_FIELDS = [
   { key: 'caldera', label: 'Caldera heat', min: 0, max: 2, step: 0.05 },
   { key: 'ridges', label: 'Distant ridges', min: 0, max: 16, step: 1 },
   { key: 'glow', label: 'Sky glow', min: 0, max: 1.2, step: 0.02 },
-  { key: 'ash', label: 'Falling ash', min: 0, max: 400, step: 4 },
+  // Ash is a density against a 1600x1000 reference now, not a headcount, so the
+  // usable range is wider. Kept well above the baked value: the last two
+  // ceilings both ended up baked in as if they were choices.
+  { key: 'ash', label: 'Falling ash', min: 0, max: 1000, step: 10 },
 ]
 
 const BED_FIELDS = [
