@@ -70,7 +70,14 @@ const ROMAN = { 1: 'I', 2: 'II', 3: 'III', 4: 'IV' }
 const saveDetails = ref(false)
 const saveForm = ref({ title: '', role: '', notes: '' })
 
+// Enter in the build-name field and a click on "Save to library" both submit
+// the same form — nothing stopped both firing seconds apart (Enter, then an
+// unsure click right after) and writing two near-identical entries.
+let lastSave = 0
 function submitSave() {
+  const now = Date.now()
+  if (now - lastSave < 600) return
+  lastSave = now
   planner.saveBuild(saveForm.value)
   const name = saveForm.value.title.trim() || `${planner.activeClass} Build`
   saveForm.value = { title: '', role: '', notes: '' }

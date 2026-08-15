@@ -1,9 +1,12 @@
 <script setup>
 import { ref, watch } from 'vue'
-import { useRoute } from 'vue-router'
+import { useRoute, useRouter } from 'vue-router'
+import { usePlanner } from '../stores/planner'
 
 const open = ref(false)
 const route = useRoute()
+const router = useRouter()
+const planner = usePlanner()
 const DISCORD = 'https://discord.gg/salamanders'
 
 const links = [
@@ -19,6 +22,19 @@ watch(
   () => route.fullPath,
   () => (open.value = false),
 )
+
+// The nav title is the one place on the site people expect a hard reset —
+// "take me back to a blank Perk Builder," not "resume whatever's loaded."
+// Same-route clicks don't trigger a navigation at all by default, so a build
+// applied from the library (or loaded from a share link) would otherwise
+// just sit there forever once you're already on the page.
+function freshPlanner() {
+  planner.resetClass()
+  if (route.path === '/planner' && Object.keys(route.query).length) {
+    router.replace({ path: '/planner', query: {} })
+  }
+  open.value = false
+}
 </script>
 
 <template>
@@ -37,6 +53,7 @@ watch(
           :to="l.to"
           class="nav-link"
           exact-active-class="is-active"
+          @click="l.to === '/planner' && freshPlanner()"
         >
           {{ l.label }}
         </RouterLink>
@@ -66,6 +83,7 @@ watch(
           :to="l.to"
           class="nav-mobile-link"
           exact-active-class="is-active"
+          @click="l.to === '/planner' && freshPlanner()"
         >
           {{ l.label }}
         </RouterLink>
