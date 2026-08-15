@@ -1,5 +1,5 @@
 <script setup>
-import { ref, computed, onMounted } from 'vue'
+import { ref, computed, watch, onMounted } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { usePlanner, CLASS_NAMES, describePerk, MAX_PRESTIGE } from '../stores/planner'
 import WeaponSlot from '../components/WeaponSlot.vue'
@@ -9,7 +9,6 @@ const route = useRoute()
 const router = useRouter()
 
 const CAT_LABEL = ['Core', 'Core', 'Core', 'Team', 'Gear', 'Gear', 'Gear', 'Signature']
-const levels = Array.from({ length: 25 }, (_, i) => i + 1)
 const slots = [
   { key: 'primary', label: 'Primary Weapon' },
   { key: 'secondary', label: 'Secondary Weapon' },
@@ -21,16 +20,50 @@ function initials(name) {
   return ((w[0]?.[0] || '') + (w.length > 1 ? w[w.length - 1][0] : '')).toUpperCase()
 }
 
-// Perk detail (hover / focus / select)
-const inspected = ref(null)
-function inspect(perk) {
-  inspected.value = perk
+// Floating popout: read-only preview, follows whatever's hovered/focused.
+const hovered = ref(null)
+const popoutBelow = ref(false)
+const popoutStyle = ref({})
+function showPopout(perk, evt) {
+  hovered.value = perk
+  const rect = evt.currentTarget.getBoundingClientRect()
+  const half = 150 // half the popout's ~300px width, for clamping
+  const left = Math.min(Math.max(rect.left + rect.width / 2, half + 12), window.innerWidth - half - 12)
+  // Not enough headroom above (near the top of the viewport) — flip below instead.
+  popoutBelow.value = rect.top < 200
+  const top = popoutBelow.value ? rect.bottom + 12 : rect.top - 10
+  popoutStyle.value = { left: `${left}px`, top: `${top}px` }
 }
-const detail = computed(() => inspected.value)
-const detailText = computed(() =>
-  detail.value ? describePerk(planner.activeClass, detail.value.name) : '',
+function hidePopout() {
+  hovered.value = null
+}
+const hoveredText = computed(() =>
+  hovered.value ? describePerk(planner.activeClass, hovered.value.name) : '',
 )
-const prestigeRanks = Array.from({ length: MAX_PRESTIGE + 1 }, (_, i) => i)
+const hoveredWhy = computed(() => {
+  const p = hovered.value
+  if (!p || planner.selected[p.col] !== p.name) return ''
+  return planner.justified[p.col] || ''
+})
+
+// Authoring box: pinned to whichever perk was last clicked into the build,
+// not whatever's hovered — hovering to compare picks shouldn't steal focus
+// away from the reasoning you're mid-sentence writing.
+const editingCol = ref(null)
+const editingPerk = computed(() => {
+  if (editingCol.value == null) return null
+  const name = planner.selected[editingCol.value]
+  if (!name) return null
+  return planner.columns[editingCol.value].perks.find((p) => p.name === name) || null
+})
+const justificationDraft = ref('')
+watch(editingPerk, (p) => {
+  justificationDraft.value = p ? planner.justified[p.col] || '' : ''
+})
+function saveJustification() {
+  if (editingPerk.value) planner.setJustification(editingPerk.value.col, justificationDraft.value)
+}
+
 const ROMAN = { 1: 'I', 2: 'II', 3: 'III', 4: 'IV' }
 
 // Save-to-library, inline in the build panel.
@@ -56,7 +89,7 @@ const isSelected = (perk) => planner.selected[perk.col] === perk.name
 function onPerk(perk) {
   if (perk.level > planner.level) return
   planner.togglePerk(perk)
-  inspect(perk)
+  editingCol.value = planner.selected[perk.col] === perk.name ? perk.col : null
 }
 
 // Toast
@@ -93,7 +126,6 @@ async function shareBuild() {
 onMounted(() => {
   planner.hydrate()
   if (route.query.b) planner.applyEncoded(String(route.query.b))
-  inspect(planner.columns[0].perks[0])
 })
 </script>
 
@@ -131,23 +163,6 @@ onMounted(() => {
           <p class="hero-desc">{{ planner.meta.description }}</p>
         </div>
       </div>
-
-      <div class="controls">
-        <label class="field">
-          <span>Class Level</span>
-          <select :value="planner.level" @change="planner.setLevel($event.target.value)">
-            <option v-for="l in levels" :key="l" :value="l">{{ l }}</option>
-          </select>
-        </label>
-        <label class="field">
-          <span>Prestige rank</span>
-          <select :value="planner.activePrestige" @change="planner.setPrestige($event.target.value)">
-            <option v-for="r in prestigeRanks" :key="r" :value="r">
-              {{ r === 0 ? 'Not prestiged' : `Prestige ${r}` }}
-            </option>
-          </select>
-        </label>
-      </div>
     </div>
 
     <div class="layout">
@@ -172,8 +187,10 @@ onMounted(() => {
                   :class="{ selected: isSelected(perk), locked: perk.level > planner.level }"
                   :disabled="perk.level > planner.level"
                   @click="onPerk(perk)"
-                  @mouseenter="inspect(perk)"
-                  @focus="inspect(perk)"
+                  @mouseenter="showPopout(perk, $event)"
+                  @mouseleave="hidePopout"
+                  @focus="showPopout(perk, $event)"
+                  @blur="hidePopout"
                 >
                   <span v-if="perk.level > planner.level" class="lock">LV {{ perk.level }}</span>
                   <span v-if="isSelected(perk)" class="pick-mark" aria-hidden="true" />
@@ -185,22 +202,56 @@ onMounted(() => {
           </div>
         </div>
 
-        <!-- Perk detail -->
-        <div v-if="detail" class="perk-detail" :data-cat="detail.cat">
-          <span class="detail-icon">{{ initials(detail.name) }}</span>
-          <div class="detail-body">
-            <p class="detail-name">{{ detail.name }}</p>
-            <p class="detail-meta">
-              {{ CAT_LABEL[detail.col] }} perk · Column {{ detail.col + 1 }} · Unlocks at level
-              {{ detail.level }}
+        <!-- Reasoning: pinned to the last perk you clicked into the build, so
+             readers hovering it later can see why you picked it. -->
+        <div v-if="editingPerk" class="perk-author" :data-cat="editingPerk.cat">
+          <span class="pa-icon">{{ initials(editingPerk.name) }}</span>
+          <div class="pa-body">
+            <p class="pa-name">
+              {{ editingPerk.name }}
+              <span class="pa-meta">selected · column {{ editingPerk.col + 1 }}</span>
             </p>
-            <p v-if="detailText" class="detail-note">{{ detailText }}</p>
-            <p v-else class="detail-note detail-note-empty">
-              No description on the wiki yet. Re-run the perk bake after the next patch.
-            </p>
+            <label class="pa-label" :for="`why-${editingPerk.col}`">Why this pick?</label>
+            <textarea
+              :id="`why-${editingPerk.col}`"
+              v-model="justificationDraft"
+              class="pa-field"
+              rows="2"
+              placeholder="What does this add to the build? When do you lean on it?"
+              @blur="saveJustification"
+            />
           </div>
         </div>
+        <p v-else class="perk-author-empty">
+          Pick a perk above to write down why it's in the build — readers see it on hover.
+        </p>
       </div>
+
+      <!-- Floating preview: wiki text plus the creator's reasoning, anchored
+           to whatever perk is currently hovered or focused. -->
+      <Teleport to="body">
+        <div
+          v-if="hovered"
+          class="perk-popout"
+          :class="{ below: popoutBelow }"
+          :style="popoutStyle"
+          :data-cat="hovered.cat"
+        >
+          <p class="pp-name">{{ hovered.name }}</p>
+          <p class="pp-meta">
+            {{ CAT_LABEL[hovered.col] }} · Column {{ hovered.col + 1 }} · Unlocks at level
+            {{ hovered.level }}
+          </p>
+          <p v-if="hoveredText" class="pp-desc">{{ hoveredText }}</p>
+          <p v-else class="pp-desc pp-empty">
+            No description on the wiki yet. Re-run the perk bake after the next patch.
+          </p>
+          <div v-if="hoveredWhy" class="pp-why">
+            <span class="pp-why-label">Why the creator picked it</span>
+            <p>{{ hoveredWhy }}</p>
+          </div>
+        </div>
+      </Teleport>
 
       <!-- Build panel -->
       <aside class="build">
@@ -318,10 +369,7 @@ onMounted(() => {
           <span class="pr-count" :class="{ full: planner.prestigePicksLeft === 0 && planner.activePrestige > 0 }">
             {{ planner.activePrestigePicks.length }} / {{ planner.activePrestige }} picked
           </span>
-          <p class="pr-note">
-            One perk per prestige rank, up to {{ MAX_PRESTIGE }}. Set your rank with
-            Prestige above.
-          </p>
+          <p class="pr-note">One perk per prestige rank, up to {{ MAX_PRESTIGE }} total.</p>
         </div>
       </div>
 
@@ -425,21 +473,17 @@ onMounted(() => {
 
 /* class hero */
 .hero-card {
+  display: inline-flex;
+  max-width: 100%;
   border: 1px solid var(--color-ash);
   border-radius: 8px;
   background: rgba(7, 17, 13, 0.5);
   padding: 1.4rem;
-  display: flex;
-  gap: 1.5rem;
-  justify-content: space-between;
-  flex-wrap: wrap;
 }
 .hero-id {
   display: flex;
   gap: 1rem;
   align-items: flex-start;
-  min-width: 16rem;
-  flex: 1;
 }
 .emblem {
   flex: none;
@@ -475,36 +519,6 @@ onMounted(() => {
   max-width: 44ch;
   font-size: 0.9rem;
 }
-.controls {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(9rem, 1fr));
-  gap: 0.6rem;
-  align-content: start;
-}
-.field {
-  display: flex;
-  flex-direction: column;
-  gap: 0.25rem;
-}
-.field span {
-  font-family: var(--font-mono);
-  text-transform: uppercase;
-  letter-spacing: 0.14em;
-  font-size: 0.58rem;
-  color: var(--color-smoke);
-}
-.field select {
-  background: rgba(5, 10, 8, 0.7);
-  border: 1px solid var(--color-ash);
-  color: var(--color-bone);
-  border-radius: 2px;
-  padding: 0.45rem 0.5rem;
-  font-size: 0.85rem;
-}
-.field select:disabled {
-  opacity: 0.4;
-}
-
 /* layout */
 .layout {
   display: grid;
@@ -533,7 +547,7 @@ onMounted(() => {
   padding: 1.2rem 1rem 0.5rem;
 }
 .perk-grid {
-  min-width: 900px;
+  min-width: 640px;
   display: grid;
   grid-template-columns: repeat(8, 1fr);
   gap: 0.4rem;
@@ -666,11 +680,11 @@ onMounted(() => {
   border-radius: 2px;
   padding: 0 3px;
 }
-/* perk detail */
-.perk-detail {
+/* perk authoring — the dead space under the tree becomes a workspace for
+   whichever perk was last clicked into the build. */
+.perk-author {
   display: flex;
   gap: 0.9rem;
-  align-items: center;
   margin-top: 0.9rem;
   padding: 0.9rem 1rem;
   border: 1px solid var(--color-ash);
@@ -678,16 +692,16 @@ onMounted(() => {
   border-radius: 6px;
   background: rgba(14, 28, 22, 0.4);
 }
-.perk-detail[data-cat='team'] {
+.perk-author[data-cat='team'] {
   border-left-color: var(--color-drake);
 }
-.perk-detail[data-cat='gear'] {
+.perk-author[data-cat='gear'] {
   border-left-color: var(--color-gold);
 }
-.perk-detail[data-cat='signature'] {
+.perk-author[data-cat='signature'] {
   border-left-color: var(--color-violet);
 }
-.detail-icon {
+.pa-icon {
   flex: none;
   width: 3rem;
   height: 3rem;
@@ -699,22 +713,145 @@ onMounted(() => {
   clip-path: polygon(50% 0, 100% 25%, 100% 75%, 50% 100%, 0 75%, 0 25%);
   background: linear-gradient(145deg, #2a4a8a, #14213f);
 }
-.detail-name {
+.pa-body {
+  flex: 1;
+  min-width: 0;
+}
+.pa-name {
   font-family: var(--font-display);
   text-transform: uppercase;
   font-weight: 700;
   color: var(--color-bone);
   font-size: 1.05rem;
 }
-.detail-meta {
+.pa-meta {
   font-family: var(--font-mono);
+  text-transform: none;
+  font-weight: 400;
   font-size: 0.68rem;
+  letter-spacing: 0.06em;
   color: var(--color-gold);
-  margin: 0.15rem 0 0.3rem;
 }
-.detail-note {
+.pa-label {
+  display: block;
+  font-family: var(--font-mono);
+  text-transform: uppercase;
+  letter-spacing: 0.12em;
+  font-size: 0.56rem;
+  color: var(--color-smoke);
+  margin: 0.5rem 0 0.3rem;
+}
+.pa-field {
+  width: 100%;
+  background: rgba(5, 10, 8, 0.7);
+  border: 1px solid var(--color-ash);
+  color: var(--color-bone);
+  border-radius: 2px;
+  padding: 0.5rem 0.6rem;
+  font-size: 0.82rem;
+  font-family: var(--font-sans);
+  line-height: 1.4;
+  resize: vertical;
+}
+.pa-field::placeholder {
+  color: #5f6f66;
+}
+.perk-author-empty {
+  margin-top: 0.9rem;
+  padding: 0.9rem 1rem;
+  border: 1px dashed var(--color-ash);
+  border-radius: 6px;
+  text-align: center;
+  color: var(--color-smoke);
+  font-size: 0.82rem;
+}
+
+/* floating popout — read-only preview, anchored to the hovered/focused hex */
+.perk-popout {
+  position: fixed;
+  transform: translate(-50%, calc(-100% - 12px));
+  width: min(90vw, 300px);
+  z-index: 95;
+  pointer-events: none;
+  padding: 0.8rem 0.9rem;
+  border: 1px solid var(--color-ash-2);
+  border-top: 2px solid var(--color-cobalt);
+  border-radius: 6px;
+  background: rgba(6, 12, 10, 0.96);
+  box-shadow: 0 16px 40px -12px rgba(0, 0, 0, 0.85);
+}
+.perk-popout[data-cat='team'] {
+  border-top-color: var(--color-drake);
+}
+.perk-popout[data-cat='gear'] {
+  border-top-color: var(--color-gold);
+}
+.perk-popout[data-cat='signature'] {
+  border-top-color: var(--color-violet);
+}
+.perk-popout.below {
+  transform: translate(-50%, 0);
+}
+.perk-popout::after {
+  content: '';
+  position: absolute;
+  left: 50%;
+  bottom: -5px;
+  width: 9px;
+  height: 9px;
+  transform: translateX(-50%) rotate(45deg);
+  background: rgba(6, 12, 10, 0.96);
+  border-right: 1px solid var(--color-ash-2);
+  border-bottom: 1px solid var(--color-ash-2);
+}
+.perk-popout.below::after {
+  bottom: auto;
+  top: -5px;
+  border-right: none;
+  border-bottom: none;
+  border-left: 1px solid var(--color-ash-2);
+  border-top: 1px solid var(--color-ash-2);
+}
+.pp-name {
+  font-family: var(--font-display);
+  text-transform: uppercase;
+  font-weight: 700;
+  color: var(--color-bone);
+  font-size: 1rem;
+}
+.pp-meta {
+  font-family: var(--font-mono);
+  font-size: 0.64rem;
+  color: var(--color-gold);
+  margin: 0.15rem 0 0.4rem;
+}
+.pp-desc {
   color: var(--color-smoke);
   font-size: 0.8rem;
+  line-height: 1.4;
+}
+.pp-empty {
+  font-style: italic;
+}
+.pp-why {
+  margin-top: 0.6rem;
+  padding-top: 0.5rem;
+  padding-left: 0.6rem;
+  border-top: 1px solid var(--color-ash);
+  border-left: 2px solid var(--color-ember);
+}
+.pp-why-label {
+  display: block;
+  font-family: var(--font-mono);
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+  font-size: 0.56rem;
+  color: var(--color-ember);
+  margin-bottom: 0.2rem;
+}
+.pp-why p {
+  color: #dfeee2;
+  font-size: 0.82rem;
   line-height: 1.4;
 }
 
@@ -1167,9 +1304,6 @@ onMounted(() => {
 @media (max-width: 600px) {
   .planner {
     padding-top: 3rem;
-  }
-  .controls {
-    grid-template-columns: 1fr 1fr;
   }
 }
 </style>

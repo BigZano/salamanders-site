@@ -41,13 +41,13 @@ export const usePlanner = defineStore('planner', {
   state: () => ({
     activeClass: CLASS_NAMES[0],
     level: 25,
-    // Prestige rank per class: { [className]: 0..MAX_PRESTIGE }
-    prestige: {},
     // Chosen prestige perk per rank: { [className]: [rank1, rank2, rank3, rank4] }
     // Slots hold a perk name or null, indexed by rank - 1.
     prestigePicks: {},
     // { [className]: { [col]: perkName } }
     selectedPerks: {},
+    // Creator's reasoning for a pick: { [className]: { [col]: text } }
+    justifications: {},
     // { [className]: { primary, secondary, melee } }
     weapons: {},
     // saved "recommended" builds (personal library, like the original)
@@ -62,8 +62,11 @@ export const usePlanner = defineStore('planner', {
     meta: (s) => classes[s.activeClass],
     columns: (s) => columnsFor(s.activeClass),
     selected: (s) => s.selectedPerks[s.activeClass] || {},
+    justified: (s) => s.justifications[s.activeClass] || {},
     activeWeapons: (s) => s.weapons[s.activeClass] || {},
-    activePrestige: (s) => s.prestige[s.activeClass] || 0,
+    // Pinned to max: this tool plans a fully-progressed build, not tracks
+    // in-progress leveling. Below-max players judge their own picks.
+    activePrestige: () => MAX_PRESTIGE,
     /** Raw rank slots, always MAX_PRESTIGE long. */
     prestigeRaw: (s) => {
       const saved = s.prestigePicks[s.activeClass] || []
@@ -109,7 +112,7 @@ export const usePlanner = defineStore('planner', {
         slots,
         count: slots.filter((x) => x.name).length,
         weapons: s.weapons[s.activeClass] || {},
-        prestige: s.prestige[s.activeClass] || 0,
+        prestige: this.activePrestige,
         // Rank slots as stored (may contain holes) plus the flat list for display.
         prestigeSlots: [...this.prestigeRaw],
         prestigePicks: this.activePrestigePicks,
@@ -124,19 +127,6 @@ export const usePlanner = defineStore('planner', {
       if (classes[name]) this.activeClass = name
       this.persist()
     },
-    setLevel(n) {
-      this.level = Math.max(1, Math.min(25, Number(n) || 1))
-      this.enforceLevel()
-      this.persist()
-    },
-    enforceLevel() {
-      const sel = this.selectedPerks[this.activeClass]
-      if (!sel) return
-      for (const col of Object.keys(sel)) {
-        const perk = columnsFor(this.activeClass)[col].perks.find((p) => p.name === sel[col])
-        if (perk && perk.level > this.level) delete sel[col]
-      }
-    },
     togglePerk(perk) {
       if (perk.level > this.level) return
       const cls = this.activeClass
@@ -146,26 +136,23 @@ export const usePlanner = defineStore('planner', {
       } else {
         this.selectedPerks[cls][perk.col] = perk.name
       }
+      // Reasoning is tied to a specific pick — swapping or clearing the column
+      // invalidates whatever was written for the perk that used to sit there.
+      delete this.justifications[cls]?.[perk.col]
       this.persist()
     },
-    setPrestige(n) {
-      const rank = Math.max(0, Math.min(MAX_PRESTIGE, Number(n) || 0))
-      this.prestige[this.activeClass] = rank
-      this.enforcePrestige()
-      this.persist()
-    },
-    /** Clear any rank slot the class hasn't earned. */
-    enforcePrestige() {
+    setJustification(col, text) {
       const cls = this.activeClass
-      const rank = this.prestige[cls] || 0
-      const picks = this.prestigePicks[cls]
-      if (!picks?.length) return
-      this.prestigePicks[cls] = picks.map((name, i) => (i + 1 <= rank ? name : null))
+      this.justifications[cls] ??= {}
+      const trimmed = (text || '').trim()
+      if (trimmed) this.justifications[cls][col] = trimmed
+      else delete this.justifications[cls][col]
+      this.persist()
     },
     /** Assign a perk to the lowest open rank, or clear it if already chosen. */
     togglePrestigePerk(name) {
       const cls = this.activeClass
-      const rank = this.prestige[cls] || 0
+      const rank = this.activePrestige
       const slots = [...this.prestigeRaw]
       const at = slots.indexOf(name)
       if (at !== -1) {
@@ -193,8 +180,8 @@ export const usePlanner = defineStore('planner', {
     },
     resetClass() {
       delete this.selectedPerks[this.activeClass]
+      delete this.justifications[this.activeClass]
       delete this.weapons[this.activeClass]
-      delete this.prestige[this.activeClass]
       delete this.prestigePicks[this.activeClass]
       this.persist()
     },
@@ -221,6 +208,7 @@ export const usePlanner = defineStore('planner', {
         prestigePicks: [...b.prestigeSlots],
         perks: b.slots.map((s) => s.name),
         perkIds: { ...(this.selectedPerks[this.activeClass] || {}) },
+        justifications: { ...(this.justifications[this.activeClass] || {}) },
         weapons: { ...(this.weapons[this.activeClass] || {}) },
         // Snapshot the tree for each equipped weapon so applying a build later
         // restores the same weapon perks, not whatever is current.
@@ -232,15 +220,13 @@ export const usePlanner = defineStore('planner', {
       const r = this.savedBuilds.find((x) => x.id === id)
       if (!r) return
       this.activeClass = r.className
-      this.level = r.level
-      this.prestige[r.className] = r.prestige || 0
       this.prestigePicks[r.className] = [...(r.prestigePicks || [])]
       this.selectedPerks[r.className] = { ...r.perkIds }
+      this.justifications[r.className] = { ...(r.justifications || {}) }
       this.weapons[r.className] = { ...r.weapons }
       for (const [w, perks] of Object.entries(r.weaponPerks || {})) {
         this.weaponPerks[w] = { ...perks }
       }
-      this.enforceLevel()
       this.persist()
     },
     deleteBuild(id) {
@@ -282,9 +268,9 @@ export const usePlanner = defineStore('planner', {
           JSON.stringify({
             activeClass: this.activeClass,
             level: this.level,
-            prestige: this.prestige,
             prestigePicks: this.prestigePicks,
             selectedPerks: this.selectedPerks,
+            justifications: this.justifications,
             weapons: this.weapons,
             savedBuilds: this.savedBuilds,
             weaponPerks: this.weaponPerks,
@@ -303,9 +289,9 @@ export const usePlanner = defineStore('planner', {
       const payload = {
         c: this.activeClass,
         l: this.level,
-        pr: this.prestige[this.activeClass] || 0,
         pp: this.prestigeRaw,
         p: this.selectedPerks[this.activeClass] || {},
+        j: this.justifications[this.activeClass] || {},
         w: this.weapons[this.activeClass] || {},
         wp: this.snapshotWeaponPerks(),
       }
@@ -321,16 +307,13 @@ export const usePlanner = defineStore('planner', {
         )
         if (!classes[json.c]) return
         this.activeClass = json.c
-        this.level = json.l || 25
-        this.prestige[json.c] = json.pr || 0
         this.prestigePicks[json.c] = Array.isArray(json.pp) ? json.pp : []
         this.selectedPerks[json.c] = json.p || {}
+        this.justifications[json.c] = json.j || {}
         this.weapons[json.c] = json.w || {}
         for (const [w, perks] of Object.entries(json.wp || {})) {
           this.weaponPerks[w] = { ...perks }
         }
-        this.enforceLevel()
-        this.enforcePrestige()
         this.persist()
       } catch {}
     },

@@ -10,7 +10,8 @@
     "wiki:perks": "node scripts/fetch-wiki-perks.mjs",
     "wiki:weapons": "node scripts/fetch-wiki-weapons.mjs",
     "wiki:all": "node scripts/fetch-wiki-perks.mjs && node scripts/fetch-wiki-weapons.mjs",
-    "check:updates": "node scripts/check-updates.mjs"
+    "check:updates": "node scripts/check-updates.mjs",
+    "discord:members": "node scripts/fetch-discord-members.mjs"
   },
   "dependencies": {
     "@fontsource-variable/oswald": "^5.2.8",

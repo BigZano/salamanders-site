@@ -1,0 +1,46 @@
+name: Sync Discord member list
+
+# Bakes the guild's member-role list to src/data/discord-members.json so the
+# site can badge member-submitted builds with no live OAuth/backend check.
+# Unlike the weekly wiki data sync, this commits straight to main — a role
+# roster diff isn't something worth a PR review, and it's just membership
+# data, not app code.
+
+on:
+  schedule:
+    - cron: '0 */8 * * *' # every 8 hours
+  workflow_dispatch:
+  repository_dispatch:
+    types: [build-submitted]
+
+permissions:
+  contents: write
+
+concurrency:
+  group: discord-members
+  cancel-in-progress: true
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+      - run: bun install --frozen-lockfile
+
+      - name: Fetch member list
+        run: bun run discord:members
+        env:
+          DISCORD_BOT_TOKEN: ${{ secrets.DISCORD_ROLE_VERIFIER }}
+
+      - name: Commit if changed
+        run: |
+          if [ -z "$(git status --porcelain -- src/data/discord-members.json)" ]; then
+            echo "No membership changes."
+            exit 0
+          fi
+          git config user.name 'github-actions[bot]'
+          git config user.email 'github-actions[bot]@users.noreply.github.com'
+          git add src/data/discord-members.json
+          git commit -m 'data: sync Discord member-role list'
+          git push
