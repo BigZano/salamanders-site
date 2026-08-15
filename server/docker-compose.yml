@@ -1,0 +1,39 @@
+services:
+  db:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: salamanders_builds
+      POSTGRES_USER: salamanders
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in server/.env}
+    volumes:
+      - db-data:/var/lib/postgresql/data
+      # Only runs on a genuinely empty data volume — safe to leave mounted;
+      # re-running docker compose up doesn't re-apply it against real data.
+      - ./schema.sql:/docker-entrypoint-initdb.d/schema.sql:ro
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U salamanders -d salamanders_builds']
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+  api:
+    build: .
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      PORT: 8787
+      DATABASE_URL: postgres://salamanders:${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in server/.env}@db:5432/salamanders_builds
+      ALLOWED_ORIGIN: ${ALLOWED_ORIGIN:-http://localhost:5173}
+      DISCORD_GUILD_ID: ${DISCORD_GUILD_ID:-}
+      DISCORD_BOT_TOKEN: ${DISCORD_BOT_TOKEN:-}
+      # Empty until a moderator role is actually designated — deletion just
+      # falls back to poster-only until this is set. See server/README.md.
+      DISCORD_MOD_ROLE_ID: ${DISCORD_MOD_ROLE_ID:-}
+    ports:
+      - '8787:8787'
+
+volumes:
+  db-data:

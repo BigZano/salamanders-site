@@ -1,0 +1,12 @@
+{
+  "name": "salamanders-builds-api",
+  "private": true,
+  "version": "0.0.0",
+  "type": "module",
+  "scripts": {
+    "start": "bun run src/index.js"
+  },
+  "dependencies": {
+    "pg": "^8.13.1"
+  }
+}
