@@ -277,6 +277,49 @@ function buildRidges(w, h) {
   })
 }
 
+/** A small irregular rock silhouette, in unit space — scaled and rotated at draw time. */
+function buildRockShape() {
+  const n = 5 + ((rng() * 2) | 0)
+  const pts = []
+  for (let i = 0; i < n; i++) {
+    const a = (i / n) * Math.PI * 2
+    const r = 0.7 + rng() * 0.4
+    pts.push({ x: Math.cos(a) * r, y: Math.sin(a) * r })
+  }
+  return pts
+}
+
+/**
+ * Riders on a flow: glowing magma packets and dark rock chunks, both moving
+ * along the channel's own point list over time rather than drawn as part of
+ * the static line. `u` is 0 at the crater end, 1 at the base, and wraps back
+ * to 0 — an endless procession rather than a one-shot particle.
+ */
+function buildRiders() {
+  return {
+    packets: Array.from({ length: 1 + ((rng() * 2) | 0) }, () => ({
+      u: rng(),
+      speed: grand(0.0015, 0.0032),
+      size: grand(0.9, 1.6),
+    })),
+    // Not every channel carries visible debris — a chunk on every flow reads
+    // as a mechanical pattern rather than scattered rockfall.
+    chunks:
+      rng() < 0.55
+        ? [
+            {
+              u: rng(),
+              speed: grand(0.0007, 0.0014), // rock is heavier than the glow riding past it
+              size: grand(2.2, 4.5),
+              angle: grand(0, Math.PI * 2),
+              spin: grand(-1.4, 1.4),
+              shape: buildRockShape(),
+            },
+          ]
+        : [],
+  }
+}
+
 /**
  * Lava spilling from the crater and running down the face of the cone.
  *
@@ -284,8 +327,17 @@ function buildRidges(w, h) {
  * height, not as an offset from a flank. Offsetting from the flank line pushed
  * the channels off the silhouette entirely and left the front face bare — which
  * is where lava is actually visible.
+ *
+ * `prev` is the outgoing flow list, if any. The channel geometry doesn't
+ * actually need it — the seed is fixed per route, so re-running this after a
+ * resize already retraces the same channels against the new mountain, not
+ * new random ones. But the riders on those channels (buildRiders, below) use
+ * *unseeded* progress so packets and rockfall never repeat in lockstep, and
+ * without carrying that progress across, every rider would snap back to a
+ * fresh random position the moment the window resizes — a real pop, just one
+ * frame later than the geometry itself.
  */
-function buildFlows() {
+function buildFlows(prev) {
   const out = []
   const count = Math.max(0, Math.round(tune.flows))
   const rows = mountain.left.length
@@ -316,15 +368,28 @@ function buildFlows() {
     }
 
     if (pts.length < 2) continue
+    const riders = prev?.[i] ? { packets: prev[i].packets, chunks: prev[i].chunks } : buildRiders()
     out.push({
       pts,
       width: grand(1.6, 4.2),
       phase: grand(0, Math.PI * 2),
       rate: grand(0.12, 0.4),
       heat: grand(0.55, 1),
+      ...riders,
     })
   }
   return out
+}
+
+/** A point at fraction `u` (0 = crater end, 1 = base) along a flow's path. */
+function pointOnFlow(f, u) {
+  const n = f.pts.length - 1
+  const idx = Math.min(n - 0.001, Math.max(0, u * n))
+  const i0 = Math.floor(idx)
+  const frac = idx - i0
+  const a = f.pts[i0]
+  const b = f.pts[i0 + 1] || a
+  return { x: a.x + (b.x - a.x) * frac, y: a.y + (b.y - a.y) * frac }
 }
 
 /** Sparks and embers leave from the crater, or off a lava channel. */
@@ -473,7 +538,7 @@ function layout() {
   seedForRoute()
   mountain = buildMountain(w, h)
   ridges = buildRidges(w, h)
-  flows = buildFlows()
+  flows = buildFlows(flows)
   silhouette = buildSilhouette(w, h)
 
   const mobile = window.matchMedia?.('(max-width: 768px)').matches
@@ -590,14 +655,23 @@ function draw(dt) {
   ctx.lineCap = 'round'
   ctx.lineJoin = 'round'
   for (const f of flows) {
-    const pulse = 0.45 + Math.sin(t * f.rate + f.phase) * 0.55
+    // Floored well clear of zero — this used to run 0.45 +/- 0.55, which
+    // touches negative for part of every cycle. heat <= 0.01 then skipped the
+    // whole channel, so each flow blinked fully out of existence on its own
+    // independent cycle. Breathes between 0.44 and 1 instead of 0 and 1.
+    const pulse = 0.72 + Math.sin(t * f.rate + f.phase) * 0.28
     const heat = f.heat * pulse * tune.flowHeat * prof.density
+    f._heat = heat // read by the chunk pass below, after this loop's dash state is gone
     if (heat <= 0.01) continue
     ctx.beginPath()
     ctx.moveTo(f.pts[0].x, f.pts[0].y)
     for (const p of f.pts) ctx.lineTo(p.x, p.y)
 
     // Bloom, body, then a tight core — molten rock never reads as one stroke.
+    // Fully solid: a dashed version of this was tried and read as a string of
+    // separate glowing capsules, not a flow — the gap was bigger than the
+    // dash. The channel itself always stays one continuous line; motion comes
+    // from the travelling highlight below instead, layered on top of it.
     ctx.globalAlpha = Math.max(0, heat * 0.22)
     ctx.strokeStyle = '#e0431d'
     ctx.lineWidth = f.width * 6
@@ -610,7 +684,83 @@ function draw(dt) {
     ctx.strokeStyle = '#ffe6c0'
     ctx.lineWidth = f.width * 0.55
     ctx.stroke()
+
+    // Magma packets: not a separate shape riding the line — a brighter
+    // highlight painted over a moving stretch of the *same* polyline. Drawing
+    // it as its own sprite (a circle sliding along the path) was the first
+    // attempt, and it read as beads — hot tic-tacs — because nothing tied it
+    // to the line it was supposed to be part of. Restroking a slice of the
+    // real path can't detach from it.
+    for (const p of f.packets) {
+      p.u += p.speed * dt
+      if (p.u > 1) p.u -= 1
+      const edge = Math.min(p.u, 1 - p.u)
+      const fade = Math.min(1, edge * 6)
+      if (fade <= 0.02) continue
+      const span = 0.05 * p.size
+      const lo = Math.max(0, p.u - span)
+      const hi = Math.min(1, p.u + span)
+      const nSeg = f.pts.length - 1
+      const i0 = Math.floor(lo * nSeg)
+      const i1 = Math.ceil(hi * nSeg)
+      if (i1 <= i0) continue
+      ctx.beginPath()
+      const start = pointOnFlow(f, lo)
+      ctx.moveTo(start.x, start.y)
+      for (let k = i0; k <= i1; k++) ctx.lineTo(f.pts[k].x, f.pts[k].y)
+      const end = pointOnFlow(f, hi)
+      ctx.lineTo(end.x, end.y)
+      const hot = heat * fade
+      ctx.globalAlpha = Math.max(0, hot * 0.5)
+      ctx.strokeStyle = '#ffb066'
+      ctx.lineWidth = f.width * 2
+      ctx.stroke()
+      ctx.globalAlpha = Math.max(0, hot)
+      ctx.strokeStyle = '#fff6e6'
+      ctx.lineWidth = f.width * 0.65
+      ctx.stroke()
+    }
   }
+
+  // 4b. Rock chunks tumbling in the flow — dark against the lava, so this
+  // runs source-over rather than the additive blend everything else uses.
+  ctx.globalCompositeOperation = 'source-over'
+  for (const f of flows) {
+    for (const c of f.chunks) {
+      c.u += c.speed * dt
+      if (c.u > 1) {
+        c.u -= 1
+        c.angle = rand(0, Math.PI * 2) // runtime, not seeded — see `rand` above
+      }
+      c.angle += c.spin * 0.01 * dt
+      const pt = pointOnFlow(f, c.u)
+      const edge = Math.min(c.u, 1 - c.u)
+      const fade = Math.min(1, edge * 8) * Math.max(0, f._heat)
+      if (fade <= 0.02) continue
+      ctx.save()
+      ctx.translate(pt.x, pt.y)
+      ctx.rotate(c.angle)
+      ctx.globalAlpha = fade
+      ctx.fillStyle = '#170b06'
+      ctx.beginPath()
+      ctx.moveTo(c.shape[0].x * c.size, c.shape[0].y * c.size)
+      for (let k = 1; k < c.shape.length; k++) {
+        ctx.lineTo(c.shape[k].x * c.size, c.shape[k].y * c.size)
+      }
+      ctx.closePath()
+      ctx.fill()
+      // Leading edge catches the heat it's floating in.
+      ctx.strokeStyle = '#ff8a3d'
+      ctx.globalAlpha = fade * 0.55
+      ctx.lineWidth = Math.max(0.6, c.size * 0.12)
+      ctx.beginPath()
+      ctx.moveTo(c.shape[0].x * c.size, c.shape[0].y * c.size)
+      ctx.lineTo(c.shape[1].x * c.size, c.shape[1].y * c.size)
+      ctx.stroke()
+      ctx.restore()
+    }
+  }
+  ctx.globalCompositeOperation = 'lighter'
 
   // 5. The lit crater mouth.
   ctx.globalAlpha = Math.max(0, calderaHeat)
