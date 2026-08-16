@@ -1,0 +1,18 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <title>Salamanders — SM2 Clan · Operations</title>
+    <script>
+      // GitHub Pages is pure static hosting — no server-side rewrite for a
+      // history-mode deep link (e.g. a refresh on /builds), so it serves this
+      // 404 instead. Encode the real path into index.html's query string;
+      // the restore script there (must run before Vue Router reads the URL)
+      // puts it back via history.replaceState. No visible redirect, no flash
+      // of a real 404 — see https://github.com/rafgraph/spa-github-pages.
+      var path = location.pathname + location.search + location.hash
+      location.replace('/index.html?redirect=' + encodeURIComponent(path))
+    </script>
+  </head>
+  <body></body>
+</html>

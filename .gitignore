@@ -11,7 +11,12 @@ node_modules
 dist
 dist-ssr
 *.local
+.env
 server/.env
+
+# Playwright output (e2e/)
+e2e/test-results
+e2e/playwright-report
 
 # Editor directories and files
 .vscode/*

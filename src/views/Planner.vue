@@ -2,9 +2,12 @@
 import { ref, computed, watch, onMounted } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { usePlanner, CLASS_NAMES, describePerk, MAX_PRESTIGE } from '../stores/planner'
+import { useAuth } from '../stores/auth'
+import * as buildsApi from '../lib/buildsApi'
 import WeaponSlot from '../components/WeaponSlot.vue'
 
 const planner = usePlanner()
+const auth = useAuth()
 const route = useRoute()
 const router = useRouter()
 
@@ -69,20 +72,35 @@ const ROMAN = { 1: 'I', 2: 'II', 3: 'III', 4: 'IV' }
 // Save-to-library, inline in the build panel.
 const saveDetails = ref(false)
 const saveForm = ref({ title: '', role: '', notes: '' })
+const saving = ref(false)
 
 // Enter in the build-name field and a click on "Save to library" both submit
 // the same form — nothing stopped both firing seconds apart (Enter, then an
-// unsure click right after) and writing two near-identical entries.
+// unsure click right after) and writing two near-identical entries. `saving`
+// covers the request itself; the timestamp still catches a second submit
+// fired before the first request has even started.
 let lastSave = 0
-function submitSave() {
+async function submitSave() {
+  if (!auth.signedIn) {
+    flash('Sign in with Discord to save a build')
+    auth.signIn()
+    return
+  }
   const now = Date.now()
-  if (now - lastSave < 600) return
+  if (saving.value || now - lastSave < 600) return
   lastSave = now
-  planner.saveBuild(saveForm.value)
-  const name = saveForm.value.title.trim() || `${planner.activeClass} Build`
-  saveForm.value = { title: '', role: '', notes: '' }
-  saveDetails.value = false
-  flash(`Saved “${name}” to your library`)
+  saving.value = true
+  try {
+    const name = saveForm.value.title.trim() || `${planner.activeClass} Build`
+    await buildsApi.createBuild(planner.buildSnapshot(saveForm.value), auth.token)
+    saveForm.value = { title: '', role: '', notes: '' }
+    saveDetails.value = false
+    flash(`Saved “${name}” to the Builds gallery`)
+  } catch (err) {
+    flash(err.message || 'Could not save the build — try again')
+  } finally {
+    saving.value = false
+  }
 }
 
 // Weapon perks picked for the weapon currently in a given slot.
@@ -339,7 +357,9 @@ onMounted(() => {
             />
           </template>
 
-          <button type="submit" class="btn-ember btn-sm save-go">Save to library</button>
+          <button type="submit" class="btn-ember btn-sm save-go" :disabled="saving">
+            {{ saving ? 'Saving…' : 'Save to library' }}
+          </button>
         </form>
 
         <div class="build-actions">

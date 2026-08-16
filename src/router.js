@@ -1,4 +1,4 @@
-import { createRouter, createWebHashHistory } from 'vue-router'
+import { createRouter, createWebHistory } from 'vue-router'
 import Landing from './views/Landing.vue'
 import { scrubCallbackHash } from './lib/discordAuth'
 
@@ -41,9 +41,11 @@ const routes = [
 ]
 
 export const router = createRouter({
-  // Hash history: works on any GitHub Pages path with zero config and no
-  // 404 fallback needed. Switch to createWebHistory once a domain is set.
-  history: createWebHashHistory(),
+  // Clean URLs now that we're on a real domain. GitHub Pages still has no
+  // server-side rewrite, so a direct load of a deep route relies on the
+  // public/404.html + index.html pair to restore the path before this
+  // constructor reads it — see those files for the mechanism.
+  history: createWebHistory(),
   routes,
   scrollBehavior() {
     return { top: 0 }

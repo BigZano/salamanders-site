@@ -7,6 +7,9 @@
     "dev": "vite",
     "build": "vite build",
     "preview": "vite preview",
+    "test": "vitest run",
+    "test:e2e": "cd e2e && docker compose up --build --abort-on-container-exit --exit-code-from playwright; cd e2e && docker compose down -v",
+    "prepare": "husky",
     "wiki:perks": "node scripts/fetch-wiki-perks.mjs",
     "wiki:weapons": "node scripts/fetch-wiki-weapons.mjs",
     "wiki:all": "node scripts/fetch-wiki-perks.mjs && node scripts/fetch-wiki-weapons.mjs",
@@ -25,6 +28,9 @@
     "@vitejs/plugin-vue": "^6.0.7",
     "node-html-parser": "^9.0.1",
     "tailwindcss": "^4.3.2",
-    "vite": "^8.1.1"
+    "husky": "^9.1.7",
+    "jsdom": "^25.0.1",
+    "vite": "^8.1.1",
+    "vitest": "^3.2.4"
   }
 }

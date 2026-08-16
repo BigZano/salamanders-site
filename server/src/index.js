@@ -19,6 +19,9 @@ const GUILD_ID = process.env.DISCORD_GUILD_ID
 // Not an error state: "no mod role yet" just means only the poster can delete.
 const MOD_ROLE_ID = process.env.DISCORD_MOD_ROLE_ID || null
 const BOT_TOKEN = process.env.DISCORD_BOT_TOKEN
+// Overridable so E2E runs can point both identity checks at a local fixture
+// instead of the real Discord API — see e2e/discord-mock.
+const DISCORD_API_BASE = process.env.DISCORD_API_BASE || 'https://discord.com/api'
 
 const pool = new Pool({ connectionString: process.env.DATABASE_URL })
 
@@ -38,7 +41,7 @@ async function verifyCaller(request) {
   const auth = request.headers.get('Authorization') || ''
   const token = auth.startsWith('Bearer ') ? auth.slice(7) : null
   if (!token) return null
-  const res = await fetch('https://discord.com/api/users/@me', {
+  const res = await fetch(`${DISCORD_API_BASE}/users/@me`, {
     headers: { Authorization: `Bearer ${token}` },
   })
   if (!res.ok) return null
@@ -49,7 +52,7 @@ async function verifyCaller(request) {
 /** Does this Discord user currently hold the designated moderator role? */
 async function hasModRole(discordUserId) {
   if (!MOD_ROLE_ID || !GUILD_ID || !BOT_TOKEN) return false
-  const res = await fetch(`https://discord.com/api/v10/guilds/${GUILD_ID}/members/${discordUserId}`, {
+  const res = await fetch(`${DISCORD_API_BASE}/v10/guilds/${GUILD_ID}/members/${discordUserId}`, {
     headers: { Authorization: `Bot ${BOT_TOKEN}` },
   })
   if (!res.ok) return false

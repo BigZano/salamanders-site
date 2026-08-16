@@ -10,6 +10,15 @@
       content="The Salamanders — a Warhammer 40,000: Space Marine 2 clan. Into the fires of battle, unto the anvil of war."
     />
     <title>Salamanders — SM2 Clan · Operations</title>
+    <script>
+      // Undoes the encoding public/404.html applies for a deep-link reload —
+      // must run before router.js constructs createWebHistory(), which reads
+      // location.pathname immediately. See 404.html for the other half.
+      ;(function () {
+        var redirect = new URLSearchParams(location.search).get('redirect')
+        if (redirect) history.replaceState(null, '', redirect)
+      })()
+    </script>
   </head>
   <body>
     <div id="app"></div>

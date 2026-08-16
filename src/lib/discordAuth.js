@@ -10,6 +10,9 @@ import members from '../data/discord-members.json'
 
 const CLIENT_ID = '1538255597810483210'
 const STORAGE_KEY = 'salamanders-discord-member'
+// Overridable so E2E runs can point identify checks at a local fixture
+// instead of the real Discord API — see e2e/discord-mock.
+const DISCORD_API_BASE = import.meta.env.VITE_DISCORD_API_BASE || 'https://discord.com/api'
 
 function redirectUri() {
   return window.location.origin + window.location.pathname
@@ -24,7 +27,28 @@ export function beginSignIn() {
   window.location.href = url.toString()
 }
 
+/** Member identity only — never the access token. Use getAccessToken() for that. */
 export function currentMember() {
+  const raw = readStored()
+  if (!raw) return null
+  const { id, username, isMember, checkedAt } = raw
+  return { id, username, isMember, checkedAt }
+}
+
+/**
+ * The live bearer token for authenticated API calls (see src/lib/buildsApi.js),
+ * or null if there isn't a valid one. Implicit-grant tokens expire — Discord
+ * sends expires_in on the callback, stored alongside so a stale token doesn't
+ * get sent as if it still worked; the caller just sees "not signed in".
+ */
+export function getAccessToken() {
+  const raw = readStored()
+  if (!raw?.accessToken || !raw?.expiresAt) return null
+  if (Date.now() >= raw.expiresAt) return null
+  return raw.accessToken
+}
+
+function readStored() {
   try {
     return JSON.parse(localStorage.getItem(STORAGE_KEY))
   } catch {
@@ -37,6 +61,7 @@ export function signOut() {
 }
 
 let pendingToken = null
+let pendingExpiresIn = null
 
 /**
  * Must run before Vue Router's hash history is constructed — createRouter()
@@ -52,7 +77,9 @@ export function scrubCallbackHash() {
   // Discord doesn't guarantee param order in the fragment — token_type
   // often comes first — so check by substring, not prefix.
   if (!hash.includes('access_token=')) return
-  pendingToken = new URLSearchParams(hash.slice(1)).get('access_token')
+  const params = new URLSearchParams(hash.slice(1))
+  pendingToken = params.get('access_token')
+  pendingExpiresIn = Number(params.get('expires_in')) || null
   history.replaceState(null, '', window.location.pathname + window.location.search)
 }
 
@@ -60,10 +87,12 @@ export function scrubCallbackHash() {
 export async function finishSignIn() {
   if (!pendingToken) return
   const token = pendingToken
+  const expiresIn = pendingExpiresIn
   pendingToken = null
+  pendingExpiresIn = null
 
   try {
-    const res = await fetch('https://discord.com/api/users/@me', {
+    const res = await fetch(`${DISCORD_API_BASE}/users/@me`, {
       headers: { Authorization: `Bearer ${token}` },
     })
     if (!res.ok) return
@@ -75,6 +104,11 @@ export async function finishSignIn() {
         username: user.username,
         isMember: members.memberIds.includes(user.id),
         checkedAt: Date.now(),
+        accessToken: token,
+        // Discord always sends expires_in on an implicit-grant callback; the
+        // fallback here only covers a malformed/missing param, not the normal
+        // path, so it stays short rather than pretending the token is fresh.
+        expiresAt: Date.now() + (expiresIn || 3600) * 1000,
       }),
     )
   } catch {

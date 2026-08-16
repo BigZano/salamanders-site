@@ -1,16 +1,35 @@
 <script setup>
-import { ref, computed } from 'vue'
+import { ref, computed, watch, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
 import { usePlanner, CLASS_NAMES } from '../stores/planner'
+import { useAuth } from '../stores/auth'
+import * as buildsApi from '../lib/buildsApi'
+import { canDeleteBuild } from '../lib/permissions'
+import { splitByMembership, paginate } from '../lib/buildGroups'
+import discordMembers from '../data/discord-members.json'
+import BuildCard from '../components/BuildCard.vue'
+import BuildsPager from '../components/BuildsPager.vue'
 
 const planner = usePlanner()
+const auth = useAuth()
 const router = useRouter()
 
-const slots = [
-  { key: 'primary', label: 'Primary' },
-  { key: 'secondary', label: 'Secondary' },
-  { key: 'melee', label: 'Melee' },
-]
+const builds = ref([])
+const loading = ref(true)
+const loadError = ref('')
+
+async function load() {
+  loading.value = true
+  loadError.value = ''
+  try {
+    builds.value = await buildsApi.listBuilds()
+  } catch (err) {
+    loadError.value = err.message || 'Could not reach the builds server.'
+  } finally {
+    loading.value = false
+  }
+}
+onMounted(load)
 
 const query = ref('')
 const classFilter = ref('')
@@ -33,17 +52,31 @@ function haystack(b) {
 
 const filtered = computed(() => {
   const q = query.value.trim().toLowerCase()
-  return planner.savedBuilds.filter(
+  return builds.value.filter(
     (b) =>
       (!classFilter.value || b.className === classFilter.value) &&
       (!q || haystack(b).includes(q)),
   )
 })
 
-// Only offer class chips for classes the library actually contains.
+// Only offer class chips for classes the gallery actually contains.
 const usedClasses = computed(() =>
-  CLASS_NAMES.filter((c) => planner.savedBuilds.some((b) => b.className === c)),
+  CLASS_NAMES.filter((c) => builds.value.some((b) => b.className === c)),
 )
+
+// Verified members first, everyone else below — see src/lib/buildGroups.js.
+const groups = computed(() => splitByMembership(filtered.value, discordMembers.memberIds))
+const memberPage = ref(1)
+const otherPage = ref(1)
+// A new search/filter reshuffles which builds exist at all — stale page
+// numbers from the previous result set would otherwise point at the wrong
+// (or a now-nonexistent) page.
+watch(filtered, () => {
+  memberPage.value = 1
+  otherPage.value = 1
+})
+const memberPaged = computed(() => paginate(groups.value.member, memberPage.value))
+const otherPaged = computed(() => paginate(groups.value.other, otherPage.value))
 
 const toast = ref('')
 let t
@@ -53,13 +86,24 @@ function flash(m) {
   t = setTimeout(() => (toast.value = ''), 1800)
 }
 
-function apply(id) {
-  planner.applyBuild(id)
+function apply(build) {
+  planner.applyBuildData(build)
   router.push('/planner')
 }
-function remove(b) {
-  planner.deleteBuild(b.id)
-  flash(`Deleted “${b.title}”`)
+
+const deleting = ref(null)
+async function remove(b) {
+  if (deleting.value) return
+  deleting.value = b.id
+  try {
+    await buildsApi.deleteBuild(b.id, auth.token)
+    builds.value = builds.value.filter((x) => x.id !== b.id)
+    flash(`Deleted “${b.title}”`)
+  } catch (err) {
+    flash(err.message || 'Could not delete that build')
+  } finally {
+    deleting.value = null
+  }
 }
 </script>
 
@@ -69,14 +113,17 @@ function remove(b) {
       <p class="eyebrow">Field-tested</p>
       <h1 class="b-title">Recommended Builds</h1>
       <p class="b-intro">
-        Your saved loadouts. Build one in the
+        Builds the Chapter has posted. Make one in the
         <RouterLink to="/planner" class="ilink">Perk Builder</RouterLink> and save it from
-        the Your Build panel — it lands here.
+        the Your Build panel — sign in with Discord first so it's tied to your name.
       </p>
     </header>
 
+    <p v-if="loading" class="b-none">Loading builds…</p>
+    <p v-else-if="loadError" class="b-none b-error">{{ loadError }}</p>
+
     <!-- Search + filter -->
-    <div v-if="planner.savedBuilds.length" class="b-tools">
+    <div v-if="!loading && !loadError && builds.length" class="b-tools">
       <input
         v-model="query"
         class="b-search"
@@ -91,7 +138,7 @@ function remove(b) {
           @click="classFilter = ''"
         >
           All
-          <span class="b-chip-n">{{ planner.savedBuilds.length }}</span>
+          <span class="b-chip-n">{{ builds.length }}</span>
         </button>
         <button
           v-for="c in usedClasses"
@@ -102,64 +149,58 @@ function remove(b) {
         >
           {{ c }}
           <span class="b-chip-n">
-            {{ planner.savedBuilds.filter((b) => b.className === c).length }}
+            {{ builds.filter((b) => b.className === c).length }}
           </span>
         </button>
       </div>
     </div>
 
-    <p v-if="planner.savedBuilds.length && !filtered.length" class="b-none">
+    <p v-if="!loading && builds.length && !filtered.length" class="b-none">
       No builds match that search.
     </p>
 
-    <!-- Saved builds -->
-    <div v-if="filtered.length" class="b-grid">
-      <article v-for="r in filtered" :key="r.id" class="b-card panel-forge">
-        <div class="b-card-top">
-          <h2 class="b-name">{{ r.title }}</h2>
-          <span class="b-class">{{ r.className }}</span>
-        </div>
-        <p class="b-meta">
-          Level {{ r.level }}<span v-if="r.prestige"> · Prestige {{ r.prestige }}</span
-          ><span v-if="r.role"> · {{ r.role }}</span>
-        </p>
-        <p v-if="r.notes" class="b-notes">{{ r.notes }}</p>
+    <!-- Verified members' builds, first and badged -->
+    <section v-if="groups.member.length" class="b-section">
+      <h2 class="b-section-title">Verified Members</h2>
+      <div class="b-grid">
+        <BuildCard
+          v-for="r in memberPaged.items"
+          :key="r.id"
+          :build="r"
+          show-badge
+          :can-delete="canDeleteBuild(auth.member, r)"
+          :deleting="deleting === r.id"
+          @open="apply"
+          @remove="remove"
+        />
+      </div>
+      <BuildsPager v-model:page="memberPage" :page-count="memberPaged.pageCount" />
+    </section>
 
-        <dl class="b-load">
-          <div v-for="s in slots" :key="s.key">
-            <dt>{{ s.label }}</dt>
-            <dd>
-              <RouterLink
-                v-if="r.weapons[s.key]"
-                class="b-weapon"
-                :to="{ path: '/armoury', query: { w: r.weapons[s.key] } }"
-              >
-                {{ r.weapons[s.key] }}
-              </RouterLink>
-              <span v-else>—</span>
-            </dd>
-          </div>
-        </dl>
-
-        <div class="b-perks">
-          <span v-for="(p, i) in r.perks.filter(Boolean)" :key="i" class="b-perk">{{ p }}</span>
-          <span v-if="!r.perks.some(Boolean)" class="b-perk-none">No class perks selected</span>
-        </div>
-
-        <div class="b-actions">
-          <button class="btn-drake btn-sm" @click="apply(r.id)">Open in builder</button>
-          <button class="btn-ghost btn-sm" @click="remove(r)">Delete</button>
-        </div>
-      </article>
-    </div>
+    <!-- Everyone else -->
+    <section v-if="groups.other.length" class="b-section">
+      <h2 class="b-section-title">Community Builds</h2>
+      <div class="b-grid">
+        <BuildCard
+          v-for="r in otherPaged.items"
+          :key="r.id"
+          :build="r"
+          :can-delete="canDeleteBuild(auth.member, r)"
+          :deleting="deleting === r.id"
+          @open="apply"
+          @remove="remove"
+        />
+      </div>
+      <BuildsPager v-model:page="otherPage" :page-count="otherPaged.pageCount" />
+    </section>
 
     <!-- Empty state -->
-    <div v-else-if="!planner.savedBuilds.length" class="b-empty panel-forge">
+    <div v-if="!loading && !loadError && !builds.length" class="b-empty panel-forge">
       <div class="b-empty-mark" aria-hidden="true"><span /><span /><span /></div>
-      <h2 class="b-empty-title">No builds saved yet</h2>
+      <h2 class="b-empty-title">No builds posted yet</h2>
       <p class="b-empty-body">
         Build a loadout in the Perk Builder, then hit Save to library in the Your Build
-        panel. Builds stay in your browser — sharing with the Chapter comes next.
+        panel. Sign in with Discord to post — everyone sees it here.
       </p>
       <RouterLink to="/planner" class="btn-ember b-empty-cta">Open the Perk Builder</RouterLink>
     </div>
@@ -253,131 +294,32 @@ function remove(b) {
   color: var(--color-smoke);
   padding: 1.5rem 0;
 }
+.b-error {
+  color: var(--color-ember);
+}
 
-/* grid */
+/* sections + grid */
+.b-section {
+  margin-top: 2.2rem;
+}
+.b-section:first-of-type {
+  margin-top: 0.5rem;
+}
+.b-section-title {
+  font-family: var(--font-display);
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  font-weight: 700;
+  font-size: 1rem;
+  color: var(--color-smoke);
+  border-bottom: 1px solid var(--color-ash);
+  padding-bottom: 0.5rem;
+  margin-bottom: 1rem;
+}
 .b-grid {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(17rem, 1fr));
   gap: 1rem;
-}
-.b-card {
-  display: flex;
-  flex-direction: column;
-  border-radius: 6px;
-  padding: 1.3rem;
-}
-.b-card-top {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 0.6rem;
-}
-.b-name {
-  font-family: var(--font-display);
-  text-transform: uppercase;
-  font-weight: 700;
-  font-size: 1.2rem;
-  color: var(--color-bone);
-  line-height: 1.1;
-}
-.b-class {
-  flex: none;
-  font-family: var(--font-mono);
-  text-transform: uppercase;
-  letter-spacing: 0.1em;
-  font-size: 0.6rem;
-  color: var(--color-drake);
-  border: 1px solid rgba(89, 214, 108, 0.35);
-  border-radius: 2px;
-  padding: 2px 6px;
-}
-.b-meta {
-  color: var(--color-smoke);
-  font-size: 0.8rem;
-  margin: 0.35rem 0 0.6rem;
-}
-.b-notes {
-  color: #c3d0c6;
-  font-size: 0.85rem;
-  line-height: 1.5;
-  margin-bottom: 0.8rem;
-}
-.b-load {
-  margin: 0 0 0.9rem;
-  display: grid;
-  gap: 0.35rem;
-}
-.b-load div {
-  display: flex;
-  justify-content: space-between;
-  gap: 1rem;
-  border-bottom: 1px solid rgba(38, 55, 47, 0.5);
-  padding-bottom: 0.3rem;
-}
-.b-load dt {
-  font-family: var(--font-mono);
-  text-transform: uppercase;
-  letter-spacing: 0.1em;
-  font-size: 0.62rem;
-  color: var(--color-smoke);
-}
-.b-load dd {
-  margin: 0;
-  font-size: 0.82rem;
-  color: var(--color-bone);
-  text-align: right;
-}
-.b-weapon {
-  color: var(--color-drake);
-  border-bottom: 1px solid rgba(89, 214, 108, 0.35);
-}
-.b-weapon:hover {
-  color: var(--color-bone);
-  border-bottom-color: var(--color-bone);
-}
-.b-perks {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 0.35rem;
-  flex-grow: 1;
-  align-content: flex-start;
-}
-.b-perk {
-  font-size: 0.72rem;
-  color: #c3d0c6;
-  background: rgba(255, 106, 43, 0.07);
-  border: 1px solid rgba(255, 106, 43, 0.22);
-  border-radius: 2px;
-  padding: 0.2rem 0.5rem;
-}
-.b-perk-none {
-  font-size: 0.76rem;
-  color: #5f6f66;
-  font-style: italic;
-}
-.b-actions {
-  display: flex;
-  gap: 0.4rem;
-  margin-top: 1rem;
-}
-.btn-sm {
-  padding: 0.5rem 0.85rem;
-  border-radius: 2px;
-  font-size: 0.78rem;
-  cursor: pointer;
-}
-.btn-ghost {
-  font-family: var(--font-display);
-  text-transform: uppercase;
-  letter-spacing: 0.06em;
-  font-weight: 700;
-  color: var(--color-smoke);
-  background: transparent;
-  border: 1px solid var(--color-ash);
-}
-.btn-ghost:hover {
-  color: var(--color-bone);
-  border-color: var(--color-ash-2);
 }
 
 /* empty */

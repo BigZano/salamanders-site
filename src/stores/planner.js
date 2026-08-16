@@ -50,8 +50,6 @@ export const usePlanner = defineStore('planner', {
     justifications: {},
     // { [className]: { primary, secondary, melee } }
     weapons: {},
-    // saved "recommended" builds (personal library, like the original)
-    savedBuilds: [],
     // weapon perk-tree selections: { [weapon]: { [perkId]: true } }
     weaponPerks: {},
     // per-weapon point budgets: { [weapon]: number }
@@ -186,7 +184,7 @@ export const usePlanner = defineStore('planner', {
       this.persist()
     },
 
-    // ---- saved builds library ----
+    // ---- shared builds gallery (server-backed — see src/lib/buildsApi.js) ----
     snapshotWeaponPerks() {
       const equipped = Object.values(this.weapons[this.activeClass] || {}).filter(Boolean)
       const out = {}
@@ -195,10 +193,10 @@ export const usePlanner = defineStore('planner', {
       }
       return out
     },
-    saveBuild({ title, role, notes } = {}) {
+    /** The exact payload the builds API expects for POST /builds. */
+    buildSnapshot({ title, role, notes } = {}) {
       const b = this.build
-      this.savedBuilds.unshift({
-        id: Date.now(),
+      return {
         title: (title || '').trim() || `${b.className} Build`,
         role: (role || '').trim(),
         notes: (notes || '').trim(),
@@ -213,24 +211,20 @@ export const usePlanner = defineStore('planner', {
         // Snapshot the tree for each equipped weapon so applying a build later
         // restores the same weapon perks, not whatever is current.
         weaponPerks: this.snapshotWeaponPerks(),
-      })
-      this.persist()
+      }
     },
-    applyBuild(id) {
-      const r = this.savedBuilds.find((x) => x.id === id)
-      if (!r) return
+    /** Load a build fetched from the API (see rowToBuild in server/src/index.js) into the editor. */
+    applyBuildData(r) {
+      if (!r?.className || !classes[r.className]) return
       this.activeClass = r.className
+      this.level = r.level || this.level
       this.prestigePicks[r.className] = [...(r.prestigePicks || [])]
-      this.selectedPerks[r.className] = { ...r.perkIds }
+      this.selectedPerks[r.className] = { ...(r.perkIds || {}) }
       this.justifications[r.className] = { ...(r.justifications || {}) }
-      this.weapons[r.className] = { ...r.weapons }
+      this.weapons[r.className] = { ...(r.weapons || {}) }
       for (const [w, perks] of Object.entries(r.weaponPerks || {})) {
         this.weaponPerks[w] = { ...perks }
       }
-      this.persist()
-    },
-    deleteBuild(id) {
-      this.savedBuilds = this.savedBuilds.filter((x) => x.id !== id)
       this.persist()
     },
 
@@ -272,7 +266,6 @@ export const usePlanner = defineStore('planner', {
             selectedPerks: this.selectedPerks,
             justifications: this.justifications,
             weapons: this.weapons,
-            savedBuilds: this.savedBuilds,
             weaponPerks: this.weaponPerks,
             weaponBudgets: this.weaponBudgets,
           }),

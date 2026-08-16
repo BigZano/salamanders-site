@@ -1,0 +1,78 @@
+services:
+  db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: salamanders_builds
+      POSTGRES_USER: salamanders
+      POSTGRES_PASSWORD: e2e-test-password
+    volumes:
+      - ../server/schema.sql:/docker-entrypoint-initdb.d/schema.sql:ro
+    # Throwaway per run — never persisted across `docker compose down`.
+    tmpfs:
+      - /var/lib/postgresql/data
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U salamanders -d salamanders_builds']
+      interval: 3s
+      timeout: 3s
+      retries: 15
+
+  discord-mock:
+    build: ./discord-mock
+    healthcheck:
+      test: ['CMD', 'bun', '-e', "fetch('http://localhost:4400/users/@me').then(()=>process.exit(0)).catch(()=>process.exit(1))"]
+      interval: 2s
+      timeout: 2s
+      retries: 10
+
+  api:
+    build: ../server
+    depends_on:
+      db:
+        condition: service_healthy
+      discord-mock:
+        condition: service_healthy
+    environment:
+      PORT: 8787
+      DATABASE_URL: postgres://salamanders:e2e-test-password@db:5432/salamanders_builds
+      ALLOWED_ORIGIN: http://web:5173
+      DISCORD_API_BASE: http://discord-mock:4400
+      DISCORD_GUILD_ID: '1322056087792521269'
+      DISCORD_BOT_TOKEN: unused-in-e2e
+      DISCORD_MOD_ROLE_ID: ''
+    healthcheck:
+      test: ['CMD', 'bun', '-e', "fetch('http://localhost:8787/health').then((r)=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      interval: 2s
+      timeout: 2s
+      retries: 15
+
+  web:
+    image: oven/bun:1-alpine
+    working_dir: /app
+    volumes:
+      - ../:/app
+    command: sh -c "bun install --frozen-lockfile && bun run dev -- --host 0.0.0.0 --port 5173"
+    environment:
+      VITE_BUILDS_API_URL: http://api:8787
+      VITE_DISCORD_API_BASE: http://discord-mock:4400
+      VITE_ALLOWED_HOSTS: web
+    depends_on:
+      api:
+        condition: service_healthy
+    healthcheck:
+      test: ['CMD', 'bun', '-e', "fetch('http://localhost:5173/').then((r)=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      interval: 2s
+      timeout: 2s
+      retries: 30
+
+  playwright:
+    image: mcr.microsoft.com/playwright:v1.48.0-jammy
+    working_dir: /e2e
+    volumes:
+      - ./:/e2e
+    environment:
+      BASE_URL: http://web:5173
+      CI: 'true'
+    depends_on:
+      web:
+        condition: service_healthy
+    command: sh -c "npm install && npx playwright test"

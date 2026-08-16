@@ -2,11 +2,13 @@
 import { ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { usePlanner } from '../stores/planner'
+import { useAuth } from '../stores/auth'
 
 const open = ref(false)
 const route = useRoute()
 const router = useRouter()
 const planner = usePlanner()
+const auth = useAuth()
 const DISCORD = 'https://discord.gg/salamanders'
 
 const links = [
@@ -63,6 +65,14 @@ function freshPlanner() {
         Join
       </a>
 
+      <div class="auth" v-if="auth.signedIn">
+        <span class="auth-name">{{ auth.member.username }}</span>
+        <button class="auth-btn" type="button" @click="auth.signOut()">Sign out</button>
+      </div>
+      <button v-else class="auth-btn auth-signin" type="button" @click="auth.signIn()">
+        Sign in
+      </button>
+
       <button
         class="burger"
         :aria-expanded="open"
@@ -90,6 +100,13 @@ function freshPlanner() {
         <a class="btn-ember nav-mobile-cta" :href="DISCORD" target="_blank" rel="noopener">
           Join the Chapter
         </a>
+        <div class="auth auth-mobile" v-if="auth.signedIn">
+          <span class="auth-name">Signed in as {{ auth.member.username }}</span>
+          <button class="auth-btn" type="button" @click="auth.signOut()">Sign out</button>
+        </div>
+        <button v-else class="auth-btn auth-signin auth-mobile" type="button" @click="auth.signIn()">
+          Sign in with Discord
+        </button>
       </nav>
     </transition>
   </header>
@@ -182,6 +199,51 @@ function freshPlanner() {
   font-size: 0.85rem;
 }
 
+.auth {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+.auth-name {
+  font-family: var(--font-mono);
+  font-size: 0.72rem;
+  color: var(--color-smoke);
+  max-width: 8rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.auth-btn {
+  font-family: var(--font-display);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  font-size: 0.78rem;
+  font-weight: 700;
+  color: var(--color-smoke);
+  background: transparent;
+  border: 1px solid var(--color-ash);
+  border-radius: 2px;
+  padding: 0.45rem 0.8rem;
+  cursor: pointer;
+  transition: 0.12s;
+}
+.auth-btn:hover {
+  color: var(--color-bone);
+  border-color: var(--color-ash-2);
+}
+.auth-signin {
+  color: var(--color-drake);
+  border-color: rgba(89, 214, 108, 0.35);
+}
+.auth-signin:hover {
+  color: var(--color-bone);
+  border-color: var(--color-drake);
+}
+.auth-mobile {
+  margin-top: 0.6rem;
+  justify-content: center;
+}
+
 .burger {
   display: none;
   flex-direction: column;
@@ -249,7 +311,9 @@ function freshPlanner() {
 
 @media (max-width: 860px) {
   .nav-links,
-  .nav-cta {
+  .nav-cta,
+  .nav-bar > .auth,
+  .nav-bar > .auth-btn {
     display: none;
   }
   .burger {
