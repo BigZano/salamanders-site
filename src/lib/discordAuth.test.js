@@ -21,6 +21,7 @@ function setHash(hash) {
 
 beforeEach(() => {
   localStorage.clear()
+  sessionStorage.clear()
   window.location.hash = ''
 })
 
@@ -104,34 +105,52 @@ describe('signOut', () => {
   })
 })
 
+function withFakeLocation(fakeLocation, fn) {
+  const realLocation = window.location
+  Object.defineProperty(window, 'location', { value: fakeLocation, writable: true, configurable: true })
+  try {
+    return fn()
+  } finally {
+    Object.defineProperty(window, 'location', { value: realLocation, writable: true, configurable: true })
+  }
+}
+
 describe('beginSignIn', () => {
   it("redirects to Discord's authorize endpoint with the implicit-grant params", () => {
     // Own the seam: swap window.location for a plain object we control, rather
     // than letting jsdom's real Location try (and refuse) to cross-origin
     // navigate. Restored after, so later describe blocks get the real one back.
-    const realLocation = window.location
     const fakeLocation = {
-      origin: 'https://bigzano.github.io',
-      pathname: '/salamanders-site/',
+      origin: 'https://buildforge.armorybot.win',
+      pathname: '/planner',
+      search: '',
       href: '',
     }
-    Object.defineProperty(window, 'location', { value: fakeLocation, writable: true, configurable: true })
 
-    try {
+    withFakeLocation(fakeLocation, () => {
       beginSignIn()
       const url = new URL(fakeLocation.href)
       expect(url.origin + url.pathname).toBe('https://discord.com/oauth2/authorize')
       expect(url.searchParams.get('client_id')).toBe('1538255597810483210')
       expect(url.searchParams.get('response_type')).toBe('token')
       expect(url.searchParams.get('scope')).toBe('identify')
-      // redirect_uri is origin+pathname only — the hash-route fragment must not
-      // ride along, or Discord would echo the access_token back past the point
-      // scrubCallbackHash looks, and the token would be lost.
-      expect(url.searchParams.get('redirect_uri')).toBe(
-        'https://bigzano.github.io/salamanders-site/',
-      )
-    } finally {
-      Object.defineProperty(window, 'location', { value: realLocation, writable: true, configurable: true })
+      // redirect_uri is the fixed site root regardless of which page sign-in
+      // started from — Discord requires an exact whitelist match per URI, and
+      // sign-in is reachable from every route (nav bar) plus the wildcard
+      // 404 route, so per-page entries can never be fully enumerated.
+      expect(url.searchParams.get('redirect_uri')).toBe('https://buildforge.armorybot.win/')
+    })
+  })
+
+  it('sends the same redirect_uri no matter which route sign-in starts from', () => {
+    const routes = ['/', '/planner', '/armoury', '/builds', '/companies', '/some/deep/404/path']
+    for (const pathname of routes) {
+      const fakeLocation = { origin: 'https://buildforge.armorybot.win', pathname, search: '', href: '' }
+      withFakeLocation(fakeLocation, () => {
+        beginSignIn()
+        const url = new URL(fakeLocation.href)
+        expect(url.searchParams.get('redirect_uri')).toBe('https://buildforge.armorybot.win/')
+      })
     }
   })
 })
@@ -222,7 +241,10 @@ describe('scrubCallbackHash + finishSignIn', () => {
     expect(window.location.hash).toBe('#tune=1')
   })
 
-  it('strips the hash but preserves the path and query exactly', () => {
+  it('strips the hash but preserves the path and query exactly when nothing was stashed', () => {
+    // No beginSignIn() call precedes this — simulates a stray/manually-crafted
+    // callback URL, or a browser session where sessionStorage never held a
+    // stash. Falls back to wherever the browser already landed.
     history.pushState(null, '', '/salamanders-site/planner?ref=discord')
     setHash('#access_token=t&expires_in=1')
 
@@ -231,5 +253,76 @@ describe('scrubCallbackHash + finishSignIn', () => {
     expect(window.location.hash).toBe('')
     expect(window.location.pathname).toBe('/salamanders-site/planner')
     expect(window.location.search).toBe('?ref=discord')
+  })
+
+  it('restores the page sign-in started from, even though Discord always bounces back to the fixed root redirect_uri', () => {
+    withFakeLocation(
+      { origin: 'https://buildforge.armorybot.win', pathname: '/planner', search: '?draft=1', href: '' },
+      () => beginSignIn(),
+    )
+
+    // Discord's bounce lands on the registered redirect_uri (site root),
+    // token in the hash fragment.
+    history.pushState(null, '', '/')
+    setHash('#access_token=tok&expires_in=3600')
+
+    scrubCallbackHash()
+
+    expect(window.location.hash).toBe('')
+    expect(window.location.pathname).toBe('/planner')
+    expect(window.location.search).toBe('?draft=1')
+  })
+
+  it('never lets the hash fragment present at sign-in time leak into the restored path', () => {
+    withFakeLocation(
+      { origin: 'https://buildforge.armorybot.win', pathname: '/planner', search: '', hash: '#junk', href: '' },
+      () => beginSignIn(),
+    )
+
+    history.pushState(null, '', '/')
+    setHash('#access_token=tok&expires_in=3600')
+    scrubCallbackHash()
+
+    expect(window.location.pathname + window.location.search + window.location.hash).toBe(
+      '/planner',
+    )
+  })
+
+  it('leaves a pending stash alone when the hash has no token, so a later real callback still restores it', () => {
+    withFakeLocation(
+      { origin: 'https://buildforge.armorybot.win', pathname: '/planner', search: '', href: '' },
+      () => beginSignIn(),
+    )
+
+    // An unrelated page load / navigation in between, no access_token.
+    history.pushState(null, '', '/some/other/page')
+    setHash('#unrelated=1')
+    scrubCallbackHash()
+    expect(window.location.pathname).toBe('/some/other/page')
+
+    // The real callback arrives later — the original stash is still honored.
+    history.pushState(null, '', '/')
+    setHash('#access_token=tok&expires_in=3600')
+    scrubCallbackHash()
+    expect(window.location.pathname).toBe('/planner')
+  })
+
+  it('consumes the stash on use, so a second callback does not silently reuse a stale return path', () => {
+    withFakeLocation(
+      { origin: 'https://buildforge.armorybot.win', pathname: '/planner', search: '', href: '' },
+      () => beginSignIn(),
+    )
+
+    history.pushState(null, '', '/')
+    setHash('#access_token=tok1&expires_in=3600')
+    scrubCallbackHash()
+    expect(window.location.pathname).toBe('/planner')
+
+    // A second, unrelated callback with no fresh stash falls back to wherever
+    // it currently is rather than replaying the consumed '/planner' stash.
+    history.pushState(null, '', '/armoury')
+    setHash('#access_token=tok2&expires_in=3600')
+    scrubCallbackHash()
+    expect(window.location.pathname).toBe('/armoury')
   })
 })

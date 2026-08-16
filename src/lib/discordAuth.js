@@ -10,15 +10,23 @@ import members from '../data/discord-members.json'
 
 const CLIENT_ID = '1538255597810483210'
 const STORAGE_KEY = 'salamanders-discord-member'
+const RETURN_PATH_KEY = 'salamanders-discord-return-path'
 // Overridable so E2E runs can point identify checks at a local fixture
 // instead of the real Discord API — see e2e/discord-mock.
 const DISCORD_API_BASE = import.meta.env.VITE_DISCORD_API_BASE || 'https://discord.com/api'
 
+// Fixed and route-independent. Discord's dashboard requires an exact string
+// match for every redirect_uri it's asked to send a token to, and sign-in is
+// reachable from every route (the nav bar) plus the wildcard 404 route — so
+// per-page whitelist entries can never be fully enumerated there. The page
+// sign-in actually started from is stashed below and restored by
+// scrubCallbackHash once the token is back.
 function redirectUri() {
-  return window.location.origin + window.location.pathname
+  return window.location.origin + '/'
 }
 
 export function beginSignIn() {
+  sessionStorage.setItem(RETURN_PATH_KEY, window.location.pathname + window.location.search)
   const url = new URL('https://discord.com/oauth2/authorize')
   url.searchParams.set('client_id', CLIENT_ID)
   url.searchParams.set('response_type', 'token')
@@ -64,12 +72,11 @@ let pendingToken = null
 let pendingExpiresIn = null
 
 /**
- * Must run before Vue Router's hash history is constructed — createRouter()
- * reads location.hash at construction time (evaluated as a static import,
- * before anything in main.js's own body runs), so scrubbing the fragment
- * afterward is too late: the router has already latched onto the OAuth
- * token as a "route", failed to match it, and rendered the 404 with the
- * live token sitting in both the address bar and the page's own text.
+ * Must run before Vue Router's history mode is constructed — createRouter()
+ * reads location.pathname at construction time (evaluated as a static
+ * import, before anything in main.js's own body runs), so restoring the
+ * pre-sign-in path afterward is too late: the router has already latched
+ * onto "/" (Discord's fixed redirect_uri, see beginSignIn) as the route.
  * Called synchronously from router.js, before createRouter().
  */
 export function scrubCallbackHash() {
@@ -80,7 +87,9 @@ export function scrubCallbackHash() {
   const params = new URLSearchParams(hash.slice(1))
   pendingToken = params.get('access_token')
   pendingExpiresIn = Number(params.get('expires_in')) || null
-  history.replaceState(null, '', window.location.pathname + window.location.search)
+  const returnPath = sessionStorage.getItem(RETURN_PATH_KEY)
+  sessionStorage.removeItem(RETURN_PATH_KEY)
+  history.replaceState(null, '', returnPath || window.location.pathname + window.location.search)
 }
 
 /** Runs after scrubCallbackHash — does the actual identify + membership check. */
