@@ -1,5 +1,5 @@
 {
-  "fetched": "2026-08-07T20:30:11.529Z",
+  "fetched": "2026-09-07T07:15:34.053Z",
   "weapons": {
     "Auto Bolt Rifle": {
       "perks": [
@@ -4984,7 +4984,8 @@
       ],
       "budget": 7,
       "intro": [
-        "Close-range incendiary Weapon"
+        "Close-range incendiary Weapon",
+        "The pyreblaster emits a stream of deadly promethium that can penetrate through multiple enemies, capable of direct damage and, more importantly, build Burn. Due to its high target limit that is on par with the melta rifle's, it is the ultimate weapon for melting a huge horde of enemies, minoris or otherwise. The damage will largely come from the Burn status, which does mean that even the most basic pyreblaster is just as capable at dispatching foes as the relic variant."
       ],
       "meta": {
         "slot": "Primary",
@@ -6576,7 +6577,8 @@
       ],
       "budget": 7,
       "intro": [
-        "Close-range incendiary Weapon"
+        "Close-range incendiary Weapon",
+        "The bigger brother of the pyreblaster, the pyrecannon boasts a larger ammo reserve and higher direct damage, at the cost of being much less nimble and also having a shorter range."
       ],
       "meta": {
         "slot": "Primary",
