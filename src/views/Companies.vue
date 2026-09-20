@@ -18,6 +18,13 @@ function jumpTo(id) {
   document.getElementById(id)?.scrollIntoView()
 }
 
+// Characters in a member's write-up (everything after the name). Sets the
+// card's share of its row (--bio), so longer bios get more width instead of
+// an ever-taller narrow column.
+function bioLength(m) {
+  return m.slice(1).join('').length
+}
+
 // Initials from first + last word of a name, for the member badge.
 function initials(name) {
   const words = name.replace(/[",]/g, '').trim().split(/\s+/)
@@ -83,13 +90,18 @@ function initials(name) {
             <li v-for="(item, j) in s.list" :key="j">{{ item }}</li>
           </ul>
 
-          <div v-if="s.notables" class="notables">
-            <div v-for="(m, j) in s.notables" :key="j" class="member panel-forge">
-              <span class="avatar">{{ initials(m[0]) }}</span>
-              <div class="member-text">
+          <div v-if="s.notables" class="notables" :data-count="s.notables.length">
+            <div
+              v-for="(m, j) in s.notables"
+              :key="j"
+              class="member panel-forge"
+              :style="{ '--bio': bioLength(m) }"
+            >
+              <div class="member-head">
+                <span class="avatar">{{ initials(m[0]) }}</span>
                 <p class="member-name">{{ m[0] }}</p>
-                <p v-for="(line, k) in m.slice(1)" :key="k" class="member-blurb">{{ line }}</p>
               </div>
+              <p v-for="(line, k) in m.slice(1)" :key="k" class="member-blurb">{{ line }}</p>
             </div>
           </div>
         </section>
@@ -260,25 +272,42 @@ function initials(name) {
   background: var(--color-ember);
 }
 
+/* Cards size to their bios: each takes a share of its row proportional to its
+   text length (--bio, see bioLength), never narrower than --member-min. Rows
+   wrap on their own, so phones get a single column with no media query.
+   Groups of 4+ use a wider minimum so they land 2x2 instead of 3 + 1 orphan. */
 .notables {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(17rem, 1fr));
-  gap: 0.8rem;
+  --member-min: 17rem;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  gap: 0.9rem;
   margin-top: 0.4rem;
 }
+.notables:not([data-count='1']):not([data-count='2']):not([data-count='3']) {
+  --member-min: 22rem;
+}
 .member {
+  flex: var(--bio, 300) 1 0;
+  min-width: min(var(--member-min), 100%);
   display: flex;
-  gap: 0.8rem;
-  padding: 1rem;
+  flex-direction: column;
+  gap: 0.6rem;
+  padding: 1.15rem 1.25rem;
   border-radius: 4px;
+}
+.member-head {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
 }
 .avatar {
   flex: none;
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 2.6rem;
-  height: 2.6rem;
+  width: 2.4rem;
+  height: 2.4rem;
   border-radius: 50%;
   font-family: var(--font-display);
   font-weight: 700;
@@ -289,16 +318,14 @@ function initials(name) {
 .member-name {
   font-weight: 600;
   color: var(--color-bone);
-  font-size: 0.92rem;
-  margin-bottom: 0.25rem;
+  font-size: 0.95rem;
+  line-height: 1.3;
 }
 .member-blurb {
   color: var(--color-smoke);
-  font-size: 0.85rem;
-  line-height: 1.5;
-}
-.member-blurb + .member-blurb {
-  margin-top: 0.5rem;
+  font-size: 0.9rem;
+  line-height: 1.6;
+  max-width: 65ch;
 }
 .c-empty {
   color: var(--color-smoke);
