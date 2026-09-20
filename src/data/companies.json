@@ -4,7 +4,7 @@
     "sigil": "I",
     "title": "1st Company — The Firedrakes",
     "subtitle": "Vulkan's chosen veterans and the Legion's senior operational standard.",
-    "keywords": "firedrakes veterans cooler booler toad absolute leadership",
+    "keywords": "firedrakes veterans cooler booler toad kaladier absolute leadership",
     "sections": [
       {
         "h": "Into the Fires of Battle, Unto the Anvil of War!",
@@ -24,24 +24,24 @@
         ]
       },
       {
-        "h": "Notable Members",
+        "h": "Notable Server Members",
         "notables": [
           [
             "Master of the Firedrakes, Chapter Master Cooler da Booler",
-            "A long standing and supporting member of the community, proving himself in battles too many to count. Beginning his journey long ago, he has faithfully and steadily been an unwavering example of both the compassion and wrath that our father Vulkan is known for.",
+            "A long-standing and supporting member of the community, proving himself in battles too many to count. Beginning his journey long ago, he has faithfully and steadily been an unwavering example of both the compassion and wrath that our father Vulkan is known for.",
             "Frequently seen sporting an Assault Intercessor toolset, choosing to wield a hammer like his father before him to dispatch the enemies of Mankind.",
             "Along with the Pyre Guard, he serves as a confidant for Vulkan and a steady guiding hand for the community at large."
           ],
           [
             "Firedrake Sergeant To'ad",
             "A trusted right hand who balances command with camaraderie. Along with Cooler, he was one of the first members of First Company to pass the trials and be accepted.",
-            "Prefering to fight from a distance, To'ad often will often be seen sporting his preferred Hellblaseter to dispatch threats."
+            "Preferring to fight from a distance, To'ad will often be seen sporting his preferred Hellblaster to dispatch threats."
           ],
           [
             "Firedrake Champion Kaladier",
-            "A shining example of the teaching of the Promethean Creed, Kaladier tirelessly works to push himself and his brothers in first to new heights.",
+            "A shining example of the teaching of the Promethean Creed, Kaladier tirelessly works to push himself and his brothers in First Company to new heights.",
             "Always eager to see others succeed alongside himself, he has frequently been among the first to volunteer to assist other companies.",
-            "Clad in his Intercessor loadout, he will rotate his weaponry from heavy bolter to Hellblaster depending on his teams strike needs."
+            "Clad in his Intercessor loadout, he will rotate his weaponry from heavy bolter to Hellblaster depending on his team's strike needs."
           ]
         ]
       }
@@ -52,7 +52,7 @@
     "sigil": "II",
     "title": "2nd Company — The Defenders of Nocturne",
     "subtitle": "Guardians of the Chapter homeworld, kin, and vulnerable Imperial populations.",
-    "keywords": "defenders nocturne pellas mirsan valk fulmetus draak guardian defense",
+    "keywords": "defenders nocturne valk fulmetus draak guardian defense dreadnought",
     "sections": [
       {
         "h": "Strength is not defined by what you can destroy, but what you can defend.",
@@ -66,20 +66,20 @@
         "notables": [
           [
             "Lieutenant Valk",
-            "A constant pillar of the company who leads through visible action. Often seen sporting the Intercessor loadout to give him a greater toolset",
-            "Lieutenant Valk tirelessly works towards the success of the Second company, often being the first and last one to say hello and good evening to everyone."
+            "A constant pillar of the company who leads through visible action. Often seen sporting the Intercessor loadout to give him a greater toolset.",
+            "Lieutenant Valk tirelessly works towards the success of the Second Company, often being the first and last one to say hello and good evening to everyone."
           ],
           [
             "Fulmetus, Dreadnought of the Hearth",
             "A veteran who guided the Chapter during its founding period, served as the first Captain of the 2nd Company.",
-            "As a Reiver - Captain Fulmetus was known for isolating the backline and removing high-value targets.",
-            "Upon his internment, he was placed in one of the Legions most precious relics - A Saturnine dreadnought rediscovered by Vulkan himself."
+            "As a Reiver — Captain Fulmetus was known for isolating the backline and removing high-value targets.",
+            "Upon his interment, he was placed in one of the Legion's most precious relics — a Saturnine Dreadnought rediscovered by Vulkan himself."
           ],
           [
             "Veteran Sergeant Dra'ak",
             "A veteran of countless battles and former Company Ancient. He combines extensive service with dedication to his brothers and a particular enthusiasm for bolters and bombs.",
             "Ever present with the Intercessor loadout, he delivers death to the enemies of the Imperium of Man with ruthless efficiency.",
-            "Another brightspot in the coals, Dra'ak is known for going out of his way to help new recruits integrate into the community and company."
+            "Another bright spot in the coals, Dra'ak is known for going out of his way to help new recruits integrate into the community and company."
           ]
         ]
       }
@@ -90,7 +90,7 @@
     "sigil": "III",
     "title": "3rd Company — The Pyroclasts",
     "subtitle": "Foremost flame specialists and the Chapter’s answer to entrenched enemies.",
-    "keywords": "pyroclasts adrax fogar foil tracyn flame fire",
+    "keywords": "pyroclasts fogar rhorn foil draxxyx flame fire",
     "sections": [
       {
         "h": "Where we walk only Ash remains.",
@@ -106,18 +106,18 @@
           [
             "Captain Fo'gar Rhorn",
             "A former Apothecary and 7th Company Sergeant who now leads his favored company. He is known across partner Legions and embodies the server’s chill-sim culture.",
-            "Preferring to lead from the front, he is often seen sporting a Storm Shield and Power Axe - defending his Marines from aside them.",
+            "Preferring to lead from the front, he is often seen sporting a Storm Shield and Power Axe — defending his Marines from beside them.",
             "Often known for being one of the first to greet visitors and brothers alike, and for his penchant for inhaling the fumes of his own forge."
           ],
           [
             "Lieutenant Foil",
-            "Captain Fo'gar's first choice for Lieutenant, Foil has long been a longtime support pillar for Third Company.",
-            "The Companies heavy weapons expert, Foil is often seen covering his fellow Marines on missions with belches of flame from his Multi-Melta."
+            "Captain Fo'gar's first choice for Lieutenant, Foil has long been a support pillar for Third Company.",
+            "The Company's heavy weapons expert, Foil is often seen covering his fellow Marines on missions with belches of flame from his Multi-Melta."
           ],
           [
             "Lieutenant Drax'xyx",
             "The third member of the command triad for 3rd Company, Drax'xyx is another longtime community member.",
-            "Preferring to also fight from a distance, he is often seen with his eliminator toolkit. Prioritizing high-value targets and those calling for aid, he makes sure that each squad he accompanies is protected from afar."
+            "Preferring to also fight from a distance, he is often seen with his Eliminator toolkit. Prioritizing high-value targets and those calling for aid, he makes sure that each squad he accompanies is protected from afar."
           ]
         ]
       }
@@ -128,7 +128,7 @@
     "sigil": "IV",
     "title": "4th Company — The Branded",
     "subtitle": "Faith, zeal, close combat, and the living edge of the Reclusiam.",
-    "keywords": "branded chaplain flusht faith zeal chainsword hammer",
+    "keywords": "branded chaplain igniax flusht pickle waffles hezonn faith zeal chainsword hammer",
     "sections": [
       {
         "h": "Faith Is Our Shield",
@@ -148,13 +148,13 @@
           ],
           [
             "Veteran Sergeant Waffles",
-            "An unwavering fixture of 4th, Waffles is usually found assisting recruits become Battle Brothers, so they can start their journey in the 18th legion.",
-            "An intercessor main, he frequently will don the assault toolkit to deliver death from the skies."
+            "An unwavering fixture of 4th, Waffles is usually found assisting recruits become Battle Brothers, so they can start their journey in the 18th Legion.",
+            "An Intercessor main, he frequently will don the Assault toolkit to deliver death from the skies."
           ],
           [
             "Veteran Sergeant Hezonn",
             "Joining us from Italy, Hezonn wears this fact proudly. Not only limiting himself to assisting 4th, he spreads his talents and ferocity to the entire community to assist them with completing their missions.",
-            "Living for battle, Hezonn dons the Bladeguard Veteran weapon set to protect his brothers while defeating the enemies of man."
+            "Living for battle, Hezonn dons the Bladeguard Veteran weapon set to protect his brothers while defeating the enemies of Man."
           ]
         ]
       }
@@ -165,12 +165,12 @@
     "sigil": "V",
     "title": "5th Company — The Dark Krakens",
     "subtitle": "Abyssal hunters defined by challenge, controlled aggression, and immaculate warplate.",
-    "keywords": "dark krakens codex tenebris abyssor thick skin drip trials",
+    "keywords": "dark krakens naktis ocean successor cob dragonborn toeknee",
     "sections": [
       {
         "h": "We are the Dark Krakens, as inexorable as the tide itself!",
         "p": [
-          "Hailing from Naktis, the Dark Krakens are a Salamanders Successor chapter that makes their homes in the depths of their ocean world. Drawn to the biggest threats, the hardest targest, and the most dangerous battles - This company is one for those that desire demanding challenges.",
+          "Hailing from Naktis, the Dark Krakens are a Salamanders successor Chapter that makes its home in the depths of its ocean world. Drawn to the biggest threats, the hardest targets, and the most dangerous battles — this company is one for those that desire demanding challenges.",
           "Transfers are selective, and entrants are vetted heavily. Calm beneath pressure, ruthless on the hunt."
         ]
       },
@@ -179,18 +179,18 @@
         "notables": [
           [
             "Cob, Master of the Marches",
-            "Initially serving as our Master of Recruits, he was interred when he chose to step down. As our first Venerable Dreadnought, he was kept awake to guide several captains to their current positions. He was also instrumental in the Dark Krakens return to our community.",
-            "Choosing a mix of combat styles, you will frequently find him either with a hellblaster or in the melee aside his beloved Krakens."
+            "Initially serving as our Master of Recruits, he was interred when he chose to step down. As our first Venerable Dreadnought, he was kept awake to guide several captains to their current positions. He was also instrumental in the Dark Krakens' return to our community.",
+            "Choosing a mix of combat styles, you will frequently find him either with a Hellblaster or in the melee beside his beloved Krakens."
           ],
           [
             "Lieutenant Dragonborn",
             "Former Lieutenant of 7th Company, he returned to the Dark Krakens upon their formation. A veteran of multiple Deathwatch tours, he is skilled enough to take any situation and flex it to his needs.",
-            "Favoring his intercessor toolkit, he will frequently be seen with heavier Hellblaster launchers as well."
+            "Favoring his Intercessor toolkit, he prefers the heavier Hellblaster plasma cannon."
           ],
           [
             "Lieutenant Toeknee",
             "The friendly face amongst the sea of hardened warriors belies lethal intent and ability. Another formative member of the Krakens, this time from 2nd Company. He was the first in the server to receive the onerous title of \"Sergeant at Arms.\"",
-            "As a Reiver, he prefers to launch himself behind enemy lines to take out high-value targets, and those that are requesting for reinforcements."
+            "As a Reiver, he prefers to launch himself behind enemy lines to take out high-value targets, and those requesting reinforcements."
           ]
         ]
       }
@@ -201,32 +201,32 @@
     "sigil": "VI",
     "title": "6th Company — Covenant of Fire",
     "subtitle": "A devout Chapter shaped by hardship, scholarship, and endurance.",
-    "keywords": "covenant fire vokar hierocles zeal religious spartan education",
+    "keywords": "covenant fire vokar escanor hierocles templar zeal scholars relics",
     "sections": [
       {
         "h": "Adversity isn't the enemy, it's the process",
         "p": [
           "The Covenant of Fire is our newest addition, replacing our reserve company and breathing new life into the Company. They carry not only the legacy of Vulkan into battle, but also act as warrior scholars.",
-          "Uterly dedicated to the preservation of truth and the Imperiums history, they destroy anything deemed heretical his similar zeal. Their flames often serving as a beacon of comfort for alies, while simultaneously marking the destruction of their enemies."
+          "Utterly dedicated to the preservation of truth and the Imperium's history, they destroy anything deemed heretical with similar zeal. Their flames serve as a beacon of comfort for allies, while simultaneously marking the destruction of their enemies."
         ]
       },
       {
-        "h": "Notable Members",
+        "h": "Notable Server Members",
         "notables": [
           [
-            "Captain Escanor Vo'Kar",
+            "Captain Escanor Vo'kar",
             "Initially starting as a Scout Sergeant turned Apothecary, Vo'kar has shown steadfast commitment and resilience as a Reiver, prioritizing high-value targets behind enemy front lines.",
             "As the Master of Relics, he stands as the guard for the technical marvels that our father uncovered, and that are still deployed to battle.",
-            "As Head of the Covenant of Fire, his is the youngest among the Salamanders but they adhere to the Promethean Creed with unrelenting Zeal."
+            "As Head of the Covenant of Fire, his is the youngest company among the Salamanders, yet they adhere to the Promethean Creed with unrelenting zeal."
           ],
           [
             "Reclusiarch Hierocles",
-            "Long standing Reclusiarch since before the rebrand as the Covenant of Fire. Serves as a font of morale for the company, delivering litanies of inspiration and zeal.",
-            "He favors the Intercessor toolset to compliment his crozius."
+            "Long-standing Reclusiarch since before the rebrand as the Covenant of Fire. Serves as a font of morale for the company, delivering litanies of inspiration and zeal.",
+            "He favors the Intercessor toolset to complement his crozius."
           ],
           [
             "Epistolary Templar",
-            "6th Companies Bladeguard, he is dedicated to both physical and metaphysical defense for his brothers.",
+            "6th Company's Bladeguard, he is dedicated to both physical and metaphysical defense for his brothers.",
             "Always available for support, Templar is dedicated to using his might to defend his brothers in the face of threats from the material and immaterial world."
           ]
         ]
@@ -238,13 +238,13 @@
     "sigil": "VII",
     "title": "7th Scout Company — The Sons of Nocturne",
     "subtitle": "Reconnaissance, patience, leadership, and the forging of new battle-brothers.",
-    "keywords": "sons nocturne scouts reconnaissance snipers tactical vanguard training",
+    "keywords": "sons nocturne scouts reconnaissance snipers eliminator tactical intercessor vanguard reiver training leefee jones artorios",
     "sections": [
       {
         "h": "About the Scout Company",
         "p": [
           "The Sons of Nocturne embody patience and leadership as the reconnaissance company of the Chapter. They train Scouts in the tactics and strategies needed to destroy the enemies of the Imperium efficiently while being forged through battle.",
-          "The company includes many Snipers, Tacticals, and Vanguards. Its leaders select engagements methodically for maximum effect, specializing in infiltration, reconnaissance, and assassination while providing Scouts with a stable home in which to learn and grow.",
+          "The company includes many Eliminators, Intercessors, and Reivers. Its leaders select engagements methodically for maximum effect, specializing in infiltration, reconnaissance, and assassination while providing Scouts with a stable home in which to learn and grow.",
           "Outside combat, the company command is known for calm, patience, compassion, and quiet support for the Scouts in its care."
         ]
       },
@@ -253,18 +253,18 @@
         "notables": [
           [
             "Captain Leefee",
-            "Our long-serving and hard working Master of Recruits, his Company is the start of every Salamanders journey.",
+            "Our long-serving and hard working Master of Recruits, his Company is the start of every Salamander's journey.",
             "As the Captain of 7th Company, he ensures that recruits have the best possible initial experience in the community, and assists them with moving onto their companies in the future.",
             "If you ever get a chance, ask him about Devil May Cry."
           ],
           [
             "Lieutenant Jones",
             "The ever present backbone of 7th Company, Lieutenant Jones tirelessly works behind the scenes to ensure that 7th continues to run like a well-oiled machine.",
-            "Often clad in his intercessor toolkit, he prefers to utilize close-quarters combat while marking out targets for prioritization."
+            "Often clad in his Intercessor toolkit, he prefers to utilize close-quarters combat while marking out targets for prioritization."
           ],
           [
             "Scout Sgt Artorios",
-            "The Bastion of 7th, frequently clad in his bladeguard attire, he is dedicated to the defense of his brothers above all else.",
+            "The Bastion of 7th, frequently clad in his Bladeguard attire, he is dedicated to the defense of his brothers above all else.",
             "Ever present and never far, he views it as his personal mission to support as many scouts through as many fires as possible, so that they may in turn help guide others through the fires of battle."
           ]
         ]
@@ -276,7 +276,7 @@
     "sigil": "A",
     "title": "The Apothecarion of Nocturne",
     "subtitle": "Guardians of gene-seed, healers of the fallen, and keepers of the flame of life.",
-    "keywords": "apothecarion prodigy biologis bluu bard jay geneseed medics",
+    "keywords": "apothecarion biologis doly valairien vaylund talis geneseed gene-seed medics",
     "sections": [
       {
         "h": "Keepers of the Flame of Life",
@@ -286,17 +286,17 @@
         ]
       },
       {
-        "h": "Leadership and Notable Members",
+        "h": "Leadership and Notable Server Members",
         "notables": [
           [
             "Chief Apothecary Doly",
-            "Head of the Apothecarion, Doly is overall in charge of it and all it's members. Resolute in the face of all challenges, and always working on new creations or events for the community.",
-            "Leading by example, he frequently dons the retinue of a bladeguard veteran to ensure the safe return of the Chapter's gene-seed."
+            "Head of the Apothecarion, Doly is overall in charge of it and all its members. Resolute in the face of all challenges, and always working on new creations or events for the community.",
+            "Leading by example, he frequently dons the retinue of a Bladeguard Veteran to ensure the safe return of the Chapter's gene-seed."
           ],
           [
-            "Biolgis Valairien",
+            "Biologis Valairien",
             "Currently attached to 1st Company, Valairien is an ever present face helping scouts or helping to organize community events.",
-            "Providing support from afar, he is frequently found sporting a Multi-melta or a Hellblaster."
+            "Providing support from afar, he is frequently found sporting a Multi-Melta or a Hellblaster."
           ],
           [
             "Biologis Vaylund",
@@ -305,7 +305,7 @@
           ],
           [
             "Biologis Talis",
-            "Attached to 2nd Company, Talis was instrumental in assisting the rebuild of it's command structure. Favoring endurance challenges, he is frequently found assisting siege missions of all sorts.",
+            "Attached to 2nd Company, Talis was instrumental in assisting the rebuild of its command structure. Favoring endurance challenges, he is frequently found assisting siege missions of all sorts.",
             "As a Reiver, he is committed to picking apart the softer bits of the enemies that cower behind their fellows."
           ]
         ]
@@ -317,13 +317,13 @@
     "sigil": "L",
     "title": "The Librarius",
     "subtitle": "Psychic guardians, scholars, and living conflagrations of the Chapter.",
-    "keywords": "librarius lexicanium codicier epistolary knowledge war craft psyker",
+    "keywords": "librarius librarian lexicanium codicier epistolary hampton vashquil ferrak knowledge war craft psyker",
     "sections": [
       {
         "h": "Who They Are",
         "p": [
-          "Librarians are responsible as keepers of wisdom and as shields against the horrors of the Immaterium. They are responsible as stewards of the Chapters history, the bulwark against the warpspawn, and guides for brothers seeking wisdom of the mind, over wisdom of the soul.",
-          "Librarians will pick one of 3 specialties, each delivering a unique benefit to the chapter. Through guidance in these fields, they make sure the culture and spirit of the Salamanders is never forgotten."
+          "Librarians are responsible as keepers of wisdom and as shields against the horrors of the Immaterium. They are responsible as stewards of the Chapter's history, the bulwark against the warpspawn, and guides for brothers seeking wisdom of the mind, over wisdom of the soul.",
+          "Librarians will pick one of three specialties, each delivering a unique benefit to the chapter. Through guidance in these fields, they make sure the culture and spirit of the Salamanders is never forgotten."
         ]
       },
       {
@@ -358,19 +358,19 @@
         "notables": [
           [
             "Chief Librarian Hampton",
-            "As Chief Librarian and head of the Librarius, Hampton is ultimately responsible for the wellbeing and safekeeping of the Salamanders history and presence of their past.",
+            "As Chief Librarian and head of the Librarius, Hampton is ultimately responsible for the wellbeing and safekeeping of the Salamanders' history and presence of their past.",
             "Covering a range of situations, he chooses either an Eliminator toolset or he will go into battle up close, tearing enemies asunder as a Bladeguard."
           ],
           [
             "Epistolary Vash'Quil",
-            "Fond of the great lizards of Old Terra, and knowledge of a galaxy far, far away - he's often found assisting scouts as his service continues. Attached to 7th Company, he is always around to make sure recruit needs are addressed readily.",
-            "Diving deep into the lore, Vash pours over tomes to provide answers to obscure questions that elude others.",
-            "Often found sporting the equipment of a bladeguard veteran."
+            "Fond of the great lizards of Old Terra, and knowledgeable of a galaxy far, far away — he's often found assisting scouts as his service continues. Attached to 7th Company, he is always around to make sure recruit needs are addressed readily.",
+            "Diving deep into the lore, Vash pores over tomes to provide answers to obscure questions that elude others.",
+            "Often found sporting the equipment of a Bladeguard Veteran."
           ],
           [
             "Epistolary Fer'rak",
             "As the Epistolary of War, his zeal is unmatchable. Tirelessly assisting brothers and recruits, he constantly stands ready to deliver death to the enemies of Man, and to ensure mission success.",
-            "Favoring the intercessor loadout, he adapts his loadout to whichever situation his mission requires."
+            "Favoring the Intercessor loadout, he adapts his loadout to whichever situation his mission requires."
           ]
         ]
       }
@@ -381,7 +381,7 @@
     "sigil": "M",
     "title": "The Armoury",
     "subtitle": "Techmarines, forge masters, and keepers of the Chapter’s engines of war.",
-    "keywords": "armoury techmarine apollyon nod kixar forge machine omnissiah",
+    "keywords": "armoury techmarine forgemaster apollyon nod kixar beck ediicius byngo mechadendrite forge machine omnissiah",
     "sections": [
       {
         "h": "Ave Omnissiah",
@@ -391,11 +391,11 @@
         ]
       },
       {
-        "h": "Notable Members",
+        "h": "Notable Server Members",
         "notables": [
           [
             "Forgemaster Kix'ar",
-            "Our First Forgemaster, an early adopter of the Shield bash strategy, and the original herald of the Powerfist. Kix'ar is a longtime member of the community, and has long provided his support and guidance to the Captains and other leadership."
+            "Our First Forgemaster, an early adopter of the shield bash strategy, and the original herald of the Power Fist. Kix'ar is a longtime member of the community, and has long provided his support and guidance to the Captains and other leadership."
           ],
           [
             "Forgemaster Apollyon",
@@ -403,14 +403,14 @@
           ],
           [
             "Forgemaster Nod",
-            "Tirelessly forging builds, and putting the community through it's paces - Nod excels and ensuring the community members are as sharp going into battle as their weapons are."
+            "Tirelessly forging builds, and putting the community through its paces — Nod excels at ensuring the community members are as sharp going into battle as their weapons are."
           ],
           [
             "Mechadendrite Experts",
-            "These are the recipients of the highest honor in the Armoury, and serve as the right hands of the Forgemasters. This is earned through submitting numerous builds, testing builds, assisting others with creating builds, and peerless knowledge on the stats of weapons used in battle:",
-            "Techmarine Beck, 1st Company - First to achieve Immortalis Vigili, early apostle of the Block cult.",
-            "Techmarine Ediicius, 2nd Company - First to achieve Peritus Comperio, preacher of the Combat Knife.",
-            "Techmarine Byn'go, 3rd Company - Leagues of Votann enjoyer, favors heavy weapons and their cousin, even heavier weapons."
+            "These are the recipients of the highest honor in the Armoury, and serve as the right hands of the Forgemasters. This is earned through submitting numerous builds, testing builds, assisting others with creating builds, and peerless knowledge of the stats of weapons used in battle:",
+            "Techmarine Beck, 1st Company — First to achieve Immortalis Vigili, early apostle of the Block cult.",
+            "Techmarine Ediicius, 2nd Company — First to achieve Peritus Comperio, preacher of the Combat Knife.",
+            "Techmarine Byn'go, 3rd Company — Leagues of Votann enjoyer, favors heavy weapons and their cousin, even heavier weapons."
           ]
         ]
       }
@@ -421,12 +421,12 @@
     "sigil": "R",
     "title": "The Reclusiam — Keepers of Faith",
     "subtitle": "The vigilant eyes, guiding hands, and unwavering judgment of the Chapter.",
-    "keywords": "reclusiam bunz oron john warhamar flusht hierocles rhenn sheres chaplain judiciar",
+    "keywords": "reclusiam reclusiarch oron tracyn gilga flusht chaplain judiciar",
     "sections": [
       {
         "h": "Keepers of Faith",
         "p": [
-          "The Reclusiam shapes warriors, guides the faithful, and carries the Emperor's will into every battle. They are charged with the spiritual welfare and overseeing the ."
+          "The Reclusiam shapes warriors, guides the faithful, and carries the Emperor's will into every battle. They are charged with overseeing the spiritual welfare of the Chapter, as well as delivering lessons on the Promethean Creed."
         ]
       },
       {
@@ -434,23 +434,23 @@
         "notables": [
           [
             "Lord Chaplain Flusht",
-            "Along with the Chapter Master and the Pyre Guard, forms the final piece of the leadership for the Community at large. Serves as counsel to Vulkan, the Pyre Guard, and the Chapter Master.",
+            "Along with the Chapter Master and the Pyre Guard, forms the final piece of the leadership for the community at large. Serves as counsel to Vulkan, the Pyre Guard, and the Chapter Master.",
             "As the lead chaplain, Flusht is also in charge of 4th Company. Serving as the home for our Igniax chaplains, as well as a home for our chaplains when they are unassigned from a community.",
             "Frequently seen in the melee, he prefers to lead from the front. Smiting enemies with his crozius and inspiring fellow Salamanders onto greater heights."
           ],
           [
-            "Reclusiarch Tra'cyn - 3rd Company",
-            "Preferring to stay in the melee, he prioritizes his Reiver loadout - delivering death swiftly while inspiring those around him.",
+            "Reclusiarch Tra'cyn — 3rd Company",
+            "Preferring to stay in the melee, he prioritizes his Reiver loadout — delivering death swiftly while inspiring those around him.",
             "Ever present and available to assist new recruits, also frequently brings new aspirants into the fold of the Reclusiam."
           ],
           [
-            "Reclusiarch Or'on - 1st Company",
-            "The first chaplain to be accepted into First Company, and a long time veteran of the community, Or'on is the embodiment of perseverence and strength as prescribed in the Promethean Creed.",
+            "Reclusiarch Or'on — 1st Company",
+            "The first chaplain to be accepted into First Company, and a long time veteran of the community, Or'on is the embodiment of perseverance and strength as prescribed in the Promethean Creed.",
             "Equipped as a Bladeguard, he exchanges the weapon for his crozius."
           ],
           [
-            "Reclusiarch Gilga - 5th Company",
-            "Reclusiarch for the Krakens, Gilga is known for his ability to resolve disputes and maintain a level-head when tensions are high.",
+            "Reclusiarch Gilga — 5th Company",
+            "Reclusiarch for the Krakens, Gilga is known for his ability to resolve disputes and maintain a level head when tensions are high.",
             "Often sporting a heavy bolter, Gilga prefers to match his giant prey with equally giant weapons."
           ]
         ]
