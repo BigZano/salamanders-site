@@ -88,7 +88,7 @@ function initials(name) {
               <span class="avatar">{{ initials(m[0]) }}</span>
               <div class="member-text">
                 <p class="member-name">{{ m[0] }}</p>
-                <p class="member-blurb">{{ m[1] }}</p>
+                <p v-for="(line, k) in m.slice(1)" :key="k" class="member-blurb">{{ line }}</p>
               </div>
             </div>
           </div>
@@ -296,6 +296,9 @@ function initials(name) {
   color: var(--color-smoke);
   font-size: 0.85rem;
   line-height: 1.5;
+}
+.member-blurb + .member-blurb {
+  margin-top: 0.5rem;
 }
 .c-empty {
   color: var(--color-smoke);
