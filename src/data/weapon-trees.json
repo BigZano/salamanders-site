@@ -1,5 +1,5 @@
 {
-  "fetched": "2026-08-07T20:30:11.529Z",
+  "fetched": "2026-09-21T07:18:53.592Z",
   "weapons": {
     "Auto Bolt Rifle": {
       "perks": [
@@ -1479,6 +1479,11 @@
           "name": "Remote Threat",
           "quality": "Relic",
           "description": "Enemies at a a distance of more than 25 metres take 20% more Damage"
+        },
+        {
+          "name": "Reconnaissance by Fire",
+          "quality": "Heroic",
+          "description": "Landing 4 successful body shots in short succession creates a small Auspex Scan area. Cooldown is 8 seconds."
         }
       ],
       "budget": 9,
@@ -1911,6 +1916,11 @@
           "name": "Reloading Immunity",
           "quality": "Relic",
           "description": "While reloading, you do not lose control from Heavy Hits"
+        },
+        {
+          "name": "Combi-Weapon",
+          "quality": "Heroic",
+          "description": "You can use an alternative Pyreblaster firing mode, accessed through Augmented Vision scope mode"
         }
       ],
       "budget": 13,
@@ -4257,6 +4267,11 @@
           "name": "Perpetual Range",
           "quality": "Relic",
           "description": "Effective Range increases by 1 metre"
+        },
+        {
+          "name": "Focused Fusion Beam",
+          "quality": "Heroic",
+          "description": "Shots have increased range and a narrow spread but need to charge before firing"
         }
       ],
       "budget": 9,
@@ -4984,7 +4999,8 @@
       ],
       "budget": 7,
       "intro": [
-        "Close-range incendiary Weapon"
+        "Close-range incendiary Weapon",
+        "The Pyreblaster emits a stream of deadly promethium that can penetrate through multiple enemies, capable of direct damage and, more importantly, build Burn. Due to its high target limit that is on par with the melta rifle's, it is the ultimate weapon for melting a huge horde of enemies, Minoris or otherwise. The damage will largely come from the Burn status, which does mean that even the most basic Pyreblaster is just as capable at dispatching foes as the relic variant."
       ],
       "meta": {
         "slot": "Primary",
@@ -6576,7 +6592,8 @@
       ],
       "budget": 7,
       "intro": [
-        "Close-range incendiary Weapon"
+        "Close-range incendiary Weapon",
+        "The bigger brother of the pyreblaster, the pyrecannon boasts a larger ammo reserve and higher direct damage, at the cost of being much less nimble and also having a shorter range."
       ],
       "meta": {
         "slot": "Primary",
@@ -7272,7 +7289,7 @@
         {
           "name": "No Help Is Coming",
           "quality": "Heroic",
-          "description": "Shooting an enemy with the status of \"Elite Scream\" stops it from calling for reinforcements"
+          "description": "Shooting an enemy with the Elite Scream status stops it from calling for reinforcements. Headshots kill in one shot"
         }
       ],
       "budget": 11,
@@ -9655,6 +9672,11 @@
           "name": "Follow-Up Shot",
           "quality": "Heroic",
           "description": "Performing a Finisher marks a nearby Majoris-level or higher enemy for a Gun Strike. Light Attack Damage is increased by 100%, but Charged Attack Damage is decreased by 50%"
+        },
+        {
+          "name": "Combi-Weapon",
+          "quality": "Heroic",
+          "description": "Pause after any Light Attack to enter a stance, then Light Attack again to fire a Melta blast that inflicts the Burn status"
         }
       ],
       "budget": 11,
@@ -10364,6 +10386,11 @@
           "name": "Electrified Thunderclap",
           "quality": "Heroic",
           "description": "Fully Charged Attacks leave behind a Shock Grenade effect"
+        },
+        {
+          "name": "Whirling Strike",
+          "quality": "Heroic",
+          "description": "Aftershock is replaced by a powerful spinning attack. Hitting 5 or more enemies with a single attack grants 1 Adrenaline Surge stacks."
         }
       ],
       "budget": 13,
