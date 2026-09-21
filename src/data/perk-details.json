@@ -1,5 +1,5 @@
 {
-  "fetched": "2026-08-07T19:26:29.858Z",
+  "fetched": "2026-09-21T07:18:30.179Z",
   "classes": {
     "Tactical": {
       "perks": {
@@ -919,7 +919,7 @@
         },
         "Omnissiah's Fury": {
           "level": 25,
-          "description": "Servo-Gun shots set enemies on fire"
+          "description": "Servo-Gun shots set enemies on fire. Deals the following damage for 8 ticks: Minimal - 5 (40 total) Average - 7 (56 total) Substantial - 12.5 (100 total) Ruthless and above - 17.5 (140 total)"
         }
       },
       "prestige": [
@@ -939,7 +939,7 @@
           "description": "Medicae Stimms restore 40% more Health"
         },
         {
-          "level": 2,
+          "level": 1,
           "name": "Volatile Sentry",
           "description": "Tarantula Sentry Gun explosion damage increases by 1000%, and the explosion radius increases by 20%"
         },
