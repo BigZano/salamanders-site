@@ -37,6 +37,19 @@ describe('seal → verify → unseal', () => {
     expect(await tree(restored)).toEqual(want)
   })
 
+  it('carries a table-of-contents overlay in collections.json through seal and unseal', async () => {
+    const meta = JSON.parse(await readFile(join(exp, 'collections.json'), 'utf8'))
+    const ids = (await readdir(join(exp, 'accolades', 'data', 'threads'))).map((n) => n.replace('.json', ''))
+    const other = ids.find((id) => id !== meta.accolades.tocThreadId)
+    meta.accolades.toc = { insert: [{ after: meta.accolades.tocThreadId, thread: other }], hide: [other] }
+    await writeFile(join(exp, 'collections.json'), JSON.stringify(meta, null, 2))
+    expect((await readExport(exp)).index.collections.accolades.toc).toEqual(meta.accolades.toc)
+    await sealExport({ exportDir: exp, rawKey: key, outDir: out, now: new Date(0) })
+    const restored = join(root, 'restored')
+    await unsealDir({ dir: out, rawKey: key, destDir: restored })
+    expect(await readFile(join(restored, 'collections.json'), 'utf8')).toBe(JSON.stringify(meta, null, 2))
+  })
+
   it('sealed output has opaque names only and contains no plaintext', async () => {
     const lock = await sealExport({ exportDir: exp, rawKey: key, outDir: out, now: new Date(0) })
     const names = await readdir(out)

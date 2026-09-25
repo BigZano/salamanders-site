@@ -3,6 +3,7 @@ import { ref, computed, watch, onMounted, onBeforeUnmount } from 'vue'
 import { useRoute } from 'vue-router'
 import { motionAllowed } from '../lib/doomfire'
 import { fireTuning, randomize, profileFor, NEUTRAL_PROFILE } from '../lib/fireTuning'
+import { deathfireHeat } from '../lib/deathfireHeat'
 
 /**
  * Mount Deathfire — the great volcano of Nocturne, sitting behind every page.
@@ -28,6 +29,9 @@ const tune = fireTuning.bed
 
 const host = ref(null)
 const canvas = ref(null)
+// Pages flagged meta.ashOver (the archive) get the near ash on a second
+// canvas above their content, so it drifts across the page, not behind it.
+const veil = ref(null)
 const mode = ref('off')
 
 const FPS = 30
@@ -110,6 +114,7 @@ const hashString = (s) => {
 }
 
 const route = useRoute()
+const ashOver = computed(() => !!route.meta?.ashOver)
 let rng = mulberry32(1)
 /** Seeded generation randomness. */
 const grand = (a, b) => a + rng() * (b - a)
@@ -533,6 +538,10 @@ function layout() {
   cv.height = Math.ceil(h * dpr)
   cv.style.width = `${w}px`
   cv.style.height = `${h}px`
+  if (veil.value) {
+    veil.value.width = cv.width
+    veil.value.height = cv.height
+  }
 
   if (!spriteGlow) spriteGlow = makeGlow()
   seedForRoute()
@@ -616,18 +625,26 @@ function draw(dt) {
   ctx.setTransform(dpr, 0, 0, dpr, 0, 0)
   ctx.clearRect(0, 0, w, h)
 
-  const fallAsh = (flakes) => {
-    ctx.globalCompositeOperation = 'source-over'
-    ctx.fillStyle = '#6b6560'
+  // Over the archive plaque the near ash is drawn a shade lighter and a touch
+  // larger, or it vanishes against the blackened iron.
+  const fallAsh = (flakes, c = ctx, over = false) => {
+    c.globalCompositeOperation = 'source-over'
+    c.fillStyle = over ? '#9a928a' : '#6b6560'
+    const grow = over ? 1.4 : 1
     for (const a of flakes) {
       a.y += a.vy * dt
       a.phase += 0.02 * dt
       a.x += (a.drift + Math.sin(a.phase) * 0.2 * a.sway) * dt
       if (a.y > h + 20) Object.assign(a, spawnAsh(w, h, true, a.front))
-      ctx.globalAlpha = a.alpha
-      ctx.fillRect(a.x, a.y, a.size, a.size)
+      c.globalAlpha = a.alpha
+      c.fillRect(a.x, a.y, a.size * grow, a.size * grow)
     }
-    ctx.globalAlpha = 1
+    c.globalAlpha = 1
+  }
+  const vctx = veil.value?.getContext('2d')
+  if (vctx) {
+    vctx.setTransform(dpr, 0, 0, dpr, 0, 0)
+    vctx.clearRect(0, 0, w, h)
   }
 
   // 1. Ash, falling behind the mountain. The nearer layer falls in step 5b.
@@ -643,6 +660,8 @@ function draw(dt) {
   const cs = m.craterHalf * (7 + flare * 2)
   ctx.globalAlpha = Math.max(0, calderaHeat * 0.5)
   ctx.drawImage(spriteGlow, m.peakX - cs / 2, m.peakY - cs * 0.62, cs, cs * 0.9)
+  deathfireHeat.breathe = breathe
+  deathfireHeat.flare = flare
   if (m.flare) m.flare = Math.max(0, m.flare - secs * 1.8)
 
   // 3. The rock.
@@ -776,7 +795,8 @@ function draw(dt) {
 
   // 5b. The near ash, in front of the rock — this is the half that makes the
   // fall read across the whole window rather than only in the open sky.
-  fallAsh(ashFront)
+  if (ashOver.value && vctx) fallAsh(ashFront, vctx, true)
+  else fallAsh(ashFront)
 
   // 6. The plume: continuous sparks and embers off the summit.
   ctx.lineCap = 'round'
@@ -946,6 +966,7 @@ onBeforeUnmount(() => {
   <div ref="host" class="deathfire" :data-mode="mode" :style="glowStyle" aria-hidden="true">
     <canvas ref="canvas" class="deathfire-canvas" />
   </div>
+  <canvas v-show="ashOver" ref="veil" class="deathfire-veil" aria-hidden="true" />
 </template>
 
 <style scoped>
@@ -961,5 +982,14 @@ onBeforeUnmount(() => {
   inset: 0;
   width: 100%;
   height: 100%;
+}
+/* Above page content, below the nav (z 50). */
+.deathfire-veil {
+  position: fixed;
+  inset: 0;
+  z-index: 40;
+  width: 100%;
+  height: 100%;
+  pointer-events: none;
 }
 </style>
