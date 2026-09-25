@@ -40,3 +40,8 @@ public/accolades/
 public/rank-requirements/
 src/data/accolades/
 src/data/rank-requirements/
+
+# Test tooling output
+coverage/
+.stryker-tmp/
+reports/
