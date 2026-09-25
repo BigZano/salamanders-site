@@ -32,6 +32,10 @@ services:
       # Empty until a moderator role is actually designated — deletion just
       # falls back to poster-only until this is set. See server/README.md.
       DISCORD_MOD_ROLE_ID: ${DISCORD_MOD_ROLE_ID:-}
+      # Legion Archive gate. ARCHIVE_KEY is the base64 key from
+      # archive-export/.env (keep a copy in a password manager).
+      ARCHIVE_KEY: ${ARCHIVE_KEY:-}
+      ARCHIVE_ROLE_ID: ${ARCHIVE_ROLE_ID:-1377787723976409211}
     ports:
       - '8787:8787'
 
