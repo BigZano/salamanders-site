@@ -2,7 +2,7 @@ import { defineStore } from 'pinia'
 import { markRaw } from 'vue'
 import { loadArchive, loadAssetBlob, ArchiveAccessError } from '../lib/archive/client'
 import { createArchive } from '../lib/archive/model'
-import { ARCHIVE_KID, ARCHIVE_BASE } from '../lib/archive/buildConfig'
+import { ARCHIVE_KID, ARCHIVE_BASE, ARCHIVE_RELEASE } from '../lib/archive/buildConfig'
 import { API_BASE } from '../lib/buildsApi'
 
 // Kept outside reactive state on purpose: the key must never be serialised
@@ -26,7 +26,7 @@ export const useArchive = defineStore('archive', {
       const gen = generation
       const run = (async () => {
         try {
-          const res = await (deps.loadArchive ?? loadArchive)({ apiBase: API_BASE, token, expectedKid: ARCHIVE_KID, assetBase: ARCHIVE_BASE })
+          const res = await (deps.loadArchive ?? loadArchive)({ apiBase: API_BASE, token, expectedKid: ARCHIVE_KID, assetBase: ARCHIVE_BASE, version: ARCHIVE_RELEASE })
           if (gen !== generation) return
           const archive = createArchive(res.index)
           keys = res.keys
@@ -54,7 +54,7 @@ export const useArchive = defineStore('archive', {
       const logicalPath = `${collectionKey}/assets/${file}`
       if (!blobs.has(logicalPath)) {
         const session = keys
-        const p = (deps.loadAssetBlob ?? loadAssetBlob)({ keys, assetBase: ARCHIVE_BASE, logicalPath }).then((b) => {
+        const p = (deps.loadAssetBlob ?? loadAssetBlob)({ keys, assetBase: ARCHIVE_BASE, logicalPath, version: ARCHIVE_RELEASE }).then((b) => {
           const url = URL.createObjectURL(b)
           // Signed out (or reset) while this was decrypting: don't keep it.
           if (keys !== session) URL.revokeObjectURL(url)

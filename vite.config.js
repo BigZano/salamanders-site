@@ -20,6 +20,9 @@ export default defineConfig({
   define: {
     __ARCHIVE_KID__: JSON.stringify(archiveLock?.kid ?? null),
     __ARCHIVE_BASE__: JSON.stringify(process.env.VITE_ARCHIVE_BASE || '/archive/'),
+    // The release tag versions archive URLs: sealed files keep their names across releases,
+    // and Pages caches them for 10 minutes, so without it a fresh deploy can serve the old one.
+    __ARCHIVE_RELEASE__: JSON.stringify(archiveLock?.release ?? null),
   },
   server: {
     // Vite's dev server rejects requests whose Host header isn't localhost

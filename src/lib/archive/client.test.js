@@ -70,6 +70,21 @@ describe('loadArchive', () => {
     const r = await loadArchive({ apiBase: 'https://api', token: 't', expectedKid: s.keys.kid, assetBase: '/archive/', fetchImpl: s2.fetchImpl })
     expect(r.index.collections.accolades.tocThreadId).toBe(makeIndex().collections.accolades.tocThreadId)
   })
+  it('versions sealed-file URLs by release, so a new release never reads a cached old file', async () => {
+    const s = await server()
+    const files = await sealedIndex(s.keys)
+    const s2 = await server({ files })
+    const urls = []
+    const fetchImpl = async (url, init) => (urls.push(url), s2.fetchImpl(url.split('?')[0], init))
+    await loadArchive({ apiBase: 'https://api', token: 't', expectedKid: s.keys.kid, assetBase: '/archive/', version: 'archive-v3', fetchImpl })
+    await loadAssetBlob({ keys: s.keys, assetBase: '/archive/', logicalPath: 'accolades/assets/x.png', version: 'archive-v3', fetchImpl }).catch(() => {})
+    const sealed = urls.filter((u) => u.includes('.bin'))
+    expect(sealed).toHaveLength(2)
+    for (const u of sealed) expect(u).toMatch(/^\/archive\/[0-9a-f]{32}\.bin\?v=archive-v3$/)
+    urls.length = 0
+    await loadArchive({ apiBase: 'https://api', token: 't', expectedKid: s.keys.kid, assetBase: '/archive/', fetchImpl })
+    expect(urls.find((u) => u.includes('.bin'))).toMatch(/\.bin$/) // no release known: plain name
+  })
   it('null expectedKid → unpublished, no key request made', async () => {
     let called = false
     expect(await state(loadArchive({ apiBase: 'x', token: 't', expectedKid: null, assetBase: '/a/', fetchImpl: async () => ((called = true), new Response()) }))).toBe('unpublished')
