@@ -16,10 +16,8 @@ export default defineConfig({
   plugins: [vue()],
   test: {
     environment: 'node',
-    // Node 25+ ships its own localStorage global, which shadows jsdom's in test workers.
-    poolOptions: {
-      forks: { execArgv: Number(process.versions.node.split('.')[0]) >= 25 ? ['--no-experimental-webstorage'] : [] },
-    },
+    // Node 25+ ships its own localStorage global, which shadows jsdom's (see the setup file).
+    setupFiles: ['./vitest.setup.js'],
     include: ['src/**/*.test.js', 'scripts/**/*.test.mjs', 'server/**/*.test.js'],
     coverage: {
       provider: 'v8',
