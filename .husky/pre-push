@@ -1,0 +1,10 @@
+# Legion Archive merge gate: whole suite, then 100% coverage + mutation on
+# the gated units, then (locally, where the plaintext exists) a build scan
+# against real-content sentinels.
+export PATH="$PWD/node_modules/.bin:$PATH"
+bun run test || exit 1
+bun run test:coverage || exit 1
+bun run test:mutation || exit 1
+if [ -d archive-export ]; then
+  bun run build >/dev/null && node scripts/scan-dist.mjs dist --sentinels-from archive-export || exit 1
+fi

@@ -14,6 +14,14 @@ const USERS = {
   'test-member-token': { id: '75633559351595008', username: 'member-tester' },
   // Well-formed but deliberately absent from that list.
   'test-nonmember-token': { id: '999999999999999999', username: 'nonmember-tester' },
+  // In the guild (and the member bake) but without the Legion role.
+  'test-norole-token': { id: '87082170719408128', username: 'norole-tester' },
+}
+const LEGION_ROLE = '1377787723976409211'
+// Guild membership as Discord's bot endpoint would report it.
+const MEMBERS = {
+  '75633559351595008': { roles: [LEGION_ROLE] },
+  '87082170719408128': { roles: [] },
 }
 
 // The browser calls this cross-origin (from wherever "web" is served), unlike
@@ -43,9 +51,12 @@ Bun.serve({
       return withCors(Response.json(user))
     }
 
-    // Mod-role lookups: no moderator scenario exercised yet, so nobody has it.
-    if (/^\/v10\/guilds\/[^/]+\/members\/[^/]+$/.test(url.pathname)) {
-      return withCors(Response.json({ roles: [] }))
+    // Guild member lookups (mod-role and Legion Archive role checks). No
+    // moderator scenario is exercised, so nobody holds a mod role.
+    const memberMatch = url.pathname.match(/^\/v10\/guilds\/[^/]+\/members\/([^/]+)$/)
+    if (memberMatch) {
+      const member = MEMBERS[memberMatch[1]]
+      return withCors(member ? Response.json(member) : Response.json({ message: 'Unknown Member' }, { status: 404 }))
     }
 
     return withCors(new Response('Not found', { status: 404 }))

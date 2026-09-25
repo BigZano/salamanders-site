@@ -1,5 +1,5 @@
 /**
- * Shared builds API. Small enough to stay one file: four routes, one table.
+ * Shared builds API. Small enough to stay one file: five routes, one table.
  *
  * The client never gets to say who it is — every mutating request carries a
  * Discord access token (the same implicit-grant token src/lib/discordAuth.js
@@ -11,6 +11,7 @@
  * from the request body.
  */
 import { Pool } from 'pg'
+import { createArchiveKeyHandler } from './archiveKey.js'
 
 const PORT = Number(process.env.PORT || 8787)
 const ALLOWED_ORIGIN = process.env.ALLOWED_ORIGIN || 'http://localhost:5173'
@@ -24,6 +25,15 @@ const BOT_TOKEN = process.env.DISCORD_BOT_TOKEN
 const DISCORD_API_BASE = process.env.DISCORD_API_BASE || 'https://discord.com/api'
 
 const pool = new Pool({ connectionString: process.env.DATABASE_URL })
+
+// Legion Archive key: role-gated, fail-closed. See archiveKey.js.
+const archiveKey = createArchiveKeyHandler({
+  discordApiBase: DISCORD_API_BASE,
+  guildId: GUILD_ID,
+  roleId: process.env.ARCHIVE_ROLE_ID,
+  botToken: BOT_TOKEN,
+  archiveKey: process.env.ARCHIVE_KEY,
+})
 
 function cors(res) {
   res.headers.set('Access-Control-Allow-Origin', ALLOWED_ORIGIN)
@@ -149,6 +159,7 @@ Bun.serve({
 
     try {
       if (url.pathname === '/health') return json({ ok: true })
+      if (url.pathname === '/archive/key' && request.method === 'GET') return cors(await archiveKey(request))
       if (url.pathname === '/builds' && request.method === 'GET') return await listBuilds(request)
       if (url.pathname === '/builds' && request.method === 'POST') return await createBuild(request)
       if (idMatch && request.method === 'DELETE') return await deleteBuild(request, idMatch[1])

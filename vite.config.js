@@ -1,6 +1,13 @@
 import { defineConfig } from 'vite'
 import vue from '@vitejs/plugin-vue'
 import tailwindcss from '@tailwindcss/vite'
+import { existsSync, readFileSync } from 'node:fs'
+
+// Legion Archive: only the key id travels in the bundle (to detect a
+// stale page), never the key. ARCHIVE_LOCK / VITE_ARCHIVE_BASE let the
+// e2e stack point at its own throwaway sealed fixture.
+const lockPath = process.env.ARCHIVE_LOCK || 'archive.lock.json'
+const archiveLock = existsSync(lockPath) ? JSON.parse(readFileSync(lockPath, 'utf8')) : null
 
 // https://vite.dev/config/
 export default defineConfig({
@@ -10,6 +17,10 @@ export default defineConfig({
   // Override with SITE_BASE if that ever changes.
   base: process.env.SITE_BASE || '/',
   plugins: [vue(), tailwindcss()],
+  define: {
+    __ARCHIVE_KID__: JSON.stringify(archiveLock?.kid ?? null),
+    __ARCHIVE_BASE__: JSON.stringify(process.env.VITE_ARCHIVE_BASE || '/archive/'),
+  },
   server: {
     // Vite's dev server rejects requests whose Host header isn't localhost
     // by default (DNS-rebinding protection). Only the e2e/ stack needs this

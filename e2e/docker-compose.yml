@@ -34,11 +34,15 @@ services:
     environment:
       PORT: 8787
       DATABASE_URL: postgres://salamanders:e2e-test-password@db:5432/salamanders_builds
-      ALLOWED_ORIGIN: http://web:5173
+      ALLOWED_ORIGIN: http://localhost:5173
       DISCORD_API_BASE: http://discord-mock:4400
       DISCORD_GUILD_ID: '1322056087792521269'
       DISCORD_BOT_TOKEN: unused-in-e2e
       DISCORD_MOD_ROLE_ID: ''
+      ARCHIVE_ROLE_ID: '1377787723976409211'
+      # Throwaway key for the synthetic fixture only. Must match the web
+      # service's E2E_ARCHIVE_KEY below.
+      ARCHIVE_KEY: 'ZTJlLXRocm93YXdheS1rZXktMzItYnl0ZXMtbG9uZyE='
     healthcheck:
       test: ['CMD', 'bun', '-e', "fetch('http://localhost:8787/health').then((r)=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
       interval: 2s
@@ -50,11 +54,14 @@ services:
     working_dir: /app
     volumes:
       - ../:/app
-    command: sh -c "bun install --frozen-lockfile && bun run dev -- --host 0.0.0.0 --port 5173"
+    command: sh -c "bun install --frozen-lockfile && bun scripts/e2e-archive.mjs && bun run dev -- --host 0.0.0.0 --port 5173"
     environment:
       VITE_BUILDS_API_URL: http://api:8787
       VITE_DISCORD_API_BASE: http://discord-mock:4400
       VITE_ALLOWED_HOSTS: web
+      E2E_ARCHIVE_KEY: 'ZTJlLXRocm93YXdheS1rZXktMzItYnl0ZXMtbG9uZyE='
+      ARCHIVE_LOCK: e2e/.archive/lock.json
+      VITE_ARCHIVE_BASE: /archive-e2e/
     depends_on:
       api:
         condition: service_healthy
@@ -66,11 +73,17 @@ services:
 
   playwright:
     image: mcr.microsoft.com/playwright:v1.48.0-jammy
+    # Share web's network namespace so the browser loads the site as
+    # http://localhost:5173 — a secure context. WebCrypto (Legion Archive
+    # decryption) doesn't exist on plain-http non-localhost origins like
+    # http://web:5173, and headless Chromium ignores the flag that would
+    # override that. api/discord-mock still resolve by service name.
+    network_mode: service:web
     working_dir: /e2e
     volumes:
       - ./:/e2e
     environment:
-      BASE_URL: http://web:5173
+      BASE_URL: http://localhost:5173
       CI: 'true'
     depends_on:
       web:

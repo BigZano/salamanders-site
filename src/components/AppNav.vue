@@ -1,5 +1,5 @@
 <script setup>
-import { ref, watch } from 'vue'
+import { computed, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { usePlanner } from '../stores/planner'
 import { useAuth } from '../stores/auth'
@@ -11,13 +11,20 @@ const planner = usePlanner()
 const auth = useAuth()
 const DISCORD = 'https://discord.gg/salamanders'
 
-const links = [
+const baseLinks = [
   { to: '/', label: 'Home' },
   { to: '/planner', label: 'Perk Builder' },
   { to: '/armoury', label: 'Armoury' },
   { to: '/builds', label: 'Builds' },
   { to: '/companies', label: 'Companies' },
 ]
+// A UX hint only — the real gate is the server's role check (see
+// src/lib/archive/client.js). Non-members never see the entries.
+const links = computed(() =>
+  auth.member?.isMember
+    ? [...baseLinks, { to: '/accolades', label: 'Accolades', section: true }, { to: '/ranks', label: 'Ranks', section: true }]
+    : baseLinks,
+)
 
 // Close the mobile menu on navigation.
 watch(
@@ -54,7 +61,8 @@ function freshPlanner() {
           :key="l.to"
           :to="l.to"
           class="nav-link"
-          exact-active-class="is-active"
+          :exact-active-class="l.section ? '' : 'is-active'"
+          :active-class="l.section ? 'is-active' : ''"
           @click="l.to === '/planner' && freshPlanner()"
         >
           {{ l.label }}
@@ -92,7 +100,8 @@ function freshPlanner() {
           :key="l.to"
           :to="l.to"
           class="nav-mobile-link"
-          exact-active-class="is-active"
+          :exact-active-class="l.section ? '' : 'is-active'"
+          :active-class="l.section ? 'is-active' : ''"
           @click="l.to === '/planner' && freshPlanner()"
         >
           {{ l.label }}
