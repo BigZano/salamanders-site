@@ -1,4 +1,5 @@
 import { defineConfig } from 'vitest/config'
+import vue from '@vitejs/plugin-vue'
 
 const FULL = { lines: 100, branches: 100, functions: 100, statements: 100 }
 const GATED = [
@@ -10,6 +11,8 @@ const GATED = [
 ]
 
 export default defineConfig({
+  // Archive components are .vue SFCs (src/components/archive/archive.test.js).
+  plugins: [vue()],
   test: {
     environment: 'node',
     include: ['src/**/*.test.js', 'scripts/**/*.test.mjs', 'server/**/*.test.js'],

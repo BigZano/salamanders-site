@@ -32,6 +32,16 @@ const routes = [
     component: () => import('./views/Companies.vue'),
     meta: { title: 'Companies' },
   },
+  ...[
+    { key: 'accolades', title: 'Accolades' },
+    { key: 'ranks', title: 'Ranks' },
+  ].map(({ key, title }) => ({
+    path: `/${key}/:threadId(\\d{17,20})?`,
+    name: key,
+    component: () => import('./views/ArchiveView.vue'),
+    props: (r) => ({ collectionKey: key, threadId: r.params.threadId || null }),
+    meta: { title },
+  })),
   {
     path: '/:pathMatch(.*)*',
     name: 'not-found',
@@ -47,7 +57,11 @@ export const router = createRouter({
   // constructor reads it — see those files for the mechanism.
   history: createWebHistory(),
   routes,
-  scrollBehavior() {
+  // Legion Archive threads scroll to their own #m-<id> anchors once decrypted
+  // content has rendered (see ArchiveThread.vue); same-page hash changes
+  // are left to them.
+  scrollBehavior(to, from) {
+    if (to.hash && to.path === from.path) return false
     return { top: 0 }
   },
 })
