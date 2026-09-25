@@ -5,9 +5,12 @@
  * scan is memoised or sticky-anchored, so hostile input stays linear.
  */
 const MAX_DEPTH = 16
-const HEADING = /^(#{1,3}) +(\S.*)$/
-const SUBTEXT = /^-# +(\S.*)$/
-const LIST_ITEM = /^([ \t]*)([-*]|\d{1,9}\.) +(.*)$/
+// Leading whitespace is tolerated (Discord shows such lines literally; authors meant a heading).
+// [^\n]* rather than .*$ — a stray U+2028 (common in pasted Discord text) must not break a
+// match. Lines are already split on \n, so [^\n]* runs to the end of the line on its own.
+const HEADING = /^[ \t]*(#{1,3}) +(\S[^\n]*)/
+const SUBTEXT = /^[ \t]*-# +(\S[^\n]*)/
+const LIST_ITEM = /^([ \t]*)([-*]|\d{1,9}\.) +([^\n]*)/
 const FENCE_OPEN = /^```([\w+-]*)$/
 const EMOJI = /<(a?):(\w{1,32}):(\d{17,20})>/y
 const MENTION = /<(@!?|@&|#)(\d{17,20})>/y
@@ -56,13 +59,9 @@ function parseBlocks(lines, inQuote) {
       continue
     }
     let m
-    if ((m = HEADING.exec(line))) {
-      out.push({ type: 'heading', level: m[1].length, children: parseInline(m[2]) })
-      i++
-      continue
-    }
-    if ((m = SUBTEXT.exec(line))) {
-      out.push({ type: 'subtext', children: parseInline(m[1]) })
+    const titled = heading(line)
+    if (titled) {
+      out.push(titled)
       i++
       continue
     }
@@ -86,6 +85,14 @@ function parseBlocks(lines, inQuote) {
   return out
 }
 
+/** A heading or subtext node for the line, or null — on its own line or as a list item's text. */
+function heading(text) {
+  let m
+  if ((m = HEADING.exec(text))) return { type: 'heading', level: m[1].length, children: parseInline(m[2]) }
+  if ((m = SUBTEXT.exec(text))) return { type: 'subtext', children: parseInline(m[1]) }
+  return null
+}
+
 function buildList(items, start, indent, depth) {
   const list = { type: 'list', ordered: /\d/.test(items[start].marker), items: [] }
   let k = start
@@ -97,7 +104,7 @@ function buildList(items, start, indent, depth) {
       k = next
       continue
     }
-    list.items.push({ marker: it.marker, children: [{ type: 'line', children: parseInline(it.text) }] })
+    list.items.push({ marker: it.marker, children: [heading(it.text) ?? { type: 'line', children: parseInline(it.text) }] })
     k++
   }
   return [list, k]

@@ -13,11 +13,37 @@ describe('blocks', () => {
       { type: 'heading', level: 3, children: [{ type: 'text', value: 'C' }] },
     ])
   })
-  it.each(['#### four', '#nospace', '# ', ' # indented'])('%j is a plain line, not a heading', (s) => {
-    expect(parse(s)[0].type).not.toBe('heading')
+  it.each(['#### four', '#nospace', '# ', 'a # mid-line', 'a -# mid-line'])('%j is a plain line, not a heading or subtext', (s) => {
+    expect(['heading', 'subtext']).not.toContain(parse(s)[0].type)
   })
   it('-# subtext', () => {
     expect(parse('-# small')).toEqual([{ type: 'subtext', children: [{ type: 'text', value: 'small' }] }])
+  })
+  // Deliberately kinder than Discord, which shows these literally: stray leading whitespace
+  // (often from a quote written as ">  ") shouldn't turn an author's heading into "## text".
+  it.each([[' ## b', 'heading'], ['\t# b', 'heading'], ['   ### b', 'heading'], [' -# b', 'subtext'], ['\t-# b', 'subtext']])('%j with leading whitespace is still a %s', (s, type) => {
+    expect(parse(s)).toEqual([{ type, ...(type === 'heading' ? { level: s.trim().indexOf(' ') } : {}), children: [{ type: 'text', value: 'b' }] }])
+  })
+  it('a quote line with extra spaces after ">" keeps its subtext', () => {
+    expect(parse('>   -# small')[0].children).toEqual([{ type: 'subtext', children: [{ type: 'text', value: 'small' }] }])
+  })
+  it('a list item can be subtext or a heading, and nests like any other item', () => {
+    const [list] = parse('- -# small\n- ## big\n- plain\n  * -# deeper')
+    expect(list.items.map((it) => it.children[0])).toEqual([
+      { type: 'subtext', children: [{ type: 'text', value: 'small' }] },
+      { type: 'heading', level: 2, children: [{ type: 'text', value: 'big' }] },
+      { type: 'line', children: [{ type: 'text', value: 'plain' }] },
+    ])
+    expect(list.items[2].children[1].items[0].children[0]).toEqual({ type: 'subtext', children: [{ type: 'text', value: 'deeper' }] })
+  })
+  it('a trailing U+2028 (pasted from Discord) does not stop a heading, subtext or list item', () => {
+    expect(parse('## b\u2028')[0]).toEqual({ type: 'heading', level: 2, children: [{ type: 'text', value: 'b\u2028' }] })
+    expect(parse('-# b\u2028')[0].type).toBe('subtext')
+    expect(parse('- b\u2028')[0]).toMatchObject({ type: 'list', items: [{ children: [{ type: 'line' }] }] })
+  })
+  it('a list item that only looks like one ("-#x", "#x") stays a line', () => {
+    const [list] = parse('- -#x\n- #x')
+    expect(list.items.map((it) => it.children[0].type)).toEqual(['line', 'line'])
   })
   it('> quotes group consecutive lines and may contain headings and nested lists', () => {
     const [q] = parse('> ### H\n> * a\n>   * b\n>\n> tail')
