@@ -10,7 +10,10 @@
 import { readFile, writeFile, mkdtemp, rm, access } from 'node:fs/promises'
 import { execFileSync } from 'node:child_process'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { join, resolve } from 'node:path'
+
+// An absolute path every tar accepts: forward slashes (Git Bash's GNU tar mangles backslashes).
+const tarPath = (p) => resolve(p).replaceAll('\\', '/')
 import { parseArgs } from 'node:util'
 import { randomBytes } from 'node:crypto'
 import { sealExport, verifyDir, unsealDir, readEnvKey, readExport } from './lib/archive-seal.mjs'
@@ -57,9 +60,10 @@ async function main() {
     lock.release = values.publish ? `archive-v${n}` : prev?.release ?? null
     if (values.publish) {
       const tmp = await mkdtemp(join(tmpdir(), 'archive-pub-'))
-      const tar = join(tmp, `archive-${lock.kid}.tar`)
-      sh('tar', ['-cf', tar, '-C', values.out, '.'])
-      sh('gh', ['release', 'create', lock.release, tar, '--title', lock.release, '--notes', 'Sealed Legion Archive (ciphertext only).'])
+      const name = `archive-${lock.kid}.tar`
+      // tar runs inside tmp with a bare file name: GNU tar reads a "C:\..." archive path as host:path.
+      sh('tar', ['-cf', name, '-C', tarPath(values.out), '.'], { cwd: tmp })
+      sh('gh', ['release', 'create', lock.release, join(tmp, name), '--title', lock.release, '--notes', 'Sealed Legion Archive (ciphertext only).'])
       await rm(tmp, { recursive: true, force: true })
     }
     await writeFile(values.lock, JSON.stringify(lock, null, 2) + '\n')
@@ -74,7 +78,7 @@ async function main() {
     sh('gh', ['release', 'download', lock.release, '--pattern', '*.tar', '--dir', tmp])
     await rm(values.out, { recursive: true, force: true })
     sh('mkdir', ['-p', values.out])
-    sh('tar', ['-xf', join(tmp, `archive-${lock.kid}.tar`), '-C', values.out])
+    sh('tar', ['-xf', `archive-${lock.kid}.tar`, '-C', tarPath(values.out)], { cwd: tmp }) // bare name: see publish
     await verifyDir(values.out, lock)
     await rm(tmp, { recursive: true, force: true })
     console.log(`verified ${Object.keys(lock.files).length} sealed files from ${lock.release}`)
