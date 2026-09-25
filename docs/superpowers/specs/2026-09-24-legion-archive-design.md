@@ -149,6 +149,22 @@ live against Discord on every request (no server-side cache).
   `@display_name`; channel → per "Link resolution".
 - **Attachments:** images below message content, from the sealed asset map.
 
+## Display pruning (user decision 2026-09-24)
+
+Amends hard constraint 2 for presentation only; the exports stay untouched.
+A reference is *live* when it resolves to a route or an external link;
+references resolved to `text` are not.
+
+- **Tables of contents** (each collection's landing thread): show only
+  blocks that hold a live link, the headings they sit under, and list labels
+  with live links beneath them. Everything else (descriptions, unlinked
+  lines, attachments) is hidden; messages left empty are not rendered.
+- **All other threads:** a line, list item, heading, or quote that is
+  nothing but non-live references (plus emoji, punctuation, formatting) is
+  hidden. Sentences that mention a non-live reference keep it as plain text.
+- **Invariant:** pruning never drops, duplicates, or reorders a live link
+  (property-tested; the local real-export test checks every thread).
+
 ## Link resolution
 
 Every link — masked link, bare URL, `<url>`, and `<#channel>` mention, on

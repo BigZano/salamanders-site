@@ -69,9 +69,26 @@ describe('ArchiveView', () => {
     for (const a of w.findAll('a')) expect(a.attributes('href')).not.toMatch(/discord(app)?\.com|discord\.gg/i)
     expect(w.find('a[href="/ranks/200000000000000001#m-200000000000000011"]').exists()).toBe(true)
   })
-  it('fixed external channel mention renders as text, not a link', async () => {
+  it('table of contents shows only live links and the headings above them', async () => {
     const { w } = await mountView('/accolades')
-    expect(w.find('.md-mention-channel').text()).toBe('#fixture-reports')
+    expect(w.findAll('.arch-thread a').map((a) => a.text())).toEqual(['Two', 'Ranks'])
+    expect(w.find('.md-h1').text()).toContain('Fixture ToC')
+    expect(w.text()).not.toContain('Click here') // starter blurb dropped
+    expect(w.find('.md-mention-channel').exists()).toBe(false) // unlinked line dropped
+    expect(w.find('.arch-img-attachment').exists()).toBe(false) // banner dropped
+    expect(w.findAll('.arch-msg')).toHaveLength(1) // emptied messages aren't rendered
+  })
+  it('elsewhere: a line that is only an unlinked reference is dropped; a sentence keeps it as plain text', async () => {
+    const index = makeIndex()
+    const f = `threads/${IDS.A_T2}.json`
+    const t = JSON.parse(index.collections.accolades.files[f])
+    t.messages.push({ id: '100000000000000031', type: 0, position: 5, attachments: [], content: `Report in <#${IDS.EXT_CHANNEL}> please\n<#${IDS.EXT_CHANNEL}>` })
+    index.collections.accolades.files[f] = JSON.stringify(t)
+    const { w } = await mountView(`/accolades/${IDS.A_T2}`, { index })
+    const msg = w.find('#m-100000000000000031')
+    expect(msg.findAll('.md-mention-channel').map((m) => m.text())).toEqual(['#fixture-reports'])
+    expect(msg.text()).toContain('Report in #fixture-reports please')
+    expect(msg.find('a').exists()).toBe(false)
   })
   it('dead link follows its fix to the replacement message', async () => {
     const { w } = await mountView(`/accolades/${IDS.A_T2}`)

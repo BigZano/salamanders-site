@@ -19,7 +19,8 @@ export async function writeFixture(dir) {
     const toc = index.collections[key].tocThreadId
     const f = `threads/${toc}.json`
     const t = JSON.parse(index.collections[key].files[f])
-    t.messages[t.messages.length - 1].content += `\n${SENTINEL}-${key}`
+    // As a live link label: the ToC view shows only live links.
+    t.messages[t.messages.length - 1].content += `\n[${SENTINEL}-${key}](https://discord.com/channels/${IDS.GUILD}/${toc})`
     index.collections[key].files[f] = JSON.stringify(t)
   }
   const exportDirs = { accolades: 'accolades', ranks: 'rank-requirements' }

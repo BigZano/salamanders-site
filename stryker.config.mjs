@@ -8,6 +8,7 @@ export default {
     'src/lib/archive/links.js',
     'src/lib/archive/markdown.js',
     'src/lib/archive/audit.js',
+  'src/lib/archive/prune.js',
     'server/src/archiveKey.js',
   ],
   coverageAnalysis: 'perTest',

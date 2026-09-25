@@ -3,6 +3,7 @@ import { computed, h, watch, nextTick, onMounted } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { useArchive } from '../../stores/archive'
 import { parse } from '../../lib/archive/markdown'
+import { dropDeadLines, tocOnly } from '../../lib/archive/prune'
 import { classifyHref, emojiFile, attachmentFile, threadTags, mentionLabel } from '../../lib/archive/model'
 import { takeAnchor } from '../../lib/archive/anchor'
 import ArchiveMarkdown from './ArchiveMarkdown'
@@ -16,7 +17,18 @@ const router = useRouter()
 const col = computed(() => archive.archive.collections.get(props.collectionKey))
 const entry = computed(() => col.value.threads.get(props.threadId))
 const tags = computed(() => threadTags(col.value, entry.value.thread))
-const messages = computed(() => entry.value.messages.map((m) => ({ m, ast: parse(m.content ?? '') })))
+// Display pruning (user decision 2026-09-24): the ToC shows only live links
+// and their headings; other threads drop lines that are only unlinked refs.
+const isToc = computed(() => props.threadId === col.value.tocThreadId)
+const kind = (href) => classifyHref(href, archive.archive).kind
+const messages = computed(() =>
+  entry.value.messages
+    .map((m) => {
+      const ast = parse(m.content ?? '')
+      return { m, ast: isToc.value ? tocOnly(ast, kind) : dropDeadLines(ast, kind), attachments: isToc.value ? [] : m.attachments ?? [] }
+    })
+    .filter(({ ast, attachments }) => ast.some((n) => n.type !== 'blank') || attachments.length),
+)
 
 const ctx = computed(() => ({
   link: (href) => {
@@ -54,13 +66,13 @@ watch(() => [route.hash, props.threadId], scrollToHash)
       </ul>
     </header>
     <section
-      v-for="{ m, ast } in messages"
+      v-for="{ m, ast, attachments } in messages"
       :key="m.id"
       :id="m.id === threadId ? undefined : `m-${m.id}`"
       class="arch-msg"
     >
       <ArchiveMarkdown :nodes="ast" :ctx="ctx" />
-      <template v-for="a in m.attachments ?? []" :key="a.id ?? a.url">
+      <template v-for="a in attachments" :key="a.id ?? a.url">
         <ArchiveImage
           v-if="attachmentFile(col, a.url)"
           :collection-key="collectionKey"

@@ -13,6 +13,9 @@ import ArchiveView from '../../views/ArchiveView.vue'
 import { useArchive } from '../../stores/archive'
 import { useAuth } from '../../stores/auth'
 import { readExport } from '../../../scripts/lib/archive-seal.mjs'
+import { parse } from '../../lib/archive/markdown'
+import { liveRefs } from '../../lib/archive/prune'
+import { classifyHref } from '../../lib/archive/model'
 
 const present = existsSync('archive-export/.env')
 
@@ -56,6 +59,11 @@ describe.skipIf(!present)('real export renders (local only)', () => {
             if (hash) expect(targetCol.threads.get(target).messages.some((m) => `m-${m.id}` === hash), `thread ${threadId} → ${href}`).toBe(true)
           }
         }
+        // Pruning never drops a live link: every one in the source is rendered.
+        const kind = (h) => classifyHref(h, archive.archive).kind
+        const want = col.threads.get(threadId).messages.reduce((n, m) => n + liveRefs(parse(m.content ?? ''), kind).length, 0)
+        expect(w.findAll('.arch-msg a').length, `thread ${threadId}`).toBe(want)
+        if (threadId === col.tocThreadId) expect(w.find('.arch-img-attachment').exists(), `toc ${threadId}`).toBe(false)
         w.unmount()
         threads++
       }
