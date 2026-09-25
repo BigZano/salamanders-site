@@ -23,13 +23,32 @@ export function createArchive(index, registry = COLLECTIONS) {
     collections.set(def.key, {
       ...def,
       tocThreadId: src.tocThreadId,
+      // Display overlay for the table of contents (sealed with the archive; ids only):
+      //   insert: [{ after, thread }] — list `thread` right after the ToC entry that links `after`.
+      //   hide: [thread] — never listed under "Also in the archive" (still reachable wherever it is linked).
+      toc: { insert: src.toc?.insert ?? [], hide: src.toc?.hide ?? [] },
       forum: json('forum.json'),
       resolve: json('resolve.json'),
       assets: json('assets.json'),
       threads,
     })
   }
+  validateToc(collections)
   return { collections, fixes: index.fixes ?? {}, linkIndex: buildLinkIndex([...collections.values()]) }
+}
+
+/** Every thread a ToC overlay names must exist, in the collection that names it. */
+function validateToc(collections) {
+  const anywhere = (id) => [...collections.values()].some((c) => c.threads.has(id))
+  for (const [key, col] of collections) {
+    for (const { after, thread } of col.toc.insert) {
+      if (!col.threads.has(thread)) throw new Error(`${key}: toc insert names thread ${thread}, which is not in this collection`)
+      if (!anywhere(after)) throw new Error(`${key}: toc insert is placed after unknown thread ${after}`)
+    }
+    for (const thread of col.toc.hide) {
+      if (!col.threads.has(thread)) throw new Error(`${key}: toc hide names thread ${thread}, which is not in this collection`)
+    }
+  }
 }
 
 export function orderMessages(messages) {

@@ -43,7 +43,7 @@ export async function readExport(exportDir) {
     }
     if (onDisk.size) throw new Error(`${def.key}: unlisted assets on disk: ${[...onDisk].join(', ')}`)
     if (!meta[def.key]?.tocThreadId) throw new Error(`collections.json has no tocThreadId for ${def.key}`)
-    index.collections[def.key] = { tocThreadId: meta[def.key].tocThreadId, files }
+    index.collections[def.key] = { tocThreadId: meta[def.key].tocThreadId, ...(meta[def.key].toc ? { toc: meta[def.key].toc } : {}), files }
   }
   return { index, assets }
 }
@@ -102,7 +102,7 @@ export async function unsealDir({ dir, rawKey, destDir }) {
     }
   }
   writes.push([join(destDir, 'collections.json'), enc.encode(JSON.stringify(Object.fromEntries(
-    Object.entries(index.collections).map(([k, c]) => [k, { tocThreadId: c.tocThreadId }]),
+    Object.entries(index.collections).map(([k, c]) => [k, { tocThreadId: c.tocThreadId, ...(c.toc ? { toc: c.toc } : {}) }]),
   ), null, 2))])
   writes.push([join(destDir, 'link-fixes.json'), enc.encode(JSON.stringify(index.fixes, null, 2))])
   // Everything decrypted and authenticated before the first byte is written.

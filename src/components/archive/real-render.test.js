@@ -41,6 +41,7 @@ describe.skipIf(!present)('real export renders (local only)', () => {
     })
     let threads = 0
     let routeLinks = 0
+    const tocLinked = new Set()
     for (const col of archive.archive.collections.values()) {
       for (const threadId of col.threads.keys()) {
         await router.push(`/${col.key}/${threadId}`)
@@ -55,20 +56,31 @@ describe.skipIf(!present)('real export renders (local only)', () => {
             const [path, hash] = href.split('#')
             const [, key, target] = path.split('/')
             const targetCol = archive.archive.collections.get(key)
-            expect(targetCol?.threads.has(target), `thread ${threadId} → ${href}`).toBe(true)
+            // A bare /<collection> link (the header's way back) lands on its table of contents.
+            expect(targetCol?.threads.has(target ?? targetCol?.tocThreadId), `thread ${threadId} → ${href}`).toBe(true)
             if (hash) expect(targetCol.threads.get(target).messages.some((m) => `m-${m.id}` === hash), `thread ${threadId} → ${href}`).toBe(true)
           }
         }
-        // Pruning never drops a live link: every one in the source is rendered.
+        // Pruning never drops a live link: every one in the source is rendered (plus the ToC overlay's entries).
         const kind = (h) => classifyHref(h, archive.archive).kind
-        const want = col.threads.get(threadId).messages.reduce((n, m) => n + liveRefs(parse(m.content ?? ''), kind).length, 0)
+        const isToc = threadId === col.tocThreadId
+        const want = col.threads.get(threadId).messages.reduce((n, m) => n + liveRefs(parse(m.content ?? ''), kind).length, 0) + (isToc ? col.toc.insert.length : 0)
         expect(w.findAll('.arch-msg a').length, `thread ${threadId}`).toBe(want)
-        if (threadId === col.tocThreadId) expect(w.find('.arch-img-attachment').exists(), `toc ${threadId}`).toBe(false)
+        if (isToc) {
+          expect(w.find('.arch-img-attachment').exists(), `toc ${threadId}`).toBe(false)
+          for (const a of w.findAll('a')) tocLinked.add((a.attributes('href') ?? '').split('#')[0])
+        }
         w.unmount()
         threads++
       }
     }
     expect(threads).toBe(40)
     expect(routeLinks).toBeGreaterThanOrEqual(300)
+    // Every thread is reachable from its table of contents, unless the overlay deliberately hides it.
+    for (const col of archive.archive.collections.values()) {
+      for (const id of col.threads.keys()) {
+        if (id !== col.tocThreadId && !col.toc.hide.includes(id)) expect(tocLinked.has(`/${col.key}/${id}`), `unreachable: ${col.key}/${id}`).toBe(true)
+      }
+    }
   }, 120_000)
 })

@@ -14,8 +14,18 @@ describe('createArchive', () => {
     ['missing collection', (i) => ({ ...i, collections: { accolades: i.collections.accolades } })],
     ['unparseable thread file', (i) => { i.collections.ranks.files[`threads/${IDS.R_TOC}.json`] = '{'; return i }],
     ['toc thread not present', (i) => { i.collections.ranks.tocThreadId = '999999999999999999'; return i }],
+    ['toc insert of a thread from another collection', (i) => { i.collections.accolades.toc = { insert: [{ after: IDS.A_TOC, thread: IDS.R_TOC }] }; return i }],
+    ['toc insert after an unknown thread', (i) => { i.collections.accolades.toc = { insert: [{ after: '999999999999999999', thread: IDS.A_T2 }] }; return i }],
+    ['toc hide of a thread from another collection', (i) => { i.collections.accolades.toc = { hide: [IDS.R_TOC] }; return i }],
   ])('rejects %s', (_, mutate) => {
     expect(() => createArchive(mutate(makeIndex()))).toThrow()
+  })
+  it('carries a valid toc overlay, and defaults to none', () => {
+    const i = makeIndex()
+    i.collections.accolades.toc = { insert: [{ after: IDS.A_TOC, thread: IDS.A_T2 }], hide: [IDS.A_T2] }
+    const a = createArchive(i)
+    expect(a.collections.get('accolades').toc).toEqual(i.collections.accolades.toc)
+    expect(a.collections.get('ranks').toc).toEqual({ insert: [], hide: [] })
   })
 })
 

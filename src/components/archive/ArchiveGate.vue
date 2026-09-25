@@ -3,6 +3,7 @@ import { watch } from 'vue'
 import { useAuth } from '../../stores/auth'
 import { useArchive } from '../../stores/archive'
 import { clearAnchor } from '../../lib/archive/anchor'
+import ArchivePlaque from './ArchivePlaque.vue'
 
 const auth = useAuth()
 const archive = useArchive()
@@ -27,20 +28,36 @@ const COPY = {
 </script>
 
 <template>
-  <div v-if="!auth.signedIn || archive.error === 'signed-out'" class="gate">
-    <p>{{ COPY['signed-out'] }}</p>
-    <button class="btn-ember gate-btn" type="button" @click="auth.signIn()">Sign in with Discord</button>
-  </div>
+  <ArchivePlaque v-if="!auth.signedIn || archive.error === 'signed-out'" narrow>
+    <div class="gate">
+      <p class="gate-eyebrow">Legion Archive</p>
+      <p>{{ COPY['signed-out'] }}</p>
+      <button class="btn-ember gate-btn" type="button" @click="auth.signIn()">Sign in with Discord</button>
+    </div>
+  </ArchivePlaque>
   <div v-else-if="archive.status === 'ready'"><slot /></div>
-  <div v-else-if="archive.status === 'error'" class="gate" role="alert">
-    <p>{{ COPY[archive.error] }}</p>
-    <button v-if="archive.error === 'unavailable'" class="btn-ember gate-btn" type="button" @click="archive.retry(auth.token)">Try again</button>
-    <button v-else-if="archive.error === 'outdated' || archive.error === 'integrity'" class="btn-ember gate-btn" type="button" @click="reload">Reload</button>
-  </div>
-  <div v-else class="gate" aria-busy="true"><p>Unsealing the archive…</p></div>
+  <ArchivePlaque v-else-if="archive.status === 'error'" narrow>
+    <div class="gate" role="alert">
+      <p class="gate-eyebrow">Legion Archive</p>
+      <p>{{ COPY[archive.error] }}</p>
+      <button v-if="archive.error === 'unavailable'" class="btn-ember gate-btn" type="button" @click="archive.retry(auth.token)">Try again</button>
+      <button v-else-if="archive.error === 'outdated' || archive.error === 'integrity'" class="btn-ember gate-btn" type="button" @click="reload">Reload</button>
+    </div>
+  </ArchivePlaque>
+  <ArchivePlaque v-else narrow>
+    <div class="gate" aria-busy="true">
+      <p class="gate-eyebrow">Legion Archive</p>
+      <p class="gate-unsealing">Unsealing the archive…</p>
+    </div>
+  </ArchivePlaque>
 </template>
 
 <style scoped>
-.gate { max-width: 34rem; margin: 5rem auto; padding: 0 1.25rem; text-align: center; color: var(--color-smoke); }
-.gate-btn { margin-top: 1.2rem; padding: 0.7rem 1.3rem; border-radius: 2px; }
+.gate { text-align: center; color: #c9cfc9; line-height: 1.6; }
+.gate-eyebrow { font-family: var(--font-mono); font-size: 0.7rem; letter-spacing: 0.28em; text-transform: uppercase; color: var(--color-averland); margin: 0 0 1rem; }
+.gate-btn { margin-top: 1.4rem; padding: 0.7rem 1.3rem; border-radius: 2px; }
+/* The seal loosening: a slow ember pulse while the key and index load. */
+.gate-unsealing { animation: gate-glow 1.6s ease-in-out infinite; }
+@keyframes gate-glow { 50% { color: #ffb066; text-shadow: 0 0 12px rgba(255, 106, 43, 0.6); } }
+@media (prefers-reduced-motion: reduce) { .gate-unsealing { animation: none; } }
 </style>

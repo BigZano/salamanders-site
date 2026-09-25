@@ -45,10 +45,17 @@ onBeforeUnmount(() => observer?.disconnect())
 </template>
 
 <style scoped>
-.arch-img-emoji img { height: 1.375em; width: auto; vertical-align: -0.3em; }
-.arch-img-attachment { display: block; margin-top: 0.75rem; }
-.arch-img-attachment img { max-width: 100%; max-height: 32rem; border: 1px solid var(--color-ash); border-radius: 3px; }
+/* Tailwind's preflight makes every img a block; emoji sit in the line, as in Discord. */
+.arch-img-emoji img { display: inline-block; height: 1.375em; width: auto; vertical-align: -0.3em; }
+/* Attachments are mounted like the plaque itself: a brass lip set into the iron. */
+.arch-img-attachment {
+  display: block; width: fit-content; max-width: 100%; margin: 1.1rem auto 0.4rem; padding: 5px; border-radius: 3px;
+  background: linear-gradient(180deg, color-mix(in srgb, var(--color-averland) 70%, #fff), var(--color-averland) 25%, color-mix(in srgb, var(--color-averland) 50%, #3a1a03));
+  box-shadow: 0 0 0 1px #000, 0 10px 24px -10px rgba(0, 0, 0, 0.9), inset 0 1px 0 rgba(255, 245, 210, 0.6);
+}
+.arch-img-attachment img { display: block; max-width: 100%; max-height: 32rem; border-radius: 1px; box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.85); }
 .arch-img-pending { display: inline-block; width: 1.2em; height: 1.2em; }
-.arch-img-attachment .arch-img-pending { display: block; height: 8rem; background: rgba(89, 214, 108, 0.04); }
+.arch-img-attachment .arch-img-pending { display: block; width: min(24rem, 70vw); height: 12rem; background: #0b0c0b; }
+.arch-img-attachment .arch-img-fallback { display: block; padding: 1rem 1.25rem; background: #0b0c0b; }
 .arch-img-fallback { font-family: var(--font-mono); font-size: 0.8em; color: var(--color-smoke); }
 </style>

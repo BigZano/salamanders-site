@@ -40,7 +40,8 @@ const routes = [
     name: key,
     component: () => import('./views/ArchiveView.vue'),
     props: (r) => ({ collectionKey: key, threadId: r.params.threadId || null }),
-    meta: { title },
+    // Near ash falls over the plaque, not behind it (MountDeathfire).
+    meta: { title, ashOver: true },
   })),
   {
     path: '/:pathMatch(.*)*',
