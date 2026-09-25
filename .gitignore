@@ -32,7 +32,7 @@ e2e/playwright-report
 # Legion Archive: plaintext Discord exports are internal-only and must never
 # be committed (public repo). Only sealed ciphertext ships — see
 # docs/superpowers/specs/2026-09-24-legion-archive-design.md
-archive-export/
+archive-export*/
 public/archive/
 public/archive-e2e/
 e2e/.archive/

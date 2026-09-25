@@ -2,6 +2,7 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest'
 import { setActivePinia, createPinia } from 'pinia'
 import { useArchive } from './archive'
+import { useAuth } from './auth'
 import { ArchiveAccessError } from '../lib/archive/client'
 import { makeIndex } from '../lib/archive/testIndex'
 
@@ -74,5 +75,33 @@ describe('useArchive', () => {
     await s.load('tok', { loadArchive: fail('unavailable') })
     await s.retry('tok', { loadArchive: ok() })
     expect(s.status).toBe('ready')
+  })
+  it('a load that finishes after reset is discarded: no key, no content', async () => {
+    const s = useArchive()
+    let release
+    const pending = s.load('tok', { loadArchive: () => new Promise((r) => (release = r)) })
+    s.reset()
+    release({ keys: { fake: true }, index: makeIndex() })
+    await pending
+    expect([s.status, s.archive]).toEqual(['idle', null])
+    await expect(s.assetUrl('accolades', 'x.png')).rejects.toThrow(/not loaded/)
+  })
+  it('a fresh load after a reset is not blocked by the stale in-flight one', async () => {
+    const s = useArchive()
+    s.load('tok', { loadArchive: () => new Promise(() => {}) })
+    s.reset()
+    await s.load('tok', { loadArchive: ok() })
+    expect(s.status).toBe('ready')
+  })
+  it('signing out anywhere (not just on an archive page) wipes the archive and revokes blobs', async () => {
+    const revoked = []
+    URL.createObjectURL = () => 'blob:1'
+    URL.revokeObjectURL = (u) => revoked.push(u)
+    const s = useArchive()
+    await s.load('tok', { loadArchive: ok() })
+    await s.assetUrl('accolades', 'emoji-fixture.png', { loadAssetBlob: async () => new Blob(['x']) })
+    useAuth().signOut()
+    expect([s.status, s.archive]).toEqual(['idle', null])
+    expect(revoked).toEqual(['blob:1'])
   })
 })

@@ -11,7 +11,10 @@ import { parse } from '../../lib/archive/markdown'
 import { useArchive } from '../../stores/archive'
 import { useAuth } from '../../stores/auth'
 import { makeIndex, IDS } from '../../lib/archive/testIndex'
-import { stashAnchor } from '../../lib/archive/anchor'
+import { stashAnchor, takeAnchor } from '../../lib/archive/anchor'
+
+// Only Discord's full-page redirect is stubbed; the real signIn runs.
+vi.mock('../../lib/discordAuth', async (orig) => ({ ...(await orig()), beginSignIn: vi.fn() }))
 
 function router() {
   return createRouter({
@@ -107,21 +110,34 @@ describe('ArchiveView', () => {
     const { w } = await mountView('/accolades', { status: 'idle', signedIn: false })
     expect(w.text()).toContain('Sign in with Discord')
     expect(w.text()).not.toContain('Fixture')
-    const auth = useAuth()
-    auth.signIn = vi.fn()
-    window.location.hash = `#m-${IDS.A_TOC_M2}`
+    history.replaceState(null, '', `/accolades#m-${IDS.A_TOC_M2}`)
     await w.find('button').trigger('click')
-    expect(sessionStorage.getItem('salamanders-archive-anchor')).toBe(`#m-${IDS.A_TOC_M2}`)
+    expect(takeAnchor('/accolades')).toBe(`#m-${IDS.A_TOC_M2}`)
   })
   it('a stashed anchor is restored after sign-in once content is ready (cold deep link)', async () => {
-    stashAnchor(`#m-${IDS.A_TOC_M2}`)
+    stashAnchor('/accolades', `#m-${IDS.A_TOC_M2}`)
     const { r } = await mountView('/accolades')
     await flushPromises()
     expect(r.currentRoute.value.hash).toBe(`#m-${IDS.A_TOC_M2}`)
   })
-  it('a junk stashed anchor is ignored', () => {
-    stashAnchor('#<img onerror=1>')
-    expect(sessionStorage.getItem('salamanders-archive-anchor')).toBeNull()
+  it('an anchor stashed for another thread is not applied here', async () => {
+    stashAnchor(`/accolades/${IDS.A_T2}`, `#m-${IDS.A_T2_M}`)
+    const { r } = await mountView('/accolades')
+    await flushPromises()
+    expect(r.currentRoute.value.hash).toBe('')
+  })
+  it('a refused sign-in clears any pending anchor', async () => {
+    stashAnchor('/accolades', `#m-${IDS.A_TOC_M2}`)
+    const { ArchiveAccessError } = await import('../../lib/archive/client')
+    const pinia = createPinia()
+    setActivePinia(pinia)
+    useAuth().member = { id: '1', username: 'u', isMember: true }
+    const r = router()
+    await r.push('/accolades')
+    mount(ArchiveView, { props: { collectionKey: 'accolades' }, global: { plugins: [r, pinia] } })
+    await useArchive().load('t', { loadArchive: async () => { throw new ArchiveAccessError('restricted') } })
+    await flushPromises()
+    expect(takeAnchor('/accolades')).toBeNull()
   })
   it.each([
     ['restricted', /doesn't currently hold the role/, null],

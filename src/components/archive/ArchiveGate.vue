@@ -2,7 +2,7 @@
 import { watch } from 'vue'
 import { useAuth } from '../../stores/auth'
 import { useArchive } from '../../stores/archive'
-import { stashAnchor } from '../../lib/archive/anchor'
+import { clearAnchor } from '../../lib/archive/anchor'
 
 const auth = useAuth()
 const archive = useArchive()
@@ -12,10 +12,9 @@ watch(() => [auth.signedIn, archive.status], () => {
   if (auth.signedIn && archive.status === 'idle') archive.load(auth.token)
 }, { immediate: true })
 
-function signIn() {
-  stashAnchor(window.location.hash)
-  auth.signIn()
-}
+// A sign-in that ends refused/failed must not leave an anchor that some
+// later thread visit would pick up.
+watch(() => archive.status, (st) => { if (st === 'error') clearAnchor() })
 const reload = () => window.location.reload()
 const COPY = {
   'signed-out': 'The Legion Archive is restricted to the XVIIIth Legion. Sign in with Discord to continue.',
@@ -30,7 +29,7 @@ const COPY = {
 <template>
   <div v-if="!auth.signedIn || archive.error === 'signed-out'" class="gate">
     <p>{{ COPY['signed-out'] }}</p>
-    <button class="btn-ember gate-btn" type="button" @click="signIn">Sign in with Discord</button>
+    <button class="btn-ember gate-btn" type="button" @click="auth.signIn()">Sign in with Discord</button>
   </div>
   <div v-else-if="archive.status === 'ready'"><slot /></div>
   <div v-else-if="archive.status === 'error'" class="gate" role="alert">

@@ -4,7 +4,8 @@
  *   audit                  list every archive problem (local terminal only — never paste output anywhere public)
  *   seal [--publish]       audit, seal into public/archive/, write archive.lock.json; --publish uploads a GitHub Release
  *   fetch                  CI: download the lock's release into public/archive/ and verify it
- *   unseal --out <dir>     recover the export from public/archive/ (or a fetched release) with the key
+ *   unseal [dest]          recover the export (default dest archive-export-restored/, gitignored) from the
+ *                          sealed files in --out (default public/archive/; run `fetch` first to get a release)
  */
 import { readFile, writeFile, mkdtemp, rm, access } from 'node:fs/promises'
 import { execFileSync } from 'node:child_process'

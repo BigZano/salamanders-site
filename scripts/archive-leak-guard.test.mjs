@@ -21,6 +21,8 @@ describe('checkPath', () => {
     'src/data/rank-requirements/threads/1.json',
     'nested/archive-export/x',
     'ARCHIVE-EXPORT/x', // case-insensitive filesystems (Windows host)
+    'archive-export-restored/accolades/assets/att-1.png', // unseal recovery output
+    'archive-export.bak/link-fixes.json',
   ])('blocks %s', (p) => expect(checkPath(p)).toMatch(/archive/i))
 
   it.each([

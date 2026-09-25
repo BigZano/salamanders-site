@@ -9,6 +9,9 @@ import { API_BASE } from '../lib/buildsApi'
 // by devtools or persisted, and blob URLs need revoking on reset.
 let keys = null
 let inflight = null
+// Bumped by reset(): a load that started before a sign-out must not
+// install its key or plaintext when it finally resolves.
+let generation = 0
 const blobs = new Map() // logical path → Promise<blob URL>
 const live = new Set() // resolved blob URLs, revoked synchronously on reset
 
@@ -20,23 +23,27 @@ export const useArchive = defineStore('archive', {
       if (inflight) return inflight
       this.status = 'loading'
       this.error = null
-      inflight = (async () => {
+      const gen = generation
+      const run = (async () => {
         try {
           const res = await (deps.loadArchive ?? loadArchive)({ apiBase: API_BASE, token, expectedKid: ARCHIVE_KID, assetBase: ARCHIVE_BASE })
+          if (gen !== generation) return
           const archive = createArchive(res.index)
           keys = res.keys
           this.archive = markRaw(archive)
           this.status = 'ready'
         } catch (e) {
+          if (gen !== generation) return
           keys = null
           this.archive = null
           this.status = 'error'
           this.error = e instanceof ArchiveAccessError ? e.state : 'integrity'
         } finally {
-          inflight = null
+          if (inflight === run) inflight = null
         }
       })()
-      return inflight
+      inflight = run
+      return run
     },
     retry(token, deps) {
       this.reset()
@@ -60,6 +67,8 @@ export const useArchive = defineStore('archive', {
       return blobs.get(logicalPath)
     },
     reset() {
+      generation++
+      inflight = null
       keys = null
       for (const u of live) URL.revokeObjectURL(u)
       live.clear()

@@ -10,7 +10,7 @@ import { createHash } from 'node:crypto'
 import { fileURLToPath } from 'node:url'
 
 const BLOCKED = [
-  /(^|\/)archive-export(\/|$)/i,
+  /(^|\/)archive-export[^/]*(\/|$)/i, // incl. archive-export-restored/ (unseal output), backups
   /(^|\/)public\/archive(-e2e)?\//i,
   /(^|\/)e2e\/\.archive\//i,
   /(^|\/)public\/(accolades|rank-requirements)\//i,

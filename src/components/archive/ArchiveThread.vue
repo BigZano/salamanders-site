@@ -35,7 +35,7 @@ function scrollToHash() {
   if (id) nextTick(() => document.getElementById(id)?.scrollIntoView({ block: 'start' }))
 }
 onMounted(() => {
-  const stashed = takeAnchor()
+  const stashed = takeAnchor(route.path)
   if (stashed && !route.hash) router.replace({ path: route.path, query: route.query, hash: stashed })
   else scrollToHash()
 })
