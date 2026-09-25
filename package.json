@@ -8,7 +8,7 @@
     "build": "vite build",
     "preview": "vite preview",
     "test": "vitest run",
-    "test:e2e": "cd e2e && docker compose up --build --abort-on-container-exit --exit-code-from playwright; cd e2e && docker compose down -v",
+    "test:e2e": "cd e2e && docker compose up --build --abort-on-container-exit --exit-code-from playwright; code=$?; docker compose down -v; exit $code",
     "prepare": "husky",
     "wiki:perks": "node scripts/fetch-wiki-perks.mjs",
     "wiki:weapons": "node scripts/fetch-wiki-weapons.mjs",
