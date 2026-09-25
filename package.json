@@ -16,7 +16,8 @@
     "check:updates": "node scripts/check-updates.mjs",
     "discord:members": "node scripts/fetch-discord-members.mjs",
     "test:coverage": "vitest run --coverage",
-    "test:mutation": "stryker run"
+    "test:mutation": "stryker run",
+    "archive": "bun scripts/seal-archive.mjs"
   },
   "dependencies": {
     "@fontsource-variable/oswald": "^5.2.8",
