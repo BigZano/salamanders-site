@@ -26,12 +26,15 @@ const DISCORD_API_BASE = process.env.DISCORD_API_BASE || 'https://discord.com/ap
 
 const pool = new Pool({ connectionString: process.env.DATABASE_URL })
 
-// Legion Archive key: role-gated, fail-closed. See archiveKey.js.
+// Legion Archive key: fail-closed, gated on the same synced member list that
+// ranks builds (src/data/discord-members.json on main). See archiveKey.js.
 const archiveKey = createArchiveKeyHandler({
   discordApiBase: DISCORD_API_BASE,
   guildId: GUILD_ID,
   roleId: process.env.ARCHIVE_ROLE_ID,
-  botToken: BOT_TOKEN,
+  membersUrl:
+    process.env.ARCHIVE_MEMBERS_URL ||
+    'https://raw.githubusercontent.com/BigZano/salamanders-site/main/src/data/discord-members.json',
   archiveKey: process.env.ARCHIVE_KEY,
 })
 

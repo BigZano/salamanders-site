@@ -36,6 +36,8 @@ services:
       # archive-export/.env (keep a copy in a password manager).
       ARCHIVE_KEY: ${ARCHIVE_KEY:-}
       ARCHIVE_ROLE_ID: ${ARCHIVE_ROLE_ID:-1377787723976409211}
+      # Optional override; defaults to src/data/discord-members.json on main.
+      ARCHIVE_MEMBERS_URL: ${ARCHIVE_MEMBERS_URL:-}
     ports:
       - '8787:8787'
 

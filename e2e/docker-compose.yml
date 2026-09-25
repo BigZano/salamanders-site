@@ -40,6 +40,7 @@ services:
       DISCORD_BOT_TOKEN: unused-in-e2e
       DISCORD_MOD_ROLE_ID: ''
       ARCHIVE_ROLE_ID: '1377787723976409211'
+      ARCHIVE_MEMBERS_URL: http://discord-mock:4400/members.json
       # Throwaway key for the synthetic fixture only. Must match the web
       # service's E2E_ARCHIVE_KEY below.
       ARCHIVE_KEY: 'ZTJlLXRocm93YXdheS1rZXktMzItYnl0ZXMtbG9uZyE='

@@ -51,7 +51,14 @@ Bun.serve({
       return withCors(Response.json(user))
     }
 
-    // Guild member lookups (mod-role and Legion Archive role checks). No
+    // Legion Archive member list, shaped like src/data/discord-members.json.
+    // Only the Legion role holder is on it (unlike the real bake, which also
+    // lists the no-role tester) so the refusal path is exercised.
+    if (url.pathname === '/members.json') {
+      return withCors(Response.json({ fetched: new Date(0).toISOString(), guildId: '1322056087792521269', roleId: LEGION_ROLE, memberIds: ['75633559351595008'] }))
+    }
+
+    // Guild member lookups (mod-role checks). No
     // moderator scenario is exercised, so nobody holds a mod role.
     const memberMatch = url.pathname.match(/^\/v10\/guilds\/[^/]+\/members\/([^/]+)$/)
     if (memberMatch) {

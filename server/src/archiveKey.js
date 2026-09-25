@@ -1,7 +1,9 @@
 /**
  * GET /archive/key — hands the Legion Archive key only to a caller whose
- * Discord token is valid *and* who holds ARCHIVE_ROLE_ID in the guild right
- * now. Every uncertain path fails closed (401/403/503), never the key.
+ * Discord token is valid *and* who is on the XVIIIth Legion member list:
+ * the same discord-members.json (synced from Discord by the
+ * discord-members.yml workflow) that ranks builds for signed-in members.
+ * Every uncertain path fails closed (401/403/503), never the key.
  * Pure: config and fetch are injected so it's testable under Node.
  */
 const KEY_B64 = /^[A-Za-z0-9+/]{43}=$/
@@ -10,16 +12,37 @@ const SNOWFLAKE = /^\d{17,20}$/
 
 class Upstream extends Error {}
 
-export function createArchiveKeyHandler({ fetchImpl = fetch, discordApiBase, guildId, roleId, botToken, archiveKey, timeoutMs = 5000 }) {
-  const configured = [discordApiBase, guildId, roleId, botToken].every((v) => typeof v === 'string' && v !== '') &&
+export function createArchiveKeyHandler({
+  fetchImpl = fetch,
+  discordApiBase,
+  guildId,
+  roleId,
+  membersUrl,
+  archiveKey,
+  timeoutMs = 5000,
+  cacheMs = 5 * 60_000,
+  now = Date.now,
+}) {
+  const configured = [discordApiBase, guildId, roleId, membersUrl].every((v) => typeof v === 'string' && v !== '') &&
     typeof archiveKey === 'string' && KEY_B64.test(archiveKey)
   const kid = configured ? kidOf(archiveKey) : null
+  let cache = null // { at, ids } — only successful fetches are cached
 
   // Network errors and timeouts reject here and land in handle()'s catch → 503.
-  async function get(url, auth) {
-    const res = await fetchImpl(url, { headers: { Authorization: auth }, signal: AbortSignal.timeout(timeoutMs) })
-    // Stryker disable next-line ArrowFunction: null vs undefined body — both fail the id/roles checks identically
+  async function get(url, headers) {
+    const res = await fetchImpl(url, { headers, signal: AbortSignal.timeout(timeoutMs) })
+    // Stryker disable next-line ArrowFunction: null vs undefined body — both fail the shape checks identically
     return { status: res.status, body: await res.json().catch(() => null) }
+  }
+
+  async function members() {
+    if (cache && now() - cache.at < cacheMs) return cache.ids
+    const list = await get(membersUrl, {})
+    const b = list.body
+    // Stryker disable next-line OptionalChaining: a null body throws inside handle()'s try, reaching the same 503
+    if (list.status !== 200 || b?.guildId !== guildId || b.roleId !== roleId || !Array.isArray(b.memberIds)) throw new Upstream()
+    cache = { at: now(), ids: new Set(b.memberIds) }
+    return cache.ids
   }
 
   return async function handle(request) {
@@ -27,15 +50,11 @@ export function createArchiveKeyHandler({ fetchImpl = fetch, discordApiBase, gui
     const m = TOKEN.exec(request.headers.get('Authorization')) // exec(null) tests "null": no match
     if (!m) return reply(401, { error: 'Sign in with Discord.' })
     try {
-      const me = await get(`${discordApiBase}/users/@me`, `Bearer ${m[1]}`)
+      const me = await get(`${discordApiBase}/users/@me`, { Authorization: `Bearer ${m[1]}` })
       if (me.status === 401 || me.status === 403) return reply(401, { error: 'Sign in with Discord.' })
       // Stryker disable next-line OptionalChaining: a null body throws inside this try, reaching the same 503
       if (me.status !== 200 || !SNOWFLAKE.test(String(me.body?.id))) throw new Upstream()
-      const member = await get(`${discordApiBase}/v10/guilds/${guildId}/members/${me.body.id}`, `Bot ${botToken}`)
-      if (member.status === 404) return reply(403, { error: 'Restricted to the XVIIIth Legion.' })
-      // Stryker disable next-line OptionalChaining: a null body throws inside this try, reaching the same 503
-      if (member.status !== 200 || !Array.isArray(member.body?.roles)) throw new Upstream()
-      if (!member.body.roles.includes(roleId)) return reply(403, { error: 'Restricted to the XVIIIth Legion.' })
+      if (!(await members()).has(me.body.id)) return reply(403, { error: 'Restricted to the XVIIIth Legion.' })
       return reply(200, { key: archiveKey, kid: await kid })
     } catch {
       return reply(503, { error: 'Discord could not be reached. Try again.' })

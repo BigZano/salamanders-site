@@ -113,9 +113,18 @@ Logic lives in `server/src/archiveKey.js` as a pure function with injected
 | config missing (`ARCHIVE_KEY`, `ARCHIVE_ROLE_ID`, bot token, guild) | `503` |
 | role present | `200 {key, kid}` |
 
+**Membership source (user decision 2026-09-25):** instead of a bot
+guild-member lookup, the caller's Discord id is checked against the same
+synced member list that ranks builds (`src/data/discord-members.json`, read
+from `main`, cached 5 minutes; its `guildId`/`roleId` must match the
+server's). No bot token is needed. Role changes reach the archive with the
+next member sync (every 8 hours or on build submission). "Member lookup 404"
+and "lacks role" above both mean "not on the list" (403).
+
 Fail closed on every uncertain path. All responses `Cache-Control: no-store`.
-The key never appears in any non-200 body, header, or log line. Role is checked
-live against Discord on every request (no server-side cache).
+The key never appears in any non-200 body, header, or log line. Identity is
+checked live against Discord on every request; membership comes from the
+member list (see above).
 
 ## Client
 
