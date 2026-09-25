@@ -49,24 +49,82 @@ dashboard), so use `ARCHIVE_DEV_PORT` there.
 
 ## Setting up the Windows checkout for design work
 
-1. `git pull` on `main`, then `bun install`.
-2. **Delete the old plaintext folders** copied over before the archive moved
-   (they're gitignored, but Vite serves `public/` and copies it into `dist/`):
-   `public/accolades`, `public/rank-requirements`, `src/data/accolades`,
-   `src/data/rank-requirements`.
-3. Copy the local-only archive folder from Vulkan (pwsh, from the repo root):
-   `scp -r artellus@<vulkan>:Documents/salamanders-site/archive-export .`
-   It includes the key, so keep it out of anything synced or shared.
-4. Get the encrypted files: `bun run archive fetch` (needs `gh` signed in and
-   `tar`), or `scp -r artellus@<vulkan>:Documents/salamanders-site/public/archive public/`.
-5. `bun run archive:dev` starts Vite plus a local key server (127.0.0.1 only).
-   Open `http://localhost:5173`, then fake a signed-in member once in DevTools:
-   ```js
-   localStorage.setItem('salamanders-discord-member', JSON.stringify({ id: '1', username: 'dev',
-     isMember: true, checkedAt: Date.now(), accessToken: 'dev', expiresAt: Date.now() + 864e5 }))
-   ```
-   and reload `/accolades` or `/ranks`. (The fake account is only for local
-   viewing; real access control is on the API.)
+Run these in **PowerShell 7 from the repo root** on the Windows machine.
+`<vulkan>` is the Linux host you normally SSH into (same user/host as your
+`ssh` command). Do the steps in order and check each "Expect" before moving on.
+
+**1. Update the checkout.**
+```pwsh
+git switch main
+git pull
+bun install
+```
+Expect: `git log -1 --oneline` shows the handoff commit or later.
+
+**2. Delete the pre-move plaintext copies.** An earlier session copied the
+exports into `public/` and `src/data/` before they moved to `archive-export/`.
+They're gitignored, but Vite serves everything in `public/` and copies it into
+`dist/`, so they must go.
+```pwsh
+Remove-Item -Recurse -Force -ErrorAction SilentlyContinue `
+  public/accolades, public/rank-requirements, src/data/accolades, src/data/rank-requirements
+```
+Expect: `Test-Path public/accolades, public/rank-requirements, src/data/accolades, src/data/rank-requirements`
+prints `False` four times.
+
+**3. Copy the local-only archive folder from Vulkan.** It holds the plaintext
+exports, `collections.json`, `link-fixes.json` and the key (`.env`). Never
+commit it, sync it to cloud storage, or paste its contents anywhere.
+```pwsh
+scp -r artellus@<vulkan>:Documents/salamanders-site/archive-export .
+```
+Expect: `Test-Path archive-export/.env, archive-export/link-fixes.json` prints
+`True` twice, and `git check-ignore archive-export/.env` prints the path
+(meaning it's ignored).
+
+**4. Copy the encrypted files** (the same ones the release and live site use):
+```pwsh
+scp -r artellus@<vulkan>:Documents/salamanders-site/public/archive public/
+```
+Expect: `(Get-ChildItem public/archive -File).Count` is `257`, matching the
+file count in `archive.lock.json`. (Alternative: `bun run archive fetch`, which
+needs `gh` signed in and `tar`.)
+
+**5. Confirm nothing archive-related is visible to git, then run the tests.**
+```pwsh
+git status --short
+bun run test
+```
+Expect: `git status` lists nothing under `archive-export`, `public/archive`,
+`public/accolades`, `public/rank-requirements` or `src/data/`. The tests all
+pass, including the local-only ones that read `archive-export/` (they'd say
+"skipped" if step 3 was missed). The e2e suite needs Docker and runs on Vulkan;
+skip it here.
+
+**6. Start the local preview.**
+```pwsh
+bun run archive:dev
+```
+Expect: `archive dev key server on http://127.0.0.1:8799 (local only)` followed
+by Vite's `http://localhost:5173/` line. If it says the key doesn't match
+`archive.lock.json`, step 3 or 4 copied from a different seal; redo both.
+If 5173 is taken, set another port first:
+`$env:ARCHIVE_DEV_PORT = 5175; bun run archive:dev`.
+
+**7. Sign in as a fake member (local only)** and open the pages. In Chrome,
+open `http://localhost:5173`, then in DevTools → Console:
+```js
+localStorage.setItem('salamanders-discord-member', JSON.stringify({ id: '1', username: 'dev',
+  isMember: true, checkedAt: Date.now(), accessToken: 'dev', expiresAt: Date.now() + 864e5 }))
+```
+Reload, then visit `/accolades` and `/ranks`. Expect: the tables of contents
+render (headings plus links only), links open thread sub-pages, and the nav
+shows Accolades and Ranks. This fake account only works against the local key
+server; the real site checks Discord.
+
+**Before committing design work:** the pre-commit hook runs the leak guard and
+tests; the pre-push hook runs the full gate (about 4 minutes). Don't bypass them
+with `--no-verify`.
 
 ## Where the design lives
 
