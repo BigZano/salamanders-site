@@ -11,7 +11,7 @@ const archiveLock = existsSync(lockPath) ? JSON.parse(readFileSync(lockPath, 'ut
 
 // https://vite.dev/config/
 export default defineConfig({
-  // Root-absolute: the site now lives at buildforge.armorybot.win's root,
+  // Root-absolute: the site now lives at sm2salamanders.site's root,
   // not a GitHub-Pages-project subpath, and history-mode routing (see
   // router.js) needs an absolute base to match against location.pathname.
   // Override with SITE_BASE if that ever changes.

@@ -37,7 +37,7 @@ How it fits together:
 |---|---|---|
 | Builds API + Postgres | `server/docker-compose.yml` → containers `server-api-1` (port 8787), `server-db-1` | `cd server && docker compose up -d --build api` after server changes. Bun auto-loads `server/.env`. |
 | Public API hostname | `builds-api.armorybot.win` → `localhost:8787` | Cloudflare Tunnel via systemd unit `cloudflared-salamanders-builds-api.service` (config in `~/.cloudflared/salamanders-builds-api.yml`). Another tunnel on the host (`cloudflared-api-tunnel.service`) belongs to a different project — leave it alone. |
-| Site | GitHub Pages, `buildforge.armorybot.win` | Deployed by `.github/workflows/deploy.yml` on push to `main`. `VITE_BUILDS_API_URL` is a repo variable pointing at the tunnel hostname. |
+| Site | GitHub Pages, `sm2salamanders.site` (DNS on Cloudflare, records DNS-only; old `buildforge.armorybot.win` 301s here via a Cloudflare redirect rule) | Deployed by `.github/workflows/deploy.yml` on push to `main`. `VITE_BUILDS_API_URL` is a repo variable pointing at the tunnel hostname. |
 | Build relay | `relay/` (Cloudflare Worker) | Unchanged; wakes the member-sync workflow on build submission. |
 | e2e stack | `e2e/docker-compose.yml` (`bun run test:e2e`) | Its web container runs as root on the bind-mounted repo and leaves root-owned files (`node_modules/.vite`, `public/archive-e2e`, `e2e/.archive`, `e2e/test-results`). On Linux, fix with `docker run --rm -v "$PWD":/app alpine chown -R $(id -u):$(id -g) /app/...`. |
 

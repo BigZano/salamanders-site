@@ -121,7 +121,7 @@ describe('beginSignIn', () => {
     // than letting jsdom's real Location try (and refuse) to cross-origin
     // navigate. Restored after, so later describe blocks get the real one back.
     const fakeLocation = {
-      origin: 'https://buildforge.armorybot.win',
+      origin: 'https://sm2salamanders.site',
       pathname: '/planner',
       search: '',
       href: '',
@@ -138,18 +138,18 @@ describe('beginSignIn', () => {
       // started from — Discord requires an exact whitelist match per URI, and
       // sign-in is reachable from every route (nav bar) plus the wildcard
       // 404 route, so per-page entries can never be fully enumerated.
-      expect(url.searchParams.get('redirect_uri')).toBe('https://buildforge.armorybot.win/')
+      expect(url.searchParams.get('redirect_uri')).toBe('https://sm2salamanders.site/')
     })
   })
 
   it('sends the same redirect_uri no matter which route sign-in starts from', () => {
     const routes = ['/', '/planner', '/armoury', '/builds', '/companies', '/some/deep/404/path']
     for (const pathname of routes) {
-      const fakeLocation = { origin: 'https://buildforge.armorybot.win', pathname, search: '', href: '' }
+      const fakeLocation = { origin: 'https://sm2salamanders.site', pathname, search: '', href: '' }
       withFakeLocation(fakeLocation, () => {
         beginSignIn()
         const url = new URL(fakeLocation.href)
-        expect(url.searchParams.get('redirect_uri')).toBe('https://buildforge.armorybot.win/')
+        expect(url.searchParams.get('redirect_uri')).toBe('https://sm2salamanders.site/')
       })
     }
   })
@@ -257,7 +257,7 @@ describe('scrubCallbackHash + finishSignIn', () => {
 
   it('restores the page sign-in started from, even though Discord always bounces back to the fixed root redirect_uri', () => {
     withFakeLocation(
-      { origin: 'https://buildforge.armorybot.win', pathname: '/planner', search: '?draft=1', href: '' },
+      { origin: 'https://sm2salamanders.site', pathname: '/planner', search: '?draft=1', href: '' },
       () => beginSignIn(),
     )
 
@@ -275,7 +275,7 @@ describe('scrubCallbackHash + finishSignIn', () => {
 
   it('never lets the hash fragment present at sign-in time leak into the restored path', () => {
     withFakeLocation(
-      { origin: 'https://buildforge.armorybot.win', pathname: '/planner', search: '', hash: '#junk', href: '' },
+      { origin: 'https://sm2salamanders.site', pathname: '/planner', search: '', hash: '#junk', href: '' },
       () => beginSignIn(),
     )
 
@@ -290,7 +290,7 @@ describe('scrubCallbackHash + finishSignIn', () => {
 
   it('leaves a pending stash alone when the hash has no token, so a later real callback still restores it', () => {
     withFakeLocation(
-      { origin: 'https://buildforge.armorybot.win', pathname: '/planner', search: '', href: '' },
+      { origin: 'https://sm2salamanders.site', pathname: '/planner', search: '', href: '' },
       () => beginSignIn(),
     )
 
@@ -309,7 +309,7 @@ describe('scrubCallbackHash + finishSignIn', () => {
 
   it('consumes the stash on use, so a second callback does not silently reuse a stale return path', () => {
     withFakeLocation(
-      { origin: 'https://buildforge.armorybot.win', pathname: '/planner', search: '', href: '' },
+      { origin: 'https://sm2salamanders.site', pathname: '/planner', search: '', href: '' },
       () => beginSignIn(),
     )
 

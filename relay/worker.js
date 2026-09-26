@@ -7,7 +7,7 @@
  * `npx wrangler secret put GH_DISPATCH_TOKEN`.
  */
 const REPO = 'BigZano/salamanders-site'
-const ALLOWED_ORIGIN = 'https://buildforge.armorybot.win'
+const ALLOWED_ORIGIN = 'https://sm2salamanders.site'
 
 export default {
   async fetch(request, env) {
