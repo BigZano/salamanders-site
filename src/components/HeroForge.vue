@@ -1,8 +1,12 @@
 <script setup>
 import FireText from './FireText.vue'
 import { fireTuning } from '../lib/fireTuning'
+import { useAuth } from '../stores/auth'
 
 const DISCORD = 'https://discord.gg/salamanders'
+// Signed-in XVIIIth Legion members are already in the server: same link,
+// but offered as a way back in rather than an invitation to join.
+const auth = useAuth()
 </script>
 
 <template>
@@ -32,9 +36,9 @@ const DISCORD = 'https://discord.gg/salamanders'
               d="M20 4.4A19 19 0 0 0 15.3 3l-.24.5a17 17 0 0 1 4.2 1.3 15 15 0 0 0-14.5 0A17 17 0 0 1 9 3.5L8.7 3A19 19 0 0 0 4 4.4 20 20 0 0 0 .5 18a19 19 0 0 0 5.8 3l.8-1.3a12 12 0 0 1-1.8-.9l.4-.3a13.6 13.6 0 0 0 11.6 0l.4.3a12 12 0 0 1-1.8.9l.8 1.3a19 19 0 0 0 5.8-3A20 20 0 0 0 20 4.4ZM8.3 14.8c-.9 0-1.7-.9-1.7-2s.7-2 1.7-2 1.7.9 1.7 2-.8 2-1.7 2Zm7.4 0c-.9 0-1.7-.9-1.7-2s.7-2 1.7-2 1.7.9 1.7 2-.8 2-1.7 2Z"
             />
           </svg>
-          Join the Chapter
+          {{ auth.member?.isMember ? 'Open the Discord' : 'Join the Chapter' }}
         </a>
-        <RouterLink class="btn-drake" to="/planner">Open the Planner</RouterLink>
+        <RouterLink class="btn-drake btn-planner" to="/planner">Open the Planner</RouterLink>
       </div>
     </div>
   </section>
@@ -112,6 +116,32 @@ const DISCORD = 'https://discord.gg/salamanders'
   padding: 0.85rem 1.5rem;
   border-radius: 2px;
   font-size: 1rem;
+}
+/* Stands beside the molten Join button, so it gets a solid obsidian face and
+   a drake glow instead of the usual faint outline. */
+.btn-planner {
+  background: var(--color-obsidian);
+  border-color: var(--color-drake);
+  box-shadow:
+    0 0 0 1px rgba(0, 0, 0, 0.3),
+    0 8px 30px -8px rgba(89, 214, 108, 0.55),
+    inset 0 1px 0 rgba(89, 214, 108, 0.2);
+  text-shadow: 0 0 12px rgba(89, 214, 108, 0.45);
+  transition:
+    transform 0.15s ease,
+    box-shadow 0.25s ease,
+    background 0.2s ease;
+}
+.btn-planner:hover {
+  transform: translateY(-1px);
+  background: var(--color-pitch);
+  box-shadow:
+    0 0 0 1px rgba(0, 0, 0, 0.3),
+    0 12px 40px -8px rgba(89, 214, 108, 0.75),
+    inset 0 1px 0 rgba(89, 214, 108, 0.3);
+}
+.btn-planner:active {
+  transform: translateY(0);
 }
 .glyph {
   width: 20px;
