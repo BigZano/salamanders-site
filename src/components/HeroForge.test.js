@@ -7,6 +7,8 @@ import HeroForge from './HeroForge.vue'
 import { useAuth } from '../stores/auth'
 
 const INVITE = 'https://discord.gg/salamanders'
+// Opens the guild directly; an invite link shows members Discord's join screen.
+const SERVER = 'https://discord.com/channels/1322056087792521269'
 
 function render(member) {
   const pinia = createPinia()
@@ -28,17 +30,18 @@ describe('HeroForge Discord button', () => {
     ['signed out', null],
     ['signed in, not in the XVIIIth Legion', { id: '1', username: 'guest', isMember: false }],
     ['signed in, membership unknown', { id: '1', username: 'guest' }],
+    ['isMember is truthy but not true', { id: '1', username: 'guest', isMember: 'true' }],
   ])('invites to join when %s', (_, member) => {
     const { discord } = render(member)
     expect(discord.text()).toBe('Join the Chapter')
     expect(discord.attributes('href')).toBe(INVITE)
   })
 
-  it('offers members the way back into the server instead of joining', () => {
+  it('sends members straight into the server instead of the invite', () => {
     const { discord } = render({ id: '1', username: 'brother', isMember: true })
     expect(discord.text()).toBe('Open the Discord')
     expect(discord.text()).not.toMatch(/join/i)
-    expect(discord.attributes('href')).toBe(INVITE)
+    expect(discord.attributes('href')).toBe(SERVER)
     expect(discord.attributes('target')).toBe('_blank')
     expect(discord.attributes('rel')).toContain('noopener')
   })
@@ -49,7 +52,7 @@ describe('HeroForge planner button', () => {
     for (const member of [null, { id: '1', username: 'brother', isMember: true }]) {
       const { planner } = render(member)
       expect(planner.attributes('href')).toBe('/planner')
-      expect(planner.text()).toBe('Open the Planner')
+      expect(planner.text()).toBe('Open the Perk Builder')
     }
   })
 })

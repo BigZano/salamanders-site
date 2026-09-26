@@ -1,12 +1,17 @@
 <script setup>
+import { computed } from 'vue'
 import FireText from './FireText.vue'
 import { fireTuning } from '../lib/fireTuning'
 import { useAuth } from '../stores/auth'
+import members from '../data/discord-members.json'
 
-const DISCORD = 'https://discord.gg/salamanders'
-// Signed-in XVIIIth Legion members are already in the server: same link,
-// but offered as a way back in rather than an invitation to join.
+const INVITE = 'https://discord.gg/salamanders'
+// Signed-in XVIIIth Legion members are already in the server, where an invite
+// link only lands them on Discord's join screen. The channels URL opens the
+// guild directly — the same guild the member list is drawn from.
+const SERVER = `https://discord.com/channels/${members.guildId}`
 const auth = useAuth()
+const isMember = computed(() => auth.member?.isMember === true)
 </script>
 
 <template>
@@ -29,16 +34,16 @@ const auth = useAuth()
       </div>
       <p class="tagline">Into the fires of battle, unto the anvil of war.</p>
       <div class="cta-row">
-        <a class="btn-ember" :href="DISCORD" target="_blank" rel="noopener">
+        <a class="btn-ember" :href="isMember ? SERVER : INVITE" target="_blank" rel="noopener">
           <svg viewBox="0 0 24 24" class="glyph" aria-hidden="true">
             <path
               fill="currentColor"
               d="M20 4.4A19 19 0 0 0 15.3 3l-.24.5a17 17 0 0 1 4.2 1.3 15 15 0 0 0-14.5 0A17 17 0 0 1 9 3.5L8.7 3A19 19 0 0 0 4 4.4 20 20 0 0 0 .5 18a19 19 0 0 0 5.8 3l.8-1.3a12 12 0 0 1-1.8-.9l.4-.3a13.6 13.6 0 0 0 11.6 0l.4.3a12 12 0 0 1-1.8.9l.8 1.3a19 19 0 0 0 5.8-3A20 20 0 0 0 20 4.4ZM8.3 14.8c-.9 0-1.7-.9-1.7-2s.7-2 1.7-2 1.7.9 1.7 2-.8 2-1.7 2Zm7.4 0c-.9 0-1.7-.9-1.7-2s.7-2 1.7-2 1.7.9 1.7 2-.8 2-1.7 2Z"
             />
           </svg>
-          {{ auth.member?.isMember ? 'Open the Discord' : 'Join the Chapter' }}
+          {{ isMember ? 'Open the Discord' : 'Join the Chapter' }}
         </a>
-        <RouterLink class="btn-drake btn-planner" to="/planner">Open the Planner</RouterLink>
+        <RouterLink class="btn-drake btn-planner" to="/planner">Open the Perk Builder</RouterLink>
       </div>
     </div>
   </section>
