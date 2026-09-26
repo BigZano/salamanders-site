@@ -16,12 +16,17 @@ const USERS = {
   'test-nonmember-token': { id: '999999999999999999', username: 'nonmember-tester' },
   // In the guild (and the member bake) but without the Legion role.
   'test-norole-token': { id: '87082170719408128', username: 'norole-tester' },
+  // Legion member who also holds Reclusiarch — reviews reports.
+  'test-reclusiarch-token': { id: '100000000000000002', username: 'reclusiarch-tester' },
 }
 const LEGION_ROLE = '1377787723976409211'
+const RECLUSIARCH_ROLE = '1323334632904855592'
+const GUILD_ID = '1322056087792521269'
 // Guild membership as Discord's bot endpoint would report it.
 const MEMBERS = {
   '75633559351595008': { roles: [LEGION_ROLE] },
   '87082170719408128': { roles: [] },
+  '100000000000000002': { roles: [LEGION_ROLE, RECLUSIARCH_ROLE] },
 }
 
 // The browser calls this cross-origin (from wherever "web" is served), unlike
@@ -55,11 +60,16 @@ Bun.serve({
     // Only the Legion role holder is on it (unlike the real bake, which also
     // lists the no-role tester) so the refusal path is exercised.
     if (url.pathname === '/members.json') {
-      return withCors(Response.json({ fetched: new Date(0).toISOString(), guildId: '1322056087792521269', roleId: LEGION_ROLE, memberIds: ['75633559351595008'] }))
+      return withCors(Response.json({ fetched: new Date(0).toISOString(), guildId: GUILD_ID, roleId: LEGION_ROLE, memberIds: ['75633559351595008'] }))
     }
 
-    // Guild member lookups (mod-role checks). No
-    // moderator scenario is exercised, so nobody holds a mod role.
+    // Guild role table (Administrator checks). Nobody here is an admin.
+    if (url.pathname === `/v10/guilds/${GUILD_ID}`) {
+      return withCors(Response.json({ owner_id: '1', roles: [{ id: GUILD_ID, permissions: '0' }, { id: RECLUSIARCH_ROLE, permissions: '0' }] }))
+    }
+
+    // Guild member lookups (mod-role and report-role checks). No
+    // build-moderator scenario is exercised, so nobody holds a mod role.
     const memberMatch = url.pathname.match(/^\/v10\/guilds\/[^/]+\/members\/([^/]+)$/)
     if (memberMatch) {
       const member = MEMBERS[memberMatch[1]]

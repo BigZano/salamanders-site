@@ -45,4 +45,13 @@ describe('canDeleteBuild', () => {
     expect(canDeleteBuild({ id: {} }, build({}))).toBe(false)
     expect(canDeleteBuild({ id: [] }, build([]))).toBe(false)
   })
+
+  it("lets a moderator delete anyone's build", () => {
+    expect(canDeleteBuild(member('42'), build('99'), true)).toBe(true)
+  })
+
+  it('never grants moderator delete to a signed-out visitor or on a truthy non-boolean', () => {
+    expect(canDeleteBuild(null, build('99'), true)).toBe(false)
+    expect(canDeleteBuild(member('42'), build('99'), 'yes')).toBe(false)
+  })
 })

@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, afterEach } from 'vitest'
-import { listBuilds, createBuild, deleteBuild, BuildsApiError } from './buildsApi'
+import { listBuilds, createBuild, deleteBuild, getModeratorStatus, BuildsApiError } from './buildsApi'
 
 function mockResponse({ ok = true, status = 200, body = null, jsonThrows = false } = {}) {
   return {
@@ -126,5 +126,21 @@ describe('error handling', () => {
       expect(err).toBeInstanceOf(BuildsApiError)
       expect(err).toBeInstanceOf(Error)
     }
+  })
+})
+
+describe('getModeratorStatus', () => {
+  it('GETs /builds/moderator with the bearer token', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(mockResponse({ body: { moderator: true } }))
+    vi.stubGlobal('fetch', fetchMock)
+    await expect(getModeratorStatus('tok')).resolves.toBe(true)
+    const [url, opts] = fetchMock.mock.calls[0]
+    expect(url).toMatch(/\/builds\/moderator$/)
+    expect(opts.headers.Authorization).toBe('Bearer tok')
+  })
+
+  it('is false unless the server says exactly true', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(mockResponse({ body: { moderator: 'yes' } })))
+    await expect(getModeratorStatus('tok')).resolves.toBe(false)
   })
 })

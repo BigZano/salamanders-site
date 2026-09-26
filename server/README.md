@@ -20,3 +20,21 @@ for another guild/role, or upstream unreachable).
 No bot token is needed. Until the required values are set the endpoint answers 503 and the site shows
 "couldn't be reached". Rotating the key (`bun run archive keygen --rotate`,
 then `seal --publish`) requires updating `ARCHIVE_KEY` here and redeploying.
+
+## Member reports (`/reports/*`)
+
+XVIIILegion members file; Reclusiarchs claim, resolve or escalate (via a
+pre-filled link to High Command's official form); Administrators read and can
+reopen. Roles are checked live against Discord on every request. Reports and
+their `report_events` audit rows are kept permanently. Design:
+`docs/superpowers/specs/2026-09-26-member-reports-design.md`.
+
+Env: `REPORTS_WEBHOOK_URL` (secret; leadership channel ping, id + link only),
+optional `REPORTER_ROLE_ID` / `RECLUSIARCH_ROLE_ID` overrides.
+
+**Existing databases:** `schema.sql` only runs automatically on a fresh volume.
+Apply the new tables once (idempotent):
+
+```sh
+docker compose exec -T db psql -U salamanders salamanders_builds < schema.sql
+```

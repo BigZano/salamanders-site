@@ -29,9 +29,14 @@ services:
       ALLOWED_ORIGIN: ${ALLOWED_ORIGIN:-http://localhost:5173}
       DISCORD_GUILD_ID: ${DISCORD_GUILD_ID:-}
       DISCORD_BOT_TOKEN: ${DISCORD_BOT_TOKEN:-}
-      # Empty until a moderator role is actually designated — deletion just
-      # falls back to poster-only until this is set. See server/README.md.
+      # Comma-separated build-moderator roles; empty = built-in defaults
+      # (Master of the Forge, Mechadendrite Expert). Admins always qualify.
       DISCORD_MOD_ROLE_ID: ${DISCORD_MOD_ROLE_ID:-}
+      # Member reports. Role ids default in code (XVIIILegion / Reclusiarch).
+      # The webhook URL is a secret: server/.env only, never committed.
+      REPORTER_ROLE_ID: ${REPORTER_ROLE_ID:-}
+      RECLUSIARCH_ROLE_ID: ${RECLUSIARCH_ROLE_ID:-}
+      REPORTS_WEBHOOK_URL: ${REPORTS_WEBHOOK_URL:-}
       # Legion Archive gate. ARCHIVE_KEY is the base64 key from
       # archive-export/.env (keep a copy in a password manager).
       ARCHIVE_KEY: ${ARCHIVE_KEY:-}

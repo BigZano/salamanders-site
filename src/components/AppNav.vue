@@ -22,7 +22,12 @@ const baseLinks = [
 // src/lib/archive/client.js). Non-members never see the entries.
 const links = computed(() =>
   auth.member?.isMember
-    ? [...baseLinks, { to: '/accolades', label: 'Accolades', section: true }, { to: '/ranks', label: 'Ranks', section: true }]
+    ? [
+        ...baseLinks,
+        { to: '/accolades', label: 'Accolades', section: true },
+        { to: '/ranks', label: 'Ranks', section: true },
+        { to: '/reports', label: 'Reports', section: true },
+      ]
     : baseLinks,
 )
 

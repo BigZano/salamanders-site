@@ -31,6 +31,18 @@ async function load() {
 }
 onMounted(load)
 
+// Moderators (Administrator, Master of the Forge, Mechadendrite Expert) may
+// delete any build. The server decides; a failed check just hides the button.
+const isModerator = ref(false)
+onMounted(async () => {
+  if (!auth.token) return
+  try {
+    isModerator.value = await buildsApi.getModeratorStatus(auth.token)
+  } catch {
+    isModerator.value = false
+  }
+})
+
 const query = ref('')
 const classFilter = ref('')
 
@@ -168,7 +180,7 @@ async function remove(b) {
           :key="r.id"
           :build="r"
           show-badge
-          :can-delete="canDeleteBuild(auth.member, r)"
+          :can-delete="canDeleteBuild(auth.member, r, isModerator)"
           :deleting="deleting === r.id"
           @open="apply"
           @remove="remove"
@@ -185,7 +197,7 @@ async function remove(b) {
           v-for="r in otherPaged.items"
           :key="r.id"
           :build="r"
-          :can-delete="canDeleteBuild(auth.member, r)"
+          :can-delete="canDeleteBuild(auth.member, r, isModerator)"
           :deleting="deleting === r.id"
           @open="apply"
           @remove="remove"

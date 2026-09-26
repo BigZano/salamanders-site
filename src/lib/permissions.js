@@ -1,11 +1,13 @@
 /**
- * Client-side mirror of the server's poster-only delete rule (see
- * server/src/index.js deleteBuild) — controls what the UI offers, not what's
+ * Client-side mirror of the server's delete rule (see server/src/index.js
+ * deleteBuild): the poster, or a moderator as reported by the server's
+ * /builds/moderator check. Controls what the UI offers, not what's
  * actually allowed. The server re-checks identity against Discord on every
  * delete regardless of what this returns, so getting this wrong only ever
  * costs a rejected request, never a real permission bypass.
  */
-export function canDeleteBuild(member, build) {
+export function canDeleteBuild(member, build, isModerator = false) {
+  if (isModerator === true && member) return true
   const memberId = member?.id
   const authorId = build?.author?.id
   if (!isId(memberId) || !isId(authorId)) return false

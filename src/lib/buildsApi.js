@@ -13,7 +13,7 @@ class BuildsApiError extends Error {
   }
 }
 
-async function request(path, { method = 'GET', token, body } = {}) {
+export async function request(path, { method = 'GET', token, body } = {}) {
   const headers = {}
   if (body !== undefined) headers['Content-Type'] = 'application/json'
   if (token) headers['Authorization'] = `Bearer ${token}`
@@ -39,5 +39,9 @@ export const createBuild = (build, token) =>
   request('/builds', { method: 'POST', token, body: build })
 
 export const deleteBuild = (id, token) => request(`/builds/${id}`, { method: 'DELETE', token })
+
+/** Whether the signed-in caller may delete anyone's build. Advisory only. */
+export const getModeratorStatus = async (token) =>
+  (await request('/builds/moderator', { token }))?.moderator === true
 
 export { BuildsApiError }
