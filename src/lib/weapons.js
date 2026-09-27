@@ -1,4 +1,5 @@
 import baked from '../data/weapon-trees.json'
+import overrides from '../data/weapon-perk-overrides.json'
 import { fetchWeapon } from './wiki'
 import { fallbackWeaponData } from '../data/weapon-fallbacks'
 
@@ -15,13 +16,32 @@ import { fallbackWeaponData } from '../data/weapon-fallbacks'
  */
 export const BAKED_AT = baked.fetched
 
+/**
+ * Layer in-game corrections over a wiki tree. The wiki lags the game, so
+ * weapon-perk-overrides.json lists, per quality, perks to drop (one per name
+ * listed) and perks to add. Returns a new tree; the input is not touched.
+ */
+export function applyPerkOverrides(name, tree, table = overrides.weapons) {
+  const fix = table[name]
+  if (!fix) return tree
+  const perks = [...tree.perks]
+  for (const [quality, { remove = [], add = [] }] of Object.entries(fix)) {
+    for (const drop of remove) {
+      const i = perks.findIndex((p) => p.quality === quality && p.name === drop)
+      if (i >= 0) perks.splice(i, 1)
+    }
+    for (const p of add) perks.push({ name: p.name, quality, description: p.description })
+  }
+  return { ...tree, perks }
+}
+
 export async function resolveWeapon(name) {
   const hit = baked.weapons[name]
-  if (hit) return { ...hit, source: 'baked' }
+  if (hit) return { ...applyPerkOverrides(name, hit), source: 'baked' }
 
   try {
     const live = await fetchWeapon(name)
-    return { ...live, source: 'wiki' }
+    return { ...applyPerkOverrides(name, live), source: 'wiki' }
   } catch {
     const fb = fallbackWeaponData(name)
     return fb ? { ...fb, source: 'offline' } : null
