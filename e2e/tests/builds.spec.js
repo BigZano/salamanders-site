@@ -42,6 +42,9 @@ test.describe('create + save a build', () => {
     const card = memberSection.locator('.b-card', { hasText: title })
     await expect(card).toBeVisible()
     await expect(card.locator('.b-member-badge')).toBeVisible()
+    // Server nickname, never the Discord username.
+    await expect(card.locator('.b-author')).toContainText('by Brother Tester')
+    await expect(card).not.toContainText('member-tester')
   })
 
   test("a non-member's build is unbadged and lands in Community Builds, not Verified Members", async ({
@@ -56,6 +59,9 @@ test.describe('create + save a build', () => {
     const card = communitySection.locator('.b-card', { hasText: title })
     await expect(card).toBeVisible()
     await expect(card.locator('.b-member-badge')).toHaveCount(0)
+    // Not in the guild: no display name to show, and the username stays hidden.
+    await expect(card.locator('.b-author')).toContainText('by Community Member')
+    await expect(card).not.toContainText('nonmember-tester')
 
     const memberSection = page.locator('.b-section', { hasText: 'Verified Members' })
     await expect(memberSection.locator('.b-card', { hasText: title })).toHaveCount(0)

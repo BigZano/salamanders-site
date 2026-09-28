@@ -30,7 +30,8 @@ const FORGE_ROLE = '1322056087867883565'
 const GUILD_ID = '1322056087792521269'
 // Guild membership as Discord's bot endpoint would report it.
 const MEMBERS = {
-  '75633559351595008': { roles: [LEGION_ROLE] },
+  // Has a server nickname, so builds show it instead of the username.
+  '75633559351595008': { roles: [LEGION_ROLE], nick: 'Brother Tester' },
   '87082170719408128': { roles: [] },
   '100000000000000002': { roles: [LEGION_ROLE, RECLUSIARCH_ROLE] },
   '100000000000000010': { roles: [LEGION_ROLE, TECHMARINE_ROLE] },
@@ -74,6 +75,17 @@ Bun.serve({
     // Guild role table (Administrator checks). Nobody here is an admin.
     if (url.pathname === `/v10/guilds/${GUILD_ID}`) {
       return withCors(Response.json({ owner_id: '1', roles: [{ id: GUILD_ID, permissions: '0' }, { id: RECLUSIARCH_ROLE, permissions: '0' }] }))
+    }
+
+    // Full member list (build authors' display names, see displayNames.js).
+    if (url.pathname === `/v10/guilds/${GUILD_ID}/members`) {
+      const byId = Object.fromEntries(Object.values(USERS).map((u) => [u.id, u]))
+      const list = Object.entries(MEMBERS).map(([id, m]) => ({
+        nick: m.nick ?? null,
+        roles: m.roles,
+        user: { id, username: byId[id]?.username ?? `user-${id}`, global_name: null },
+      }))
+      return withCors(Response.json(list))
     }
 
     // Guild member lookups (mod-role, report-role and perk-privilege checks).

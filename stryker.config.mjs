@@ -11,6 +11,7 @@ export default {
   'src/lib/archive/prune.js',
     'server/src/archiveKey.js',
     'src/lib/longPress.js',
+    'server/src/displayNames.js',
   ],
   coverageAnalysis: 'perTest',
   thresholds: { high: 100, low: 100, break: 100 },
