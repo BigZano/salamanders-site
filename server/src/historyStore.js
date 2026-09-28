@@ -101,7 +101,8 @@ export function createHistoryStore(pool) {
       inTx(async (q) => {
         const { rows } = await q.query('select 1 from perk_corrections where author_discord_id = $1 limit 1', [actor.id])
         if (rows.length) return 0
-        for (const c of list) await insertOne(q, { ...c, note: 'seeded from the 2026-09-27 member error report' }, actor)
+        // Each item may carry `before` (see perkCorrectionsCore.withBefore).
+        for (const c of list) await insertOne(q, { ...c, note: 'seeded from the 2026-09-27 member error report' }, actor, c.before ?? null)
         return list.length
       }),
 

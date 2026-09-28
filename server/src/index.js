@@ -12,7 +12,7 @@
  */
 import { Pool } from 'pg'
 import { createArchiveKeyHandler } from './archiveKey.js'
-import { createBakeLoader } from './bake.js'
+import { createBakeLoader, DEFAULT_BAKE_BASE_URL } from './bake.js'
 import { rowToBuild } from './buildRow.js'
 import { createBuildModeration } from './buildModeration.js'
 import { validateBuildText } from './buildText.js'
@@ -70,7 +70,7 @@ const perks = createPerksHandler({
   store: history,
   notify,
   loadBake: createBakeLoader({
-    baseUrl: process.env.BAKE_BASE_URL || 'https://raw.githubusercontent.com/BigZano/salamanders-site/main/src/data/',
+    baseUrl: process.env.BAKE_BASE_URL || DEFAULT_BAKE_BASE_URL,
   }),
 })
 const moderation = createBuildModeration({ roles, privileges, store: history, notify })

@@ -6,6 +6,8 @@
  */
 import { Upstream } from './discordRoles.js'
 
+export const DEFAULT_BAKE_BASE_URL = 'https://raw.githubusercontent.com/BigZano/salamanders-site/main/src/data/'
+
 export function createBakeLoader({ baseUrl, fetchImpl = fetch, ttlMs = 10 * 60_000, now = Date.now }) {
   let cached = null
   let at = 0

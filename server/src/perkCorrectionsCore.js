@@ -107,6 +107,31 @@ export function toDocument(corrections, version = new Date().toISOString()) {
   return doc
 }
 
+/**
+ * For seeding: give each correction the `before` a live POST would record —
+ * the perk it replaces ({ name, description }) for an edit/remove, null for
+ * an add — against the bake (`{ weapons, classes }`, as createBakeLoader
+ * returns it) with the list's earlier corrections applied in order. A target
+ * or perk the bake doesn't have gets null rather than failing the seed.
+ * Returns new objects; the input is untouched.
+ */
+export function withBefore(list, bake) {
+  const applied = []
+  return list.map((c, i) => {
+    const earlier = applied.filter((x) => x.kind === c.kind && x.target === c.target)
+    applied.push({ ...c, id: `seed${i}` })
+    if (c.op === 'add') return { ...c, before: null }
+    let current
+    if (c.kind === 'class') {
+      const perks = bake?.classes && Object.hasOwn(bake.classes, c.target) ? bake.classes[c.target]?.perks : null
+      if (perks && Object.hasOwn(perks, c.perkName)) current = applyClassCorrections(perks, earlier)[c.perkName]
+    } else if (bake?.weapons && Object.hasOwn(bake.weapons, c.target)) {
+      current = applyWeaponCorrections(bake.weapons[c.target], earlier).perks.find((p) => p.quality === c.quality && p.name === c.perkName)
+    }
+    return { ...c, before: current ? { name: c.perkName, description: current.description ?? null } : null }
+  })
+}
+
 /** Document → plain corrections, in document order (for seeding). */
 export function flattenDocument(doc) {
   const out = []

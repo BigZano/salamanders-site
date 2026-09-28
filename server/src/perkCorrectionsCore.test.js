@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { applyWeaponCorrections, applyClassCorrections, hasWeaponPerk, toDocument, flattenDocument, sanitizeText, PERK_NAME } from './perkCorrectionsCore'
+import { applyWeaponCorrections, applyClassCorrections, hasWeaponPerk, toDocument, flattenDocument, withBefore, sanitizeText, PERK_NAME } from './perkCorrectionsCore'
 
 const tree = {
   budget: 7,
@@ -177,5 +177,46 @@ describe('PERK_NAME', () => {
     expect(PERK_NAME.test('<script>')).toBe(false)
     expect(PERK_NAME.test('a@b')).toBe(false)
     expect(PERK_NAME.test('')).toBe(false)
+  })
+})
+
+describe('withBefore (seeding)', () => {
+  const bake = {
+    weapons: { Gun: tree },
+    classes: { Tactical: { perks: { Stim: { description: 's' } } } },
+  }
+  const w = (op, quality, perkName, description = null) => ({ kind: 'weapon', target: 'Gun', quality, op, perkName, description })
+
+  it('records the bake perk each edit/remove replaces; adds have none', () => {
+    const out = withBefore([w('edit', 'Standard', 'A', 'a2'), w('remove', 'Relic', 'C'), w('add', 'Relic', 'D', 'd')], bake)
+    expect(out.map((c) => c.before)).toEqual([{ name: 'A', description: 'a' }, { name: 'C', description: 'c' }, null])
+    expect(out[0]).toMatchObject(w('edit', 'Standard', 'A', 'a2'))
+  })
+
+  it('applies earlier corrections first, so a later one sees their result', () => {
+    const out = withBefore(
+      [w('add', 'Relic', 'D', 'd'), w('edit', 'Relic', 'D', 'd2'), w('edit', 'Relic', 'D', 'd3'), w('remove', 'Relic', 'D')],
+      bake,
+    )
+    expect(out.map((c) => c.before)).toEqual([null, { name: 'D', description: 'd' }, { name: 'D', description: 'd2' }, { name: 'D', description: 'd3' }])
+  })
+
+  it('class edits see the bake text and earlier class edits', () => {
+    const c = (description) => ({ kind: 'class', target: 'Tactical', quality: null, op: 'edit', perkName: 'Stim', description })
+    expect(withBefore([c('s2'), c('s3')], bake).map((x) => x.before)).toEqual([
+      { name: 'Stim', description: 's' },
+      { name: 'Stim', description: 's2' },
+    ])
+  })
+
+  it('an unknown target or perk gets before: null instead of failing', () => {
+    const out = withBefore([{ ...w('edit', 'Standard', 'A', 'x'), target: 'Nope' }, w('remove', 'Heroic', 'Z')], bake)
+    expect(out.map((c) => c.before)).toEqual([null, null])
+  })
+
+  it('leaves the input list untouched', () => {
+    const list = [w('edit', 'Standard', 'A', 'a2')]
+    withBefore(list, bake)
+    expect(list[0]).not.toHaveProperty('before')
   })
 })
