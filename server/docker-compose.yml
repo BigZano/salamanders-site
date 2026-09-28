@@ -29,9 +29,6 @@ services:
       ALLOWED_ORIGIN: ${ALLOWED_ORIGIN:-http://localhost:5173}
       DISCORD_GUILD_ID: ${DISCORD_GUILD_ID:-}
       DISCORD_BOT_TOKEN: ${DISCORD_BOT_TOKEN:-}
-      # Comma-separated build-moderator roles; empty = built-in defaults
-      # (Master of the Forge, Mechadendrite Expert). Admins always qualify.
-      DISCORD_MOD_ROLE_ID: ${DISCORD_MOD_ROLE_ID:-}
       # Member reports. Role ids default in code (XVIIILegion / Reclusiarch).
       # The webhook URL is a secret: server/.env only, never committed.
       REPORTER_ROLE_ID: ${REPORTER_ROLE_ID:-}
@@ -43,6 +40,13 @@ services:
       ARCHIVE_ROLE_ID: ${ARCHIVE_ROLE_ID:-1377787723976409211}
       # Optional override; defaults to src/data/discord-members.json on main.
       ARCHIVE_MEMBERS_URL: ${ARCHIVE_MEMBERS_URL:-}
+      # Perk corrections: wiki bake location and editor/moderator role
+      # overrides; empty means the built-in defaults (bake.js, privileges.js).
+      BAKE_BASE_URL: ${BAKE_BASE_URL:-}
+      TECHMARINE_ROLE_ID: ${TECHMARINE_ROLE_ID:-}
+      MECHADENDRITE_ROLE_ID: ${MECHADENDRITE_ROLE_ID:-}
+      FORGE_ROLE_ID: ${FORGE_ROLE_ID:-}
+      HIERARCHY_ROLE_ID: ${HIERARCHY_ROLE_ID:-}
     ports:
       - '8787:8787'
 

@@ -137,7 +137,7 @@ async function createBuild(request) {
       JSON.stringify(b.prestigePicks || []),
       JSON.stringify(b.perks || []),
       JSON.stringify(b.perkIds || {}),
-      JSON.stringify(b.justifications || {}),
+      JSON.stringify(text.justifications),
       JSON.stringify(b.weapons || {}),
       JSON.stringify(b.weaponPerks || {}),
       caller.id,
