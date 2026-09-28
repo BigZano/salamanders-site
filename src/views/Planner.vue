@@ -247,6 +247,7 @@ onMounted(() => {
               :id="`why-${editingPerk.col}`"
               v-model="justificationDraft"
               class="pa-field"
+              maxlength="1000"
               rows="2"
               placeholder="What does this add to the build? When do you lean on it?"
               @blur="saveJustification"
@@ -342,6 +343,7 @@ onMounted(() => {
             id="build-name"
             v-model="saveForm.title"
             class="fld"
+            maxlength="200"
             type="text"
             :placeholder="`${planner.activeClass} build`"
           />
@@ -358,6 +360,7 @@ onMounted(() => {
             <input
               v-model="saveForm.role"
               class="fld"
+              maxlength="200"
               type="text"
               placeholder="Role (e.g. Frontline)"
               aria-label="Role"
@@ -365,6 +368,7 @@ onMounted(() => {
             <textarea
               v-model="saveForm.notes"
               class="fld"
+              maxlength="2000"
               rows="2"
               placeholder="Notes — how it plays, when to use it"
               aria-label="Notes"
