@@ -31,15 +31,21 @@ const tiers = computed(() =>
 
 const budget = computed(() => planner.weaponBudgets[props.weapon] ?? props.data.budget ?? 10)
 const selected = computed(() => planner.weaponPerks[props.weapon] || {})
-const used = computed(() => Object.keys(selected.value).length)
+// Only picks of perks that still exist count: a removal correction orphans a
+// pick without deleting it, so reverting the correction restores it.
+const perkIds = computed(() => new Set(perks.value.map((p) => p.id)))
+const used = computed(() => Object.keys(selected.value).filter((id) => perkIds.value.has(id)).length)
 const full = computed(() => used.value >= budget.value)
 
-const inspected = ref(null)
+// Hold the id, not the perk, so the panel follows live corrections (and
+// closes if the inspected perk is removed).
+const inspectedId = ref(null)
+const inspected = computed(() => perks.value.find((p) => p.id === inspectedId.value) || null)
 function inspect(p) {
-  inspected.value = p
+  inspectedId.value = p.id
 }
 function toggle(p) {
-  planner.toggleWeaponPerk(props.weapon, p.id, props.data.budget ?? 10)
+  planner.toggleWeaponPerk(props.weapon, p.id, props.data.budget ?? 10, perkIds.value)
   inspect(p)
 }
 </script>
