@@ -1,5 +1,5 @@
 <script setup>
-import { ref, computed } from 'vue'
+import { ref, computed, watch } from 'vue'
 import { usePlanner } from '../stores/planner'
 import { usePerkCorrections } from '../stores/perkCorrections'
 import { QUALITIES, slug } from '../lib/wiki'
@@ -44,16 +44,58 @@ const perkIds = computed(() => new Set(perks.value.map((p) => p.id)))
 const used = computed(() => Object.keys(selected.value).filter((id) => perkIds.value.has(id)).length)
 const full = computed(() => used.value >= budget.value)
 
-// Hold the id, not the perk, so the panel follows live corrections (and
-// closes if the inspected perk is removed).
-const inspectedId = ref(null)
-const inspected = computed(() => perks.value.find((p) => p.id === inspectedId.value) || null)
-function inspect(p) {
-  inspectedId.value = p.id
+// Corrections target the first perk of a name in its tier (the bake has a
+// few duplicates), so later ones of the same name aren't offered for editing.
+const laterDuplicates = computed(() => {
+  const seen = new Set()
+  const ids = new Set()
+  for (const p of perks.value) {
+    const k = `${p.quality}\u0000${p.name}`
+    if (seen.has(k)) ids.add(p.id)
+    seen.add(k)
+  }
+  return ids
+})
+
+// Inspection: a click (or keyboard focus) pins a perk; hover only previews
+// while nothing is pinned. Hold ids, not perks, so the panel follows live
+// corrections (and closes if the inspected perk is removed).
+const pinnedId = ref(null)
+const hoverId = ref(null)
+const inspectedId = computed(() => pinnedId.value ?? hoverId.value)
+const live = computed(() => perks.value.find((p) => p.id === inspectedId.value) || null)
+// While the edit panel is in use (a form open, a save in flight, an error on
+// show) the inspected perk never changes under it, and it stays shown from
+// its last snapshot even if an optimistic remove took it out of the tree —
+// so a refused remove can still show its error once the rollback lands.
+const panelActive = ref(false)
+const lastSeen = ref(null)
+watch(live, (p) => {
+  if (p) lastSeen.value = p
+})
+const inspected = computed(() => live.value || (panelActive.value && canEdit.value ? lastSeen.value : null))
+// The panel unmounts without a word when edit rights go; don't stay locked.
+watch(canEdit, (v) => {
+  if (!v) panelActive.value = false
+})
+function onPanelState(s) {
+  panelActive.value = s !== 'idle'
+  if (panelActive.value) pinnedId.value = inspectedId.value
+}
+function preview(p) {
+  if (!panelActive.value) hoverId.value = p.id
+}
+function pin(p) {
+  if (!panelActive.value) pinnedId.value = p.id
+}
+function unpin() {
+  pinnedId.value = null
+  hoverId.value = null
+  panelActive.value = false
 }
 function toggle(p) {
   planner.toggleWeaponPerk(props.weapon, p.id, props.data.budget ?? 10, perkIds.value)
-  inspect(p)
+  pin(p)
 }
 </script>
 
@@ -88,8 +130,8 @@ function toggle(p) {
               class="wnode"
               :class="{ on: selected[p.id], dim: !selected[p.id] && full }"
               @click="toggle(p)"
-              @mouseenter="inspect(p)"
-              @focus="inspect(p)"
+              @mouseenter="preview(p)"
+              @focus="pin(p)"
             >
               <span class="wnode-dot" />
               <span class="wnode-name">{{ p.name }}</span>
@@ -111,18 +153,23 @@ function toggle(p) {
         >
           Corrected in game · {{ correctedOn(inspected) }}
         </span>
+        <button type="button" class="wdetail-close" aria-label="Close perk details" @click="unpin">×</button>
       </div>
       <p class="wdetail-desc">{{ inspected.description }}</p>
       <!-- inspected is derived from the live perks, so it refreshes (or
            clears) itself after a save; no @done handler needed. -->
-      <PerkEditPanel
-        v-if="canEdit"
-        :key="inspected.id"
-        kind="weapon"
-        :target="weapon"
-        :quality="inspected.quality"
-        :perk="{ name: inspected.name, description: inspected.description }"
-      />
+      <template v-if="canEdit">
+        <PerkEditPanel
+          v-if="!laterDuplicates.has(inspected.id)"
+          :key="inspected.id"
+          kind="weapon"
+          :target="weapon"
+          :quality="inspected.quality"
+          :perk="{ name: inspected.name, description: inspected.description }"
+          @state="onPanelState"
+        />
+        <p v-else class="wdetail-dup">Duplicate name — edit the first one in this tier.</p>
+      </template>
     </div>
 
     <div v-if="adding && canEdit" class="wdetail" :data-q="slug(adding)">
@@ -354,6 +401,30 @@ function toggle(p) {
   border: 1px solid rgba(214, 170, 72, 0.45);
   border-radius: 2px;
   padding: 0.1rem 0.35rem;
+}
+.wdetail-close {
+  margin-left: auto;
+  align-self: center;
+  border: 1px solid var(--color-ash);
+  background: transparent;
+  color: var(--color-smoke);
+  border-radius: 2px;
+  width: 1.4rem;
+  height: 1.4rem;
+  line-height: 1;
+  cursor: pointer;
+}
+.wdetail-close:hover {
+  color: var(--color-bone);
+  border-color: var(--color-ash-2);
+}
+.corrected-tag + .wdetail-close {
+  margin-left: 0.4rem;
+}
+.wdetail-dup {
+  margin-top: 0.7rem;
+  font-size: 0.78rem;
+  color: var(--color-smoke);
 }
 .wnode-fix {
   margin-left: auto;

@@ -1,10 +1,21 @@
 // @vitest-environment jsdom
-import { describe, it, expect, beforeEach } from 'vitest'
-import { mount } from '@vue/test-utils'
+import { describe, it, expect, beforeEach, vi } from 'vitest'
+import { mount, flushPromises } from '@vue/test-utils'
 import { setActivePinia, createPinia } from 'pinia'
 import WeaponTree from './WeaponTree.vue'
 import { usePerkCorrections } from '../stores/perkCorrections'
 import { usePlanner } from '../stores/planner'
+import * as perksApi from '../lib/perksApi'
+
+// Only the network edge is mocked: saves go through the real store, so its
+// optimistic apply and rollback reach the tree exactly as they do live.
+vi.mock('../lib/perksApi', () => ({
+  getCorrections: vi.fn(),
+  getPrivileges: vi.fn(),
+  submitCorrection: vi.fn(),
+  revertCorrection: vi.fn(),
+}))
+vi.mock('../stores/auth', () => ({ useAuth: () => ({ token: 'tok' }) }))
 
 const data = {
   budget: 5,
@@ -14,7 +25,23 @@ const data = {
   ],
 }
 
-beforeEach(() => setActivePinia(createPinia()))
+beforeEach(() => {
+  setActivePinia(createPinia())
+  vi.clearAllMocks()
+})
+
+const baked = { ...data, source: 'baked' }
+const emptyDoc = { version: 'v', classes: {}, weapons: {} }
+function editorTree(treeData = baked) {
+  const s = usePerkCorrections()
+  s.doc = emptyDoc
+  s.live = true
+  s.privileges = { editor: true }
+  return mount(WeaponTree, { props: { weapon: 'Test', data: treeData } })
+}
+const node = (w, name) => w.findAll('.wnode').find((n) => n.find('.wnode-name').text() === name)
+const names = (w) => w.findAll('.wnode-name').map((n) => n.text())
+const REVOKED = 'Your site privileges have been revoked.'
 
 describe('WeaponTree with corrections', () => {
   it('keeps bake ids stable when an earlier perk is removed', async () => {
@@ -114,6 +141,133 @@ describe('WeaponTree with corrections', () => {
     const w = mount(WeaponTree, { props: { weapon: 'Test', data: { ...data, source: 'baked' } } })
     expect(w.find('button.wtier-add').exists()).toBe(true)
     await w.findAll('.wnode')[0].trigger('mouseenter')
+    expect(w.find('.pe').exists()).toBe(true)
+  })
+})
+
+describe('WeaponTree saves through the real store', () => {
+  it('a refused remove shows the error and the perk comes back', async () => {
+    perksApi.submitCorrection.mockRejectedValue(new Error(REVOKED))
+    const w = editorTree()
+    await node(w, 'A').trigger('click')
+    await w.get('button.pe-remove').trigger('click')
+    await w.get('button.pe-confirm').trigger('click')
+    await flushPromises()
+    expect(perksApi.submitCorrection).toHaveBeenCalledTimes(1)
+    expect(names(w)).toEqual(['A', 'B'])
+    expect(w.get('.pe-error').text()).toBe(REVOKED)
+    expect(w.get('.wdetail-name').text()).toBe('A')
+  })
+
+  it('a successful remove takes the perk out and closes the panel', async () => {
+    perksApi.submitCorrection.mockResolvedValue({
+      version: 'v2',
+      classes: {},
+      weapons: { Test: [{ id: 7, op: 'remove', quality: 'Standard', perkName: 'A', description: null, createdAt: 't' }] },
+    })
+    const w = editorTree()
+    await node(w, 'A').trigger('click')
+    await w.get('button.pe-remove').trigger('click')
+    await w.get('button.pe-confirm').trigger('click')
+    await flushPromises()
+    expect(names(w)).toEqual(['B'])
+    expect(w.find('.wdetail').exists()).toBe(false)
+  })
+
+  it('a refused edit shows the error and keeps the typed draft', async () => {
+    perksApi.submitCorrection.mockRejectedValue(new Error(REVOKED))
+    const w = editorTree()
+    await node(w, 'B').trigger('click')
+    await w.get('button.pe-edit').trigger('click')
+    await w.get('textarea').setValue('my better text')
+    await w.get('input.pe-note').setValue('patch 14.1')
+    await w.get('form').trigger('submit')
+    await flushPromises()
+    expect(w.get('.pe-error').text()).toBe(REVOKED)
+    expect(w.get('textarea').element.value).toBe('my better text')
+    expect(w.get('input.pe-note').element.value).toBe('patch 14.1')
+    expect(w.get('.wdetail-desc').text()).toBe('b')
+  })
+
+  it('a successful edit shows the new text and returns the panel to idle', async () => {
+    perksApi.submitCorrection.mockResolvedValue({
+      version: 'v2',
+      classes: {},
+      weapons: { Test: [{ id: 8, op: 'edit', quality: 'Standard', perkName: 'B', description: 'new', createdAt: '2026-09-27T12:00:00.000Z' }] },
+    })
+    const w = editorTree()
+    await node(w, 'B').trigger('click')
+    await w.get('button.pe-edit').trigger('click')
+    await w.get('textarea').setValue('new')
+    await w.get('form').trigger('submit')
+    await flushPromises()
+    expect(w.get('.wdetail-desc').text()).toBe('new')
+    expect(w.find('form').exists()).toBe(false)
+    expect(w.find('button.pe-edit').exists()).toBe(true)
+    expect(w.find('.pe-error').exists()).toBe(false)
+  })
+})
+
+describe('WeaponTree inspection: hover previews, click pins', () => {
+  it('hover previews when nothing is pinned', async () => {
+    const w = editorTree()
+    await node(w, 'A').trigger('mouseenter')
+    expect(w.get('.wdetail-name').text()).toBe('A')
+    await node(w, 'B').trigger('mouseenter')
+    expect(w.get('.wdetail-name').text()).toBe('B')
+  })
+
+  it('clicking pins the perk: hovering another does not retarget', async () => {
+    const w = editorTree()
+    await node(w, 'B').trigger('click')
+    expect(usePlanner().weaponPerks.Test).toHaveProperty('standard-b-1')
+    await node(w, 'A').trigger('mouseenter')
+    expect(w.get('.wdetail-name').text()).toBe('B')
+  })
+
+  it('hover never retargets an open edit, even one opened from a hover preview', async () => {
+    const w = editorTree()
+    await node(w, 'B').trigger('mouseenter')
+    await w.get('button.pe-edit').trigger('click')
+    await w.get('textarea').setValue('draft')
+    await node(w, 'A').trigger('mouseenter')
+    await node(w, 'A').trigger('focus')
+    expect(w.get('.wdetail-name').text()).toBe('B')
+    expect(w.get('textarea').element.value).toBe('draft')
+  })
+
+  it('the close button clears the pin and the panel', async () => {
+    const w = editorTree()
+    await node(w, 'B').trigger('click')
+    await w.get('button.wdetail-close').trigger('click')
+    expect(w.find('.wdetail').exists()).toBe(false)
+    await node(w, 'A').trigger('mouseenter')
+    expect(w.get('.wdetail-name').text()).toBe('A')
+  })
+})
+
+describe('WeaponTree duplicate names within a tier', () => {
+  const dup = {
+    budget: 5,
+    source: 'baked',
+    perks: [
+      { name: 'Increased Capacity', quality: 'Relic', description: 'one' },
+      { name: 'Increased Capacity', quality: 'Relic', description: 'two' },
+      { name: 'Increased Capacity', quality: 'Heroic', description: 'three' },
+    ],
+  }
+
+  it('offers edit controls only on the first occurrence of a name in a tier', async () => {
+    const w = editorTree(dup)
+    const nodes = w.findAll('.wnode')
+    await nodes[0].trigger('mouseenter')
+    expect(w.find('.pe').exists()).toBe(true)
+    expect(w.find('.wdetail-dup').exists()).toBe(false)
+    await nodes[1].trigger('mouseenter')
+    expect(w.find('.pe').exists()).toBe(false)
+    expect(w.get('.wdetail-dup').text()).toContain('Duplicate name')
+    // Same name in another tier is its own first occurrence.
+    await nodes[2].trigger('mouseenter')
     expect(w.find('.pe').exists()).toBe(true)
   })
 })

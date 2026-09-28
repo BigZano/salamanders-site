@@ -12,7 +12,10 @@ const props = defineProps({
   perk: { type: Object, default: null },
   suggestions: { type: Array, default: () => [] },
 })
-const emit = defineEmits(['done'])
+// `state`: 'idle' when showing just the Edit/Remove buttons, else 'active'
+// (a form open, a save in flight, or an error on show) — so a host knows
+// not to retarget or unmount the panel under the user.
+const emit = defineEmits(['done', 'state'])
 const corrections = usePerkCorrections()
 const auth = useAuth()
 // Several panels can be on one page (edit + add, several weapon slots), so
@@ -26,18 +29,29 @@ const note = ref('')
 const error = ref('')
 const busy = ref(false)
 
+function reset() {
+  const p = props.perk
+  mode.value = p ? 'idle' : 'add'
+  text.value = p?.description || ''
+  note.value = ''
+  error.value = ''
+}
 // Hosts pass a fresh `{ name, description }` literal on every render, so
 // watch the perk's value, not its identity, or any re-render (a hover, a
-// node toggle) would wipe the draft.
+// node toggle) would wipe the draft. Our own save changes that value too:
+// the store applies it at once (while busy) and, if refused, rolls it back
+// to what it was when we saved — neither may wipe the draft or the error.
+const perkKey = () => (props.perk ? props.perk.name + '\u0000' + (props.perk.description ?? '') : null)
+let savedFrom = null
+watch(perkKey, (key) => {
+  if (busy.value) return
+  if (error.value && key === savedFrom) return
+  reset()
+})
 watch(
-  () => (props.perk ? props.perk.name + '\u0000' + (props.perk.description ?? '') : null),
-  () => {
-    const p = props.perk
-    mode.value = p ? 'idle' : 'add'
-    text.value = p?.description || ''
-    note.value = ''
-    error.value = ''
-  },
+  () => (mode.value === 'idle' && !busy.value && !error.value ? 'idle' : 'active'),
+  (s) => emit('state', s),
+  { immediate: true },
 )
 const canSave = computed(() => {
   const t = text.value.trim()
@@ -53,6 +67,7 @@ async function save(op) {
   if (busy.value) return
   busy.value = true
   error.value = ''
+  savedFrom = perkKey()
   try {
     await corrections.submit(
       {
@@ -66,6 +81,8 @@ async function save(op) {
       },
       auth.token,
     )
+    // The perk-change watcher stood down while busy, so settle here.
+    if (props.perk) reset()
     emit('done')
   } catch (err) {
     error.value = err.message || 'That did not save.'
