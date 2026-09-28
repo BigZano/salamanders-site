@@ -38,3 +38,8 @@ Apply the new tables once (idempotent):
 ```sh
 docker compose exec -T db psql -U salamanders salamanders_builds < schema.sql
 ```
+
+Perk corrections (2026-09-27) added tables and two `builds` columns; re-run
+`schema.sql` (idempotent), then seed once with `docker compose exec -T api bun
+run src/seed.js < ../src/data/perk-corrections.json`. `DISCORD_MOD_ROLE_ID` is
+no longer read; moderator roles live in `src/privileges.js`.
