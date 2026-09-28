@@ -122,6 +122,10 @@ const when = (d) => new Date(d).toLocaleString()
           </button>
           <div v-if="openId === e.id" class="hist-detail">
             <p v-if="e.note" class="hist-note">Note: {{ e.note }}</p>
+            <div v-if="e.snapshot?.before" class="hist-change">
+              <p><span class="hist-change-label">Before:</span> {{ e.snapshot.before.description || '—' }}</p>
+              <p><span class="hist-change-label">After:</span> {{ e.snapshot.description || 'removed' }}</p>
+            </div>
             <pre class="hist-snap">{{ JSON.stringify(e.snapshot, null, 2) }}</pre>
             <div class="hist-actions">
               <button v-if="e.subject === 'perk_correction' && e.action === 'created'" type="button" :disabled="busy" @click="revert(e)">Revert</button>
@@ -236,6 +240,20 @@ const when = (d) => new Date(d).toLocaleString()
 }
 .hist-detail {
   padding: 0 0.8rem 0.8rem;
+}
+.hist-change {
+  display: grid;
+  gap: 0.3rem;
+  margin: 0 0 0.6rem;
+  font-size: 0.85rem;
+}
+.hist-change p {
+  margin: 0;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+.hist-change-label {
+  color: var(--color-smoke);
 }
 .hist-snap {
   white-space: pre-wrap;

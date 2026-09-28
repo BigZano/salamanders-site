@@ -34,10 +34,10 @@ function memStore() {
   return {
     corrections, events, revocations,
     listActive: async () => corrections.filter((c) => c.active),
-    insertCorrection: async (c, actor) => {
+    insertCorrection: async (c, actor, before = null) => {
       const row = { ...c, id: corrections.length + 1, active: true, author: actor, createdAt: `t${corrections.length + 1}` }
       corrections.push(row)
-      ev({ subject: 'perk_correction', subjectId: String(row.id), action: 'created', actor, snapshot: row, note: c.note })
+      ev({ subject: 'perk_correction', subjectId: String(row.id), action: 'created', actor, snapshot: { ...row, before }, note: c.note })
       return row
     },
     revertCorrection: async (id, actor, note) => {
@@ -184,6 +184,57 @@ describe('POST /perk-corrections', () => {
       (await call('tm', 'POST', '/perk-corrections', { kind: 'class', target: 'Tactical', op: 'edit', perkName: 'constructor', description: 'x' })).status,
     ).toBe(404)
     expect((await call(null, 'GET', '/perk-corrections')).status).toBe(200)
+  })
+})
+
+describe('what a correction replaced', () => {
+  const created = (store) => store.events.filter((e) => e.action === 'created').at(-1).snapshot
+
+  it('an add records nothing before it', async () => {
+    const { call, store } = setup()
+    await call('tm', 'POST', '/perk-corrections', ADD_HH)
+    expect(created(store).before).toBeNull()
+  })
+
+  it("an edit records the bake's description", async () => {
+    const { call, store } = setup()
+    await call('tm', 'POST', '/perk-corrections', { ...REMOVE_PV, op: 'edit', description: 'new pv' })
+    expect(created(store).before).toEqual({ name: 'Perpetual Velocity', description: 'pv' })
+    expect(created(store).description).toBe('new pv')
+  })
+
+  it('a remove records the removed perk', async () => {
+    const { call, store } = setup()
+    await call('tm', 'POST', '/perk-corrections', REMOVE_PV)
+    expect(created(store).before).toEqual({ name: 'Perpetual Velocity', description: 'pv' })
+  })
+
+  it("editing an already-edited perk records the previous correction's text", async () => {
+    const { call, store } = setup()
+    await call('tm', 'POST', '/perk-corrections', { ...REMOVE_PV, op: 'edit', description: 'first' })
+    await call('tm', 'POST', '/perk-corrections', { ...REMOVE_PV, op: 'edit', description: 'second' })
+    expect(created(store).before).toEqual({ name: 'Perpetual Velocity', description: 'first' })
+  })
+
+  it('a class edit records the current class-perk text, after corrections', async () => {
+    const { call, store } = setup()
+    const base = { kind: 'class', target: 'Tactical', op: 'edit', perkName: 'Adrenaline Rush' }
+    await call('tm', 'POST', '/perk-corrections', { ...base, description: 'one' })
+    expect(created(store).before).toEqual({ name: 'Adrenaline Rush', description: 'ar' })
+    await call('tm', 'POST', '/perk-corrections', { ...base, description: 'two' })
+    expect(created(store).before).toEqual({ name: 'Adrenaline Rush', description: 'one' })
+  })
+})
+
+describe('duplicate adds', () => {
+  it('409 when the tier already has a perk by that name (bake or added)', async () => {
+    const { call } = setup()
+    const dupBake = await call('tm', 'POST', '/perk-corrections', { ...ADD_HH, perkName: 'Perpetual Velocity' })
+    expect(dupBake.status).toBe(409)
+    expect(dupBake.body.error).toBe('That tier already has a perk named Perpetual Velocity.')
+    expect((await call('tm', 'POST', '/perk-corrections', ADD_HH)).status).toBe(201)
+    expect((await call('tm', 'POST', '/perk-corrections', ADD_HH)).status).toBe(409)
+    expect((await call('tm', 'POST', '/perk-corrections', { ...ADD_HH, quality: 'Heroic' })).status).toBe(201)
   })
 })
 

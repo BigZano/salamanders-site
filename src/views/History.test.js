@@ -110,4 +110,49 @@ describe('History.vue', () => {
     // Loading state should be false after request completes
     expect(wrapper.vm.loading).toBe(false)
   })
+
+  async function mountWith(events) {
+    const { getHistory } = await import('../lib/perksApi')
+    getHistory.mockReset()
+    getHistory.mockResolvedValue({ events, revocations: [], next: null })
+    const wrapper = mount(History)
+    await new Promise((r) => setTimeout(r, 0))
+    await wrapper.vm.$nextTick()
+    return wrapper
+  }
+  const correction = (id, snapshot) => ({
+    id,
+    subject: 'perk_correction',
+    subjectId: String(id),
+    action: 'created',
+    actor: { id: '9', username: 'tm' },
+    createdAt: '2026-09-27T00:00:00Z',
+    snapshot,
+    note: null,
+  })
+
+  it('an expanded edit shows what it replaced, as plain text', async () => {
+    const wrapper = await mountWith([
+      correction(5, { op: 'edit', perkName: 'PV', description: 'new <b>text</b>', before: { name: 'PV', description: 'old text' } }),
+    ])
+    await wrapper.find('.hist-line').trigger('click')
+    const change = wrapper.find('.hist-change')
+    expect(change.text()).toContain('Before: old text')
+    expect(change.text()).toContain('After: new <b>text</b>')
+    expect(change.find('b').exists()).toBe(false)
+  })
+
+  it('a remove reads "After: removed"; a missing before description reads "—"', async () => {
+    const wrapper = await mountWith([correction(6, { op: 'remove', perkName: 'PV', description: null, before: { name: 'PV', description: null } })])
+    await wrapper.find('.hist-line').trigger('click')
+    expect(wrapper.find('.hist-change').text()).toContain('Before: —')
+    expect(wrapper.find('.hist-change').text()).toContain('After: removed')
+  })
+
+  it('no before/after block when the snapshot has no before (adds, older events)', async () => {
+    const wrapper = await mountWith([correction(7, { op: 'add', perkName: 'HH', description: 'd', before: null })])
+    await wrapper.find('.hist-line').trigger('click')
+    expect(wrapper.find('.hist-change').exists()).toBe(false)
+    expect(wrapper.find('.hist-snap').exists()).toBe(true)
+  })
 })

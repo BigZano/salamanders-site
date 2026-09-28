@@ -67,14 +67,14 @@ export function createHistoryStore(pool) {
       [subject, String(subjectId), action, actor.id, actor.username, JSON.stringify(snapshot ?? null), note ?? null],
     )
 
-  const insertOne = async (q, c, actor) => {
+  const insertOne = async (q, c, actor, before = null) => {
     const { rows } = await q.query(
       `insert into perk_corrections (kind, target, quality, op, perk_name, description, note, author_discord_id, author_username)
        values ($1,$2,$3,$4,$5,$6,$7,$8,$9) returning *`,
       [c.kind, c.target, c.quality, c.op, c.perkName, c.description, c.note ?? null, actor.id, actor.username],
     )
     const out = toCorrection(rows[0])
-    await event(q, { subject: 'perk_correction', subjectId: out.id, action: 'created', actor, snapshot: out, note: c.note })
+    await event(q, { subject: 'perk_correction', subjectId: out.id, action: 'created', actor, snapshot: { ...out, before }, note: c.note })
     return out
   }
 
@@ -84,7 +84,7 @@ export function createHistoryStore(pool) {
       return rows.map(toCorrection)
     },
 
-    insertCorrection: (c, actor) => inTx((q) => insertOne(q, c, actor)),
+    insertCorrection: (c, actor, before = null) => inTx((q) => insertOne(q, c, actor, before)),
 
     revertCorrection: (id, actor, note) =>
       inTx(async (q) => {

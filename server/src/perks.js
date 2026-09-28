@@ -9,7 +9,7 @@
  * without Postgres.
  */
 import { Upstream } from './discordRoles.js'
-import { QUALITIES, OPS, LIMITS, PERK_NAME, applyWeaponCorrections, hasWeaponPerk, toDocument, sanitizeText } from './perkCorrectionsCore.js'
+import { QUALITIES, OPS, LIMITS, PERK_NAME, applyWeaponCorrections, applyClassCorrections, toDocument, sanitizeText } from './perkCorrectionsCore.js'
 import { mayRevoke } from './privileges.js'
 
 const REVERT = /^\/perk-corrections\/(\d{1,15})\/revert$/
@@ -23,22 +23,31 @@ const label = (c) => `${c.target}${c.quality ? ` / ${c.quality}` : ''} — ${PAS
 export function createPerksHandler({ roles, privileges, store, loadBake, notify = () => {} }) {
   const doc = async () => toDocument(await store.listActive())
 
-  /** → null when the correction's target (and, for remove/edit, its perk) exists; else a 404 message. */
-  async function missingTarget(c) {
+  /**
+   * Check the correction against the bake after current corrections.
+   * → { status, error } when it can't apply, else { before }: the perk it
+   * replaces ({ name, description }) for an edit/remove, null for an add.
+   */
+  async function inspect(c) {
     const bake = await loadBake()
     if (c.kind === 'class') {
-      if (!Object.hasOwn(bake.classes, c.target)) return `Unknown class: ${c.target}.`
-      const cls = bake.classes[c.target]
-      return cls.perks && Object.hasOwn(cls.perks, c.perkName) ? null : `${c.target} has no perk named ${c.perkName}.`
+      if (!Object.hasOwn(bake.classes, c.target)) return { status: 404, error: `Unknown class: ${c.target}.` }
+      const perks = bake.classes[c.target].perks
+      if (!perks || !Object.hasOwn(perks, c.perkName)) return { status: 404, error: `${c.target} has no perk named ${c.perkName}.` }
+      const current = applyClassCorrections(perks, await activeFor(c))[c.perkName]
+      return { before: { name: c.perkName, description: current.description ?? null } }
     }
-    if (!Object.hasOwn(bake.weapons, c.target)) return `Unknown weapon: ${c.target}.`
-    const tree = bake.weapons[c.target]
-    if (c.op === 'add') return null
-    const active = (await store.listActive()).filter((x) => x.kind === 'weapon' && x.target === c.target)
-    return hasWeaponPerk(applyWeaponCorrections(tree, active), c.quality, c.perkName)
-      ? null
-      : `${c.target} has no ${c.quality} perk named ${c.perkName}.`
+    if (!Object.hasOwn(bake.weapons, c.target)) return { status: 404, error: `Unknown weapon: ${c.target}.` }
+    const tree = applyWeaponCorrections(bake.weapons[c.target], await activeFor(c))
+    const current = tree.perks.find((p) => p.quality === c.quality && p.name === c.perkName)
+    if (c.op === 'add') {
+      return current ? { status: 409, error: `That tier already has a perk named ${c.perkName}.` } : { before: null }
+    }
+    if (!current) return { status: 404, error: `${c.target} has no ${c.quality} perk named ${c.perkName}.` }
+    return { before: { name: current.name, description: current.description ?? null } }
   }
+
+  const activeFor = async (c) => (await store.listActive()).filter((x) => x.kind === c.kind && x.target === c.target)
 
   async function route(request, url) {
     const { pathname } = url
@@ -61,9 +70,9 @@ export function createPerksHandler({ roles, privileges, store, loadBake, notify 
       if (!me.editor) return refuse()
       const c = validateCorrection(await request.json().catch(() => null))
       if (typeof c === 'string') return reply(400, { error: c })
-      const missing = await missingTarget(c)
-      if (missing) return reply(404, { error: missing })
-      const saved = await store.insertCorrection(c, user)
+      const check = await inspect(c)
+      if (check.error) return reply(check.status, { error: check.error })
+      const saved = await store.insertCorrection(c, user, check.before)
       notify(`Perk correction by ${user.username}: ${label(saved)}${saved.note ? ` ("${saved.note}")` : ''}`)
       return reply(201, await doc())
     }
