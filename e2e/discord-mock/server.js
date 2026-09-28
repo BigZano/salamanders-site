@@ -18,15 +18,23 @@ const USERS = {
   'test-norole-token': { id: '87082170719408128', username: 'norole-tester' },
   // Legion member who also holds Reclusiarch — reviews reports.
   'test-reclusiarch-token': { id: '100000000000000002', username: 'reclusiarch-tester' },
+  // Techmarine — edits perks, sees history, moderates builds.
+  'test-techmarine-token': { id: '100000000000000010', username: 'techmarine-tester' },
+  // Master of the Forge — may revoke the Techmarine.
+  'test-forge-token': { id: '100000000000000011', username: 'forge-tester' },
 }
 const LEGION_ROLE = '1377787723976409211'
 const RECLUSIARCH_ROLE = '1323334632904855592'
+const TECHMARINE_ROLE = '1322056087859499042'
+const FORGE_ROLE = '1322056087867883565'
 const GUILD_ID = '1322056087792521269'
 // Guild membership as Discord's bot endpoint would report it.
 const MEMBERS = {
   '75633559351595008': { roles: [LEGION_ROLE] },
   '87082170719408128': { roles: [] },
   '100000000000000002': { roles: [LEGION_ROLE, RECLUSIARCH_ROLE] },
+  '100000000000000010': { roles: [LEGION_ROLE, TECHMARINE_ROLE] },
+  '100000000000000011': { roles: [LEGION_ROLE, FORGE_ROLE] },
 }
 
 // The browser calls this cross-origin (from wherever "web" is served), unlike
@@ -68,13 +76,17 @@ Bun.serve({
       return withCors(Response.json({ owner_id: '1', roles: [{ id: GUILD_ID, permissions: '0' }, { id: RECLUSIARCH_ROLE, permissions: '0' }] }))
     }
 
-    // Guild member lookups (mod-role and report-role checks). No
-    // build-moderator scenario is exercised, so nobody holds a mod role.
+    // Guild member lookups (mod-role, report-role and perk-privilege checks).
+    // The Techmarine and Forge testers hold mod roles; nobody else does.
     const memberMatch = url.pathname.match(/^\/v10\/guilds\/[^/]+\/members\/([^/]+)$/)
     if (memberMatch) {
       const member = MEMBERS[memberMatch[1]]
       return withCors(member ? Response.json(member) : Response.json({ message: 'Unknown Member' }, { status: 404 }))
     }
+
+    // The wiki bake, standing in for raw.githubusercontent.com (BAKE_BASE_URL).
+    const bakeMatch = url.pathname.match(/^\/bake\/(weapon-trees|perk-details)\.json$/)
+    if (bakeMatch) return withCors(new Response(Bun.file(`/bake/${bakeMatch[1]}.json`), { headers: { 'Content-Type': 'application/json' } }))
 
     return withCors(new Response('Not found', { status: 404 }))
   },
