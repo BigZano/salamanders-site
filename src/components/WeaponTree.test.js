@@ -209,6 +209,22 @@ describe('WeaponTree saves through the real store', () => {
 })
 
 describe('WeaponTree inspection: hover previews, click pins', () => {
+  it('after a successful remove, hover works again on other perks', async () => {
+    perksApi.submitCorrection.mockResolvedValue({
+      version: 'v2',
+      classes: {},
+      weapons: { Test: [{ id: 7, op: 'remove', quality: 'Standard', perkName: 'A', description: null, createdAt: 't' }] },
+    })
+    const w = editorTree()
+    await node(w, 'A').trigger('click')
+    await w.get('button.pe-remove').trigger('click')
+    await w.get('button.pe-confirm').trigger('click')
+    await flushPromises()
+    // A is removed, pinnedId should be cleared so hovering B works
+    await node(w, 'B').trigger('mouseenter')
+    expect(w.get('.wdetail-name').text()).toBe('B')
+  })
+
   it('hover previews when nothing is pinned', async () => {
     const w = editorTree()
     await node(w, 'A').trigger('mouseenter')

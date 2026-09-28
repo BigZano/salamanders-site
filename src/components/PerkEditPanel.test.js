@@ -128,4 +128,18 @@ describe('PerkEditPanel', () => {
     await w.get('textarea').setValue('new text')
     expect(w.get('button[type=submit]').element.disabled).toBe(false)
   })
+
+  it('Cancel after a failed save clears the error and emits idle state', async () => {
+    const s = usePerkCorrections()
+    s.submit = vi.fn().mockRejectedValue(new Error('Your site privileges have been revoked.'))
+    const w = mount(PerkEditPanel, { props: weaponProps({ name: 'Head Hunter', description: 'x' }) })
+    await w.get('button.pe-edit').trigger('click')
+    await w.get('form').trigger('submit')
+    await flushPromises()
+    expect(w.get('.pe-error').text()).toContain('revoked')
+    expect(w.emitted('state')).toContainEqual(['active'])
+    await w.findAll('button')[w.findAll('button').length - 1].trigger('click') // last Cancel button
+    expect(w.find('.pe-error').exists()).toBe(false)
+    expect(w.emitted('state')).toContainEqual(['idle'])
+  })
 })

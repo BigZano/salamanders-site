@@ -90,6 +90,14 @@ async function save(op) {
     busy.value = false
   }
 }
+
+function cancel() {
+  if (props.perk) {
+    reset()
+  } else {
+    emit('done')
+  }
+}
 </script>
 
 <template>
@@ -103,7 +111,7 @@ async function save(op) {
       <span>Remove {{ perk.name }} from {{ quality }}?</span>
       <input v-model="note" class="pe-note" maxlength="200" placeholder="Note (optional), e.g. checked in game, patch 14.1" aria-label="Note" />
       <button type="button" class="pe-confirm" :disabled="busy" @click="save('remove')">Remove</button>
-      <button type="button" @click="mode = 'idle'">Cancel</button>
+      <button type="button" @click="cancel">Cancel</button>
     </div>
 
     <form v-else class="pe-form" @submit.prevent="save(mode === 'add' ? 'add' : 'edit')">
@@ -119,7 +127,7 @@ async function save(op) {
       <input v-model="note" class="pe-note" maxlength="200" placeholder="Note (optional), e.g. checked in game, patch 14.1" aria-label="Note" />
       <div class="pe-actions">
         <button type="submit" :disabled="busy || !canSave">Save</button>
-        <button type="button" @click="perk ? (mode = 'idle') : emit('done')">Cancel</button>
+        <button type="button" @click="cancel">Cancel</button>
       </div>
     </form>
 

@@ -16,10 +16,14 @@ const MAX_JUSTIFICATIONS = 8 // one per perk column
 const WEAPON_SLOTS = new Set(['primary', 'secondary', 'melee'])
 /**
  * Keys of perkIds / justifications are ids the site generates (a perk column
- * index), not text anyone reads, so they're sanitized and capped at 40
- * rather than rejected; one that sanitizes to nothing is dropped with its entry.
+ * index), not text anyone reads, so they're sanitized and dropped if over 40
+ * characters; one that sanitizes to nothing is also dropped with its entry.
  */
-const cleanKey = (k) => sanitizeText(k).slice(0, 40)
+const cleanKey = (k) => {
+  const sanitized = sanitizeText(k)
+  if (sanitized.length > 40 || !sanitized) return ''
+  return sanitized
+}
 
 /**
  * `justifications` is a client-supplied object keyed by perk id. Only its own

@@ -78,6 +78,15 @@ const inspected = computed(() => live.value || (panelActive.value && canEdit.val
 watch(canEdit, (v) => {
   if (!v) panelActive.value = false
 })
+// Clear stale pin when the pinned perk is removed and the panel returns to idle.
+watch(
+  () => [perks.value, pinnedId.value, panelActive.value],
+  ([p, pinned, active]) => {
+    if (!active && pinned && !p.find((x) => x.id === pinned)) {
+      pinnedId.value = null
+    }
+  }
+)
 function onPanelState(s) {
   panelActive.value = s !== 'idle'
   if (panelActive.value) pinnedId.value = inspectedId.value

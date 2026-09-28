@@ -169,16 +169,16 @@ describe('validateBuildText: the build body', () => {
     expect(out.weapons).toEqual({ primary: 'Bolt Rifle', melee: 'Power Sword' })
   })
 
-  it('sanitizes perkIds keys, caps them at 40 characters and drops empty ones', () => {
-    const out = validateBuildText(b({ perkIds: { ['k'.repeat(50)]: 'P', 'a​b': 'Q', '​': 'R', '  ': 'S' } }))
-    expect(out.perkIds).toEqual({ ['k'.repeat(40)]: 'P', ab: 'Q' })
+  it('drops perkIds keys over 40 characters after sanitizing, keeps exactly 40-char keys', () => {
+    const out = validateBuildText(b({ perkIds: { ['a'.repeat(41)]: 'too long', ['b'.repeat(40)]: 'just right', short: 'also good', '​': 'empty' } }))
+    expect(out.perkIds).toEqual({ ['b'.repeat(40)]: 'just right', short: 'also good' })
   })
 
-  it('sanitizes justification keys, caps them at 40 characters, drops empty ones and keeps at most 8', () => {
+  it('drops justification keys over 40 characters after sanitizing, keeps exactly 40-char keys and at most 8', () => {
     const many = Object.fromEntries(Array.from({ length: 10 }, (_, i) => [String(i), `why ${i}`]))
     expect(Object.keys(validateBuildText(b({ justifications: many })).justifications)).toEqual(['0', '1', '2', '3', '4', '5', '6', '7'])
-    const out = validateBuildText(b({ justifications: { ['j'.repeat(45)]: 'long key', '​': 'empty key', '1​': 'one' } }))
-    expect(out.justifications).toEqual({ ['j'.repeat(40)]: 'long key', 1: 'one' })
+    const out = validateBuildText(b({ justifications: { ['a'.repeat(41)]: 'over limit', ['b'.repeat(40)]: 'exact', '​': 'empty key', '1​': 'one' } }))
+    expect(out.justifications).toEqual({ ['b'.repeat(40)]: 'exact', 1: 'one' })
   })
 })
 
