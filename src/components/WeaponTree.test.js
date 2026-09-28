@@ -88,11 +88,32 @@ describe('WeaponTree with corrections', () => {
     const s = usePerkCorrections()
     s.live = true
     s.privileges = { editor: true }
-    const w = mount(WeaponTree, { props: { weapon: 'Test', data } })
+    const w = mount(WeaponTree, { props: { weapon: 'Test', data: { ...data, source: 'baked' } } })
     await w.get('button.wtier-add').trigger('click')
     expect(w.find('input.pe-name').exists()).toBe(true)
     s.privileges = { editor: false }
     await w.vm.$nextTick()
     expect(w.find('input.pe-name').exists()).toBe(false)
+  })
+
+  it.each(['wiki', 'offline', undefined])('no edit or add controls for a %s tree the server does not know, even for an editor', async (source) => {
+    const s = usePerkCorrections()
+    s.live = true
+    s.privileges = { editor: true }
+    const w = mount(WeaponTree, { props: { weapon: 'Test', data: { ...data, source } } })
+    expect(w.find('button.wtier-add').exists()).toBe(false)
+    await w.findAll('.wnode')[0].trigger('mouseenter')
+    expect(w.find('.wdetail').exists()).toBe(true)
+    expect(w.find('.pe').exists()).toBe(false)
+  })
+
+  it('a baked tree shows the edit and add controls to an editor', async () => {
+    const s = usePerkCorrections()
+    s.live = true
+    s.privileges = { editor: true }
+    const w = mount(WeaponTree, { props: { weapon: 'Test', data: { ...data, source: 'baked' } } })
+    expect(w.find('button.wtier-add').exists()).toBe(true)
+    await w.findAll('.wnode')[0].trigger('mouseenter')
+    expect(w.find('.pe').exists()).toBe(true)
   })
 })

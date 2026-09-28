@@ -149,6 +149,20 @@ describe('History.vue', () => {
     expect(wrapper.find('.hist-change').text()).toContain('After: removed')
   })
 
+  it("hides Revoke on the caller's own entries, using the id from /privileges/me", async () => {
+    const { usePerkCorrections } = await import('../stores/perkCorrections')
+    usePerkCorrections.mockReturnValueOnce({ privileges: { revoker: 'forge', id: '9' }, revert: vi.fn() })
+    const wrapper = await mountWith([
+      correction(8, { op: 'add', perkName: 'HH', description: 'd', before: null }),
+      { ...correction(9, { op: 'add', perkName: 'X', description: 'd', before: null }), actor: { id: '42', username: 'other' } },
+    ])
+    const lines = wrapper.findAll('.hist-line')
+    await lines[0].trigger('click')
+    expect(wrapper.text()).not.toContain('Revoke tm')
+    await lines[1].trigger('click')
+    expect(wrapper.text()).toContain('Revoke other')
+  })
+
   it('no before/after block when the snapshot has no before (adds, older events)', async () => {
     const wrapper = await mountWith([correction(7, { op: 'add', perkName: 'HH', description: 'd', before: null })])
     await wrapper.find('.hist-line').trigger('click')

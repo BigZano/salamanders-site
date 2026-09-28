@@ -15,6 +15,9 @@ const corrections = usePerkCorrections()
 const tree = computed(() => corrections.weaponTree(props.weapon, props.data))
 const suggestions = perkSuggestions()
 const adding = ref(null) // quality being added to
+// Only trees from the bake can be corrected: the server validates against the
+// bake, so a live-wiki or offline fallback tree would 404 on every edit.
+const canEdit = computed(() => corrections.canEdit && props.data.source === 'baked')
 
 // Ids come from each perk's stable `key` (its bake index, or c<id> for an
 // added perk) so a correction removing a perk never shifts saved picks.
@@ -76,7 +79,7 @@ function toggle(p) {
         <section v-for="t in tiers" :key="t.quality" class="wtier" :data-q="slug(t.quality)">
           <div class="wtier-head">
             {{ t.quality }}
-            <button v-if="corrections.canEdit" type="button" class="wtier-add" :aria-label="`Add a perk to ${t.quality}`" @click="adding = t.quality">+</button>
+            <button v-if="canEdit" type="button" class="wtier-add" :aria-label="`Add a perk to ${t.quality}`" @click="adding = t.quality">+</button>
           </div>
           <div class="wtier-nodes">
             <button
@@ -113,7 +116,7 @@ function toggle(p) {
       <!-- inspected is derived from the live perks, so it refreshes (or
            clears) itself after a save; no @done handler needed. -->
       <PerkEditPanel
-        v-if="corrections.canEdit"
+        v-if="canEdit"
         :key="inspected.id"
         kind="weapon"
         :target="weapon"
@@ -122,7 +125,7 @@ function toggle(p) {
       />
     </div>
 
-    <div v-if="adding && corrections.canEdit" class="wdetail" :data-q="slug(adding)">
+    <div v-if="adding && canEdit" class="wdetail" :data-q="slug(adding)">
       <div class="wdetail-top">
         <span class="wdetail-q">{{ adding }}</span>
         <strong class="wdetail-name">Add a perk</strong>

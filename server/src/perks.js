@@ -63,7 +63,7 @@ export function createPerksHandler({ roles, privileges, store, loadBake, notify 
 
     if (pathname === '/privileges/me' && method === 'GET') {
       const { editor, historyViewer, moderator, revoked, revoker } = me
-      return reply(200, { editor, historyViewer, moderator, revoked, revoker })
+      return reply(200, { id: user.id, editor, historyViewer, moderator, revoked, revoker })
     }
 
     if (pathname === '/perk-corrections' && method === 'POST') {

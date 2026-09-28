@@ -322,7 +322,14 @@ describe('GET /history', () => {
 describe('privileges', () => {
   it('/privileges/me reports the caller', async () => {
     const { call } = setup()
-    expect((await call('forge', 'GET', '/privileges/me')).body).toEqual({ editor: true, historyViewer: true, moderator: true, revoked: false, revoker: 'forge' })
+    expect((await call('forge', 'GET', '/privileges/me')).body).toEqual({
+      id: USERS.forge.id,
+      editor: true,
+      historyViewer: true,
+      moderator: true,
+      revoked: false,
+      revoker: 'forge',
+    })
     expect((await call('lh', 'GET', '/privileges/me')).body).toMatchObject({ editor: true, moderator: false, revoker: null })
   })
 

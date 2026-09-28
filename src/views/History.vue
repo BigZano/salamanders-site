@@ -32,7 +32,8 @@ let seq = 0
 let t
 
 const canRevoke = computed(() => !!corrections.privileges?.revoker)
-const me = computed(() => auth.member?.id)
+// The server's idea of who the caller is wins; the stored member is a fallback.
+const me = computed(() => corrections.privileges?.id ?? auth.member?.id)
 
 async function load(more = false) {
   error.value = ''
