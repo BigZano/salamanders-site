@@ -18,7 +18,11 @@ export const LIMITS = { target: 80, perkName: 80, description: 500, note: 200 }
 export const PERK_NAME = /^[\p{L}\p{N} '’\-().,&:+%/]+$/u
 
 const CONTROLS = /[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F-\u009F]/g
-const ZERO_WIDTH_AND_BIDI = /[\u200B-\u200D\u2060\uFEFF\u00AD\u202A-\u202E\u2066-\u2069]/g
+// Every Unicode "format" character (\p{Cf}: zero-width joiners/spaces, LRM/RLM/ALM,
+// bidi embeds/overrides/isolates, invisible math operators, soft hyphen, the BOM,
+// etc.) plus the Hangul filler characters, which render as invisible but are
+// letters (\p{L}), not \p{Cf}, so they need listing separately.
+const INVISIBLE = /[\p{Cf}\u115F\u1160\u3164\uFFA0]/gu
 const HORIZONTAL_WS = /[^\S\n]+/g
 
 /**
@@ -27,17 +31,20 @@ const HORIZONTAL_WS = /[^\S\n]+/g
  * see docs/superpowers/specs/2026-09-27-perk-corrections-design.md). Order:
  * normalize line endings to \n, NFC-normalize, strip C0/C1 controls (tab and
  * newline are deferred to the whitespace step below, not stripped here),
- * strip zero-width/soft-hyphen/bidi-override characters, then collapse
- * whitespace — multiline text keeps single newlines (paragraph breaks
- * collapse to at most two, blank around each line trimmed); single-line text
- * turns newlines into a space first, so everything collapses to one line.
- * Length limits are enforced by callers, after sanitizing — never truncated
- * here.
+ * strip every invisible format/filler character, normalize to NFC *again*
+ * (removing an invisible character can bring a base character and a
+ * combining mark together that were not adjacent before — e.g. "e" + a
+ * zero-width space + a combining acute accent only becomes the composed "é"
+ * once the zero-width space between them is gone), then collapse whitespace
+ * — multiline text keeps single newlines (paragraph breaks collapse to at
+ * most two, blank around each line trimmed); single-line text turns
+ * newlines into a space first, so everything collapses to one line. Length
+ * limits are enforced by callers, after sanitizing — never truncated here.
  */
 export function sanitizeText(value, { multiline = false } = {}) {
   if (typeof value !== 'string') return ''
   let v = value.replace(/\r\n/g, '\n').replace(/\r/g, '\n').normalize('NFC')
-  v = v.replace(CONTROLS, '').replace(ZERO_WIDTH_AND_BIDI, '')
+  v = v.replace(CONTROLS, '').replace(INVISIBLE, '').normalize('NFC')
   if (multiline) {
     v = v.replace(HORIZONTAL_WS, ' ').replace(/ *\n */g, '\n').replace(/\n{3,}/g, '\n\n')
   } else {

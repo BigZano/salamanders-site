@@ -111,6 +111,12 @@ describe('sanitizeText', () => {
     expect(sanitizeText(decomposed)).toBe('éclair')
   })
 
+  it('re-normalizes to NFC after stripping invisible characters (stripping can newly make a base+combining-mark sequence adjacent)', () => {
+    const probe = 'e\u200B\u0301clair' // e, ZWSP, combining acute accent, clair
+    expect(sanitizeText(probe)).toBe('éclair')
+    expect(PERK_NAME.test(sanitizeText(probe))).toBe(true)
+  })
+
   it('strips C0 and C1 control characters', () => {
     expect(sanitizeText('a\u0000\u0007\u001Fb')).toBe('ab')
     expect(sanitizeText('a\u007F\u0090\u009Fb')).toBe('ab')
@@ -121,6 +127,12 @@ describe('sanitizeText', () => {
     expect(sanitizeText('soft\u00ADhyphen')).toBe('softhyphen')
     expect(sanitizeText('a\u202A\u202B\u202C\u202D\u202Eb')).toBe('ab')
     expect(sanitizeText('a\u2066\u2067\u2068\u2069b')).toBe('ab')
+  })
+
+  it('strips LRM/RLM/ALM, invisible-times, and the Hangul filler characters (\\p{Cf} plus fillers)', () => {
+    expect(sanitizeText('a\u200Eb\u200Fc\u061Cd')).toBe('abcd')
+    expect(sanitizeText('a\u2062b')).toBe('ab')
+    expect(sanitizeText('Head\u3164Hunter')).toBe('HeadHunter')
   })
 
   it('collapses tabs, NBSP and runs of spaces to one space', () => {

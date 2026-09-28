@@ -47,4 +47,21 @@ describe('createNotifier', () => {
     expect(content.length).toBeLessThanOrEqual(2000)
     expect(content.endsWith('… · s')).toBe(true)
   })
+
+  it('never leaves a dangling escape backslash right before the truncation ellipsis', () => {
+    const send = (content) => {
+      const fetchImpl = vi.fn().mockResolvedValue(new Response('{}'))
+      createNotifier({ url: 'https://hook.test', suffix: ' · s', fetchImpl })(content)
+      return JSON.parse(fetchImpl.mock.calls[0][1].body).content
+    }
+    // 1500 asterisks escapes to 3000 chars, cutting mid-pair somewhere.
+    const fromAsterisks = send('*'.repeat(1500))
+    // 1999 literal backslashes each escape to two backslashes: a long odd-length run.
+    const fromBackslashes = send('\\'.repeat(1999))
+    for (const content of [fromAsterisks, fromBackslashes]) {
+      const trailingBeforeEllipsis = content.match(/(\\*)…/)
+      expect(trailingBeforeEllipsis).not.toBeNull()
+      expect(trailingBeforeEllipsis[1].length % 2).toBe(0)
+    }
+  })
 })
