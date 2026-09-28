@@ -25,6 +25,7 @@ function sanitizeCorrection(c) {
     description: sanitizeText(c.description) || null,
     note: sanitizeText(c.note) || null,
   }
+  if (clean.kind === 'class') clean.quality = null
   if (clean.op === 'remove') clean.description = null
   return clean
 }
@@ -89,7 +90,8 @@ export const usePerkCorrections = defineStore('perkCorrections', {
       }
     },
     async revert(id, note, token) {
-      this.doc = markRaw(await api.revertCorrection(id, note, token))
+      const clean = sanitizeText(note) || null
+      this.doc = markRaw(await api.revertCorrection(id, clean, token))
     },
   },
 })
