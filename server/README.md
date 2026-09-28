@@ -36,10 +36,12 @@ optional `REPORTER_ROLE_ID` / `RECLUSIARCH_ROLE_ID` overrides.
 Apply the new tables once (idempotent):
 
 ```sh
-docker compose exec -T db psql -U salamanders salamanders_builds < schema.sql
+docker compose exec -T db psql -v ON_ERROR_STOP=1 -U salamanders salamanders_builds < schema.sql
 ```
 
 Perk corrections (2026-09-27) added tables and two `builds` columns; re-run
-`schema.sql` (idempotent), then seed once with `docker compose exec -T api bun
+`schema.sql` (idempotent, command above) **before** rebuilding or starting the
+new API image — the new `listBuilds` reads `builds.deleted_at`, so the API
+errors until the column exists. Then seed once with `docker compose exec -T api bun
 run src/seed.js < ../src/data/perk-corrections.json`. `DISCORD_MOD_ROLE_ID` is
 no longer read; moderator roles live in `src/privileges.js`.

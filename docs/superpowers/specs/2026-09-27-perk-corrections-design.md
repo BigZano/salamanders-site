@@ -72,10 +72,10 @@ API document and is the offline fallback when the API is unreachable.
 | Route | Who | Does |
 |---|---|---|
 | `GET /perk-corrections` | public | `{version, weapons:{name:{quality:[…]}}, classes:{name:[…]}}`, `Cache-Control: max-age=30` |
-| `GET /privileges/me` | signed in | `{editor, historyViewer, moderator, revoked, canRevoke}` |
+| `GET /privileges/me` | signed in | `{id, editor, historyViewer, moderator, revoked, revoker}` — `id` is the caller's Discord id; `revoker` is `'admin'`, `'forge'` or `null` |
 | `POST /perk-corrections` | editor | one add/remove/edit; returns new document |
 | `POST /perk-corrections/:id/revert` | editor | deactivate + event; returns new document |
-| `GET /history?subject=&q=&cursor=` | history viewer | paged events with snapshots, newest first |
+| `GET /history?subject=&q=&before=` | history viewer | paged events with snapshots, newest first |
 | `POST /privileges/:discordId/revoke` | Forge (tier-1 targets) / Admin (any below) | reason required |
 | `POST /privileges/:discordId/reinstate` | same as revoke | lifts the open revocation |
 | `DELETE /builds/:id` | poster, or moderator not revoked | soft delete + `deleted` event |
