@@ -65,3 +65,59 @@ create table if not exists report_events (
 );
 
 create index if not exists report_events_report_idx on report_events (report_id);
+
+-- Perk corrections and version history
+-- (see docs/superpowers/specs/2026-09-27-perk-corrections-design.md).
+-- Nothing in the API deletes from these tables.
+alter table builds add column if not exists deleted_at timestamptz;
+alter table builds add column if not exists deleted_by text;
+
+create table if not exists perk_corrections (
+  id                 bigserial primary key,
+  kind               text not null check (kind in ('weapon', 'class')),
+  target             text not null,
+  quality            text check (quality in ('Standard', 'Master-Crafted', 'Artificer', 'Relic', 'Heroic')),
+  op                 text not null check (op in ('add', 'remove', 'edit')),
+  perk_name          text not null,
+  description        text,
+  note               text,
+  active             boolean not null default true,
+  author_discord_id  text not null,
+  author_username    text not null,
+  created_at         timestamptz not null default now(),
+  updated_at         timestamptz not null default now(),
+  check ((kind = 'weapon' and quality is not null) or (kind = 'class' and quality is null and op = 'edit'))
+);
+
+create index if not exists perk_corrections_active_idx on perk_corrections (active, created_at, id);
+
+create table if not exists edit_events (
+  id                bigserial primary key,
+  subject           text not null check (subject in ('perk_correction', 'build', 'privilege')),
+  subject_id        text not null,
+  action            text not null check (action in ('created', 'edited', 'reverted', 'deleted', 'revoked', 'reinstated')),
+  actor_discord_id  text not null,
+  actor_username    text not null,
+  snapshot          jsonb,
+  note              text,
+  created_at        timestamptz not null default now()
+);
+
+create index if not exists edit_events_subject_idx on edit_events (subject, id desc);
+
+create table if not exists privilege_revocations (
+  id                   bigserial primary key,
+  discord_id           text not null,
+  username             text not null,
+  revoked_by           text not null,
+  revoked_by_username  text not null,
+  reason               text not null,
+  created_at           timestamptz not null default now(),
+  lifted_by            text,
+  lifted_by_username   text,
+  lifted_at            timestamptz
+);
+
+-- At most one open revocation per member.
+create unique index if not exists privilege_revocations_open_idx
+  on privilege_revocations (discord_id) where lifted_at is null;

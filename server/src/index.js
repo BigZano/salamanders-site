@@ -12,6 +12,7 @@
  */
 import { Pool } from 'pg'
 import { createArchiveKeyHandler } from './archiveKey.js'
+import { rowToBuild } from './buildRow.js'
 import { createDiscordRoles } from './discordRoles.js'
 import { createReportsHandler } from './reports.js'
 import { createReportsStore } from './reportsStore.js'
@@ -103,24 +104,6 @@ async function moderatorStatus(request) {
   const caller = await verifyCaller(request)
   return json({ moderator: caller ? await isModerator(caller.id) : false })
 }
-
-const rowToBuild = (r) => ({
-  id: r.id,
-  title: r.title,
-  role: r.role,
-  notes: r.notes,
-  className: r.class_name,
-  level: r.level,
-  prestige: r.prestige,
-  prestigePicks: r.prestige_picks,
-  perks: r.perks,
-  perkIds: r.perk_ids,
-  justifications: r.justifications,
-  weapons: r.weapons,
-  weaponPerks: r.weapon_perks,
-  author: { id: r.author_discord_id, username: r.author_discord_username },
-  createdAt: r.created_at,
-})
 
 async function listBuilds(request) {
   const url = new URL(request.url)
