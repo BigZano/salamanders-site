@@ -5,7 +5,10 @@
  */
 import { request } from './buildsApi'
 
-export const getCorrections = () => request('/perk-corrections')
+// Always revalidate: the server lets caches keep this for 30s, and a browser
+// doesn't drop its cached GET after this user's own POST, so a reload right
+// after a correction would otherwise show the old text.
+export const getCorrections = () => request('/perk-corrections', { cache: 'no-cache' })
 export const getPrivileges = (token) => request('/privileges/me', { token })
 export const submitCorrection = (correction, token) => request('/perk-corrections', { method: 'POST', token, body: correction })
 export const revertCorrection = (id, note, token) =>

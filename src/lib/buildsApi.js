@@ -13,7 +13,7 @@ class BuildsApiError extends Error {
   }
 }
 
-export async function request(path, { method = 'GET', token, body } = {}) {
+export async function request(path, { method = 'GET', token, body, cache } = {}) {
   const headers = {}
   if (body !== undefined) headers['Content-Type'] = 'application/json'
   if (token) headers['Authorization'] = `Bearer ${token}`
@@ -22,6 +22,8 @@ export async function request(path, { method = 'GET', token, body } = {}) {
     method,
     headers,
     body: body !== undefined ? JSON.stringify(body) : undefined,
+    // fetch's cache mode, only when asked, so other calls keep the default.
+    ...(cache ? { cache } : {}),
   })
 
   if (!res.ok) {

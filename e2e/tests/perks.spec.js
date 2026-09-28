@@ -4,6 +4,22 @@ import { test, expect } from '@playwright/test'
 // touched by src/data/perk-corrections.json.
 const WEAPON = 'Las Fusil'
 const PERK = 'Increased Capacity'
+// The runner shares web's network, so the api resolves by service name.
+const API = process.env.API_URL || 'http://api:8787'
+const TECHMARINE_ID = '100000000000000010'
+
+// If a run dies between revoke and reinstate, the Techmarine stays revoked
+// and poisons a reused stack. Best-effort reinstate as the Forge; a 409
+// (already reinstated, the normal case) or an unreachable api is ignored.
+test.afterAll(async ({ playwright }) => {
+  const api = await playwright.request.newContext()
+  try {
+    await api.post(`${API}/privileges/${TECHMARINE_ID}/reinstate`, { headers: { Authorization: 'Bearer test-forge-token' }, data: {} })
+  } catch {
+  } finally {
+    await api.dispose()
+  }
+})
 
 async function signIn(page, token) {
   await page.goto(`/#access_token=${token}&expires_in=3600`)
