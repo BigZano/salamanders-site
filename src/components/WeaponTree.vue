@@ -3,6 +3,8 @@ import { ref, computed } from 'vue'
 import { usePlanner } from '../stores/planner'
 import { usePerkCorrections } from '../stores/perkCorrections'
 import { QUALITIES, slug } from '../lib/wiki'
+import PerkEditPanel from './PerkEditPanel.vue'
+import { perkSuggestions } from '../lib/weapons'
 
 const props = defineProps({
   weapon: { type: String, required: true },
@@ -11,6 +13,8 @@ const props = defineProps({
 const planner = usePlanner()
 const corrections = usePerkCorrections()
 const tree = computed(() => corrections.weaponTree(props.weapon, props.data))
+const suggestions = perkSuggestions()
+const adding = ref(null) // quality being added to
 
 // Ids come from each perk's stable `key` (its bake index, or c<id> for an
 // added perk) so a correction removing a perk never shifts saved picks.
@@ -70,7 +74,10 @@ function toggle(p) {
     <div class="wtree-scroll">
       <div class="wtree-grid">
         <section v-for="t in tiers" :key="t.quality" class="wtier" :data-q="slug(t.quality)">
-          <div class="wtier-head">{{ t.quality }}</div>
+          <div class="wtier-head">
+            {{ t.quality }}
+            <button v-if="corrections.canEdit" type="button" class="wtier-add" :aria-label="`Add a perk to ${t.quality}`" @click="adding = t.quality">+</button>
+          </div>
           <div class="wtier-nodes">
             <button
               v-for="p in t.perks"
@@ -103,6 +110,24 @@ function toggle(p) {
         </span>
       </div>
       <p class="wdetail-desc">{{ inspected.description }}</p>
+      <!-- inspected is derived from the live perks, so it refreshes (or
+           clears) itself after a save; no @done handler needed. -->
+      <PerkEditPanel
+        v-if="corrections.canEdit"
+        :key="inspected.id"
+        kind="weapon"
+        :target="weapon"
+        :quality="inspected.quality"
+        :perk="{ name: inspected.name, description: inspected.description }"
+      />
+    </div>
+
+    <div v-if="adding" class="wdetail" :data-q="slug(adding)">
+      <div class="wdetail-top">
+        <span class="wdetail-q">{{ adding }}</span>
+        <strong class="wdetail-name">Add a perk</strong>
+      </div>
+      <PerkEditPanel kind="weapon" :target="weapon" :quality="adding" :perk="null" :suggestions="suggestions" @done="adding = null" />
     </div>
   </div>
 </template>
@@ -186,6 +211,16 @@ function toggle(p) {
   margin-bottom: 0.6rem;
   border-radius: 3px;
   color: #0a1410;
+}
+.wtier-add {
+  margin-left: 0.4rem;
+  border: 0;
+  background: rgba(10, 20, 16, 0.35);
+  color: inherit;
+  border-radius: 2px;
+  width: 1.2rem;
+  cursor: pointer;
+  font-weight: 800;
 }
 .wtier[data-q='standard'] .wtier-head {
   background: #9aa8a0;

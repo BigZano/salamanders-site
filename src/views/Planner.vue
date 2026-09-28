@@ -6,6 +6,7 @@ import { useAuth } from '../stores/auth'
 import { usePerkCorrections } from '../stores/perkCorrections'
 import * as buildsApi from '../lib/buildsApi'
 import WeaponSlot from '../components/WeaponSlot.vue'
+import PerkEditPanel from '../components/PerkEditPanel.vue'
 
 const planner = usePlanner()
 const auth = useAuth()
@@ -249,6 +250,13 @@ onMounted(() => {
               rows="2"
               placeholder="What does this add to the build? When do you lean on it?"
               @blur="saveJustification"
+            />
+            <PerkEditPanel
+              v-if="corrections.canEdit"
+              :key="editingPerk.name"
+              kind="class"
+              :target="planner.activeClass"
+              :perk="{ name: editingPerk.name, description: corrections.describe(planner.activeClass, editingPerk.name) }"
             />
           </div>
         </div>
