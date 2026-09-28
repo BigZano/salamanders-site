@@ -112,14 +112,16 @@ describe('validateBuildText: the build body', () => {
     [{ prestigePicks: ['x'.repeat(81)] }, /prestige pick is too long/i],
     [{ weapons: Object.fromEntries(Array.from({ length: 7 }, (_, i) => [`s${i}`, 'W'])) }, 'Build has too many weapons.'],
     [{ weapons: { primary: 'x'.repeat(81) } }, /weapon name is too long/i],
-    [{ weapons: { ['k'.repeat(41)]: 'W' } }, /weapon slot/i],
     [{ weaponPerks: Object.fromEntries(Array.from({ length: 7 }, (_, i) => [`W${i}`, {}])) }, 'Build has too many weapon perk trees.'],
     [{ weaponPerks: { W: treeOf('W', 41) } }, 'A weapon has too many perks selected.'],
     [{ weaponPerks: { ['x'.repeat(81)]: {} } }, /weapon name is too long/i],
     [{ weaponPerks: { W: { ['x'.repeat(121)]: true } } }, /perk id is too long/i],
     [{ perkIds: Object.fromEntries(Array.from({ length: 41 }, (_, i) => [String(i), 'P'])) }, 'Build has too many perk picks.'],
     [{ perkIds: { 0: 'x'.repeat(121) } }, /perk pick is too long/i],
-    [{ perkIds: { ['x'.repeat(121)]: 'P' } }, /perk pick is too long/i],
+    [{ weapons: { primary: '__proto__' } }, /weapon name is not valid/i],
+    [{ weapons: { primary: '<b>Gun</b>' } }, /weapon name is not valid/i],
+    [{ weaponPerks: { '<script>': {} } }, /weapon name is not valid/i],
+    [{ weaponPerks: JSON.parse('{"__proto__":{"a":true}}') }, /weapon name is not valid/i],
   ])('rejects %j', (over, msg) => {
     const out = validateBuildText(b(over))
     expect(typeof out).toBe('string')
@@ -152,7 +154,7 @@ describe('validateBuildText: the build body', () => {
     const out = validateBuildText(
       b({
         weapons: JSON.parse('{"__proto__":"W"}'),
-        weaponPerks: JSON.parse('{"__proto__":{"a":true},"W":{"__proto__":true}}'),
+        weaponPerks: JSON.parse('{"W":{"__proto__":true}}'),
         perkIds: JSON.parse('{"__proto__":"P"}'),
       }),
     )
@@ -160,5 +162,39 @@ describe('validateBuildText: the build body', () => {
     expect(Object.getPrototypeOf(out.perkIds)).toBe(Object.prototype)
     expect(({}).a).toBeUndefined()
     expect(Object.prototype.a).toBeUndefined()
+  })
+
+  it('keeps only the primary, secondary and melee weapon slots', () => {
+    const out = validateBuildText(b({ weapons: { primary: 'Bolt Rifle', sidearm: 'Pistol', __proto__x: 'W', melee: 'Power Sword' } }))
+    expect(out.weapons).toEqual({ primary: 'Bolt Rifle', melee: 'Power Sword' })
+  })
+
+  it('sanitizes perkIds keys, caps them at 40 characters and drops empty ones', () => {
+    const out = validateBuildText(b({ perkIds: { ['k'.repeat(50)]: 'P', 'a​b': 'Q', '​': 'R', '  ': 'S' } }))
+    expect(out.perkIds).toEqual({ ['k'.repeat(40)]: 'P', ab: 'Q' })
+  })
+
+  it('sanitizes justification keys, caps them at 40 characters, drops empty ones and keeps at most 8', () => {
+    const many = Object.fromEntries(Array.from({ length: 10 }, (_, i) => [String(i), `why ${i}`]))
+    expect(Object.keys(validateBuildText(b({ justifications: many })).justifications)).toEqual(['0', '1', '2', '3', '4', '5', '6', '7'])
+    const out = validateBuildText(b({ justifications: { ['j'.repeat(45)]: 'long key', '​': 'empty key', '1​': 'one' } }))
+    expect(out.justifications).toEqual({ ['j'.repeat(40)]: 'long key', 1: 'one' })
+  })
+})
+
+describe('validateBuildText: level and prestige', () => {
+  it.each([
+    [undefined, undefined, 1, 0],
+    [25, 4, 25, 4],
+    [12.9, 2.7, 12, 2],
+    ['7', '3', 7, 3],
+    [0, -1, 1, 0],
+    [99, 9, 25, 4],
+    ['abc', null, 1, 0],
+    [Infinity, NaN, 1, 0],
+  ])('level %j / prestige %j → %i / %i', (level, prestige, wantLevel, wantPrestige) => {
+    const out = validateBuildText(b({ level, prestige }))
+    expect(out.level).toBe(wantLevel)
+    expect(out.prestige).toBe(wantPrestige)
   })
 })

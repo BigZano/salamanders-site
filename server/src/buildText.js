@@ -12,6 +12,14 @@
 import { sanitizeText, PERK_NAME } from './perkCorrectionsCore.js'
 
 const JUSTIFICATION_LIMIT = 1000
+const MAX_JUSTIFICATIONS = 8 // one per perk column
+const WEAPON_SLOTS = new Set(['primary', 'secondary', 'melee'])
+/**
+ * Keys of perkIds / justifications are ids the site generates (a perk column
+ * index), not text anyone reads, so they're sanitized and capped at 40
+ * rather than rejected; one that sanitizes to nothing is dropped with its entry.
+ */
+const cleanKey = (k) => sanitizeText(k).slice(0, 40)
 
 /**
  * `justifications` is a client-supplied object keyed by perk id. Only its own
@@ -28,14 +36,24 @@ const JUSTIFICATION_LIMIT = 1000
 function sanitizeJustifications(input) {
   if (!input || typeof input !== 'object') return {}
   const entries = []
-  for (const [key, value] of Object.entries(input)) {
-    if (!Object.hasOwn(input, key) || typeof value !== 'string') continue
+  for (const [rawKey, value] of Object.entries(input)) {
+    if (!Object.hasOwn(input, rawKey) || typeof value !== 'string') continue
+    const key = cleanKey(rawKey)
+    if (!key) continue
     const clean = sanitizeText(value, { multiline: true })
     if (!clean) continue
     if (clean.length > JUSTIFICATION_LIMIT) return `A perk justification is too long (${JUSTIFICATION_LIMIT} characters max).`
     entries.push([key, clean])
+    if (entries.length >= MAX_JUSTIFICATIONS) break
   }
   return Object.fromEntries(entries)
+}
+
+/** Clamp a number-ish value to an integer in [min, max]; anything non-finite is `fallback`. */
+function clampInt(v, min, max, fallback) {
+  const n = Math.trunc(Number(v))
+  if (v === null || v === undefined || v === '' || !Number.isFinite(n)) return fallback
+  return Math.min(max, Math.max(min, n))
 }
 
 const isObject = (v) => !!v && typeof v === 'object' && !Array.isArray(v)
@@ -59,14 +77,20 @@ function slotList(input, { max, itemMax, tooMany, tooLong }) {
   return input.map((v) => (typeof v === 'string' ? line(v, itemMax, tooLong) || null : null))
 }
 
+/** A weapon name: sanitized, ≤ 80, and PERK_NAME characters only ('' when blank). */
+function weaponName(v) {
+  const clean = line(v, 80, 'A weapon name is too long (80 characters max).')
+  if (clean && !PERK_NAME.test(clean)) fail('A weapon name is not valid.')
+  return clean
+}
+
 function weaponsOf(input) {
   const entries = ownEntries(input)
   if (entries.length > 6) fail('Build has too many weapons.')
   const out = []
   for (const [slot, name] of entries) {
-    if (typeof name !== 'string') continue
-    if (slot.length > 40) fail('A weapon slot name is too long.')
-    const clean = line(name, 80, 'A weapon name is too long (80 characters max).')
+    if (typeof name !== 'string' || !WEAPON_SLOTS.has(slot)) continue
+    const clean = weaponName(name)
     if (clean) out.push([slot, clean])
   }
   return Object.fromEntries(out)
@@ -78,7 +102,7 @@ function weaponPerksOf(input) {
   const out = []
   for (const [weapon, picks] of entries) {
     if (!isObject(picks)) continue
-    const name = line(weapon, 80, 'A weapon name is too long (80 characters max).')
+    const name = weaponName(weapon)
     const ids = ownEntries(picks).filter(([, v]) => v === true)
     if (ids.length > 40) fail('A weapon has too many perks selected.')
     const kept = ids.map(([id]) => [line(id, 120, 'A weapon perk id is too long.'), true]).filter(([id]) => id)
@@ -91,8 +115,9 @@ function perkIdsOf(input) {
   const entries = ownEntries(input)
   if (entries.length > 40) fail('Build has too many perk picks.')
   const out = []
-  for (const [key, value] of entries) {
-    if (key.length > 120) fail('A perk pick is too long.')
+  for (const [rawKey, value] of entries) {
+    const key = cleanKey(rawKey)
+    if (!key) continue
     if (typeof value === 'string') out.push([key, line(value, 120, 'A perk pick is too long.')])
     else if (typeof value === 'boolean' || (typeof value === 'number' && Number.isFinite(value))) out.push([key, value])
   }
@@ -104,6 +129,8 @@ function structuredFields(b) {
   if (!className || className.length > 40 || !PERK_NAME.test(className)) fail('Class name is not valid.')
   return {
     className,
+    level: clampInt(b.level, 1, 25, 1),
+    prestige: clampInt(b.prestige, 0, 4, 0),
     weapons: weaponsOf(b.weapons),
     perks: slotList(b.perks, { max: 24, itemMax: 80, tooMany: 'Build has too many perks.', tooLong: 'A perk name is too long (80 characters max).' }),
     prestigePicks: slotList(b.prestigePicks, {
@@ -118,8 +145,9 @@ function structuredFields(b) {
 }
 
 /**
- * → { title, role, notes, justifications, className, weapons, perks,
- * prestigePicks, weaponPerks, perkIds } sanitized, or an error message string.
+ * → { title, role, notes, justifications, className, level (1–25),
+ * prestige (0–4), weapons, perks, prestigePicks, weaponPerks, perkIds }
+ * sanitized, or an error message string.
  */
 export function validateBuildText(b) {
   const title = sanitizeText(b.title)
