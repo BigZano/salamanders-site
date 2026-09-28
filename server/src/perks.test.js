@@ -175,6 +175,16 @@ describe('POST /perk-corrections', () => {
     const noBake = setup({ loadBake: async () => { throw new Upstream() } })
     expect((await noBake.call('tm', 'POST', '/perk-corrections', REMOVE_PV)).status).toBe(503)
   })
+
+  it('rejects prototype-key targets and class perk names, and never poisons the document', async () => {
+    const { call } = setup()
+    expect((await call('tm', 'POST', '/perk-corrections', { ...ADD_HH, target: 'constructor' })).status).toBe(404)
+    expect((await call('tm', 'POST', '/perk-corrections', { ...ADD_HH, target: '__proto__' })).status).toBe(404)
+    expect(
+      (await call('tm', 'POST', '/perk-corrections', { kind: 'class', target: 'Tactical', op: 'edit', perkName: 'constructor', description: 'x' })).status,
+    ).toBe(404)
+    expect((await call(null, 'GET', '/perk-corrections')).status).toBe(200)
+  })
 })
 
 describe('validateCorrection', () => {
@@ -267,5 +277,18 @@ describe('privileges', () => {
 
   it('404 for someone not in the guild', async () => {
     expect((await setup().call('admin', 'POST', '/privileges/199999999999999999/revoke', { reason: 'x' })).status).toBe(404)
+  })
+
+  it('refuses a non-revoker before looking up the target (no guild-membership probing)', async () => {
+    const { call } = setup()
+    expect((await call('member', 'POST', '/privileges/199999999999999999/revoke', { reason: 'x' })).status).toBe(403)
+    expect((await call('lh', 'POST', '/privileges/199999999999999999/revoke', { reason: 'x' })).status).toBe(403)
+  })
+
+  it('a revoked forge cannot revoke others', async () => {
+    const { call } = setup()
+    await call('admin', 'POST', `/privileges/${USERS.forge.id}/revoke`, { reason: 'x', username: 'forge' })
+    const res = await call('forge', 'POST', `/privileges/${USERS.tm.id}/revoke`, { reason: 'y', username: 'tm' })
+    expect(res.status).toBe(403)
   })
 })

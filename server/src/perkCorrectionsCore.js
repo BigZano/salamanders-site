@@ -55,7 +55,8 @@ export function toDocument(corrections, version = new Date().toISOString()) {
   const doc = { version, weapons: {}, classes: {} }
   for (const c of corrections) {
     const bucket = c.kind === 'class' ? doc.classes : doc.weapons
-    ;(bucket[c.target] ??= []).push({
+    const list = Object.hasOwn(bucket, c.target) ? bucket[c.target] : (bucket[c.target] = [])
+    list.push({
       id: c.id,
       op: c.op,
       quality: c.quality ?? null,

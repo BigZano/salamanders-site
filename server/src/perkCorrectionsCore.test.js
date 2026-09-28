@@ -83,4 +83,15 @@ describe('toDocument / flattenDocument', () => {
       { kind: 'class', target: 'Tactical', quality: null, op: 'edit', perkName: 'Y', description: 'y' },
     ])
   })
+
+  it('groups a prototype-key target correctly instead of throwing', () => {
+    const poisoned = [
+      { id: 3, kind: 'weapon', target: 'constructor', quality: 'Relic', op: 'add', perkName: 'Z', description: 'z', note: null, active: true, author: { id: '9', username: 'u' }, createdAt: 't3' },
+    ]
+    let doc
+    expect(() => {
+      doc = toDocument(poisoned, 'v1')
+    }).not.toThrow()
+    expect(doc.weapons.constructor).toEqual([{ id: 3, op: 'add', quality: 'Relic', perkName: 'Z', description: 'z', createdAt: 't3' }])
+  })
 })

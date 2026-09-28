@@ -28,12 +28,12 @@ export function createPerksHandler({ roles, privileges, store, loadBake, notify 
   async function missingTarget(c) {
     const bake = await loadBake()
     if (c.kind === 'class') {
+      if (!Object.hasOwn(bake.classes, c.target)) return `Unknown class: ${c.target}.`
       const cls = bake.classes[c.target]
-      if (!cls) return `Unknown class: ${c.target}.`
-      return cls.perks?.[c.perkName] ? null : `${c.target} has no perk named ${c.perkName}.`
+      return cls.perks && Object.hasOwn(cls.perks, c.perkName) ? null : `${c.target} has no perk named ${c.perkName}.`
     }
+    if (!Object.hasOwn(bake.weapons, c.target)) return `Unknown weapon: ${c.target}.`
     const tree = bake.weapons[c.target]
-    if (!tree) return `Unknown weapon: ${c.target}.`
     if (c.op === 'add') return null
     const active = (await store.listActive()).filter((x) => x.kind === 'weapon' && x.target === c.target)
     return hasWeaponPerk(applyWeaponCorrections(tree, active), c.quality, c.perkName)
@@ -95,6 +95,7 @@ export function createPerksHandler({ roles, privileges, store, loadBake, notify 
     const pm = PRIVILEGE.exec(pathname)
     if (pm && method === 'POST') {
       const [, targetId, action] = pm
+      if (!me.revoker) return refuse()
       const target = await privileges.target(targetId)
       if (!target) return reply(404, { error: 'That member is not in the server.' })
       if (!mayRevoke(me, target)) return reply(403, { error: "You can't change that member's privileges." })
