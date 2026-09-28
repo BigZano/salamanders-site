@@ -1,5 +1,5 @@
 <script setup>
-import { ref, computed, onMounted, watch } from 'vue'
+import { ref, computed, onMounted, onBeforeUnmount, watch } from 'vue'
 import { useAuth } from '../stores/auth'
 import { usePerkCorrections } from '../stores/perkCorrections'
 import * as api from '../lib/perksApi'
@@ -26,6 +26,10 @@ const openId = ref(null)
 const revoking = ref(null) // event whose actor is being revoked
 const reason = ref('')
 const busy = ref(false)
+const loading = ref(false)
+
+let seq = 0
+let t
 
 const canRevoke = computed(() => !!corrections.privileges?.revoker)
 const me = computed(() => auth.member?.id)
@@ -33,22 +37,29 @@ const me = computed(() => auth.member?.id)
 async function load(more = false) {
   error.value = ''
   if (!auth.token) return
+  const mine = ++seq
+  loading.value = true
   try {
     const page = await api.getHistory({ subject: subject.value, q: q.value.trim(), before: more ? next.value : null }, auth.token)
+    if (mine !== seq) return
     events.value = more ? [...events.value, ...page.events] : page.events
     next.value = page.next
     revocations.value = page.revocations
   } catch (err) {
+    if (mine !== seq) return
     error.value = err.status === 403 ? 'Version History is restricted to the forge and Legion leadership.' : err.message
+  } finally {
+    if (mine === seq) loading.value = false
   }
 }
 onMounted(() => load())
+onBeforeUnmount(() => clearTimeout(t))
 watch(subject, () => load())
-let t
 watch(q, () => {
   clearTimeout(t)
   t = setTimeout(() => load(), 300)
 })
+watch(() => auth.member?.id, () => load())
 
 async function run(fn) {
   if (busy.value) return
@@ -88,7 +99,7 @@ const when = (d) => new Date(d).toLocaleString()
         <button v-for="f in FILTERS" :key="f.label" type="button" class="hist-filter" :class="{ on: subject === f.key }" @click="subject = f.key">
           {{ f.label }}
         </button>
-        <input v-model="q" type="search" class="hist-search" placeholder="Weapon, class, perk or build…" aria-label="Search history" />
+        <input v-model="q" type="search" class="hist-search" maxlength="80" placeholder="Weapon, class, perk or build…" aria-label="Search history" />
       </div>
 
       <p v-if="error" class="hist-error" role="alert">{{ error }}</p>
@@ -126,7 +137,7 @@ const when = (d) => new Date(d).toLocaleString()
         </li>
       </ol>
       <p v-if="!events.length && !error" class="hist-empty">Nothing yet.</p>
-      <button v-if="next" type="button" class="hist-more" @click="load(true)">Older</button>
+      <button v-if="next" type="button" class="hist-more" :disabled="loading" @click="load(true)">Older</button>
     </template>
   </section>
 </template>
