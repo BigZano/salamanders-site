@@ -20,6 +20,7 @@ async function createAndSaveBuild(page, title) {
   await page.locator('.nav-links').getByRole('link', { name: 'Perk Builder' }).click()
   await expect(page).toHaveURL(/\/planner$/)
   await page.locator('.perk').first().click()
+  await page.getByLabel('Why this pick?').fill('E2E reason')
   await page.getByLabel('Build name').fill(title)
   await page.getByRole('button', { name: 'Save to library' }).click()
   await expect(page.locator('.toast')).toContainText('Saved')
@@ -72,6 +73,7 @@ test.describe('create + save a build', () => {
     await expect(page.locator('.auth-signin')).toBeVisible()
 
     await page.locator('.perk').first().click()
+    await page.getByLabel('Why this pick?').fill('E2E reason')
     await page.getByLabel('Build name').fill('Should not save')
 
     const [request] = await Promise.all([
