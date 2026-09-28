@@ -1,5 +1,5 @@
 <script setup>
-import { ref, watch } from 'vue'
+import { ref, computed, watch, useId } from 'vue'
 import { usePerkCorrections } from '../stores/perkCorrections'
 import { useAuth } from '../stores/auth'
 
@@ -15,6 +15,9 @@ const props = defineProps({
 const emit = defineEmits(['done'])
 const corrections = usePerkCorrections()
 const auth = useAuth()
+// Several panels can be on one page (edit + add, several weapon slots), so
+// label/field ids must be per-instance.
+const uid = useId()
 
 const mode = ref(props.perk ? 'idle' : 'add') // idle | edit | remove | add
 const name = ref('')
@@ -23,15 +26,24 @@ const note = ref('')
 const error = ref('')
 const busy = ref(false)
 
+// Hosts pass a fresh `{ name, description }` literal on every render, so
+// watch the perk's value, not its identity, or any re-render (a hover, a
+// node toggle) would wipe the draft.
 watch(
-  () => props.perk,
-  (p) => {
+  () => (props.perk ? props.perk.name + '\u0000' + (props.perk.description ?? '') : null),
+  () => {
+    const p = props.perk
     mode.value = p ? 'idle' : 'add'
     text.value = p?.description || ''
     note.value = ''
     error.value = ''
   },
 )
+const canSave = computed(() => {
+  const t = text.value.trim()
+  if (!t) return false
+  return mode.value !== 'edit' || t !== (props.perk?.description || '').trim()
+})
 watch(name, (n) => {
   const hit = props.suggestions.find((s) => s.name === n.trim())
   if (hit) text.value = hit.description
@@ -79,17 +91,17 @@ async function save(op) {
 
     <form v-else class="pe-form" @submit.prevent="save(mode === 'add' ? 'add' : 'edit')">
       <template v-if="mode === 'add'">
-        <label class="pe-label" for="pe-name">Perk name</label>
-        <input id="pe-name" v-model="name" class="pe-name" maxlength="80" list="pe-suggest" required />
-        <datalist id="pe-suggest">
+        <label class="pe-label" :for="`${uid}-name`">Perk name</label>
+        <input :id="`${uid}-name`" v-model="name" class="pe-name" maxlength="80" :list="`${uid}-suggest`" required />
+        <datalist :id="`${uid}-suggest`">
           <option v-for="s in suggestions" :key="s.name" :value="s.name" />
         </datalist>
       </template>
-      <label class="pe-label" for="pe-text">Perk text</label>
-      <textarea id="pe-text" v-model="text" rows="3" maxlength="500" required />
+      <label class="pe-label" :for="`${uid}-text`">Perk text</label>
+      <textarea :id="`${uid}-text`" v-model="text" rows="3" maxlength="500" required />
       <input v-model="note" class="pe-note" maxlength="200" placeholder="Note (optional), e.g. checked in game, patch 14.1" aria-label="Note" />
       <div class="pe-actions">
-        <button type="submit" :disabled="busy">Save</button>
+        <button type="submit" :disabled="busy || !canSave">Save</button>
         <button type="button" @click="perk ? (mode = 'idle') : emit('done')">Cancel</button>
       </div>
     </form>

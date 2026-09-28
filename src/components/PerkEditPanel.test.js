@@ -62,4 +62,70 @@ describe('PerkEditPanel', () => {
     expect(w.get('.pe-error').text()).toContain('revoked')
     expect(w.emitted('done')).toBeUndefined()
   })
+
+  const weaponProps = (perk) => ({ kind: 'weapon', target: 'Las Fusil', quality: 'Relic', perk })
+
+  it('keeps the draft when the host re-passes an equal perk object', async () => {
+    const w = mount(PerkEditPanel, { props: weaponProps({ name: 'Head Hunter', description: 'old' }) })
+    await w.get('button.pe-edit').trigger('click')
+    await w.get('textarea').setValue('typed draft')
+    await w.get('input.pe-note').setValue('my note')
+    await w.setProps({ perk: { name: 'Head Hunter', description: 'old' } })
+    expect(w.find('form').exists()).toBe(true)
+    expect(w.get('textarea').element.value).toBe('typed draft')
+    expect(w.get('input.pe-note').element.value).toBe('my note')
+  })
+
+  it('resets when a genuinely different perk arrives', async () => {
+    const w = mount(PerkEditPanel, { props: weaponProps({ name: 'Head Hunter', description: 'old' }) })
+    await w.get('button.pe-edit').trigger('click')
+    await w.get('textarea').setValue('typed draft')
+    await w.setProps({ perk: { name: 'Divine Might', description: 'dm' } })
+    expect(w.find('form').exists()).toBe(false)
+    expect(w.find('button.pe-edit').exists()).toBe(true)
+    await w.get('button.pe-edit').trigger('click')
+    expect(w.get('textarea').element.value).toBe('dm')
+  })
+
+  it('gives each panel its own label/field ids', async () => {
+    const Host = {
+      components: { PerkEditPanel },
+      template: `<div>
+        <PerkEditPanel kind="weapon" target="Las Fusil" quality="Relic" :perk="null" />
+        <PerkEditPanel kind="weapon" target="Las Fusil" quality="Heroic" :perk="null" />
+      </div>`,
+    }
+    const w = mount(Host)
+    const panels = w.findAll('.pe')
+    const ids = panels.map((p) => {
+      const labels = p.findAll('label')
+      const nameInput = p.get('input.pe-name')
+      const textarea = p.get('textarea')
+      expect(labels[0].attributes('for')).toBe(nameInput.attributes('id'))
+      expect(labels[1].attributes('for')).toBe(textarea.attributes('id'))
+      expect(nameInput.attributes('list')).toBe(p.get('datalist').attributes('id'))
+      return [nameInput.attributes('id'), textarea.attributes('id'), p.get('datalist').attributes('id')]
+    })
+    const all = ids.flat()
+    expect(new Set(all).size).toBe(all.length)
+  })
+
+  it('disables Save when the text is empty', async () => {
+    const w = mount(PerkEditPanel, { props: weaponProps(null) })
+    await w.get('input.pe-name').setValue('New Perk')
+    await w.get('textarea').setValue('   ')
+    expect(w.get('button[type=submit]').element.disabled).toBe(true)
+    await w.get('textarea').setValue('does a thing')
+    expect(w.get('button[type=submit]').element.disabled).toBe(false)
+  })
+
+  it('disables Save in edit mode until the text changes', async () => {
+    const w = mount(PerkEditPanel, { props: weaponProps({ name: 'Head Hunter', description: 'old' }) })
+    await w.get('button.pe-edit').trigger('click')
+    expect(w.get('button[type=submit]').element.disabled).toBe(true)
+    await w.get('textarea').setValue('  old  ')
+    expect(w.get('button[type=submit]').element.disabled).toBe(true)
+    await w.get('textarea').setValue('new text')
+    expect(w.get('button[type=submit]').element.disabled).toBe(false)
+  })
 })

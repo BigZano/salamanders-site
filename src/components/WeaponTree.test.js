@@ -83,4 +83,16 @@ describe('WeaponTree with corrections', () => {
     await w.vm.$nextTick()
     expect(w.find('.wdetail').exists()).toBe(false)
   })
+
+  it('closes an open add panel when edit rights vanish', async () => {
+    const s = usePerkCorrections()
+    s.live = true
+    s.privileges = { editor: true }
+    const w = mount(WeaponTree, { props: { weapon: 'Test', data } })
+    await w.get('button.wtier-add').trigger('click')
+    expect(w.find('input.pe-name').exists()).toBe(true)
+    s.privileges = { editor: false }
+    await w.vm.$nextTick()
+    expect(w.find('input.pe-name').exists()).toBe(false)
+  })
 })

@@ -122,7 +122,7 @@ function toggle(p) {
       />
     </div>
 
-    <div v-if="adding" class="wdetail" :data-q="slug(adding)">
+    <div v-if="adding && corrections.canEdit" class="wdetail" :data-q="slug(adding)">
       <div class="wdetail-top">
         <span class="wdetail-q">{{ adding }}</span>
         <strong class="wdetail-name">Add a perk</strong>
