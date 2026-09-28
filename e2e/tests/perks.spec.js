@@ -48,7 +48,11 @@ test('a Techmarine corrects a perk, members see it, the Forge revokes the Techma
   await tm.getByRole('button', { name: 'Edit text', exact: true }).click()
   await tm.getByLabel('Perk text').fill(text)
   await tm.getByLabel('Note').fill('e2e check')
+  // The panel shows the new text optimistically, before the POST lands; wait
+  // for the server to store it so the member below can't load the old doc.
+  const saved = tm.waitForResponse((r) => r.request().method() === 'POST' && r.url().endsWith('/perk-corrections'))
   await tm.getByRole('button', { name: 'Save', exact: true }).click()
+  expect((await saved).ok()).toBe(true)
   await expect(tm.locator('.wdetail-desc')).toHaveText(text)
   await expect(tm.locator('.corrected-tag')).toContainText('Corrected in game')
   await expect(tm.getByRole('link', { name: 'Version History' }).first()).toBeVisible()
