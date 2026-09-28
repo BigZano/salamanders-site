@@ -15,6 +15,7 @@
     "wiki:all": "node scripts/fetch-wiki-perks.mjs && node scripts/fetch-wiki-weapons.mjs",
     "check:updates": "node scripts/check-updates.mjs",
     "discord:members": "node scripts/fetch-discord-members.mjs",
+    "perks:snapshot": "node scripts/snapshot-perk-corrections.mjs",
     "test:coverage": "vitest run --coverage",
     "test:mutation": "stryker run",
     "archive": "bun scripts/seal-archive.mjs",
