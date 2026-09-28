@@ -153,6 +153,12 @@ Perk names additionally may contain only letters, numbers, spaces and
 perkName, description, note), revert notes, revoke reasons, the revoked
 username, the history search `q`, and build title/role/notes.
 
+Member reports (reported member, description, witnesses, medium text, and
+review notes) go through the same `sanitizeText` — invisible and spoofing
+characters removed, whitespace tidied — but are **never content-filtered**:
+reports are evidence, so slurs and quoted language are stored exactly as
+written. The reports webhook still carries only the report id.
+
 Webhook content has Discord markdown escaped (a backslash before each of
 `\`, `*`, `_`, `~`, backtick, `|`, `>`, `#`, `[`, `]`, `(`, `)`) in addition
 to `allowed_mentions: { parse: [] }`,

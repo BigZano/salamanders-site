@@ -9,6 +9,7 @@
  * Nothing here ever deletes a report.
  */
 import { Upstream } from './discordRoles.js'
+import { sanitizeText } from './perkCorrectionsCore.js'
 
 export const MEDIUMS = ['text', 'voice', 'dm', 'other']
 const DATE = /^\d{4}-\d{2}-\d{2}$/
@@ -90,7 +91,7 @@ export function createReportsHandler({ roles, store, reporterRoleId, reviewerRol
       const t = TRANSITIONS[action]
       if (!can[t.role]) return reply(403, { error: t.role === 'admin' ? 'Only an Administrator can reopen a report.' : 'Only a Reclusiarch can do that.' })
       const body = (await request.json().catch(() => null)) || {}
-      const note = typeof body.note === 'string' ? body.note.trim() : ''
+      const note = sanitizeText(body.note, { multiline: true })
       if (t.note === 'required' && !note) return reply(400, { error: 'A note is required.' })
       if (note.length > 4000) return reply(400, { error: 'Note is too long.' })
       const result = await store.transition(id, {
@@ -124,11 +125,15 @@ export function createReportsHandler({ roles, store, reporterRoleId, reviewerRol
 /** → clean fields, or an error message string. */
 export function validate(b) {
   if (!b || typeof b !== 'object') return 'Malformed report.'
-  const str = (v) => (typeof v === 'string' ? v.trim() : '')
+  // Reports are evidence: sanitizeText strips invisible and spoofing
+  // characters and tidies whitespace, but never filters wording — slurs and
+  // quoted language must reach the Reclusiarchs exactly as reported.
+  const str = (v) => sanitizeText(v)
+  const text = (v) => sanitizeText(v, { multiline: true })
   const f = {
     reportedMember: str(b.reportedMember),
-    description: str(b.description),
-    witnesses: str(b.witnesses),
+    description: text(b.description),
+    witnesses: text(b.witnesses),
     medium: str(b.medium),
     mediumOther: str(b.mediumOther),
     incidentDate: str(b.incidentDate) || null,

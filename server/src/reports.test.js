@@ -207,4 +207,41 @@ describe('validate', () => {
   ])('rejects bad input #%#', (b) => {
     expect(typeof validate(b)).toBe('string')
   })
+
+  // Reports are evidence: invisible and spoofing characters go, the words stay.
+  it('strips invisible and bidi characters but never filters language', () => {
+    const quote = 'He called me a “slur-word” in voice.'
+    const out = validate({
+      ...GOOD,
+      reportedMember: 'Brother​‮ X',
+      description: `${quote}\n\n\n\nThen left.⁦`,
+      witnesses: 'A  B',
+    })
+    expect(out.reportedMember).toBe('Brother X')
+    expect(out.description).toBe(`${quote}\n\nThen left.`)
+    expect(out.witnesses).toBe('A B')
+  })
+
+  it('checks lengths after cleaning and rejects rather than truncates', () => {
+    expect(typeof validate({ ...GOOD, description: 'x'.repeat(4000) + '​'.repeat(50) })).toBe('object')
+    expect(validate({ ...GOOD, description: '​‮' })).toMatch(/Describe what happened/)
+  })
+})
+
+describe('transition notes', () => {
+  it('sanitizes the note but keeps its wording', async () => {
+    const { store, call } = setup()
+    await call('member', 'POST', '/reports', GOOD)
+    await call('recl', 'POST', '/reports/1/claim')
+    const res = await call('recl', 'POST', '/reports/1/resolve', { note: ' Warned him​ about the “slur-word”. ' })
+    expect(res.status).toBe(200)
+    expect(store.rows[0].resolutionNote).toBe('Warned him about the “slur-word”.')
+  })
+
+  it('a note that is only invisible characters counts as empty', async () => {
+    const { call } = setup()
+    await call('member', 'POST', '/reports', GOOD)
+    await call('recl', 'POST', '/reports/1/claim')
+    expect((await call('recl', 'POST', '/reports/1/resolve', { note: '​⁠' })).status).toBe(400)
+  })
 })
