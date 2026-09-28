@@ -1,6 +1,7 @@
 <script setup>
 import { ref, computed } from 'vue'
 import { usePlanner } from '../stores/planner'
+import { usePerkCorrections } from '../stores/perkCorrections'
 import { QUALITIES, slug } from '../lib/wiki'
 
 const props = defineProps({
@@ -8,10 +9,20 @@ const props = defineProps({
   data: { type: Object, required: true }, // { perks:[{name,quality,description}], budget }
 })
 const planner = usePlanner()
+const corrections = usePerkCorrections()
+const tree = computed(() => corrections.weaponTree(props.weapon, props.data))
 
+// Ids come from each perk's stable `key` (its bake index, or c<id> for an
+// added perk) so a correction removing a perk never shifts saved picks.
 const perks = computed(() =>
-  props.data.perks.map((p, i) => ({ ...p, id: `${slug(p.quality)}-${slug(p.name)}-${i}` })),
+  tree.value.perks.map((p) => ({ ...p, id: `${slug(p.quality)}-${slug(p.name)}-${p.key}` })),
 )
+const correctedOn = (p) =>
+  new Date(p.corrected.createdAt).toLocaleDateString(undefined, {
+    day: 'numeric',
+    month: 'short',
+    year: 'numeric',
+  })
 const tiers = computed(() =>
   QUALITIES.map((q) => ({ quality: q, perks: perks.value.filter((p) => p.quality === q) })).filter(
     (t) => t.perks.length,
@@ -66,6 +77,7 @@ function toggle(p) {
             >
               <span class="wnode-dot" />
               <span class="wnode-name">{{ p.name }}</span>
+              <span v-if="p.corrected" class="wnode-fix" aria-label="Corrected in game" />
             </button>
           </div>
         </section>
@@ -76,6 +88,13 @@ function toggle(p) {
       <div class="wdetail-top">
         <span class="wdetail-q">{{ inspected.quality }}</span>
         <strong class="wdetail-name">{{ inspected.name }}</strong>
+        <span
+          v-if="inspected.corrected"
+          class="corrected-tag"
+          :title="`Corrected from an in-game check · ${correctedOn(inspected)}`"
+        >
+          Corrected in game · {{ correctedOn(inspected) }}
+        </span>
       </div>
       <p class="wdetail-desc">{{ inspected.description }}</p>
     </div>
@@ -280,5 +299,23 @@ function toggle(p) {
   color: #c3d0c6;
   font-size: 0.85rem;
   line-height: 1.5;
+}
+.corrected-tag {
+  margin-left: auto;
+  font-family: var(--font-mono);
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+  font-size: 0.58rem;
+  color: var(--color-gold);
+  border: 1px solid rgba(214, 170, 72, 0.45);
+  border-radius: 2px;
+  padding: 0.1rem 0.35rem;
+}
+.wnode-fix {
+  margin-left: auto;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--color-gold);
 }
 </style>

@@ -1,13 +1,15 @@
 <script setup>
 import { ref, computed, watch, onMounted } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { usePlanner, CLASS_NAMES, describePerk, MAX_PRESTIGE } from '../stores/planner'
+import { usePlanner, CLASS_NAMES, MAX_PRESTIGE } from '../stores/planner'
 import { useAuth } from '../stores/auth'
+import { usePerkCorrections } from '../stores/perkCorrections'
 import * as buildsApi from '../lib/buildsApi'
 import WeaponSlot from '../components/WeaponSlot.vue'
 
 const planner = usePlanner()
 const auth = useAuth()
+const corrections = usePerkCorrections()
 const route = useRoute()
 const router = useRouter()
 
@@ -41,7 +43,10 @@ function hidePopout() {
   hovered.value = null
 }
 const hoveredText = computed(() =>
-  hovered.value ? describePerk(planner.activeClass, hovered.value.name) : '',
+  hovered.value ? corrections.describe(planner.activeClass, hovered.value.name) : '',
+)
+const hoveredCorrected = computed(() =>
+  hovered.value ? !!corrections.classPerks(planner.activeClass)[hovered.value.name]?.corrected : false,
 )
 const hoveredWhy = computed(() => {
   const p = hovered.value
@@ -267,6 +272,7 @@ onMounted(() => {
             {{ CAT_LABEL[hovered.col] }} · Column {{ hovered.col + 1 }} · Unlocks at level
             {{ hovered.level }}
           </p>
+          <p v-if="hoveredCorrected" class="pp-fixed">Corrected in game</p>
           <p v-if="hoveredText" class="pp-desc">{{ hoveredText }}</p>
           <p v-else class="pp-desc pp-empty">
             No description on the wiki yet. Re-run the perk bake after the next patch.
@@ -851,6 +857,14 @@ onMounted(() => {
   font-size: 0.64rem;
   color: var(--color-gold);
   margin: 0.15rem 0 0.4rem;
+}
+.pp-fixed {
+  font-family: var(--font-mono);
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+  font-size: 0.58rem;
+  color: var(--color-gold);
+  margin: 0.2rem 0 0.3rem;
 }
 .pp-desc {
   color: var(--color-smoke);
