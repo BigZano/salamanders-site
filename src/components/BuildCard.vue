@@ -25,7 +25,7 @@ const slots = [
       ><span v-if="build.role"> · {{ build.role }}</span>
     </p>
     <p class="b-author">
-      by {{ build.author.username }}
+      by {{ build.author.displayName || 'Community Member' }}
       <span v-if="showBadge" class="b-member-badge" title="Verified Chapter member">✓ Member</span>
     </p>
     <p v-if="build.notes" class="b-notes">{{ build.notes }}</p>

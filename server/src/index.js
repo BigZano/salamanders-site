@@ -13,10 +13,11 @@
 import { Pool } from 'pg'
 import { createArchiveKeyHandler } from './archiveKey.js'
 import { createBakeLoader, DEFAULT_BAKE_BASE_URL } from './bake.js'
-import { rowToBuild } from './buildRow.js'
+import { rowToBuild, publicBuild } from './buildRow.js'
 import { createBuildModeration } from './buildModeration.js'
 import { validateBuildText } from './buildText.js'
 import { createDiscordRoles } from './discordRoles.js'
+import { createDisplayNames } from './displayNames.js'
 import { createHistoryStore } from './historyStore.js'
 import { createPerksHandler } from './perks.js'
 import { createPrivileges } from './privileges.js'
@@ -47,6 +48,9 @@ const archiveKey = createArchiveKeyHandler({
 })
 
 const roles = createDiscordRoles({ apiBase: DISCORD_API_BASE, guildId: GUILD_ID, botToken: BOT_TOKEN })
+// Build authors are shown by Discord display name, from an in-memory
+// directory of the guild — see displayNames.js.
+const displayNames = createDisplayNames({ apiBase: DISCORD_API_BASE, guildId: GUILD_ID, botToken: BOT_TOKEN })
 
 // Member reports — see reports.js. Role ids default to XVIIILegion (files)
 // and Reclusiarch (reviews); the webhook pings leadership with an id only.
@@ -105,7 +109,8 @@ async function listBuilds(request) {
   const { rows } = className
     ? await pool.query('select * from builds where deleted_at is null and class_name = $1 order by created_at desc', [className])
     : await pool.query('select * from builds where deleted_at is null order by created_at desc')
-  return json(rows.map(rowToBuild))
+  const nameFor = await displayNames.resolver()
+  return json(rows.map((r) => publicBuild(rowToBuild(r), nameFor)))
 }
 
 async function createBuild(request) {
@@ -144,7 +149,7 @@ async function createBuild(request) {
       caller.username,
     ],
   )
-  return json(rowToBuild(rows[0]), 201)
+  return json(publicBuild(rowToBuild(rows[0]), await displayNames.resolver()), 201)
 }
 
 Bun.serve({

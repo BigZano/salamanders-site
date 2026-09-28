@@ -10,6 +10,7 @@ const GATED = [
   'src/lib/archive/prune.js',
   'server/src/archiveKey.js',
   'src/lib/longPress.js',
+  'server/src/displayNames.js',
 ]
 
 export default defineConfig({
