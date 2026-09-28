@@ -195,6 +195,7 @@ describe('validateCorrection', () => {
     [{ ...ADD_HH, op: 'swap' }, /add, remove or edit/],
     [{ ...ADD_HH, perkName: '' }, /Name the perk/],
     [{ ...ADD_HH, perkName: 'x'.repeat(81) }, /Name the perk/],
+    [{ ...ADD_HH, perkName: '<script>' }, /letters, numbers and basic punctuation/],
     [{ ...ADD_HH, description: '' }, /Describe/],
     [{ ...ADD_HH, description: 'x'.repeat(501) }, /Describe/],
     [{ ...ADD_HH, note: 'x'.repeat(201) }, /Note/],
@@ -207,6 +208,23 @@ describe('validateCorrection', () => {
       perkName: 'Perpetual Velocity',
       description: null,
     })
+  })
+
+  it('sanitizes before checking length: padding whitespace is free, but 501 real characters is not', () => {
+    const padded = validateCorrection({ ...ADD_HH, description: `  ${'x'.repeat(500)}  ` })
+    expect(typeof padded).toBe('object')
+    expect(padded.description).toBe('x'.repeat(500))
+    expect(validateCorrection({ ...ADD_HH, description: 'x'.repeat(501) })).toMatch(/Describe/)
+  })
+
+  it('cleans a zero-width space and doubled spaces out of the perk name', () => {
+    const c = validateCorrection({ ...ADD_HH, perkName: 'Head\u200B  Hunter' })
+    expect(c).toMatchObject({ perkName: 'Head Hunter' })
+  })
+
+  it('strips a bidi override out of the description', () => {
+    const c = validateCorrection({ ...ADD_HH, description: 'Deals\u202E more damage' })
+    expect(c.description).toBe('Deals more damage')
   })
 })
 
@@ -240,6 +258,13 @@ describe('GET /history', () => {
     await call('forge', 'POST', '/privileges/100000000000000002/revoke', { reason: 'r', username: 'tm' })
     expect((await call('lh', 'GET', '/history')).body.revocations).toEqual([])
     expect((await call('forge', 'GET', '/history')).body.revocations).toHaveLength(1)
+  })
+
+  it('a search term over 80 characters is rejected', async () => {
+    const { call } = setup()
+    const res = await call('lh', 'GET', `/history?q=${'x'.repeat(81)}`)
+    expect(res.status).toBe(400)
+    expect(res.body.error).toMatch(/too long/)
   })
 })
 
@@ -277,6 +302,13 @@ describe('privileges', () => {
 
   it('404 for someone not in the guild', async () => {
     expect((await setup().call('admin', 'POST', '/privileges/199999999999999999/revoke', { reason: 'x' })).status).toBe(404)
+  })
+
+  it('a username over 100 characters is rejected, not truncated', async () => {
+    const { call } = setup()
+    const res = await call('forge', 'POST', '/privileges/100000000000000002/revoke', { reason: 'x', username: 'x'.repeat(101) })
+    expect(res.status).toBe(400)
+    expect(res.body.error).toMatch(/Username is too long/)
   })
 
   it('refuses a non-revoker before looking up the target (no guild-membership probing)', async () => {

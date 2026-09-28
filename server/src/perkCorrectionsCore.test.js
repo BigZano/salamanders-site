@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { applyWeaponCorrections, applyClassCorrections, hasWeaponPerk, toDocument, flattenDocument } from './perkCorrectionsCore'
+import { applyWeaponCorrections, applyClassCorrections, hasWeaponPerk, toDocument, flattenDocument, sanitizeText, PERK_NAME } from './perkCorrectionsCore'
 
 const tree = {
   budget: 7,
@@ -93,5 +93,77 @@ describe('toDocument / flattenDocument', () => {
       doc = toDocument(poisoned, 'v1')
     }).not.toThrow()
     expect(doc.weapons.constructor).toEqual([{ id: 3, op: 'add', quality: 'Relic', perkName: 'Z', description: 'z', createdAt: 't3' }])
+  })
+})
+
+describe('sanitizeText', () => {
+  it('turns non-strings into an empty string', () => {
+    expect(sanitizeText(null)).toBe('')
+    expect(sanitizeText(undefined)).toBe('')
+    expect(sanitizeText(42)).toBe('')
+    expect(sanitizeText({})).toBe('')
+  })
+
+  it('normalizes to NFC so composed and decomposed forms match', () => {
+    const decomposed = 'e\u0301clair' // e + combining acute accent
+    const composed = '\u00e9clair' // e-acute, precomposed
+    expect(sanitizeText(decomposed)).toBe(sanitizeText(composed))
+    expect(sanitizeText(decomposed)).toBe('éclair')
+  })
+
+  it('strips C0 and C1 control characters', () => {
+    expect(sanitizeText('a\u0000\u0007\u001Fb')).toBe('ab')
+    expect(sanitizeText('a\u007F\u0090\u009Fb')).toBe('ab')
+  })
+
+  it('strips zero-width, soft hyphen and bidi override/isolate characters', () => {
+    expect(sanitizeText('a\u200B\u200C\u200D\u2060\uFEFFb')).toBe('ab')
+    expect(sanitizeText('soft\u00ADhyphen')).toBe('softhyphen')
+    expect(sanitizeText('a\u202A\u202B\u202C\u202D\u202Eb')).toBe('ab')
+    expect(sanitizeText('a\u2066\u2067\u2068\u2069b')).toBe('ab')
+  })
+
+  it('collapses tabs, NBSP and runs of spaces to one space', () => {
+    expect(sanitizeText('a\t\tb')).toBe('a b')
+    expect(sanitizeText('a\u00A0\u00A0b')).toBe('a b')
+    expect(sanitizeText('a    b')).toBe('a b')
+  })
+
+  it('single-line (default): newlines become a space, then collapse with neighboring whitespace', () => {
+    expect(sanitizeText('a\nb')).toBe('a b')
+    expect(sanitizeText('a\n\n\nb')).toBe('a b')
+    expect(sanitizeText('a \n b')).toBe('a b')
+  })
+
+  it('multiline: trims spaces around newlines and collapses 3+ newlines to 2', () => {
+    expect(sanitizeText('a \n b', { multiline: true })).toBe('a\nb')
+    expect(sanitizeText('a\n\n\n\nb', { multiline: true })).toBe('a\n\nb')
+    expect(sanitizeText('a   b\nc   d', { multiline: true })).toBe('a b\nc d')
+  })
+
+  it('treats \\r\\n and lone \\r as a newline before applying line rules', () => {
+    expect(sanitizeText('a\r\nb', { multiline: true })).toBe('a\nb')
+    expect(sanitizeText('a\rb')).toBe('a b')
+  })
+
+  it('trims leading and trailing whitespace', () => {
+    expect(sanitizeText('  padded  ')).toBe('padded')
+    expect(sanitizeText('  padded  ', { multiline: true })).toBe('padded')
+  })
+})
+
+describe('PERK_NAME', () => {
+  it('accepts letters, numbers, spaces and basic punctuation', () => {
+    expect(PERK_NAME.test('Head Hunter')).toBe(true)
+    expect(PERK_NAME.test("Marksman's Eye")).toBe(true)
+    expect(PERK_NAME.test('Perpetual Velocity (II)')).toBe(true)
+    expect(PERK_NAME.test('+10% Damage')).toBe(true)
+    expect(PERK_NAME.test('A&B: C, D/E')).toBe(true)
+  })
+
+  it('rejects markup and other symbols, and the empty string', () => {
+    expect(PERK_NAME.test('<script>')).toBe(false)
+    expect(PERK_NAME.test('a@b')).toBe(false)
+    expect(PERK_NAME.test('')).toBe(false)
   })
 })

@@ -9,7 +9,7 @@
  * without Postgres.
  */
 import { Upstream } from './discordRoles.js'
-import { QUALITIES, OPS, LIMITS, applyWeaponCorrections, hasWeaponPerk, toDocument } from './perkCorrectionsCore.js'
+import { QUALITIES, OPS, LIMITS, PERK_NAME, applyWeaponCorrections, hasWeaponPerk, toDocument, sanitizeText } from './perkCorrectionsCore.js'
 import { mayRevoke } from './privileges.js'
 
 const REVERT = /^\/perk-corrections\/(\d{1,15})\/revert$/
@@ -18,7 +18,6 @@ const SUBJECTS = ['perk_correction', 'build', 'privilege']
 const PREFIXES = ['/perk-corrections', '/history', '/privileges']
 const PAST = { add: 'added', remove: 'removed', edit: 'edited' }
 
-const str = (v) => (typeof v === 'string' ? v.trim() : '')
 const label = (c) => `${c.target}${c.quality ? ` / ${c.quality}` : ''} — ${PAST[c.op]} ${c.perkName}`
 
 export function createPerksHandler({ roles, privileges, store, loadBake, notify = () => {} }) {
@@ -72,7 +71,7 @@ export function createPerksHandler({ roles, privileges, store, loadBake, notify 
     const rv = REVERT.exec(pathname)
     if (rv && method === 'POST') {
       if (!me.editor) return refuse()
-      const note = str(((await request.json().catch(() => null)) || {}).note)
+      const note = sanitizeText(((await request.json().catch(() => null)) || {}).note)
       if (note.length > LIMITS.note) return reply(400, { error: 'Note is too long (200 characters max).' })
       const result = await store.revertCorrection(Number(rv[1]), user, note || null)
       if (result === 'missing') return reply(404, { error: 'Correction not found.' })
@@ -85,7 +84,9 @@ export function createPerksHandler({ roles, privileges, store, loadBake, notify 
       if (!me.historyViewer) return refuse()
       const subject = url.searchParams.get('subject') || null
       if (subject && !SUBJECTS.includes(subject)) return reply(400, { error: 'Unknown history filter.' })
-      const q = str(url.searchParams.get('q')).slice(0, LIMITS.target) || null
+      const qText = sanitizeText(url.searchParams.get('q'))
+      if (qText.length > LIMITS.target) return reply(400, { error: 'Search is too long.' })
+      const q = qText || null
       const beforeRaw = url.searchParams.get('before') || ''
       const before = /^\d{1,15}$/.test(beforeRaw) ? Number(beforeRaw) : null
       const page = await store.history({ subject, q, before, limit: 50 })
@@ -100,11 +101,13 @@ export function createPerksHandler({ roles, privileges, store, loadBake, notify 
       if (!target) return reply(404, { error: 'That member is not in the server.' })
       if (!mayRevoke(me, target)) return reply(403, { error: "You can't change that member's privileges." })
       const body = (await request.json().catch(() => null)) || {}
-      const reason = str(body.reason)
+      const reason = sanitizeText(body.reason)
       if (reason.length > LIMITS.note) return reply(400, { error: 'Reason is too long (200 characters max).' })
       if (action === 'revoke') {
         if (!reason) return reply(400, { error: 'Give a reason.' })
-        const username = str(body.username).slice(0, 100) || targetId
+        const usernameText = sanitizeText(body.username)
+        if (usernameText.length > 100) return reply(400, { error: 'Username is too long.' })
+        const username = usernameText || targetId
         const r = await store.revoke({ id: targetId, username }, user, reason)
         if (r === 'conflict') return reply(409, { error: 'Already revoked.' })
         notify(`${user.username} revoked site privileges for ${username}: ${reason}`)
@@ -133,13 +136,13 @@ export function createPerksHandler({ roles, privileges, store, loadBake, notify 
 export function validateCorrection(b) {
   if (!b || typeof b !== 'object') return 'Malformed correction.'
   const c = {
-    kind: str(b.kind),
-    target: str(b.target),
-    quality: str(b.quality) || null,
-    op: str(b.op),
-    perkName: str(b.perkName),
-    description: str(b.description) || null,
-    note: str(b.note) || null,
+    kind: sanitizeText(b.kind),
+    target: sanitizeText(b.target),
+    quality: sanitizeText(b.quality) || null,
+    op: sanitizeText(b.op),
+    perkName: sanitizeText(b.perkName),
+    description: sanitizeText(b.description) || null,
+    note: sanitizeText(b.note) || null,
   }
   if (!['weapon', 'class'].includes(c.kind)) return 'Pick weapon or class.'
   if (!c.target || c.target.length > LIMITS.target) return 'Name the weapon or class.'
@@ -151,6 +154,7 @@ export function validateCorrection(b) {
     if (!OPS.includes(c.op)) return 'Pick add, remove or edit.'
   }
   if (!c.perkName || c.perkName.length > LIMITS.perkName) return 'Name the perk (80 characters max).'
+  if (!PERK_NAME.test(c.perkName)) return 'Perk names can only use letters, numbers and basic punctuation.'
   if (c.op === 'remove') c.description = null
   else if (!c.description || c.description.length > LIMITS.description) return 'Describe the perk (500 characters max).'
   if (c.note && c.note.length > LIMITS.note) return 'Note is too long (200 characters max).'

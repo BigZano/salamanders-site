@@ -14,6 +14,38 @@ export const QUALITIES = ['Standard', 'Master-Crafted', 'Artificer', 'Relic', 'H
 export const OPS = ['add', 'remove', 'edit']
 export const LIMITS = { target: 80, perkName: 80, description: 500, note: 200 }
 
+/** Letters, numbers, spaces and basic punctuation only — no markup, no symbols. */
+export const PERK_NAME = /^[\p{L}\p{N} '’\-().,&:+%/]+$/u
+
+const CONTROLS = /[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F-\u009F]/g
+const ZERO_WIDTH_AND_BIDI = /[\u200B-\u200D\u2060\uFEFF\u00AD\u202A-\u202E\u2066-\u2069]/g
+const HORIZONTAL_WS = /[^\S\n]+/g
+
+/**
+ * The one sanitizer every user-supplied text field goes through, on both the
+ * API and the site, before validation or storage (spec amendment 2026-09-27,
+ * see docs/superpowers/specs/2026-09-27-perk-corrections-design.md). Order:
+ * normalize line endings to \n, NFC-normalize, strip C0/C1 controls (tab and
+ * newline are deferred to the whitespace step below, not stripped here),
+ * strip zero-width/soft-hyphen/bidi-override characters, then collapse
+ * whitespace — multiline text keeps single newlines (paragraph breaks
+ * collapse to at most two, blank around each line trimmed); single-line text
+ * turns newlines into a space first, so everything collapses to one line.
+ * Length limits are enforced by callers, after sanitizing — never truncated
+ * here.
+ */
+export function sanitizeText(value, { multiline = false } = {}) {
+  if (typeof value !== 'string') return ''
+  let v = value.replace(/\r\n/g, '\n').replace(/\r/g, '\n').normalize('NFC')
+  v = v.replace(CONTROLS, '').replace(ZERO_WIDTH_AND_BIDI, '')
+  if (multiline) {
+    v = v.replace(HORIZONTAL_WS, ' ').replace(/ *\n */g, '\n').replace(/\n{3,}/g, '\n\n')
+  } else {
+    v = v.replace(/\n/g, ' ').replace(HORIZONTAL_WS, ' ')
+  }
+  return v.trim()
+}
+
 const mark = (c) => ({ id: c.id, createdAt: c.createdAt })
 
 /** Apply in order. An edit/remove whose perk is gone (its add was reverted) is skipped. */
