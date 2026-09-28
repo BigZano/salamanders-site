@@ -25,16 +25,14 @@ input-sanitization amendment). Plan:
   whitespace collapsed; limits checked after cleaning). Webhook text has Discord
   markdown escaped.
 
-Unit suite on Windows: 722 passed, 4 skipped (archive tests that need the
-local-only export).
+The unit suite passes on Windows; only the four archive tests that need the
+local-only export are skipped.
 
 ## Before you start
 
-On Windows, the branch has to reach GitHub first (Claude asks before pushing):
-```pwsh
-git push -u origin feat/perk-corrections
-```
-The pre-push hook runs the full gate (about 4 minutes). Don't bypass it.
+The branch is on GitHub (`origin/feat/perk-corrections`). Any later fixes get
+pushed to the same branch, so run `git pull` in step 1 even if you checked it
+out before.
 
 ## 1. Pull the branch on Vulkan
 
@@ -42,6 +40,7 @@ The pre-push hook runs the full gate (about 4 minutes). Don't bypass it.
 cd ~/Documents/salamanders-site
 git fetch origin
 git switch feat/perk-corrections
+git pull
 bun install --frozen-lockfile
 ```
 Expect: `git log -1 --oneline` shows the branch head.
@@ -71,9 +70,9 @@ only adds to them. Prove a second run is a no-op before touching the real
 database:
 ```bash
 docker run -d --name pc-check -e POSTGRES_PASSWORD=x -e POSTGRES_DB=t postgres:16-alpine
-sleep 4
-docker exec -i pc-check psql -U postgres -d t -v ON_ERROR_STOP=1 < server/schema.sql
-docker exec -i pc-check psql -U postgres -d t -v ON_ERROR_STOP=1 < server/schema.sql
+until docker exec pc-check pg_isready -U postgres -d t -h 127.0.0.1; do sleep 1; done
+docker exec -i pc-check psql -v ON_ERROR_STOP=1 -U postgres -d t < server/schema.sql
+docker exec -i pc-check psql -v ON_ERROR_STOP=1 -U postgres -d t < server/schema.sql
 docker rm -f pc-check
 ```
 Expect: both runs finish with no `ERROR`.
@@ -90,7 +89,7 @@ step logs "Keeping the committed perk corrections snapshot". That's expected.
 cd ~/Documents/salamanders-site
 git switch main && git pull
 cd server
-docker compose exec -T db psql -U salamanders salamanders_builds -v ON_ERROR_STOP=1 < schema.sql
+docker compose exec -T db psql -v ON_ERROR_STOP=1 -U salamanders salamanders_builds < schema.sql
 docker compose up -d --build api
 docker compose exec -T api bun run src/seed.js < ../src/data/perk-corrections.json
 curl -s localhost:8787/perk-corrections | head -c 300; echo
@@ -98,7 +97,10 @@ curl -s localhost:8787/perk-corrections | head -c 300; echo
 Expect:
 - the schema run ends with no `ERROR`
 - the seed prints `Seeded 45 perk corrections.` (a second run prints
-  `Already seeded — nothing to do.`)
+  `Already seeded — nothing to do.`). The seed reads the wiki bake from GitHub
+  to record what each correction replaced. If it prints a warning that the bake
+  couldn't be loaded, the rows still go in, just without before/after in the
+  history.
 - the curl output starts with `{"version":` and mentions `Occulus Bolt Carbine`
 
 New, optional environment variables. Empty means the built-in defaults, which
@@ -109,8 +111,12 @@ If `server/.env` still sets it, delete the line.
 
 ## 6. Redeploy the site
 
-This makes the bundled snapshot pick up the real correction ids:
+This makes the bundled snapshot pick up the real correction ids. The deploy
+reads the API address from the repo variable `VITE_BUILDS_API_URL` (currently
+`https://builds-api.armorybot.win`). If that variable is ever unset, the live
+site can't reach the API and the whole feature disappears.
 ```bash
+gh variable list | grep VITE_BUILDS_API_URL
 gh workflow run "Deploy to GitHub Pages"
 ```
 
@@ -119,11 +125,20 @@ gh workflow run "Deploy to GitHub Pages"
 1. The nav shows **Version History**. Open it: the 45 seeded rows are there,
    by `system (error report 2026-09-27)`.
 2. Armoury → Occulus Bolt Carbine: the Standard tier shows Great Might and
-   Remote Threat, and a perk's detail panel shows "Corrected in game".
-3. Pick any perk, choose **Edit text**, change a word, add a note, save. The
-   page updates at once and the webhook channel gets the message.
-4. In Version History, open that entry and **Revert** it.
+   Remote Threat, and Remote Threat's detail panel shows "Corrected in game".
+3. Click a perk to pin its detail panel, choose **Edit text**, change a word,
+   add a note, save. The page updates at once, and the webhook channel gets
+   the message.
+4. In Version History, open that entry. It shows Before and After. **Revert**
+   it.
 5. Signed out, or as a plain member: no edit buttons, no Version History link.
+
+## Rolling back
+
+The schema only adds tables and columns, so rolling back is just redeploying
+the previous API image and site (`git switch` to the previous `main` commit,
+`docker compose up -d --build api`, redeploy the site). The new tables stay
+behind, unused, and nothing in the database needs reverting.
 
 ## Release note for members
 
@@ -141,6 +156,12 @@ session:
   token, shared with reports and the archive). If Discord rate-limits it, the
   edit controls hide until the next load. It's uncached on purpose so
   revocations take effect immediately; add a short cache if 429s show up.
+- Class perks can only be corrected from the Perk Builder's "Why this pick?"
+  box. That means the editor has to pick the perk into their own build first,
+  and can't reach perks above their build's level. A dedicated class-perk edit
+  view would fix it. This is a UX decision for Bret.
+- The "Corrected" tag shows the date, not who made the correction. The name is
+  one click away in Version History.
 - A build save accepts at most 40 stored picks per weapon. Orphaned picks are
   kept on purpose, so a member who re-picks a big tree after several re-bakes
   could hit that and get a save error. Raise the cap, or save only live picks.
