@@ -9,6 +9,7 @@ const GATED = [
   'src/lib/archive/audit.js',
   'src/lib/archive/prune.js',
   'server/src/archiveKey.js',
+  'src/lib/longPress.js',
 ]
 
 export default defineConfig({

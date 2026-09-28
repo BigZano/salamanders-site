@@ -10,6 +10,7 @@ export default {
     'src/lib/archive/audit.js',
   'src/lib/archive/prune.js',
     'server/src/archiveKey.js',
+    'src/lib/longPress.js',
   ],
   coverageAnalysis: 'perTest',
   thresholds: { high: 100, low: 100, break: 100 },
