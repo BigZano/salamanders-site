@@ -1,14 +1,16 @@
 <script setup>
-import { computed, ref, watch } from 'vue'
+import { computed, onMounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { usePlanner } from '../stores/planner'
 import { useAuth } from '../stores/auth'
+import { usePerkCorrections } from '../stores/perkCorrections'
 
 const open = ref(false)
 const route = useRoute()
 const router = useRouter()
 const planner = usePlanner()
 const auth = useAuth()
+const corrections = usePerkCorrections()
 const DISCORD = 'https://discord.gg/salamanders'
 
 const baseLinks = [
@@ -20,22 +22,28 @@ const baseLinks = [
 ]
 // A UX hint only — the real gate is the server's role check (see
 // src/lib/archive/client.js). Non-members never see the entries.
-const links = computed(() =>
-  auth.member?.isMember
+const links = computed(() => {
+  const out = auth.member?.isMember
     ? [
         ...baseLinks,
         { to: '/accolades', label: 'Accolades', section: true },
         { to: '/ranks', label: 'Ranks', section: true },
         { to: '/reports', label: 'Reports', section: true },
       ]
-    : baseLinks,
-)
+    : [...baseLinks]
+  if (corrections.privileges?.historyViewer) out.push({ to: '/history', label: 'Version History', section: true })
+  return out
+})
 
 // Close the mobile menu on navigation.
 watch(
   () => route.fullPath,
   () => (open.value = false),
 )
+
+onMounted(() => corrections.load())
+// auth.token reads storage and isn't reactive; auth.member is (sign-out clears it).
+watch(() => auth.member, () => corrections.loadPrivileges(auth.token), { immediate: true })
 
 // The nav title is the one place on the site people expect a hard reset —
 // "take me back to a blank Perk Builder," not "resume whatever's loaded."

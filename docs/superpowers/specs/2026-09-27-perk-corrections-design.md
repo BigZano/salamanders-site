@@ -72,10 +72,10 @@ API document and is the offline fallback when the API is unreachable.
 | Route | Who | Does |
 |---|---|---|
 | `GET /perk-corrections` | public | `{version, weapons:{name:{quality:[…]}}, classes:{name:[…]}}`, `Cache-Control: max-age=30` |
-| `GET /privileges/me` | signed in | `{editor, historyViewer, moderator, revoked, canRevoke}` |
+| `GET /privileges/me` | signed in | `{id, editor, historyViewer, moderator, revoked, revoker}` — `id` is the caller's Discord id; `revoker` is `'admin'`, `'forge'` or `null` |
 | `POST /perk-corrections` | editor | one add/remove/edit; returns new document |
 | `POST /perk-corrections/:id/revert` | editor | deactivate + event; returns new document |
-| `GET /history?subject=&q=&cursor=` | history viewer | paged events with snapshots, newest first |
+| `GET /history?subject=&q=&before=` | history viewer | paged events with snapshots, newest first |
 | `POST /privileges/:discordId/revoke` | Forge (tier-1 targets) / Admin (any below) | reason required |
 | `POST /privileges/:discordId/reinstate` | same as revoke | lifts the open revocation |
 | `DELETE /builds/:id` | poster, or moderator not revoked | soft delete + `deleted` event |
@@ -129,3 +129,38 @@ corrections; fallback when the fetch fails; optimistic rollback. E2E: mock
 Discord gains Techmarine and Forge tokens — Techmarine corrects a perk, a
 member sees it on reload, history shows it, Forge revokes the Techmarine,
 whose edit controls disappear.
+
+## Amendment (2026-09-27): input sanitization
+
+Every user-supplied text field is sanitized and normalized before validation
+and storage, by one shared function (`sanitizeText` in
+`server/src/perkCorrectionsCore.js`, also used by the site before optimistic
+updates so the editor sees exactly what the server stores):
+
+1. Non-strings become `''`.
+2. Unicode NFC normalization.
+3. Remove C0/C1 control characters (keep `\n` only for multi-line fields),
+   zero-width characters (U+200B–U+200D, U+2060, U+FEFF), soft hyphen
+   (U+00AD) and bidirectional controls (U+202A–U+202E, U+2066–U+2069).
+4. Collapse runs of horizontal whitespace (incl. NBSP) to one space; in
+   multi-line fields collapse 3+ newlines to 2; in single-line fields turn
+   newlines into spaces. Trim.
+5. Length limits apply after sanitizing; over-limit input is rejected (400),
+   never silently truncated.
+
+Perk names additionally may contain only letters, numbers, spaces and
+`' ’ - ( ) . , & : + % /`. Sanitizing applies to: correction fields (target,
+perkName, description, note), revert notes, revoke reasons, the revoked
+username, the history search `q`, and build title/role/notes.
+
+Member reports (reported member, description, witnesses, medium text, and
+review notes) go through the same `sanitizeText` — invisible and spoofing
+characters removed, whitespace tidied — but are **never content-filtered**:
+reports are evidence, so slurs and quoted language are stored exactly as
+written. The reports webhook still carries only the report id.
+
+Webhook content has Discord markdown escaped (a backslash before each of
+`\`, `*`, `_`, `~`, backtick, `|`, `>`, `#`, `[`, `]`, `(`, `)`) in addition
+to `allowed_mentions: { parse: [] }`,
+so user text can't render as links, headings or formatting. The site renders
+user text only via text interpolation (never `v-html`).

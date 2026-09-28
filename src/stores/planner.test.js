@@ -178,3 +178,19 @@ describe('applyBuildData', () => {
     expect(planner.level).toBe(30)
   })
 })
+
+describe('toggleWeaponPerk validIds', () => {
+  it('ignores picks outside validIds when checking the budget, without deleting them', () => {
+    const planner = usePlanner()
+    planner.toggleWeaponPerk('Gun', 'gone', 2)
+    planner.toggleWeaponPerk('Gun', 'a', 2)
+    // Without validIds the budget is full.
+    planner.toggleWeaponPerk('Gun', 'b', 2)
+    expect(planner.weaponPerks.Gun).not.toHaveProperty('b')
+    // With validIds, 'gone' no longer counts.
+    planner.toggleWeaponPerk('Gun', 'b', 2, new Set(['a', 'b', 'c']))
+    expect(planner.weaponPerks.Gun).toEqual({ gone: true, a: true, b: true })
+    planner.toggleWeaponPerk('Gun', 'c', 2, ['a', 'b', 'c'])
+    expect(planner.weaponPerks.Gun).not.toHaveProperty('c')
+  })
+})

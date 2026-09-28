@@ -44,6 +44,12 @@ const routes = [
     component: () => import('./views/ReportsReview.vue'),
     meta: { title: 'Report Review' },
   },
+  {
+    path: '/history',
+    name: 'history',
+    component: () => import('./views/History.vue'),
+    meta: { title: 'Version History' },
+  },
   ...[
     { key: 'accolades', title: 'Accolades' },
     { key: 'ranks', title: 'Ranks' },

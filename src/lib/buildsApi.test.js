@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, afterEach } from 'vitest'
-import { listBuilds, createBuild, deleteBuild, getModeratorStatus, BuildsApiError } from './buildsApi'
+import { request, listBuilds, createBuild, deleteBuild, getModeratorStatus, BuildsApiError } from './buildsApi'
+import { getCorrections } from './perksApi'
 
 function mockResponse({ ok = true, status = 200, body = null, jsonThrows = false } = {}) {
   return {
@@ -142,5 +143,30 @@ describe('getModeratorStatus', () => {
   it('is false unless the server says exactly true', async () => {
     vi.stubGlobal('fetch', vi.fn().mockResolvedValue(mockResponse({ body: { moderator: 'yes' } })))
     await expect(getModeratorStatus('tok')).resolves.toBe(false)
+  })
+})
+
+describe('request cache mode', () => {
+  it('passes a requested cache mode through to fetch', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(mockResponse({ body: {} }))
+    vi.stubGlobal('fetch', fetchMock)
+    await request('/perk-corrections', { cache: 'no-cache' })
+    expect(fetchMock.mock.calls[0][1].cache).toBe('no-cache')
+  })
+
+  it('leaves fetch on its default cache mode otherwise', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(mockResponse({ body: [] }))
+    vi.stubGlobal('fetch', fetchMock)
+    await listBuilds()
+    expect(fetchMock.mock.calls[0][1]).not.toHaveProperty('cache')
+  })
+
+  it('getCorrections always revalidates with the server', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(mockResponse({ body: { weapons: {}, classes: {} } }))
+    vi.stubGlobal('fetch', fetchMock)
+    await getCorrections()
+    const [url, opts] = fetchMock.mock.calls[0]
+    expect(url).toMatch(/\/perk-corrections$/)
+    expect(opts.cache).toBe('no-cache')
   })
 })

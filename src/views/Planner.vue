@@ -1,13 +1,16 @@
 <script setup>
-import { ref, computed, watch, onMounted } from 'vue'
+import { ref, computed, watch, onMounted, nextTick } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { usePlanner, CLASS_NAMES, describePerk, MAX_PRESTIGE } from '../stores/planner'
+import { usePlanner, CLASS_NAMES, MAX_PRESTIGE } from '../stores/planner'
 import { useAuth } from '../stores/auth'
+import { usePerkCorrections } from '../stores/perkCorrections'
 import * as buildsApi from '../lib/buildsApi'
 import WeaponSlot from '../components/WeaponSlot.vue'
+import PerkEditPanel from '../components/PerkEditPanel.vue'
 
 const planner = usePlanner()
 const auth = useAuth()
+const corrections = usePerkCorrections()
 const route = useRoute()
 const router = useRouter()
 
@@ -41,7 +44,10 @@ function hidePopout() {
   hovered.value = null
 }
 const hoveredText = computed(() =>
-  hovered.value ? describePerk(planner.activeClass, hovered.value.name) : '',
+  hovered.value ? corrections.describe(planner.activeClass, hovered.value.name) : '',
+)
+const hoveredCorrected = computed(() =>
+  hovered.value ? !!corrections.classPerks(planner.activeClass)[hovered.value.name]?.corrected : false,
 )
 const hoveredWhy = computed(() => {
   const p = hovered.value
@@ -110,6 +116,18 @@ function weaponPerkCount(slotKey) {
 }
 
 const isSelected = (perk) => planner.selected[perk.col] === perk.name
+
+// Every picked perk needs a reason before the build goes to the library (the
+// server enforces the same rule). Listed so the author can jump to each one.
+const unexplained = computed(() =>
+  planner.columns
+    .filter((c) => planner.selected[c.col] && !(planner.justified[c.col] || '').trim())
+    .map((c) => ({ col: c.col, name: planner.selected[c.col] })),
+)
+function explain(col) {
+  editingCol.value = col
+  nextTick(() => document.getElementById(`why-${col}`)?.focus())
+}
 
 function onPerk(perk) {
   if (perk.level > planner.level) return
@@ -241,9 +259,17 @@ onMounted(() => {
               :id="`why-${editingPerk.col}`"
               v-model="justificationDraft"
               class="pa-field"
+              maxlength="1000"
               rows="2"
               placeholder="What does this add to the build? When do you lean on it?"
               @blur="saveJustification"
+            />
+            <PerkEditPanel
+              v-if="corrections.canEdit"
+              :key="editingPerk.name"
+              kind="class"
+              :target="planner.activeClass"
+              :perk="{ name: editingPerk.name, description: corrections.describe(planner.activeClass, editingPerk.name) }"
             />
           </div>
         </div>
@@ -267,6 +293,7 @@ onMounted(() => {
             {{ CAT_LABEL[hovered.col] }} · Column {{ hovered.col + 1 }} · Unlocks at level
             {{ hovered.level }}
           </p>
+          <p v-if="hoveredCorrected" class="pp-fixed">Corrected in game</p>
           <p v-if="hoveredText" class="pp-desc">{{ hoveredText }}</p>
           <p v-else class="pp-desc pp-empty">
             No description on the wiki yet. Re-run the perk bake after the next patch.
@@ -328,6 +355,7 @@ onMounted(() => {
             id="build-name"
             v-model="saveForm.title"
             class="fld"
+            maxlength="200"
             type="text"
             :placeholder="`${planner.activeClass} build`"
           />
@@ -344,6 +372,7 @@ onMounted(() => {
             <input
               v-model="saveForm.role"
               class="fld"
+              maxlength="200"
               type="text"
               placeholder="Role (e.g. Frontline)"
               aria-label="Role"
@@ -351,13 +380,26 @@ onMounted(() => {
             <textarea
               v-model="saveForm.notes"
               class="fld"
+              maxlength="2000"
               rows="2"
               placeholder="Notes — how it plays, when to use it"
               aria-label="Notes"
             />
           </template>
 
-          <button type="submit" class="btn-ember btn-sm save-go" :disabled="saving">
+          <div v-if="unexplained.length" class="save-needs" role="status">
+            <p>Explain every pick before saving — readers see your reasons on hover:</p>
+            <button
+              v-for="u in unexplained"
+              :key="u.col"
+              type="button"
+              class="save-needs-pick"
+              @click="explain(u.col)"
+            >
+              {{ u.name }}
+            </button>
+          </div>
+          <button type="submit" class="btn-ember btn-sm save-go" :disabled="saving || unexplained.length > 0">
             {{ saving ? 'Saving…' : 'Save to library' }}
           </button>
         </form>
@@ -852,6 +894,14 @@ onMounted(() => {
   color: var(--color-gold);
   margin: 0.15rem 0 0.4rem;
 }
+.pp-fixed {
+  font-family: var(--font-mono);
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+  font-size: 0.58rem;
+  color: var(--color-gold);
+  margin: 0.2rem 0 0.3rem;
+}
 .pp-desc {
   color: var(--color-smoke);
   font-size: 0.8rem;
@@ -1042,6 +1092,26 @@ onMounted(() => {
 .save-go {
   justify-content: center;
   margin-top: 0.2rem;
+}
+.save-needs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.35rem;
+  font-size: 0.75rem;
+  color: var(--color-smoke);
+}
+.save-needs p {
+  width: 100%;
+}
+.save-needs-pick {
+  font: inherit;
+  font-size: 0.72rem;
+  color: var(--color-ember);
+  background: transparent;
+  border: 1px solid var(--color-ember);
+  border-radius: 2px;
+  padding: 0.2rem 0.45rem;
+  cursor: pointer;
 }
 .save .fld {
   width: 100%;

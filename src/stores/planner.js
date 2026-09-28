@@ -4,8 +4,6 @@ import perkDetails from '../data/perk-details.json'
 
 // Wiki-baked perk text, keyed by class then perk name. See scripts/fetch-wiki-perks.mjs.
 export const detailsFor = (className) => perkDetails.classes[className] || { perks: {}, prestige: [] }
-export const describePerk = (className, perkName) =>
-  detailsFor(className).perks[perkName]?.description || ''
 // A class can prestige 4 times, each rank granting one perk pick. The wiki only
 // documents which perks unlock at ranks 1 and 2, so the candidate pool is
 // smaller than the rank cap — that's a data gap, not a rule.
@@ -235,12 +233,17 @@ export const usePlanner = defineStore('planner', {
     weaponUsed(weapon) {
       return Object.keys(this.weaponPerks[weapon] || {}).length
     },
-    toggleWeaponPerk(weapon, perkId, budget = 10) {
+    // validIds (array or Set), when given, limits the budget count to picks of
+    // perks that still exist — a pick orphaned by a removal correction stays
+    // stored (so a revert restores it) but no longer consumes budget.
+    toggleWeaponPerk(weapon, perkId, budget = 10, validIds) {
       this.weaponPerks[weapon] ??= {}
       const sel = this.weaponPerks[weapon]
+      const valid = validIds && new Set(validIds)
+      const used = Object.keys(sel).filter((id) => !valid || valid.has(id)).length
       if (sel[perkId]) {
         delete sel[perkId]
-      } else if (Object.keys(sel).length < this.weaponBudget(weapon, budget)) {
+      } else if (used < this.weaponBudget(weapon, budget)) {
         sel[perkId] = true
       }
       this.persist()
