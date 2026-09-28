@@ -132,6 +132,11 @@ gh workflow run "Deploy to GitHub Pages"
 4. In Version History, open that entry. It shows Before and After. **Revert**
    it.
 5. Signed out, or as a plain member: no edit buttons, no Version History link.
+6. Perk Builder: pick two perks and write a reason for only one. "Save to
+   library" stays disabled and names the other pick; clicking the name jumps
+   to its "Why this pick?" box. Once both have reasons, the save goes through,
+   and hovering either pick in the saved build shows the reason. Builds
+   already in the library aren't affected.
 
 ## Rolling back
 
@@ -158,8 +163,10 @@ session:
   revocations take effect immediately; add a short cache if 429s show up.
 - Class perks can only be corrected from the Perk Builder's "Why this pick?"
   box. That means the editor has to pick the perk into their own build first,
-  and can't reach perks above their build's level. A dedicated class-perk edit
-  view would fix it. This is a UX decision for Bret.
+  and can't reach perks above their build's level. Bret chose option A: an
+  "Edit text" entry on the perk popout for editors. It's not built yet. It
+  needs the popout to be clickable for editors, and locked (disabled) perks
+  need hover events. A follow-up session should design that.
 - The "Corrected" tag shows the date, not who made the correction. The name is
   one click away in Version History.
 - A build save accepts at most 40 stored picks per weapon. Orphaned picks are

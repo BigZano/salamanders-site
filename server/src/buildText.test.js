@@ -80,10 +80,29 @@ const MAXIMAL = {
   prestigePicks: ['Prestige One', 'Prestige Two', 'Prestige Three', 'Prestige Four'],
   perks: ['Adrenaline Rush', 'Bolter Drill', 'Clear Mind', 'Squad Cohesion', 'Ammo Reserves', 'Grenadier', 'Close Quarters', "Emperor's Wrath"],
   perkIds: Object.fromEntries(Array.from({ length: 8 }, (_, c) => [String(c), `Perk ${c}`])),
-  justifications: { 0: 'Because.' },
+  justifications: Object.fromEntries(Array.from({ length: 8 }, (_, c) => [String(c), `Why pick ${c}.`])),
   weapons: { primary: 'Heavy Bolt Rifle', secondary: 'Bolt Pistol', melee: 'Power Sword' },
   weaponPerks: { 'Heavy Bolt Rifle': treeOf('Heavy Bolt Rifle', 40), 'Bolt Pistol': treeOf('Bolt Pistol', 23), 'Power Sword': treeOf('Power Sword', 23) },
 }
+
+describe('validateBuildText: every picked perk needs a justification', () => {
+  const picks = { perks: ['Adrenaline Rush', null, 'Clear Mind', null, null, null, null, null] }
+
+  it('rejects a picked perk with no justification, naming it', () => {
+    expect(validateBuildText(b({ ...picks, justifications: { 0: 'Opens fights.' } }))).toBe(
+      'Explain why you picked Clear Mind (every picked perk needs a reason).',
+    )
+  })
+
+  it('treats a whitespace or invisible-only reason as missing', () => {
+    expect(validateBuildText(b({ ...picks, justifications: { 0: 'Opens fights.', 2: ' ​ ' } }))).toMatch(/Clear Mind/)
+  })
+
+  it('accepts a build where every picked perk is justified; empty slots need nothing', () => {
+    const out = validateBuildText(b({ ...picks, justifications: { 0: 'Opens fights.', 2: 'Keeps me calm.' } }))
+    expect(out.justifications).toEqual({ 0: 'Opens fights.', 2: 'Keeps me calm.' })
+  })
+})
 
 describe('validateBuildText: the build body', () => {
   it('accepts a realistic maximal build unchanged', () => {
@@ -93,7 +112,7 @@ describe('validateBuildText: the build body', () => {
   })
 
   it('keeps empty slots in place (perks and prestige picks are positional)', () => {
-    const out = validateBuildText(b({ perks: ['A', null, 'C'], prestigePicks: [null, 'P', null, null] }))
+    const out = validateBuildText(b({ perks: ['A', null, 'C'], prestigePicks: [null, 'P', null, null], justifications: { 0: 'a', 2: 'c' } }))
     expect(out.perks).toEqual(['A', null, 'C'])
     expect(out.prestigePicks).toEqual([null, 'P', null, null])
   })
@@ -136,6 +155,7 @@ describe('validateBuildText: the build body', () => {
         weapons: { primary: 'Bolt‮ Rifle', secondary: 3, melee: { a: 1 } },
         weaponPerks: { 'Bolt Rifle': { a: true, b: 'yes', c: 1 }, Junk: 'nope' },
         perkIds: { 0: 'P', 1: 3, 2: true, 3: { nested: 1 }, 4: null },
+        justifications: { 0: 'why' },
       }),
     )
     expect(out.perks).toEqual(['Bolter Drill', null, null])

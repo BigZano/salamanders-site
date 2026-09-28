@@ -1,5 +1,5 @@
 <script setup>
-import { ref, computed, watch, onMounted } from 'vue'
+import { ref, computed, watch, onMounted, nextTick } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { usePlanner, CLASS_NAMES, MAX_PRESTIGE } from '../stores/planner'
 import { useAuth } from '../stores/auth'
@@ -116,6 +116,18 @@ function weaponPerkCount(slotKey) {
 }
 
 const isSelected = (perk) => planner.selected[perk.col] === perk.name
+
+// Every picked perk needs a reason before the build goes to the library (the
+// server enforces the same rule). Listed so the author can jump to each one.
+const unexplained = computed(() =>
+  planner.columns
+    .filter((c) => planner.selected[c.col] && !(planner.justified[c.col] || '').trim())
+    .map((c) => ({ col: c.col, name: planner.selected[c.col] })),
+)
+function explain(col) {
+  editingCol.value = col
+  nextTick(() => document.getElementById(`why-${col}`)?.focus())
+}
 
 function onPerk(perk) {
   if (perk.level > planner.level) return
@@ -375,7 +387,19 @@ onMounted(() => {
             />
           </template>
 
-          <button type="submit" class="btn-ember btn-sm save-go" :disabled="saving">
+          <div v-if="unexplained.length" class="save-needs" role="status">
+            <p>Explain every pick before saving — readers see your reasons on hover:</p>
+            <button
+              v-for="u in unexplained"
+              :key="u.col"
+              type="button"
+              class="save-needs-pick"
+              @click="explain(u.col)"
+            >
+              {{ u.name }}
+            </button>
+          </div>
+          <button type="submit" class="btn-ember btn-sm save-go" :disabled="saving || unexplained.length > 0">
             {{ saving ? 'Saving…' : 'Save to library' }}
           </button>
         </form>
@@ -1068,6 +1092,26 @@ onMounted(() => {
 .save-go {
   justify-content: center;
   margin-top: 0.2rem;
+}
+.save-needs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.35rem;
+  font-size: 0.75rem;
+  color: var(--color-smoke);
+}
+.save-needs p {
+  width: 100%;
+}
+.save-needs-pick {
+  font: inherit;
+  font-size: 0.72rem;
+  color: var(--color-ember);
+  background: transparent;
+  border: 1px solid var(--color-ember);
+  border-radius: 2px;
+  padding: 0.2rem 0.45rem;
+  cursor: pointer;
 }
 .save .fld {
   width: 100%;

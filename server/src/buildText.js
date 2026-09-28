@@ -163,10 +163,16 @@ export function validateBuildText(b) {
   if (!title) return 'Give the build a title.'
   const justifications = sanitizeJustifications(b.justifications)
   if (typeof justifications === 'string') return justifications
+  let fields
   try {
-    return { title, role, notes, justifications, ...structuredFields(b) }
+    fields = structuredFields(b)
   } catch (err) {
     if (err instanceof Invalid) return err.message
     throw err
   }
+  // A shared build explains itself: every picked perk (slot index = column)
+  // needs a reason, which readers see when they hover it.
+  const unexplained = (fields.perks || []).find((name, col) => name && !justifications[String(col)])
+  if (unexplained) return `Explain why you picked ${unexplained} (every picked perk needs a reason).`
+  return { title, role, notes, justifications, ...fields }
 }
