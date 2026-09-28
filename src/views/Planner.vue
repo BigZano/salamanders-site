@@ -1,10 +1,11 @@
 <script setup>
-import { ref, computed, watch, onMounted, nextTick } from 'vue'
+import { ref, computed, watch, onMounted, onBeforeUnmount, nextTick } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { usePlanner, CLASS_NAMES, MAX_PRESTIGE } from '../stores/planner'
 import { useAuth } from '../stores/auth'
 import { usePerkCorrections } from '../stores/perkCorrections'
 import * as buildsApi from '../lib/buildsApi'
+import { createLongPress } from '../lib/longPress'
 import WeaponSlot from '../components/WeaponSlot.vue'
 import PerkEditPanel from '../components/PerkEditPanel.vue'
 
@@ -30,9 +31,9 @@ function initials(name) {
 const hovered = ref(null)
 const popoutBelow = ref(false)
 const popoutStyle = ref({})
-function showPopout(perk, evt) {
+function showPopout(perk, el) {
   hovered.value = perk
-  const rect = evt.currentTarget.getBoundingClientRect()
+  const rect = el.getBoundingClientRect()
   const half = 150 // half the popout's ~300px width, for clamping
   const left = Math.min(Math.max(rect.left + rect.width / 2, half + 12), window.innerWidth - half - 12)
   // Not enough headroom above (near the top of the viewport) — flip below instead.
@@ -42,6 +43,18 @@ function showPopout(perk, evt) {
 }
 function hidePopout() {
   hovered.value = null
+}
+// Touch has no hover: press and hold a perk to open the popout (iOS Safari
+// neither emulates hover for a held finger nor focuses a tapped button).
+let pressedPerk = null
+const hold = createLongPress((el) => showPopout(pressedPerk, el))
+function onPerkDown(perk, evt) {
+  pressedPerk = perk
+  hold.down(evt)
+}
+// A held popout has no mouseleave to close it; the next touch anywhere does.
+function dismissHeldPopout(evt) {
+  if (evt.pointerType === 'touch') hidePopout()
 }
 const hoveredText = computed(() =>
   hovered.value ? corrections.describe(planner.activeClass, hovered.value.name) : '',
@@ -130,6 +143,7 @@ function explain(col) {
 }
 
 function onPerk(perk) {
+  if (hold.consumeClick()) return
   if (perk.level > planner.level) return
   planner.togglePerk(perk)
   editingCol.value = planner.selected[perk.col] === perk.name ? perk.col : null
@@ -167,8 +181,13 @@ async function shareBuild() {
 }
 
 onMounted(() => {
+  window.addEventListener('pointerdown', dismissHeldPopout, true)
   planner.hydrate()
   if (route.query.b) planner.applyEncoded(String(route.query.b))
+})
+onBeforeUnmount(() => {
+  window.removeEventListener('pointerdown', dismissHeldPopout, true)
+  hold.cancel()
 })
 </script>
 
@@ -230,10 +249,13 @@ onMounted(() => {
                   :class="{ selected: isSelected(perk), locked: perk.level > planner.level }"
                   :disabled="perk.level > planner.level"
                   @click="onPerk(perk)"
-                  @mouseenter="showPopout(perk, $event)"
+                  @mouseenter="showPopout(perk, $event.currentTarget)"
                   @mouseleave="hidePopout"
-                  @focus="showPopout(perk, $event)"
+                  @focus="showPopout(perk, $event.currentTarget)"
                   @blur="hidePopout"
+                  @pointerdown="onPerkDown(perk, $event)"
+                  @pointerup="hold.cancel"
+                  @pointercancel="hold.cancel"
                 >
                   <span v-if="perk.level > planner.level" class="lock">LV {{ perk.level }}</span>
                   <span v-if="isSelected(perk)" class="pick-mark" aria-hidden="true" />
@@ -670,6 +692,10 @@ onMounted(() => {
   text-align: center;
   cursor: pointer;
   transition: 0.15s;
+  /* Holding a perk opens its popout; keep iOS's callout and text selection out of the way. */
+  -webkit-touch-callout: none;
+  -webkit-user-select: none;
+  user-select: none;
 }
 .perk:hover:not(:disabled) {
   border-color: var(--color-ash-2);
