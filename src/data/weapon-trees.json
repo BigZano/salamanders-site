@@ -1,5 +1,5 @@
 {
-  "fetched": "2026-09-27T23:27:42.567Z",
+  "fetched": "2026-10-05T07:28:40.230Z",
   "weapons": {
     "Auto Bolt Rifle": {
       "perks": [
@@ -69,7 +69,7 @@
           "description": "The maximum Ammo Reserve of this Weapon increases by 20%"
         }
       ],
-      "budget": 7,
+      "budget": 8,
       "intro": [
         "Fully automatic, close-range rifle",
         "Bolters are a category of weapons that use an initial propellant charge to fire a rocket-propelled projectile. The most common ammunition type is the Standard Bolt, being a lightly armor penetrating delayed explosive .75cal/19mm projectile. Upon embedding itself in the target it will detonate, blowing its target to pieces and potentially causing collateral to close-proximity targets."
@@ -316,6 +316,40 @@
           "figures": {
             "Magazine Capacity": "45",
             "Ammo Reserve": "270"
+          }
+        },
+        {
+          "quality": "Heroic",
+          "name": "Iron Hands",
+          "gauges": {
+            "Firepower": {
+              "value": 8,
+              "raw": "8"
+            },
+            "Accuracy": {
+              "value": 5,
+              "raw": "5"
+            },
+            "Rate of Fire": {
+              "value": 9,
+              "raw": "9"
+            },
+            "Reloading Speed": {
+              "value": 5,
+              "raw": "5"
+            },
+            "Piercing": {
+              "value": 2,
+              "raw": "2"
+            },
+            "Range": {
+              "value": 5,
+              "raw": "5"
+            }
+          },
+          "figures": {
+            "Magazine Capacity": "50",
+            "Ammo Reserve": "300"
           }
         }
       ]
@@ -1970,7 +2004,7 @@
         },
         {
           "quality": "Standard",
-          "name": "Marksman Bolt Carbine (PVP)",
+          "name": "Master-Crafted Marksman",
           "gauges": {
             "Firepower": {
               "value": 2.5,
@@ -1993,13 +2027,13 @@
               "raw": "3"
             },
             "Range": {
-              "value": 10,
-              "raw": "10"
+              "value": 8,
+              "raw": "8"
             }
           },
           "figures": {
             "Magazine Capacity": "20",
-            "Ammo Reserve": "120"
+            "Ammo Reserve": "140"
           }
         },
         {
@@ -3891,7 +3925,7 @@
             }
           },
           "figures": {
-            "Magazine Capacity": "130 (PvE); 70 (PvP)"
+            "Magazine Capacity": "130 (PvE); 130 (PvP)"
           }
         },
         {
@@ -4312,7 +4346,7 @@
           },
           "figures": {
             "Magazine Capacity": "5",
-            "Ammo Reserve": "15 (PvE); 32 (PvP)"
+            "Ammo Reserve": "10 (PvE); 32 (PvP)"
           }
         },
         {
@@ -4342,7 +4376,7 @@
           },
           "figures": {
             "Magazine Capacity": "5",
-            "Ammo Reserve": "15"
+            "Ammo Reserve": "10"
           }
         },
         {
@@ -4372,7 +4406,7 @@
           },
           "figures": {
             "Magazine Capacity": "6",
-            "Ammo Reserve": "18"
+            "Ammo Reserve": "13"
           }
         },
         {
@@ -4402,7 +4436,7 @@
           },
           "figures": {
             "Magazine Capacity": "5",
-            "Ammo Reserve": "15"
+            "Ammo Reserve": "10"
           }
         },
         {
@@ -4432,7 +4466,7 @@
           },
           "figures": {
             "Magazine Capacity": "7",
-            "Ammo Reserve": "21"
+            "Ammo Reserve": "16"
           }
         },
         {
@@ -4462,7 +4496,7 @@
           },
           "figures": {
             "Magazine Capacity": "5",
-            "Ammo Reserve": "15"
+            "Ammo Reserve": "10"
           }
         },
         {
@@ -4492,7 +4526,7 @@
           },
           "figures": {
             "Magazine Capacity": "8",
-            "Ammo Reserve": "24"
+            "Ammo Reserve": "19"
           }
         },
         {
@@ -4522,7 +4556,7 @@
           },
           "figures": {
             "Magazine Capacity": "5",
-            "Ammo Reserve": "15"
+            "Ammo Reserve": "10"
           }
         },
         {
@@ -4552,7 +4586,7 @@
           },
           "figures": {
             "Magazine Capacity": "5",
-            "Ammo Reserve": "15"
+            "Ammo Reserve": "10"
           }
         }
       ]
@@ -4687,7 +4721,7 @@
             }
           },
           "figures": {
-            "Magazine Capacity": "12 (PvE); 20 (PvP)"
+            "Magazine Capacity": "12 (PvE); 12 (PvP)"
           }
         },
         {
@@ -5343,7 +5377,7 @@
             }
           },
           "figures": {
-            "Magazine Capacity": "450 (PvE); 300 (PvP)"
+            "Magazine Capacity": "450 (PvE); 450 (PvP)"
           }
         },
         {
@@ -5856,7 +5890,7 @@
             }
           },
           "figures": {
-            "Magazine Capacity": "40 (PvE); 60 (PvP)"
+            "Magazine Capacity": "40 (PvE); 40 (PvP)"
           }
         },
         {
@@ -6287,7 +6321,7 @@
             }
           },
           "figures": {
-            "Magazine Capacity": "20 (PvE); 40 (PvP)"
+            "Magazine Capacity": "16 (PvE); 16 (PvP)"
           }
         },
         {
@@ -6312,7 +6346,7 @@
             }
           },
           "figures": {
-            "Magazine Capacity": "20"
+            "Magazine Capacity": "16"
           }
         },
         {
@@ -6337,7 +6371,7 @@
             }
           },
           "figures": {
-            "Magazine Capacity": "23"
+            "Magazine Capacity": "19"
           }
         },
         {
@@ -6362,7 +6396,7 @@
             }
           },
           "figures": {
-            "Magazine Capacity": "20"
+            "Magazine Capacity": "16"
           }
         },
         {
@@ -6387,7 +6421,7 @@
             }
           },
           "figures": {
-            "Magazine Capacity": "20"
+            "Magazine Capacity": "16"
           }
         },
         {
@@ -6412,7 +6446,7 @@
             }
           },
           "figures": {
-            "Magazine Capacity": "26"
+            "Magazine Capacity": "22"
           }
         },
         {
@@ -6437,7 +6471,7 @@
             }
           },
           "figures": {
-            "Magazine Capacity": "20"
+            "Magazine Capacity": "16"
           }
         },
         {
@@ -6462,7 +6496,7 @@
             }
           },
           "figures": {
-            "Magazine Capacity": "20"
+            "Magazine Capacity": "16"
           }
         },
         {
@@ -6487,7 +6521,7 @@
             }
           },
           "figures": {
-            "Magazine Capacity": "30"
+            "Magazine Capacity": "26"
           }
         },
         {
@@ -6512,7 +6546,7 @@
             }
           },
           "figures": {
-            "Magazine Capacity": "20"
+            "Magazine Capacity": "16"
           }
         }
       ]
@@ -10754,7 +10788,7 @@
           "description": "Power Backstep can still be performed with the next Heavy Attack, even if you move out of Power Stance"
         }
       ],
-      "budget": 10,
+      "budget": 11,
       "intro": [
         "Fast power Weapon with infinitely chained attacks",
         "The Power Axe ingame sports some of the most fluid combat loop out of all melee weapons. Unlike most melee weapons, it does not have a damaging heavy attack, instead relying on its light attacks for its single target damage. Still, users will find its heavy attack's cleave and hitbox more than generous for handing minoris enemies. Thanks to its combo loops, however, one always has an answer for maximizing damage against either a horde or a single high value target. Uniquely, the Power Axe's sprint attack does more damage than other weapons'."
@@ -10945,6 +10979,25 @@
             "Speed": {
               "value": 4,
               "raw": "4"
+            },
+            "Cleaving Potential": {
+              "value": 17,
+              "raw": "17"
+            }
+          },
+          "figures": {}
+        },
+        {
+          "quality": "Heroic",
+          "name": "Frost Axe",
+          "gauges": {
+            "Strength": {
+              "value": 16,
+              "raw": "16"
+            },
+            "Speed": {
+              "value": 8,
+              "raw": "8"
             },
             "Cleaving Potential": {
               "value": 17,
