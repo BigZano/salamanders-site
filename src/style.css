@@ -24,6 +24,11 @@
   --color-magma: #e0431d;
   --color-cobalt: #6cc4ef;
   --color-violet: #bb82e0;
+  /* Roster: the hot end of the rank heat ramp, and a vacant post */
+  --color-whitehot: #f2d27a;
+  --color-vacant: #ff9a7a;
+
+  --ease-forge: cubic-bezier(0.2, 0.8, 0.2, 1);
 
   --font-display: 'Oswald Variable', 'Bahnschrift', 'DIN Condensed', 'Oswald',
     'Arial Narrow', system-ui, sans-serif;
@@ -84,6 +89,19 @@
     outline-offset: 2px;
     border-radius: 2px;
   }
+
+  /* Reduced motion: land on the final state at once. 0.01ms, not `none`, so
+     Vue <Transition> and animationend handlers still fire. */
+  @media (prefers-reduced-motion: reduce) {
+    *,
+    *::before,
+    *::after {
+      animation-duration: 0.01ms !important;
+      animation-iteration-count: 1 !important;
+      transition-duration: 0.01ms !important;
+      scroll-behavior: auto !important;
+    }
+  }
 }
 
 /* ------------------------------------------------------------------ *
@@ -125,6 +143,14 @@
     background: linear-gradient(180deg, rgba(14, 28, 22, 0.72), rgba(11, 21, 17, 0.72));
     border: 1px solid var(--color-ash);
     backdrop-filter: blur(6px);
+  }
+
+  /* Readable panel for text that sits over the volcano: dense enough that body
+     text keeps 4.5:1 even against the brightest lava (see style.test.js). */
+  .surface {
+    background: linear-gradient(180deg, rgba(14, 28, 22, 0.86), rgba(9, 18, 14, 0.9));
+    border: 1px solid var(--color-ash);
+    backdrop-filter: blur(8px);
   }
 
   /* Primary molten CTA */
