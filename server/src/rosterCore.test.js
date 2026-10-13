@@ -121,14 +121,15 @@ const spec = (key) => L.SPECIALTIES.find((s) => s.key === key)
 /**
  * Everyone placed anywhere in the main roster, flattened, each member once: acting
  * duplicates are dropped, and so is a High Command Captain's second appearance as
- * their company's head (the banner entry counts).
+ * their company's head (the banner entry counts). Only that exact copy is dropped: a
+ * banner member in a head row of any other company still counts.
  */
 const placed = (r) => {
   const banner = r.highCommand.flatMap((x) => x.members)
   const inBanner = new Set(banner.map((m) => m.id))
   return [
     ...banner,
-    ...r.branches.flatMap((b) => [...b.head.members.filter((m) => !m.acting && !inBanner.has(m.id)), ...b.aside, ...b.rows.flatMap((x) => x.members)]),
+    ...r.branches.flatMap((b) => [...b.head.members.filter((m) => !m.acting && !(inBanner.has(m.id) && m.company === b.number)), ...b.aside, ...b.rows.flatMap((x) => x.members)]),
     ...r.unassigned.rows.flatMap((x) => x.members),
   ]
 }

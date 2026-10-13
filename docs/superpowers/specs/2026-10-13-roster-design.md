@@ -95,10 +95,10 @@ The single exception is servitor detection, which also reads the name.
 2. **High Command** (top banner, in this order): Lord of Drakes, Lord
    Protector of the 7 Realms, Pyre Guard, Chapter Master, Master of Sanctity
    (labelled "Lord Chaplain"). A High Command member who also holds the
-   Captain role and a company role (the lowest-numbered company wins, as in
-   rule 4) also heads that company: they stay in the banner and are added to
+   Captain role and a company (a company role, or one a rank variant implies;
+   see Rank variants; the lowest-numbered company wins, as in rule 4) also heads that company: they stay in the banner and are added to
    the company's head row as a normal, unlabelled member. A High Command
-   Captain with no company role is in the banner only. High Command still
+   Captain with no company is in the banner only. High Command still
    wins over the Venerable Dreadnought rule; the company head row is the
    extra copy.
 3. **Master of the Forge**, **Chief Librarian**, **Chief Apothecary** → head of
@@ -347,7 +347,7 @@ core and the handler (both added to `stryker.config.mjs`).
     non-Legion never appear in the main roster; output is identical under any input
     ordering; every Legion member appears exactly once (the acting head's
     second appearance in the banner, and a High Command Captain's second appearance
-as company head, excepted); company comes from roles only;
+    as company head, excepted); company comes from roles only;
     leavers absent.
   - Hostile inputs: unknown role ids, missing or non-array `roles`, null nick
     and global name, emoji and overlong names, duplicate ids, 2+ company roles,
