@@ -135,8 +135,12 @@ export function buildRoster(rawMembers, { guildId } = {}) {
 
     const placed = place(f, companyOf(f.roles).company)
     const m = member(f)
-    if (placed.to === 'highCommand') highCommand.get(placed.rank.key).push(m)
-    else if (placed.to === 'unassigned') unassigned.get((placed.rank ?? NO_RANK).key).push(m)
+    if (placed.to === 'highCommand') {
+      highCommand.get(placed.rank.key).push(m)
+      // A High Command Captain with a company also heads it, as a plain member copy.
+      const { company } = companyOf(f.roles)
+      if (f.roles.has(CAPTAIN.id) && company !== null) slots.get(`company-${company}`).head.push(member(f))
+    } else if (placed.to === 'unassigned') unassigned.get((placed.rank ?? NO_RANK).key).push(m)
     else {
       const slot = slots.get(placed.to)
       if (placed.head) slot.head.push(m)

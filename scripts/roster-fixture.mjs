@@ -36,17 +36,18 @@ export function syntheticGuild() {
   }
   const add = (roles, opts) => person([L.LEGION_ROLE, ...roles], opts)
 
-  // High Command, with a Pyre Guard standing in as 2nd Company's acting head.
+  // High Command, with a Pyre Guard standing in as 2nd Company's acting head,
+  // and the Chapter Master also the 4th Company's Captain (banner and head row).
   add([L.HIGH_COMMAND[0].id])
   add([L.HIGH_COMMAND[2].id, co(2), cmd(2)])
   add([L.HIGH_COMMAND[2].id])
-  add([L.HIGH_COMMAND[3].id])
+  add([L.HIGH_COMMAND[3].id, L.CAPTAIN.id, co(4), cmd(4)])
   add([L.HIGH_COMMAND[4].id])
 
-  // Companies. 2nd is run by the acting head; 6th has nobody, so it is vacant.
+  // Companies. 2nd is run by the acting head; 4th by the High Command Captain above; 6th has nobody, so it is vacant.
   for (const c of L.COMPANIES) {
     const k = c.number
-    if (k !== 2 && k !== 6) add([L.CAPTAIN.id, c.roleId, c.commandRoleIds[0]])
+    if (k !== 2 && k !== 4 && k !== 6) add([L.CAPTAIN.id, c.roleId, c.commandRoleIds[0]])
     for (let i = 0; i < 2; i++) add([cr('lieutenant').id, c.roleId])
     add([(k % 2 ? cr('company-ancient') : cr('company-champion')).id, c.roleId])
     add([cr('veteran-sergeant').id, c.roleId])

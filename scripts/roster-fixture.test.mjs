@@ -25,6 +25,11 @@ describe('the synthetic roster fixture', () => {
     expect(branch('company-6').head).toMatchObject({ vacant: true, members: [] })
     expect(branch('company-2').head.members.every((m) => m.acting)).toBe(true)
     expect(branch('company-2').head.members.length).toBeGreaterThan(0)
+    // a High Command Captain heads their company too, unlabelled
+    const head4 = branch('company-4').head.members
+    expect(head4).toHaveLength(1)
+    expect(head4[0]).not.toHaveProperty('acting')
+    expect(fx.roster.highCommand.flatMap((r) => r.members).some((m) => m.id === head4[0].id)).toBe(true)
     expect(branch('venerable-dreadnoughts').head.members.length).toBeGreaterThanOrEqual(2)
     expect(branch('company-4').aside.length).toBeGreaterThan(0)
     expect(branch('reclusiam').head.members.length).toBeGreaterThan(0)

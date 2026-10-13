@@ -118,12 +118,20 @@ const names = (ms) => ms.map((m) => m.name)
 const rowOf = (b, key) => b.rows.find((r) => r.rank.key === key)?.members ?? []
 const LEG = L.LEGION_ROLE
 const spec = (key) => L.SPECIALTIES.find((s) => s.key === key)
-/** Everyone placed anywhere in the main roster, flattened, acting duplicates dropped. */
-const placed = (r) => [
-  ...r.highCommand.flatMap((x) => x.members),
-  ...r.branches.flatMap((b) => [...b.head.members.filter((m) => !m.acting), ...b.aside, ...b.rows.flatMap((x) => x.members)]),
-  ...r.unassigned.rows.flatMap((x) => x.members),
-]
+/**
+ * Everyone placed anywhere in the main roster, flattened, each member once: acting
+ * duplicates are dropped, and so is a High Command Captain's second appearance as
+ * their company's head (the banner entry counts).
+ */
+const placed = (r) => {
+  const banner = r.highCommand.flatMap((x) => x.members)
+  const inBanner = new Set(banner.map((m) => m.id))
+  return [
+    ...banner,
+    ...r.branches.flatMap((b) => [...b.head.members.filter((m) => !m.acting && !inBanner.has(m.id)), ...b.aside, ...b.rows.flatMap((x) => x.members)]),
+    ...r.unassigned.rows.flatMap((x) => x.members),
+  ]
+}
 
 describe('buildRoster: shape', () => {
   it('returns all twelve branches, vacant, for an empty or hostile input', () => {
@@ -499,6 +507,76 @@ describe('buildRoster: acting heads', () => {
     expect(names(branch(r, 'company-4').head.members)).toEqual(['Floating'])
     expect(branch(r, 'company-4').head.members[0].acting).toBe(true)
     expect(names(rowOf({ rows: r.unassigned.rows }, 'no-rank'))).toEqual(['Floating'])
+  })
+})
+
+describe('buildRoster: High Command Captains', () => {
+  const hc = (i) => L.HIGH_COMMAND[i].id
+
+  it('also heads their company, unlabelled, while staying in the banner; other Command-role holders are not heads', () => {
+    const master = mem([LEG, hc(3), L.CAPTAIN.id, co(1), cmd(1)], { name: 'Master' })
+    const pyre = mem([LEG, hc(2), cmd(1)], { name: 'Pyre A' })
+    const lord = mem([LEG, hc(0), cmd(1, 1)], { name: 'Lord' })
+    const r = build(master, pyre, lord)
+    const head = branch(r, 'company-1').head
+    expect(head.vacant).toBe(false)
+    expect(names(head.members)).toEqual(['Master'])
+    expect(head.members[0]).not.toHaveProperty('acting')
+    expect(head.members[0]).toMatchObject({ id: master.user.id, company: 1 })
+    expect(r.highCommand.flatMap((x) => names(x.members)).sort()).toEqual(['Lord', 'Master', 'Pyre A'])
+    expect(placed(r)).toHaveLength(3)
+  })
+
+  it('stays in the banner only when they hold no company role', () => {
+    const r = build(mem([LEG, hc(3), L.CAPTAIN.id], { name: 'Floating Master' }))
+    expect(names(r.highCommand[0].members)).toEqual(['Floating Master'])
+    expect(r.branches.every((b) => b.head.vacant && b.head.members.length === 0)).toBe(true)
+  })
+
+  it('does not stop a Captain-less company getting its acting heads', () => {
+    const r = build(
+      mem([LEG, hc(3), L.CAPTAIN.id, co(1)], { name: 'Master' }),
+      mem([LEG, hc(2), co(2), cmd(2)], { name: 'Pyre A' }),
+    )
+    expect(branch(r, 'company-2').head.members.map((m) => [m.name, m.acting])).toEqual([['Pyre A', true]])
+    expect(names(branch(r, 'company-1').head.members)).toEqual(['Master'])
+  })
+
+  it('heads alongside a non-High-Command Captain of the same company, neither acting', () => {
+    const r = build(
+      mem([LEG, hc(3), L.CAPTAIN.id, co(4)], { name: 'Master' }),
+      mem([LEG, L.CAPTAIN.id, co(4)], { name: 'Plain Captain' }),
+      mem([LEG, hc(2), cmd(4)], { name: 'Pyre A' }),
+    )
+    const head = branch(r, 'company-4').head
+    expect(head.members.map((m) => [m.name, m.acting])).toEqual([['Master', undefined], ['Plain Captain', undefined]])
+    expect(placed(r)).toHaveLength(3)
+  })
+
+  it('shows a Venerable Dreadnought Captain in the banner and as company head, not in the Venerable Dreadnoughts branch', () => {
+    const r = build(mem([LEG, hc(3), L.CAPTAIN.id, L.VENERABLE_DREADNOUGHT.id, co(3)], { name: 'Old Master' }))
+    expect(names(branch(r, 'company-3').head.members)).toEqual(['Old Master'])
+    expect(r.highCommand).toHaveLength(1)
+    const vd = branch(r, 'venerable-dreadnoughts')
+    expect(vd.head).toEqual(expect.objectContaining({ members: [], vacant: true }))
+    expect(vd.rows.flatMap((x) => x.members)).toEqual([])
+  })
+
+  it('heads the lowest-numbered of several held companies only, keeping alsoCompanies', () => {
+    for (const roles of [[co(5), co(2)], [co(2), co(5)]]) {
+      const r = build(mem([LEG, hc(3), L.CAPTAIN.id, ...roles], { name: 'Two Cos' }))
+      expect(names(branch(r, 'company-2').head.members)).toEqual(['Two Cos'])
+      expect(branch(r, 'company-2').head.members[0]).toMatchObject({ company: 2, alsoCompanies: [5] })
+      expect(branch(r, 'company-5').head.members).toEqual([])
+      expect(r.highCommand[0].members[0]).toMatchObject({ company: 2, alsoCompanies: [5] })
+    }
+  })
+
+  it('a variant role implying a company counts as a company role', () => {
+    const owner = L.COMPANY_RANKS.find((r) => r.variants?.length > 0)
+    const v = owner.variants[0]
+    const r = build(mem([LEG, hc(3), L.CAPTAIN.id, v.id], { name: 'Variant Master' }))
+    expect(names(branch(r, `company-${v.company}`).head.members)).toEqual(['Variant Master'])
   })
 })
 

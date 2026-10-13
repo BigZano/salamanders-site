@@ -94,7 +94,13 @@ The single exception is servitor detection, which also reads the name.
      otherwise it is placed by those roles like anyone else.
 2. **High Command** (top banner, in this order): Lord of Drakes, Lord
    Protector of the 7 Realms, Pyre Guard, Chapter Master, Master of Sanctity
-   (labelled "Lord Chaplain").
+   (labelled "Lord Chaplain"). A High Command member who also holds the
+   Captain role and a company role (the lowest-numbered company wins, as in
+   rule 4) also heads that company: they stay in the banner and are added to
+   the company's head row as a normal, unlabelled member. A High Command
+   Captain with no company role is in the banner only. High Command still
+   wins over the Venerable Dreadnought rule; the company head row is the
+   extra copy.
 3. **Master of the Forge**, **Chief Librarian**, **Chief Apothecary** → head of
    the Forge, Librarius, Apothecarion branch.
 4. **Captain** → head of the branch for the company they hold. A member who is
@@ -159,10 +165,14 @@ account holds no High Command, head, Dreadnought, specialty, company rank or
 company role. A nickname alone therefore cannot pull a ranked member off the
 roster. Servitors sort by name and are excluded from the Infirmary list.
 
-**Acting head.** A company with no Captain takes as head every High Command
+**Acting head.** A company still without a head after every placement, counting
+High Command Captains (rule 2), takes as head every High Command
 member, and every Captain of another company, who holds that company's Company
 Command role, marked `acting: true`. Such a member also stays where they
-already are: in the High Command banner, or as head of their own company. When
+already are: in the High Command banner, or as head of their own company. A
+High Command Captain heads their company as a plain Captain, so other High
+Command members holding that company's Command role are not listed as acting
+heads there. When
 a Captain is appointed, the Captain takes over with no change needed. A
 Captain who holds the Command role of a company that has its own Captain is
 simply a Captain; nothing is labelled. No role-grant timestamps are used,
@@ -336,7 +346,8 @@ core and the handler (both added to `stryker.config.mjs`).
     Infirmary holders appear only in the Infirmary list, Legion role or not;
     non-Legion never appear in the main roster; output is identical under any input
     ordering; every Legion member appears exactly once (the acting head's
-    second appearance in the banner excepted); company comes from roles only;
+    second appearance in the banner, and a High Command Captain's second appearance
+as company head, excepted); company comes from roles only;
     leavers absent.
   - Hostile inputs: unknown role ids, missing or non-array `roles`, null nick
     and global name, emoji and overlong names, duplicate ids, 2+ company roles,
@@ -364,7 +375,8 @@ New optional env: `ROSTER_TTL_MS` (default 300000).
 - The Infirmary list shows every holder of the role, including the third or so
   who never held the Legion role (Recruits, Guests and so on), each flagged
   `legion` or not.
-- The acting head also stays in the High Command banner.
+- The acting head also stays in the High Command banner. So does a High Command
+  Captain, who appears in both the banner and their company's head row, unlabelled.
 - Command-tier roles for the Infirmary are listed under Access; Administrators
   are not added separately.
 - Dreadnought status outranks specialty roles (some Dreadnoughts also hold
