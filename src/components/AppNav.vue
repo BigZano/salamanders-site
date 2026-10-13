@@ -29,6 +29,7 @@ const links = computed(() => {
         { to: '/accolades', label: 'Accolades', section: true },
         { to: '/ranks', label: 'Ranks', section: true },
         { to: '/reports', label: 'Reports', section: true },
+        { to: '/roster', label: 'Roster', section: true },
       ]
     : [...baseLinks]
   if (corrections.privileges?.historyViewer) out.push({ to: '/history', label: 'Version History', section: true })

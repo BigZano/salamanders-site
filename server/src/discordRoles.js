@@ -22,11 +22,16 @@ export function createDiscordRoles({ fetchImpl = fetch, apiBase, guildId, botTok
 
   async function get(path, authorization) {
     if (!configured) throw new Upstream('Discord lookups are not configured.')
-    const res = await fetchImpl(`${apiBase}${path}`, {
-      headers: { Authorization: authorization },
-      signal: AbortSignal.timeout(timeoutMs),
-    })
-    return { status: res.status, body: await res.json().catch(() => null) }
+    try {
+      const res = await fetchImpl(`${apiBase}${path}`, {
+        headers: { Authorization: authorization },
+        signal: AbortSignal.timeout(timeoutMs),
+      })
+      return { status: res.status, body: await res.json().catch(() => null) }
+    } catch {
+      // Network error, abort or timeout. Drop the original: its message can carry the request url, and with it a user id.
+      throw new Upstream('Discord is unreachable.')
+    }
   }
   const bot = (path) => get(path, `Bot ${botToken}`)
 

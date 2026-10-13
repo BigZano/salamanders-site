@@ -22,11 +22,19 @@ const USERS = {
   'test-techmarine-token': { id: '100000000000000010', username: 'techmarine-tester' },
   // Master of the Forge — may revoke the Techmarine.
   'test-forge-token': { id: '100000000000000011', username: 'forge-tester' },
+  // Company command (Captain of the 3rd) — may open the Infirmary list.
+  'test-captain-token': { id: '100000000000000020', username: 'captain-tester' },
 }
 const LEGION_ROLE = '1377787723976409211'
 const RECLUSIARCH_ROLE = '1323334632904855592'
 const TECHMARINE_ROLE = '1322056087859499042'
 const FORGE_ROLE = '1322056087867883565'
+const CAPTAIN_ROLE = '1322056087867883561'
+const THIRD_COMPANY_ROLE = '1322056087850979333'
+const THIRD_COMMAND_ROLE = '1323056001779241034'
+const SERGEANT_ROLE = '1322056087859499044'
+const SCOUT_ROLE = '1430743608822206504'
+const INFIRMARY_ROLE = '1362059023481831517'
 const GUILD_ID = '1322056087792521269'
 // Guild membership as Discord's bot endpoint would report it.
 const MEMBERS = {
@@ -36,6 +44,12 @@ const MEMBERS = {
   '100000000000000002': { roles: [LEGION_ROLE, RECLUSIARCH_ROLE] },
   '100000000000000010': { roles: [LEGION_ROLE, TECHMARINE_ROLE] },
   '100000000000000011': { roles: [LEGION_ROLE, FORGE_ROLE] },
+  '100000000000000020': { roles: [LEGION_ROLE, CAPTAIN_ROLE, THIRD_COMPANY_ROLE, THIRD_COMMAND_ROLE], nick: 'E2E Captain' },
+  '100000000000000021': { roles: [LEGION_ROLE, SERGEANT_ROLE, THIRD_COMPANY_ROLE], nick: 'E2E Sergeant' },
+  '100000000000000022': { roles: [LEGION_ROLE, INFIRMARY_ROLE, SCOUT_ROLE], nick: 'E2E Convalescent' },
+  '100000000000000023': { roles: [INFIRMARY_ROLE], nick: 'E2E Recruit On Leave' },
+  '100000000000000024': { roles: [LEGION_ROLE, SCOUT_ROLE, THIRD_COMPANY_ROLE], nick: 'E2E Leaver' },
+  '100000000000000025': { roles: [LEGION_ROLE], nick: 'E2E Servitor', bot: true },
 }
 
 // The browser calls this cross-origin (from wherever "web" is served), unlike
@@ -43,7 +57,7 @@ const MEMBERS = {
 // exactly this kind of client-side OAuth flow — this mock has to do the same.
 function withCors(res) {
   res.headers.set('Access-Control-Allow-Origin', '*')
-  res.headers.set('Access-Control-Allow-Methods', 'GET, OPTIONS')
+  res.headers.set('Access-Control-Allow-Methods', 'GET, POST, OPTIONS')
   res.headers.set('Access-Control-Allow-Headers', 'Authorization, Content-Type')
   return res
 }
@@ -83,7 +97,7 @@ Bun.serve({
       const list = Object.entries(MEMBERS).map(([id, m]) => ({
         nick: m.nick ?? null,
         roles: m.roles,
-        user: { id, username: byId[id]?.username ?? `user-${id}`, global_name: null },
+        user: { id, username: byId[id]?.username ?? `user-${id}`, global_name: null, ...(m.bot ? { bot: true } : {}) },
       }))
       return withCors(Response.json(list))
     }
@@ -99,6 +113,13 @@ Bun.serve({
     // The wiki bake, standing in for raw.githubusercontent.com (BAKE_BASE_URL).
     const bakeMatch = url.pathname.match(/^\/bake\/(weapon-trees|perk-details)\.json$/)
     if (bakeMatch) return withCors(new Response(Bun.file(`/bake/${bakeMatch[1]}.json`), { headers: { 'Content-Type': 'application/json' } }))
+
+    // Test hook: a member leaves the guild (the leaver spec).
+    const leave = url.pathname.match(/^\/__test\/leave\/(\d+)$/)
+    if (leave && request.method === 'POST') {
+      delete MEMBERS[leave[1]]
+      return withCors(Response.json({ left: leave[1] }))
+    }
 
     return withCors(new Response('Not found', { status: 404 }))
   },

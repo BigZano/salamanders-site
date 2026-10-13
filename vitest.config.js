@@ -11,6 +11,10 @@ const GATED = [
   'server/src/archiveKey.js',
   'src/lib/longPress.js',
   'server/src/displayNames.js',
+  'server/src/rosterMember.js',
+  'server/src/rosterCore.js',
+  'server/src/roster.js',
+  'server/src/rosterHandler.js',
 ]
 
 export default defineConfig({

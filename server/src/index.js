@@ -22,6 +22,8 @@ import { createHistoryStore } from './historyStore.js'
 import { createPerksHandler } from './perks.js'
 import { createPrivileges } from './privileges.js'
 import { createReportsHandler } from './reports.js'
+import { createRoster } from './roster.js'
+import { createRosterHandler } from './rosterHandler.js'
 import { createReportsStore } from './reportsStore.js'
 import { createNotifier } from './webhook.js'
 
@@ -51,6 +53,16 @@ const roles = createDiscordRoles({ apiBase: DISCORD_API_BASE, guildId: GUILD_ID,
 // Build authors are shown by Discord display name, from an in-memory
 // directory of the guild — see displayNames.js.
 const displayNames = createDisplayNames({ apiBase: DISCORD_API_BASE, guildId: GUILD_ID, botToken: BOT_TOKEN })
+
+// The Legion roster and Infirmary list — see roster.js and rosterHandler.js.
+// Its own guild-member cache, never written to disk.
+const roster = createRoster({
+  apiBase: DISCORD_API_BASE,
+  guildId: GUILD_ID,
+  botToken: BOT_TOKEN,
+  ttlMs: Number(process.env.ROSTER_TTL_MS) || undefined,
+})
+const rosterRoutes = createRosterHandler({ roles, roster })
 
 // Member reports — see reports.js. Role ids default to XVIIILegion (files)
 // and Reclusiarch (reviews); the webhook pings leadership with an id only.
@@ -165,6 +177,8 @@ Bun.serve({
       if (reportsRes) return cors(reportsRes)
       const perksRes = await perks(request, url)
       if (perksRes) return cors(perksRes)
+      const rosterRes = await rosterRoutes(request, url)
+      if (rosterRes) return cors(rosterRes)
       if (url.pathname === '/health') return json({ ok: true })
       if (url.pathname === '/archive/key' && request.method === 'GET') return cors(await archiveKey(request))
       if (url.pathname === '/builds/moderator' && request.method === 'GET') return cors(await moderation.status(request))

@@ -73,3 +73,38 @@ describe('isAdmin', () => {
     await expect(make({}).roles.isAdmin(USER, [])).rejects.toBeInstanceOf(Upstream)
   })
 })
+
+describe('Discord unreachable', () => {
+  const unreachable = (fetchImpl, over = {}) =>
+    createDiscordRoles({ fetchImpl, apiBase: 'https://d.test/api', guildId: GUILD, botToken: 'bot', ...over })
+  const hang = (_url, init) =>
+    new Promise((_, reject) => init.signal.addEventListener('abort', () => reject(init.signal.reason)))
+
+  it.each([
+    ['a network error', () => Promise.reject(new TypeError('fetch failed'))],
+    ['an abort', () => Promise.reject(new DOMException('aborted', 'AbortError'))],
+    ['a timeout', () => Promise.reject(new DOMException('timed out', 'TimeoutError'))],
+  ])('throws Upstream, not the raw error, on %s', async (_, fetchImpl) => {
+    const roles = unreachable(fetchImpl)
+    await expect(roles.identify(req('Bearer tok'))).rejects.toBeInstanceOf(Upstream)
+    await expect(roles.rolesOf(USER)).rejects.toBeInstanceOf(Upstream)
+    await expect(roles.isAdmin(USER, [])).rejects.toBeInstanceOf(Upstream)
+  })
+
+  it('throws Upstream when Discord never answers within the timeout', async () => {
+    await expect(unreachable(hang, { timeoutMs: 20 }).rolesOf(USER)).rejects.toBeInstanceOf(Upstream)
+  })
+
+  it('does not carry the request url, and so the user id, into the error', async () => {
+    const fetchImpl = () => Promise.reject(new TypeError(`fetch failed: https://d.test/api/v10/guilds/${GUILD}/members/${USER}`))
+    const err = await unreachable(fetchImpl).rolesOf(USER).catch((e) => e)
+    expect(err).toBeInstanceOf(Upstream)
+    expect(err.message).not.toContain(USER)
+  })
+
+  it('throws Upstream when the body stream fails mid-read', async () => {
+    const broken = new Response(new ReadableStream({ start: (c) => c.error(new Error('reset')) }), { status: 200 })
+    // an unreadable body is a null body, so a good status with no roles is the odd answer Upstream already covers
+    await expect(unreachable(async () => broken).rolesOf(USER)).rejects.toBeInstanceOf(Upstream)
+  })
+})
