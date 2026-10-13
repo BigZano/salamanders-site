@@ -145,7 +145,7 @@ matching the repo (the Vue skill's TypeScript default does not apply).
 | `lib/rosterView.js` | Pure: `buildRosterView(roster)`, `heatAt(t)`, `showCompanyTag(member, branch)`. |
 | `lib/useOpenBranches.js` | Open set, toggle, set-all, hash deep link. |
 | `lib/useRosterPolling.js` | The 60 s visible-aware loop and cleanup. |
-| `lib/pinReader.js` | `withReaderPinned(mutate)` and `openNow(el, open)`: the DOM helpers for bulk changes and jumps (section 2). Unit-tested with stubbed rects. |
+| `lib/pinReader.js` | `withReaderPinned(items, mutate)` and `openNow(open)`: async DOM helpers for bulk changes and jumps (section 2). Both wait one Vue tick before measuring, because state changes patch the DOM on the next tick. Unit-tested with stubbed rects. |
 | `lib/useNavLinks.js` | Shared nav link list (site-wide, section 6). |
 
 `buildRosterView` runs once per snapshot, in one pass over the roster, and returns
