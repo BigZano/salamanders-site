@@ -163,6 +163,26 @@ describe('mergeTrees', () => {
     expect(out.A.versions.map((v) => v.name)).toEqual(['Standard-Issue', 'Marksman (PVP)'])
   })
 
+  it('keepPerks holds the baked version when the wiki lists one name twice, instead of copying it twice', () => {
+    const prev = tree({
+      versions: [ver('Standard-Issue', 5), ver('Marksman (PVP)', 7), ver('Master-Crafted', 6), ver('MC Marksman', 9)],
+    })
+    // The wiki relabelled the PvP row as a second "MC Marksman".
+    const next = fresh({
+      versions: [ver('Standard-Issue', 5), ver('MC Marksman', 7), ver('Master-Crafted', 6), ver('MC Marksman', 9)],
+    })
+    const out = mergeTrees({ A: prev }, { A: next }, { keepPerks: true })
+    expect(out.A.versions.map((v) => v.name)).toEqual(['Standard-Issue', 'Master-Crafted', 'MC Marksman', 'Marksman (PVP)'])
+    expect(out.A.versions[2].gauges.Strength.value).toBe(9)
+  })
+
+  it('keepPerks keeps only the last row when a duplicated name has no baked version', () => {
+    const prev = tree({ versions: [ver('Standard-Issue', 5)] })
+    const next = fresh({ versions: [ver('Standard-Issue', 5), ver('New', 1), ver('New', 2)] })
+    const out = mergeTrees({ A: prev }, { A: next }, { keepPerks: true })
+    expect(out.A.versions.map((v) => [v.name, v.gauges.Strength.value])).toEqual([['Standard-Issue', 5], ['New', 2]])
+  })
+
   it('without keepPerks the fresh versions win wholesale', () => {
     const prev = tree({ versions: [ver('Standard-Issue', 5), ver('Marksman (PVP)', 7)] })
     const next = fresh({ versions: [ver('Standard-Issue', 6)] })

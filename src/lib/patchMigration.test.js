@@ -47,6 +47,12 @@ describe('migrateSelection', () => {
     }
   })
 
+  it('names the class on every notice', () => {
+    const r = run({ selectedPerks: { 7: 'Signal Jammer' }, prestigePicks: ['Exigency Charge', null, null, null] })
+    expect(r.notices).toHaveLength(2)
+    expect(r.notices.every((n) => n.className === 'Tactical')).toBe(true)
+  })
+
   it('carries the table note onto the notice', () => {
     expect(run({ selectedPerks: { 4: 'Vital Data' } }).notices[0].note).toBe('Vital Data moved to level 8')
   })

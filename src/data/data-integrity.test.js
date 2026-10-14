@@ -33,6 +33,13 @@ describe('weapons', () => {
     expect(bad).toEqual([])
   })
 
+  it('lists each version of a weapon once', () => {
+    for (const [name, t] of Object.entries(baked)) {
+      const names = t.versions.map((v) => v.name)
+      expect(names.filter((n, i) => names.indexOf(n) !== i), name).toEqual([])
+    }
+  })
+
   it('records the defence type per melee version', () => {
     expect(version('Thunder Hammer', 'Standard-Issue').defence).toBe('Balanced')
     expect(version('Thunder Hammer', 'Master-Crafted - Beta').defence).toBe('Fencing')
@@ -60,7 +67,10 @@ describe('weapons', () => {
 
   it('holds weapon perk text at the previous bake (Fast Reload)', () => {
     const fast = baked['Auto Bolt Rifle'].perks.find((p) => p.name === 'Fast Reload' && p.quality === 'Master-Crafted')
-    expect(fast.description).toBe('Reload all Weapons 10% faster')
+    // The wiki says "This Weapon reloads 10% faster"; Patch Notes 15.0 do not mention it.
+    expect(fast.description, 'HELD ON PURPOSE (docs/handoff/2026-10-14-patch-15-data.md): update this test when the wiki weapon perks are adopted').toBe(
+      'Reload all Weapons 10% faster',
+    )
   })
 
   it('updates the class melee lists for Patch 15.0', () => {
@@ -142,7 +152,9 @@ describe('class perks', () => {
 
   it('holds the other classes at the previous bake (Heavy prestige)', () => {
     const names = details.classes.Heavy.prestige.map((p) => p.name)
-    expect(names).toContain('Honed Precision')
-    expect(names).not.toContain('Restorative Capacity')
+    // The wiki swapped it for Restorative Capacity; Patch Notes 15.0 do not mention it.
+    const why = 'HELD ON PURPOSE (docs/handoff/2026-10-14-patch-15-data.md): update this test, and add a perk-migrations entry, when Heavy is adopted'
+    expect(names, why).toContain('Honed Precision')
+    expect(names, why).not.toContain('Restorative Capacity')
   })
 })

@@ -150,10 +150,15 @@ export function buildTree(doc) {
  */
 function holdVersions(previous, fresh) {
   const before = new Map(previous.map((v) => [v.name, v]))
-  const out = fresh.map((f) => {
+  const lastAt = new Map(fresh.map((f, i) => [f.name, i]))
+  const out = []
+  fresh.forEach((f, i) => {
+    // A name the wiki lists twice (a mislabelled row) cannot be matched to a baked
+    // version row by row: keep the baked one once, where the last such row sits.
+    if (lastAt.get(f.name) !== i) return
     const p = before.get(f.name)
-    if (!p) return f
-    return f.defence ? { ...p, defence: f.defence } : p
+    if (!p) out.push(f)
+    else out.push(f.defence && fresh.filter((x) => x.name === f.name).length === 1 ? { ...p, defence: f.defence } : p)
   })
   const seen = new Set(out.map((v) => v.name))
   return [...out, ...previous.filter((v) => !seen.has(v.name))]

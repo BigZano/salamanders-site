@@ -1,5 +1,5 @@
 {
-  "fetched": "2026-10-14T21:25:31.324Z",
+  "fetched": "2026-10-14T21:47:12.773Z",
   "weapons": {
     "Auto Bolt Rifle": {
       "perks": [
@@ -2000,40 +2000,6 @@
           "figures": {
             "Magazine Capacity": "30",
             "Ammo Reserve": "240 (PvE); 180(PvP)"
-          }
-        },
-        {
-          "quality": "Master-Crafted",
-          "name": "Master-Crafted Marksman",
-          "gauges": {
-            "Firepower": {
-              "value": 4,
-              "raw": "4"
-            },
-            "Accuracy": {
-              "value": 7,
-              "raw": "7"
-            },
-            "Rate of Fire": {
-              "value": 4.5,
-              "raw": "4+"
-            },
-            "Reloading Speed": {
-              "value": 4,
-              "raw": "4"
-            },
-            "Piercing": {
-              "value": 3,
-              "raw": "3"
-            },
-            "Range": {
-              "value": 8,
-              "raw": "8"
-            }
-          },
-          "figures": {
-            "Magazine Capacity": "20",
-            "Ammo Reserve": "140"
           }
         },
         {

@@ -59,9 +59,14 @@ function reportHeld(previous, fresh) {
 
   for (const [name, f] of Object.entries(fresh)) {
     const before = new Map((previous[name]?.versions || []).map((v) => [v.name, v]))
+    const listed = new Map()
+    for (const v of f.versions) listed.set(v.name, (listed.get(v.name) || 0) + 1)
+    for (const [version, n] of listed) {
+      if (n > 1) console.log(`  held duplicate ${name} / ${version}: the wiki lists it ${n} times, the baked version is kept`)
+    }
     for (const v of f.versions) {
       const was = before.get(v.name)
-      if (was && statsOf(was) !== statsOf(v)) {
+      if (listed.get(v.name) === 1 && was && statsOf(was) !== statsOf(v)) {
         total.stats++
         console.log(`  held stats ${name} / ${v.name}: ${statsOf(was)} -> ${statsOf(v)}`)
       }

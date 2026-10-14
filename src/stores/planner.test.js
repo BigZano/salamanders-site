@@ -271,21 +271,68 @@ describe('Patch 15.0 migration', () => {
     expect(planner.selected[7]).toBe('Signal Jammer')
   })
 
-  it('replaces the notices when a different build is loaded', () => {
+  it('replaces that class notices when its build is loaded again', () => {
     const planner = usePlanner()
     planner.applyBuildData(stale)
     expect(planner.staleNotices).toHaveLength(2)
-    planner.applyBuildData({ className: 'Vanguard', perkIds: {}, justifications: {} })
+    planner.applyBuildData({ ...stale, perkIds: {}, justifications: {}, prestigePicks: [] })
     expect(planner.staleNotices).toEqual([])
   })
 
-  it('clears the notices when the class changes, not when the same class is re-selected', () => {
+  it('names the class on each notice and shows only the active class its own', () => {
     const planner = usePlanner()
     planner.applyBuildData(stale)
-    planner.setClass('Tactical')
-    expect(planner.staleNotices).toHaveLength(2)
+    expect(planner.staleNotices.every((n) => n.className === 'Tactical')).toBe(true)
+    expect(planner.activeStaleNotices).toHaveLength(2)
     planner.setClass('Vanguard')
-    expect(planner.staleNotices).toEqual([])
+    expect(planner.activeStaleNotices).toEqual([])
+    planner.setClass('Tactical')
+    expect(planner.activeStaleNotices).toHaveLength(2)
+  })
+
+  it('keeps the notice for a class the user is not viewing until they open it', () => {
+    localStorage.setItem(KEY, JSON.stringify({
+      activeClass: 'Vanguard',
+      selectedPerks: { Tactical: { 7: 'Signal Jammer' } },
+      justifications: { Tactical: { 7: 'jam' } },
+    }))
+    const planner = usePlanner()
+    planner.hydrate()
+    expect(planner.activeStaleNotices).toEqual([])
+    planner.setClass('Tactical')
+    expect(planner.activeStaleNotices).toHaveLength(1)
+    expect(planner.activeStaleNotices[0]).toMatchObject({ className: 'Tactical', was: 'Signal Jammer', now: 'Tactical Reserve' })
+  })
+
+  it('keeps the notices found on load when a share link for another class is applied', () => {
+    localStorage.setItem(KEY, JSON.stringify({
+      activeClass: 'Vanguard',
+      selectedPerks: { Tactical: { 7: 'Signal Jammer' } },
+    }))
+    const planner = usePlanner()
+    planner.hydrate()
+    planner.applyEncoded(encode({ c: 'Vanguard', p: {} }))
+    expect(planner.staleNotices).toHaveLength(1)
+    expect(planner.staleNotices[0].className).toBe('Tactical')
+  })
+
+  it('dismisses only the active class notices', () => {
+    const planner = usePlanner()
+    const note = (className) => ({ kind: 'replaced', level: 9, was: 'a', now: 'b', className })
+    planner.staleNotices = [note('Assault'), note('Tactical')]
+    planner.setClass('Tactical')
+    planner.dismissStaleNotices()
+    expect(planner.staleNotices.map((n) => n.className)).toEqual(['Assault'])
+  })
+
+  it('drops saved notices that do not name a class', () => {
+    localStorage.setItem(KEY, JSON.stringify({
+      activeClass: 'Tactical',
+      staleNotices: [{ kind: 'replaced', level: 9, was: 'a', now: 'b' }, { kind: 'replaced', level: 9, was: 'a', now: 'b', className: 'Tactical' }],
+    }))
+    const planner = usePlanner()
+    planner.hydrate()
+    expect(planner.staleNotices).toHaveLength(1)
   })
 
   it('keeps the notices across a reload until they are dismissed', () => {

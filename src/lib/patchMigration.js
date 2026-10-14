@@ -14,7 +14,7 @@
  */
 import migrations from '../data/perk-migrations.json'
 
-/** @typedef {{ kind: 'replaced'|'reworked', level: number|null, was: string, now: string, note?: string }} Notice */
+/** @typedef {{ kind: 'replaced'|'reworked', className: string, level: number|null, was: string, now: string, note?: string }} Notice */
 
 const PATCH_DATE = Date.parse(migrations.date)
 
@@ -26,8 +26,9 @@ const madeBeforePatch = (createdAt) => {
   return Number.isFinite(t) && t < PATCH_DATE
 }
 
-const notice = (entry, level) => ({
+const notice = (entry, level, className) => ({
   kind: entry.action,
+  className,
   level,
   was: entry.was,
   now: entry.now,
@@ -52,9 +53,9 @@ export function migrateSelection({ className, selectedPerks, justifications, pre
       if (slot.action === 'replaced') {
         delete picks[col]
         delete why[col]
-        notices.push(notice(slot, slot.level))
+        notices.push(notice(slot, slot.level, className))
       } else if (slot.action === 'reworked' && madeBeforePatch(createdAt)) {
-        notices.push(notice(slot, slot.level))
+        notices.push(notice(slot, slot.level, className))
       }
     }
 
@@ -65,7 +66,7 @@ export function migrateSelection({ className, selectedPerks, justifications, pre
         prestige.forEach((name, i) => {
           if (name !== p.was) return
           prestige[i] = null
-          notices.push(notice(p, null))
+          notices.push(notice(p, null, className))
         })
       }
     }

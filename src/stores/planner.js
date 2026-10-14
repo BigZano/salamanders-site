@@ -39,7 +39,11 @@ function migrateInPlace(store, className, createdAt) {
   return r.notices
 }
 
-const isNotice = (n) => n && typeof n === 'object' && typeof n.was === 'string' && typeof n.now === 'string'
+const isNotice = (n) =>
+  n && typeof n === 'object' && typeof n.className === 'string' && typeof n.was === 'string' && typeof n.now === 'string'
+
+/** Swap in a class's freshly found notices, leaving the other classes' notices alone. */
+const withNotices = (all, className, found) => [...all.filter((n) => n.className !== className), ...found]
 
 // Column c holds perks at levels 2+c, 10+c, 18+c (one per tier).
 function columnsFor(className) {
@@ -84,6 +88,8 @@ export const usePlanner = defineStore('planner', {
   getters: {
     meta: (s) => classes[s.activeClass],
     columns: (s) => columnsFor(s.activeClass),
+    // The Patch 15.0 notices that belong to the class on screen.
+    activeStaleNotices: (s) => s.staleNotices.filter((n) => n.className === s.activeClass),
     selected: (s) => s.selectedPerks[s.activeClass] || {},
     justified: (s) => s.justifications[s.activeClass] || {},
     activeWeapons: (s) => s.weapons[s.activeClass] || {},
@@ -147,15 +153,12 @@ export const usePlanner = defineStore('planner', {
 
   actions: {
     setClass(name) {
-      if (classes[name]) {
-        // The notices describe the build that was loaded, not the new class.
-        if (name !== this.activeClass) this.staleNotices = []
-        this.activeClass = name
-      }
+      if (classes[name]) this.activeClass = name
       this.persist()
     },
+    /** Dismiss the notices for the class on screen; other classes keep theirs. */
     dismissStaleNotices() {
-      this.staleNotices = []
+      this.staleNotices = this.staleNotices.filter((n) => n.className !== this.activeClass)
       this.persist()
     },
     togglePerk(perk) {
@@ -258,7 +261,7 @@ export const usePlanner = defineStore('planner', {
       for (const [w, perks] of Object.entries(r.weaponPerks || {})) {
         this.weaponPerks[w] = { ...perks }
       }
-      this.staleNotices = migrateInPlace(this, r.className, r.createdAt)
+      this.staleNotices = withNotices(this.staleNotices, r.className, migrateInPlace(this, r.className, r.createdAt))
       this.persist()
     },
 
@@ -360,7 +363,7 @@ export const usePlanner = defineStore('planner', {
         for (const [w, perks] of Object.entries(json.wp || {})) {
           this.weaponPerks[w] = { ...perks }
         }
-        this.staleNotices = migrateInPlace(this, json.c)
+        this.staleNotices = withNotices(this.staleNotices, json.c, migrateInPlace(this, json.c))
         this.persist()
       } catch {}
     },

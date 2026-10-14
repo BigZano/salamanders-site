@@ -214,7 +214,7 @@ onBeforeUnmount(() => {
       </button>
     </div>
 
-    <StaleNotice :notices="planner.staleNotices" @dismiss="planner.dismissStaleNotices()" />
+    <StaleNotice :notices="planner.activeStaleNotices" @dismiss="planner.dismissStaleNotices()" />
 
     <!-- Class hero -->
     <div class="hero-card">
