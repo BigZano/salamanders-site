@@ -133,6 +133,42 @@ describe('mergeTrees', () => {
     expect(out.A.intro).toEqual(['new intro'])
   })
 
+  const ver = (name, strength, extra = {}) => ({
+    quality: 'Standard',
+    name,
+    gauges: { Strength: { value: strength, raw: String(strength) } },
+    figures: {},
+    ...extra,
+  })
+
+  it('keepPerks holds an existing version\'s stats and takes only its defence from fresh', () => {
+    const prev = tree({ versions: [ver('Standard-Issue', 5)] })
+    const next = fresh({ versions: [ver('Standard-Issue', 6, { defence: 'Block' })] })
+    const out = mergeTrees({ A: prev }, { A: next }, { keepPerks: true })
+    expect(out.A.versions).toEqual([ver('Standard-Issue', 5, { defence: 'Block' })])
+  })
+
+  it('keepPerks takes a version that is new on the wiki, whole', () => {
+    const prev = tree({ versions: [ver('Standard-Issue', 5)] })
+    const next = fresh({ versions: [ver('Standard-Issue', 5), ver('Frost Axe', 16, { defence: 'Balanced' })] })
+    const out = mergeTrees({ A: prev }, { A: next }, { keepPerks: true })
+    expect(out.A.versions.map((v) => v.name)).toEqual(['Standard-Issue', 'Frost Axe'])
+    expect(out.A.versions[1].gauges.Strength.value).toBe(16)
+  })
+
+  it('keepPerks keeps a version the wiki has dropped', () => {
+    const prev = tree({ versions: [ver('Standard-Issue', 5), ver('Marksman (PVP)', 7)] })
+    const next = fresh({ versions: [ver('Standard-Issue', 5)] })
+    const out = mergeTrees({ A: prev }, { A: next }, { keepPerks: true })
+    expect(out.A.versions.map((v) => v.name)).toEqual(['Standard-Issue', 'Marksman (PVP)'])
+  })
+
+  it('without keepPerks the fresh versions win wholesale', () => {
+    const prev = tree({ versions: [ver('Standard-Issue', 5), ver('Marksman (PVP)', 7)] })
+    const next = fresh({ versions: [ver('Standard-Issue', 6)] })
+    expect(mergeTrees({ A: prev }, { A: next }, { keepPerks: false }).A.versions).toEqual(next.versions)
+  })
+
   it('keepPerks takes a weapon that is only in fresh, whole', () => {
     const out = mergeTrees({}, { B: fresh() }, { keepPerks: true })
     expect(out.B).toEqual(fresh())

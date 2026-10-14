@@ -1,5 +1,5 @@
 {
-  "fetched": "2026-09-27T23:27:42.567Z",
+  "fetched": "2026-10-14T21:25:31.324Z",
   "weapons": {
     "Auto Bolt Rifle": {
       "perks": [
@@ -316,6 +316,40 @@
           "figures": {
             "Magazine Capacity": "45",
             "Ammo Reserve": "270"
+          }
+        },
+        {
+          "quality": "Heroic",
+          "name": "Iron Hands",
+          "gauges": {
+            "Firepower": {
+              "value": 8,
+              "raw": "8"
+            },
+            "Accuracy": {
+              "value": 5,
+              "raw": "5"
+            },
+            "Rate of Fire": {
+              "value": 9,
+              "raw": "9"
+            },
+            "Reloading Speed": {
+              "value": 5,
+              "raw": "5"
+            },
+            "Piercing": {
+              "value": 2,
+              "raw": "2"
+            },
+            "Range": {
+              "value": 5,
+              "raw": "5"
+            }
+          },
+          "figures": {
+            "Magazine Capacity": "50",
+            "Ammo Reserve": "300"
           }
         }
       ]
@@ -1969,16 +2003,16 @@
           }
         },
         {
-          "quality": "Standard",
-          "name": "Marksman Bolt Carbine (PVP)",
+          "quality": "Master-Crafted",
+          "name": "Master-Crafted Marksman",
           "gauges": {
             "Firepower": {
-              "value": 2.5,
-              "raw": "2+"
+              "value": 4,
+              "raw": "4"
             },
             "Accuracy": {
-              "value": 5,
-              "raw": "5"
+              "value": 7,
+              "raw": "7"
             },
             "Rate of Fire": {
               "value": 4.5,
@@ -1993,13 +2027,13 @@
               "raw": "3"
             },
             "Range": {
-              "value": 10,
-              "raw": "10"
+              "value": 8,
+              "raw": "8"
             }
           },
           "figures": {
             "Magazine Capacity": "20",
-            "Ammo Reserve": "120"
+            "Ammo Reserve": "140"
           }
         },
         {
@@ -2374,6 +2408,40 @@
           "figures": {
             "Magazine Capacity": "45",
             "Ammo Reserve": "225"
+          }
+        },
+        {
+          "quality": "Standard",
+          "name": "Marksman Bolt Carbine (PVP)",
+          "gauges": {
+            "Firepower": {
+              "value": 2.5,
+              "raw": "2+"
+            },
+            "Accuracy": {
+              "value": 5,
+              "raw": "5"
+            },
+            "Rate of Fire": {
+              "value": 4.5,
+              "raw": "4+"
+            },
+            "Reloading Speed": {
+              "value": 4,
+              "raw": "4"
+            },
+            "Piercing": {
+              "value": 3,
+              "raw": "3"
+            },
+            "Range": {
+              "value": 10,
+              "raw": "10"
+            }
+          },
+          "figures": {
+            "Magazine Capacity": "20",
+            "Ammo Reserve": "120"
           }
         }
       ]
@@ -9098,7 +9166,8 @@
               "raw": "4"
             }
           },
-          "figures": {}
+          "figures": {},
+          "defence": "Balanced"
         },
         {
           "quality": "Master-Crafted",
@@ -9117,7 +9186,8 @@
               "raw": "10"
             }
           },
-          "figures": {}
+          "figures": {},
+          "defence": "Balanced"
         },
         {
           "quality": "Master-Crafted",
@@ -9136,7 +9206,8 @@
               "raw": "4"
             }
           },
-          "figures": {}
+          "figures": {},
+          "defence": "Block"
         },
         {
           "quality": "Artificer",
@@ -9155,7 +9226,8 @@
               "raw": "10"
             }
           },
-          "figures": {}
+          "figures": {},
+          "defence": "Balanced"
         },
         {
           "quality": "Artificer",
@@ -9174,7 +9246,8 @@
               "raw": "1"
             }
           },
-          "figures": {}
+          "figures": {},
+          "defence": "Fencing"
         },
         {
           "quality": "Artificer",
@@ -9193,7 +9266,8 @@
               "raw": "4"
             }
           },
-          "figures": {}
+          "figures": {},
+          "defence": "Block"
         },
         {
           "quality": "Relic",
@@ -9212,7 +9286,8 @@
               "raw": "10"
             }
           },
-          "figures": {}
+          "figures": {},
+          "defence": "Balanced"
         },
         {
           "quality": "Relic",
@@ -9231,7 +9306,8 @@
               "raw": "1"
             }
           },
-          "figures": {}
+          "figures": {},
+          "defence": "Fencing"
         },
         {
           "quality": "Relic",
@@ -9250,7 +9326,8 @@
               "raw": "4"
             }
           },
-          "figures": {}
+          "figures": {},
+          "defence": "Block"
         },
         {
           "quality": "Heroic",
@@ -9269,7 +9346,8 @@
               "raw": "10"
             }
           },
-          "figures": {}
+          "figures": {},
+          "defence": "Balanced"
         },
         {
           "quality": "Heroic",
@@ -9288,7 +9366,8 @@
               "raw": "4"
             }
           },
-          "figures": {}
+          "figures": {},
+          "defence": "Block"
         }
       ]
     },
@@ -9406,7 +9485,8 @@
               "raw": "2"
             }
           },
-          "figures": {}
+          "figures": {},
+          "defence": "Balanced"
         },
         {
           "quality": "Master-Crafted",
@@ -9425,7 +9505,8 @@
               "raw": "6"
             }
           },
-          "figures": {}
+          "figures": {},
+          "defence": "Balanced"
         },
         {
           "quality": "Master-Crafted",
@@ -9444,7 +9525,8 @@
               "raw": "1"
             }
           },
-          "figures": {}
+          "figures": {},
+          "defence": "Fencing"
         },
         {
           "quality": "Artificer",
@@ -9463,7 +9545,8 @@
               "raw": "2"
             }
           },
-          "figures": {}
+          "figures": {},
+          "defence": "Block"
         },
         {
           "quality": "Artificer",
@@ -9482,7 +9565,8 @@
               "raw": "1"
             }
           },
-          "figures": {}
+          "figures": {},
+          "defence": "Fencing"
         },
         {
           "quality": "Relic",
@@ -9501,7 +9585,8 @@
               "raw": "6"
             }
           },
-          "figures": {}
+          "figures": {},
+          "defence": "Balanced"
         },
         {
           "quality": "Relic",
@@ -9520,7 +9605,8 @@
               "raw": "1"
             }
           },
-          "figures": {}
+          "figures": {},
+          "defence": "Fencing"
         },
         {
           "quality": "Relic",
@@ -9539,7 +9625,8 @@
               "raw": "2"
             }
           },
-          "figures": {}
+          "figures": {},
+          "defence": "Block"
         },
         {
           "quality": "Heroic",
@@ -9558,7 +9645,8 @@
               "raw": "2"
             }
           },
-          "figures": {}
+          "figures": {},
+          "defence": "Balanced"
         },
         {
           "quality": "Heroic",
@@ -9577,7 +9665,8 @@
               "raw": "1"
             }
           },
-          "figures": {}
+          "figures": {},
+          "defence": "Fencing"
         }
       ]
     },
@@ -9705,7 +9794,8 @@
               "raw": "4+"
             }
           },
-          "figures": {}
+          "figures": {},
+          "defence": "Balanced"
         },
         {
           "quality": "Master-Crafted",
@@ -9724,7 +9814,8 @@
               "raw": "12+"
             }
           },
-          "figures": {}
+          "figures": {},
+          "defence": "Balanced"
         },
         {
           "quality": "Master-Crafted",
@@ -9743,7 +9834,8 @@
               "raw": "4+"
             }
           },
-          "figures": {}
+          "figures": {},
+          "defence": "Block"
         },
         {
           "quality": "Artificer",
@@ -9762,7 +9854,8 @@
               "raw": "12+"
             }
           },
-          "figures": {}
+          "figures": {},
+          "defence": "Balanced"
         },
         {
           "quality": "Artificer",
@@ -9781,7 +9874,8 @@
               "raw": "2"
             }
           },
-          "figures": {}
+          "figures": {},
+          "defence": "Fencing"
         },
         {
           "quality": "Artificer",
@@ -9800,7 +9894,8 @@
               "raw": "4+"
             }
           },
-          "figures": {}
+          "figures": {},
+          "defence": "Block"
         },
         {
           "quality": "Relic",
@@ -9819,7 +9914,8 @@
               "raw": "12+"
             }
           },
-          "figures": {}
+          "figures": {},
+          "defence": "Balanced"
         },
         {
           "quality": "Relic",
@@ -9838,7 +9934,8 @@
               "raw": "2"
             }
           },
-          "figures": {}
+          "figures": {},
+          "defence": "Fencing"
         },
         {
           "quality": "Relic",
@@ -9857,7 +9954,8 @@
               "raw": "4+"
             }
           },
-          "figures": {}
+          "figures": {},
+          "defence": "Block"
         },
         {
           "quality": "Heroic",
@@ -9876,7 +9974,8 @@
               "raw": "2"
             }
           },
-          "figures": {}
+          "figures": {},
+          "defence": "Fencing"
         },
         {
           "quality": "Heroic",
@@ -9895,7 +9994,8 @@
               "raw": "13"
             }
           },
-          "figures": {}
+          "figures": {},
+          "defence": "Balanced"
         }
       ]
     },
@@ -10043,7 +10143,8 @@
               "raw": "4"
             }
           },
-          "figures": {}
+          "figures": {},
+          "defence": "Balanced"
         },
         {
           "quality": "Master-Crafted",
@@ -10062,7 +10163,8 @@
               "raw": "12"
             }
           },
-          "figures": {}
+          "figures": {},
+          "defence": "Balanced"
         },
         {
           "quality": "Master-Crafted",
@@ -10081,7 +10183,8 @@
               "raw": "4"
             }
           },
-          "figures": {}
+          "figures": {},
+          "defence": "Block"
         },
         {
           "quality": "Master-Crafted",
@@ -10100,7 +10203,8 @@
               "raw": "2"
             }
           },
-          "figures": {}
+          "figures": {},
+          "defence": "Fencing"
         },
         {
           "quality": "Artificer",
@@ -10119,7 +10223,8 @@
               "raw": "12"
             }
           },
-          "figures": {}
+          "figures": {},
+          "defence": "Balanced"
         },
         {
           "quality": "Artificer",
@@ -10138,7 +10243,8 @@
               "raw": "4"
             }
           },
-          "figures": {}
+          "figures": {},
+          "defence": "Block"
         },
         {
           "quality": "Artificer",
@@ -10157,7 +10263,8 @@
               "raw": "2"
             }
           },
-          "figures": {}
+          "figures": {},
+          "defence": "Fencing"
         },
         {
           "quality": "Relic",
@@ -10176,7 +10283,8 @@
               "raw": "12"
             }
           },
-          "figures": {}
+          "figures": {},
+          "defence": "Balanced"
         },
         {
           "quality": "Relic",
@@ -10195,7 +10303,8 @@
               "raw": "2"
             }
           },
-          "figures": {}
+          "figures": {},
+          "defence": "Fencing"
         },
         {
           "quality": "Relic",
@@ -10214,7 +10323,8 @@
               "raw": "4"
             }
           },
-          "figures": {}
+          "figures": {},
+          "defence": "Block"
         },
         {
           "quality": "Relic",
@@ -10233,7 +10343,8 @@
               "raw": "12"
             }
           },
-          "figures": {}
+          "figures": {},
+          "defence": "Balanced"
         },
         {
           "quality": "Heroic",
@@ -10252,7 +10363,8 @@
               "raw": "16"
             }
           },
-          "figures": {}
+          "figures": {},
+          "defence": "Balanced"
         },
         {
           "quality": "Heroic",
@@ -10271,7 +10383,8 @@
               "raw": "4"
             }
           },
-          "figures": {}
+          "figures": {},
+          "defence": "Fencing"
         }
       ]
     },
@@ -10419,7 +10532,8 @@
               "raw": "6"
             }
           },
-          "figures": {}
+          "figures": {},
+          "defence": "Balanced"
         },
         {
           "quality": "Master-Crafted",
@@ -10438,7 +10552,8 @@
               "raw": "12"
             }
           },
-          "figures": {}
+          "figures": {},
+          "defence": "Balanced"
         },
         {
           "quality": "Master-Crafted",
@@ -10457,7 +10572,8 @@
               "raw": "2"
             }
           },
-          "figures": {}
+          "figures": {},
+          "defence": "Fencing"
         },
         {
           "quality": "Master-Crafted",
@@ -10476,7 +10592,8 @@
               "raw": "6"
             }
           },
-          "figures": {}
+          "figures": {},
+          "defence": "Block"
         },
         {
           "quality": "Artificer",
@@ -10495,7 +10612,8 @@
               "raw": "12"
             }
           },
-          "figures": {}
+          "figures": {},
+          "defence": "Balanced"
         },
         {
           "quality": "Artificer",
@@ -10514,7 +10632,8 @@
               "raw": "2"
             }
           },
-          "figures": {}
+          "figures": {},
+          "defence": "Fencing"
         },
         {
           "quality": "Artificer",
@@ -10533,7 +10652,8 @@
               "raw": "6"
             }
           },
-          "figures": {}
+          "figures": {},
+          "defence": "Block"
         },
         {
           "quality": "Artificer",
@@ -10552,7 +10672,8 @@
               "raw": "10"
             }
           },
-          "figures": {}
+          "figures": {},
+          "defence": "Balanced"
         },
         {
           "quality": "Relic",
@@ -10571,7 +10692,8 @@
               "raw": "12"
             }
           },
-          "figures": {}
+          "figures": {},
+          "defence": "Balanced"
         },
         {
           "quality": "Relic",
@@ -10590,7 +10712,8 @@
               "raw": "2"
             }
           },
-          "figures": {}
+          "figures": {},
+          "defence": "Fencing"
         },
         {
           "quality": "Relic",
@@ -10609,7 +10732,8 @@
               "raw": "6"
             }
           },
-          "figures": {}
+          "figures": {},
+          "defence": "Block"
         },
         {
           "quality": "Heroic",
@@ -10628,7 +10752,8 @@
               "raw": "6"
             }
           },
-          "figures": {}
+          "figures": {},
+          "defence": "Fencing"
         },
         {
           "quality": "Heroic",
@@ -10647,9 +10772,221 @@
               "raw": "7"
             }
           },
-          "figures": {}
+          "figures": {},
+          "defence": "Block"
         }
       ]
+    },
+    "One-Handed Thunder Hammer": {
+      "perks": [],
+      "budget": 10,
+      "intro": [],
+      "meta": {
+        "slot": "Melee"
+      },
+      "versions": [
+        {
+          "quality": "Standard",
+          "name": "Standard-Issue",
+          "gauges": {
+            "Strength": {
+              "value": 5,
+              "raw": "5"
+            },
+            "Speed": {
+              "value": 4,
+              "raw": "4"
+            },
+            "Cleaving Potential": {
+              "value": 5,
+              "raw": "5"
+            }
+          },
+          "figures": {},
+          "defence": "Balanced"
+        },
+        {
+          "quality": "Master-Crafted",
+          "name": "Master-Crafted - Alpha",
+          "gauges": {
+            "Strength": {
+              "value": 7,
+              "raw": "7"
+            },
+            "Speed": {
+              "value": 4,
+              "raw": "4"
+            },
+            "Cleaving Potential": {
+              "value": 11,
+              "raw": "11"
+            }
+          },
+          "figures": {},
+          "defence": "Balanced"
+        },
+        {
+          "quality": "Master-Crafted",
+          "name": "Master-Crafted - Beta",
+          "gauges": {
+            "Strength": {
+              "value": 6,
+              "raw": "6"
+            },
+            "Speed": {
+              "value": 8,
+              "raw": "8"
+            },
+            "Cleaving Potential": {
+              "value": 3,
+              "raw": "3"
+            }
+          },
+          "figures": {},
+          "defence": "Fencing"
+        },
+        {
+          "quality": "Artificer",
+          "name": "Salvation of Bakka - Alpha",
+          "gauges": {
+            "Strength": {
+              "value": 10,
+              "raw": "10"
+            },
+            "Speed": {
+              "value": 5,
+              "raw": "5"
+            },
+            "Cleaving Potential": {
+              "value": 11,
+              "raw": "11"
+            }
+          },
+          "figures": {},
+          "defence": "Balanced"
+        },
+        {
+          "quality": "Artificer",
+          "name": "Salvation of Bakka - Beta",
+          "gauges": {
+            "Strength": {
+              "value": 7,
+              "raw": "7"
+            },
+            "Speed": {
+              "value": 8,
+              "raw": "8"
+            },
+            "Cleaving Potential": {
+              "value": 3,
+              "raw": "3"
+            }
+          },
+          "figures": {},
+          "defence": "Fencing"
+        },
+        {
+          "quality": "Artificer",
+          "name": "Salvation of Bakka - Gamma",
+          "gauges": {
+            "Strength": {
+              "value": 10,
+              "raw": "10"
+            },
+            "Speed": {
+              "value": 3,
+              "raw": "3"
+            },
+            "Cleaving Potential": {
+              "value": 5,
+              "raw": "5"
+            }
+          },
+          "figures": {},
+          "defence": "Block"
+        },
+        {
+          "quality": "Relic",
+          "name": "Ophelian Liberation - Alpha",
+          "gauges": {
+            "Strength": {
+              "value": 16,
+              "raw": "16"
+            },
+            "Speed": {
+              "value": 6,
+              "raw": "6"
+            },
+            "Cleaving Potential": {
+              "value": 11,
+              "raw": "11"
+            }
+          },
+          "figures": {},
+          "defence": "Balanced"
+        },
+        {
+          "quality": "Relic",
+          "name": "Ophelian Liberation - Beta",
+          "gauges": {
+            "Strength": {
+              "value": 13,
+              "raw": "13"
+            },
+            "Speed": {
+              "value": 8,
+              "raw": "8"
+            },
+            "Cleaving Potential": {
+              "value": 3,
+              "raw": "3"
+            }
+          },
+          "figures": {},
+          "defence": "Fencing"
+        },
+        {
+          "quality": "Relic",
+          "name": "Ophelian Liberation - Gamma",
+          "gauges": {
+            "Strength": {
+              "value": 15,
+              "raw": "15"
+            },
+            "Speed": {
+              "value": 3,
+              "raw": "3"
+            },
+            "Cleaving Potential": {
+              "value": 5,
+              "raw": "5"
+            }
+          },
+          "figures": {},
+          "defence": "Block"
+        },
+        {
+          "quality": "Heroic",
+          "name": "Power Maul",
+          "gauges": {
+            "Strength": {
+              "value": 15,
+              "raw": "15"
+            },
+            "Speed": {
+              "value": 6,
+              "raw": "6"
+            },
+            "Cleaving Potential": {
+              "value": 13,
+              "raw": "13"
+            }
+          },
+          "figures": {},
+          "defence": "Balanced"
+        }
+      ],
+      "perksPending": true
     },
     "Power Axe": {
       "perks": [
@@ -10780,7 +11117,8 @@
               "raw": "5"
             }
           },
-          "figures": {}
+          "figures": {},
+          "defence": "Balanced"
         },
         {
           "quality": "Master-Crafted",
@@ -10799,7 +11137,8 @@
               "raw": "9"
             }
           },
-          "figures": {}
+          "figures": {},
+          "defence": "Balanced"
         },
         {
           "quality": "Master-Crafted",
@@ -10818,7 +11157,8 @@
               "raw": "2"
             }
           },
-          "figures": {}
+          "figures": {},
+          "defence": "Fencing"
         },
         {
           "quality": "Artificer",
@@ -10837,7 +11177,8 @@
               "raw": "9"
             }
           },
-          "figures": {}
+          "figures": {},
+          "defence": "Balanced"
         },
         {
           "quality": "Artificer",
@@ -10856,7 +11197,8 @@
               "raw": "2"
             }
           },
-          "figures": {}
+          "figures": {},
+          "defence": "Fencing"
         },
         {
           "quality": "Artificer",
@@ -10875,7 +11217,8 @@
               "raw": "5"
             }
           },
-          "figures": {}
+          "figures": {},
+          "defence": "Block"
         },
         {
           "quality": "Relic",
@@ -10894,7 +11237,8 @@
               "raw": "9"
             }
           },
-          "figures": {}
+          "figures": {},
+          "defence": "Balanced"
         },
         {
           "quality": "Relic",
@@ -10913,7 +11257,8 @@
               "raw": "2"
             }
           },
-          "figures": {}
+          "figures": {},
+          "defence": "Fencing"
         },
         {
           "quality": "Relic",
@@ -10932,7 +11277,8 @@
               "raw": "5"
             }
           },
-          "figures": {}
+          "figures": {},
+          "defence": "Block"
         },
         {
           "quality": "Heroic",
@@ -10951,7 +11297,28 @@
               "raw": "17"
             }
           },
-          "figures": {}
+          "figures": {},
+          "defence": "Block"
+        },
+        {
+          "quality": "Heroic",
+          "name": "Frost Axe",
+          "gauges": {
+            "Strength": {
+              "value": 16,
+              "raw": "16"
+            },
+            "Speed": {
+              "value": 8,
+              "raw": "8"
+            },
+            "Cleaving Potential": {
+              "value": 17,
+              "raw": "17"
+            }
+          },
+          "figures": {},
+          "defence": "Balanced"
         }
       ]
     },
@@ -11089,7 +11456,8 @@
               "raw": "4"
             }
           },
-          "figures": {}
+          "figures": {},
+          "defence": "Balanced"
         },
         {
           "quality": "Master-Crafted",
@@ -11108,7 +11476,8 @@
               "raw": "9"
             }
           },
-          "figures": {}
+          "figures": {},
+          "defence": "Balanced"
         },
         {
           "quality": "Master-Crafted",
@@ -11127,7 +11496,8 @@
               "raw": "3"
             }
           },
-          "figures": {}
+          "figures": {},
+          "defence": "Fencing"
         },
         {
           "quality": "Artificer",
@@ -11146,7 +11516,8 @@
               "raw": "11"
             }
           },
-          "figures": {}
+          "figures": {},
+          "defence": "Balanced"
         },
         {
           "quality": "Artificer",
@@ -11165,7 +11536,8 @@
               "raw": "3"
             }
           },
-          "figures": {}
+          "figures": {},
+          "defence": "Fencing"
         },
         {
           "quality": "Artificer",
@@ -11184,7 +11556,8 @@
               "raw": "5"
             }
           },
-          "figures": {}
+          "figures": {},
+          "defence": "Block"
         },
         {
           "quality": "Relic",
@@ -11203,7 +11576,8 @@
               "raw": "13"
             }
           },
-          "figures": {}
+          "figures": {},
+          "defence": "Balanced"
         },
         {
           "quality": "Relic",
@@ -11222,7 +11596,8 @@
               "raw": "3"
             }
           },
-          "figures": {}
+          "figures": {},
+          "defence": "Fencing"
         },
         {
           "quality": "Relic",
@@ -11241,7 +11616,8 @@
               "raw": "5"
             }
           },
-          "figures": {}
+          "figures": {},
+          "defence": "Block"
         },
         {
           "quality": "Relic",
@@ -11260,7 +11636,8 @@
               "raw": "1"
             }
           },
-          "figures": {}
+          "figures": {},
+          "defence": "Fencing"
         }
       ]
     }

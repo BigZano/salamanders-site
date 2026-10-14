@@ -21,7 +21,10 @@
       ],
       "melee": [
         "Combat Knife",
-        "Chainsword"
+        "Chainsword",
+        "Power Sword",
+        "Power Axe",
+        "One-Handed Thunder Hammer"
       ]
     },
     "rows": [
@@ -74,6 +77,7 @@
       "melee": [
         "Chainsword",
         "Thunder Hammer",
+        "One-Handed Thunder Hammer",
         "Power Fist",
         "Power Sword",
         "Power Axe"
@@ -183,6 +187,7 @@
       ],
       "melee": [
         "Thunder Hammer",
+        "One-Handed Thunder Hammer",
         "Chainsword",
         "Power Fist",
         "Power Sword",
@@ -352,6 +357,8 @@
       ],
       "melee": [
         "Combat Knife",
+        "Thunder Hammer",
+        "One-Handed Thunder Hammer",
         "Power Sword",
         "Power Axe",
         "Omnissiah Axe"

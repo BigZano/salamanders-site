@@ -143,26 +143,48 @@ export function buildTree(doc) {
 }
 
 /**
+ * Versions under --keep-perks: an existing version keeps its baked stats and
+ * takes only the fresh defence type; a version new on the wiki is taken whole;
+ * a version the wiki has dropped is kept. The wiki's stat edits (magazine
+ * sizes, ammo reserves) are as uncorroborated as its perk edits.
+ */
+function holdVersions(previous, fresh) {
+  const before = new Map(previous.map((v) => [v.name, v]))
+  const out = fresh.map((f) => {
+    const p = before.get(f.name)
+    if (!p) return f
+    return f.defence ? { ...p, defence: f.defence } : p
+  })
+  const seen = new Set(out.map((v) => v.name))
+  return [...out, ...previous.filter((v) => !seen.has(v.name))]
+}
+
+/**
  * Combine the previous bake with a fresh one.
  *
- * With `keepPerks`, a weapon already in the bake keeps its perks and budget and
- * takes the fresh versions, meta and intro. A fresh tree with no perk table
- * never wipes a previous tree that has perks, with or without the flag: a perk
- * list vanishing from the wiki is a glitch far more often than a decision.
- * Weapons only in `fresh` are taken whole; weapons only in `previous` (a failed
- * fetch) are kept.
+ * With `keepPerks`, a weapon already in the bake keeps its perks, budget and
+ * version stats (see holdVersions) and takes the fresh meta, intro, new
+ * versions and defence types. A fresh tree with no perk table never wipes a
+ * previous tree that has perks, with or without the flag: a perk list
+ * vanishing from the wiki is a glitch far more often than a decision.
+ * Weapons only in `fresh` are taken whole; weapons only in `previous` (a
+ * failed fetch) are kept.
  */
 export function mergeTrees(previous, fresh, { keepPerks }) {
   const out = {}
   for (const [name, f] of Object.entries(fresh)) {
     const p = previous[name]
-    const holdPerks = p?.perks?.length > 0 && (keepPerks || f.perksPending)
-    if (!holdPerks) {
+    if (!p) {
       out[name] = f
       continue
     }
-    const { perksPending, ...rest } = f
-    out[name] = { ...rest, perks: p.perks, budget: p.budget }
+    const versions = keepPerks ? holdVersions(p.versions || [], f.versions) : f.versions
+    if (p.perks?.length > 0 && (keepPerks || f.perksPending)) {
+      const { perksPending, ...rest } = f
+      out[name] = { ...rest, perks: p.perks, budget: p.budget, versions }
+    } else {
+      out[name] = { ...f, versions }
+    }
   }
   for (const [name, p] of Object.entries(previous)) if (!(name in out)) out[name] = p
   return out
