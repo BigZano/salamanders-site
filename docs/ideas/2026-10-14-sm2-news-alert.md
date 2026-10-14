@@ -51,6 +51,11 @@ A short-cron workflow that runs the existing check, saves the full text of any n
 - A wrong extracted fact adopted silently: facts are proposals that a person approves, and the alert never changes data on its own.
 - Secrets: the webhook URL stays in the workflow's secrets.
 
+## Related
+
+- `2026-10-14-game-files-source-of-truth.md`: extracting data from the installed game. The Steam build id changing is a stronger "a patch landed" trigger than an announcement title.
+- `2026-10-14-sealed-build-review.md`: sealed.build keeps a patch ledger (date, summary, impact, and the classes, perks and weapons each patch changed). Step 4 above (`patch-facts.json`) and that ledger are the same idea; one `patches.json` could serve the alert, the bakes and the build flagging.
+
 ## Next step
 
 Run the brainstorming step for this, then write a spec and plan. It is independent of Spec B+C (the Perk Builder version picker and rationale boxes), so the order is Bret's call.
