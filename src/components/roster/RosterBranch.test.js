@@ -125,3 +125,24 @@ describe('RosterBranch: the Unassigned variant', () => {
     expect(el.findAll('.rs-row').every((r) => r.attributes('data-tier') === undefined)).toBe(true)
   })
 })
+
+describe('RosterBranch: a head with more than two members', () => {
+  const three = () => {
+    const rank = { key: 'venerable-dreadnought', label: 'Venerable Dreadnought', tier: 1 }
+    const people = ['1', '2', '3', '4'].map((id) => ({ id: `90000000000000000${id}`, name: `Name ${id}`, avatar: null, company: null }))
+    const roster = {
+      fetchedAt: 'x', stale: false, viewer: { infirmary: false }, highCommand: [], servitors: [], unassigned: { rows: [] },
+      branches: [{ key: 'venerable-dreadnoughts', kind: 'dreadnoughts', label: 'Venerable Dreadnoughts', head: { rank, members: people, vacant: false }, aside: [], rows: [] }],
+    }
+    return { branch: buildRosterView(roster).branches[0], people }
+  }
+
+  it('shows two in the bar, opens, and lists the rest inside', () => {
+    const { branch: b, people } = three()
+    const w = render({ branch: b, open: false })
+    expect(w.findAll('.rs-head li.rs-member')).toHaveLength(2)
+    expect(w.find('.rs-more').text()).toBe('+2')
+    expect(w.find('button').exists()).toBe(true)
+    for (const m of people.slice(2)) expect(w.find(`.rs-body li[data-id="${m.id}"]`).exists(), m.id).toBe(true)
+  })
+})

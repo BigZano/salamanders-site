@@ -317,4 +317,34 @@ describe('Roster.vue: the design pass', () => {
     expect(remove).toHaveBeenCalledWith('visibilitychange', expect.any(Function))
     remove.mockRestore()
   })
+  it('does not start another request while one is still pending', async () => {
+    vi.useFakeTimers()
+    try {
+      api.getRoster.mockReturnValue(new Promise(() => {}))
+      const w = mount(Roster)
+      mounted.push(w)
+      await vi.advanceTimersByTimeAsync(180_000)
+      expect(api.getRoster).toHaveBeenCalledTimes(1)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it.each([
+    ['prefers reduced motion', true, 'auto'],
+    ['welcomes motion', false, 'smooth'],
+  ])('when the visitor %s, Find me scrolls the matching way', async (_, reduced, behavior) => {
+    window.matchMedia = vi.fn(() => ({ matches: reduced }))
+    try {
+      asViewer(brother)
+      const w = await render()
+      await w.find('.rs-find').trigger('click')
+      await flushPromises()
+      const used = Element.prototype.scrollIntoView.mock.calls.map(([options]) => options.behavior)
+      expect(used.length).toBeGreaterThan(0)
+      expect(used.every((b) => b === behavior)).toBe(true)
+    } finally {
+      delete window.matchMedia
+    }
+  })
 })

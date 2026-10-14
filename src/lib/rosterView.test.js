@@ -225,3 +225,42 @@ describe('buildRosterView: edges', () => {
     expect(buildRosterView(frozen)).toEqual(a)
   })
 })
+
+describe('buildRosterView: a head with more than two members', () => {
+  const heads = (n, rows = []) =>
+    branchOf({
+      key: 'venerable-dreadnoughts', kind: 'dreadnoughts', label: 'Venerable Dreadnoughts', number: undefined,
+      head: { rank: rank('venerable-dreadnought', 1), members: Array.from({ length: n }, (_, i) => person(String(i + 1))), vacant: false },
+      rows,
+    })
+  const viewOf = (b) => buildRosterView(rosterOf([b]))
+
+  it('puts the members beyond the second first in the opened ladder, so nobody is hidden', () => {
+    const v = viewOf(heads(4))
+    const b = v.branches[0]
+    expect(b.openable).toBe(true)
+    expect(b.ladder).toHaveLength(1)
+    expect(b.ladder[0]).toMatchObject({ type: 'group', s: 0 })
+    expect(b.ladder[0].rows[0].rank.key).toBe('venerable-dreadnought')
+    expect(b.ladder[0].rows[0].members.map((m) => m.id)).toEqual(['3', '4'])
+    expect(b.head.shown.map((m) => m.id)).toEqual(['1', '2'])
+    expect(b.head.more).toBe(2)
+    expect(b.count).toBe(4)
+  })
+
+  it('does not merge that row into a same-tier rank beneath it', () => {
+    const b = viewOf(heads(3, [{ rank: rank('lieutenant', 1), members: [person('9')] }])).branches[0]
+    expect(b.ladder.map((i) => i.rows.map((r) => r.rank.key))).toEqual([['venerable-dreadnought'], ['lieutenant']])
+  })
+
+  it('adds nothing for a head of two or fewer', () => {
+    expect(viewOf(heads(2)).branches[0].ladder).toEqual([])
+    expect(viewOf(heads(2)).branches[0].openable).toBe(false)
+    expect(viewOf(heads(1)).branches[0].openable).toBe(false)
+  })
+
+  it('finds every head member for Find me, shown or not', () => {
+    const v = viewOf(heads(4))
+    for (const id of ['1', '2', '3', '4']) expect(v.index.get(id), id).toBe('venerable-dreadnoughts')
+  })
+})

@@ -13,6 +13,7 @@ import { ROSTER_VIEWER } from '../lib/rosterContext'
 import { useOpenBranches } from '../lib/useOpenBranches'
 import { useRosterPolling } from '../lib/useRosterPolling'
 import { openNow, withReaderPinned } from '../lib/pinReader'
+import { scrollBehavior } from '../lib/motion'
 import '../components/roster/roster.css'
 
 // A thin composition surface: fetch lifecycle, which panel shows, and the page's
@@ -35,9 +36,10 @@ const updated = computed(() => (store.roster ? new Date(store.roster.fetchedAt).
 const openableKeys = computed(() => view.value?.openableKeys ?? [])
 const allOpen = computed(() => open.allOpen(openableKeys.value))
 
+// Returned, so the polling chain waits for the request: a slow one must not be
+// overtaken by the next tick.
 function load() {
-  store.load(auth.token)
-  if (showInfirmary.value) store.loadInfirmary(auth.token)
+  return Promise.all([store.load(auth.token), showInfirmary.value ? store.loadInfirmary(auth.token) : null])
 }
 const polling = useRosterPolling({ load })
 
@@ -74,7 +76,7 @@ async function jumpTo(key) {
   if (openableKeys.value.includes(key)) await openNow(() => open.openKey(key))
   const el = targetOf(key)
   if (!el) return
-  el.scrollIntoView({ behavior: 'smooth', block: 'center' })
+  el.scrollIntoView({ behavior: scrollBehavior(), block: 'center' })
   flash(el, 'rs-flash')
 }
 
@@ -88,13 +90,13 @@ async function findMe() {
   }
   await showOrder()
   if (key === 'high-command') {
-    targetOf(key)?.scrollIntoView({ behavior: 'smooth', block: 'center' })
+    targetOf(key)?.scrollIntoView({ behavior: scrollBehavior(), block: 'center' })
     return
   }
   await openNow(() => open.openKey(key))
   const chip = [...(targetOf(key)?.querySelectorAll('[data-id]') ?? [])].find((el) => el.dataset.id === id)
   if (!chip) return
-  chip.scrollIntoView({ behavior: 'smooth', block: 'center' })
+  chip.scrollIntoView({ behavior: scrollBehavior(), block: 'center' })
   flash(chip, 'rs-ping')
 }
 

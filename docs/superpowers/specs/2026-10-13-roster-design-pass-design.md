@@ -74,8 +74,13 @@ Branch bar: hex sigil (the same text sigils the Companies page uses: `I` to `VII
 Companies page calls the Armoury; plus `VD` for Venerable Dreadnoughts and `?` for
 Unassigned, which have no Companies counterpart), title, head (rank label, up to
 two member chips, `+N`), member count, chevron. No sub-label under the title. The whole
-bar is the toggle (stretched-button pattern). A branch with nothing under its head
-(Venerable Dreadnoughts) is static: no chevron, no hover highlight.
+bar is the toggle (stretched-button pattern): head chips pass clicks through to it
+(`pointer-events: none`), since a raised chip would swallow a tap on most of a
+phone-width bar. A branch with nothing under its head (Venerable Dreadnoughts) is
+static: no chevron, no hover highlight. A head with more than two members is not
+static: the members past the second are the first row of the opened ladder, so
+nobody is left off the page (added after the final review; Venerable Dreadnoughts can
+have many holders).
 
 Open branch: ladder with the spine. Rank groups in order; ranks sharing a `tier` are
 peers on one node, side by side. A `lateral` rank (Terminator) gets a hollow node on a

@@ -26,5 +26,8 @@ describe('style.css', () => {
     expect(block).toContain('transition-duration: 0.01ms !important')
     expect(block).toContain('animation-iteration-count: 1 !important')
     expect(block).toContain('scroll-behavior: auto !important')
+    // a staggered pour is delays, not durations: with delays left in, ranks still light one by one
+    expect(block).toContain('transition-delay: 0s !important')
+    expect(block).toContain('animation-delay: 0s !important')
   })
 })

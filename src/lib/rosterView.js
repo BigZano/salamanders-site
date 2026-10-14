@@ -47,17 +47,18 @@ export function showCompanyTag(member, branch) {
 /**
  * A branch's ranks as ladder items. Same-tier ranks sit in one group (peers),
  * a lateral rank (Terminator) is its own item beside the spine, and Dreadnought
- * "aside" members lead. Each item carries its position `s` and the heat colours
+ * "aside" members follow any `lead` row (see branchOf). Each item carries its position `s` and the heat colours
  * for its node and the spine segment that runs from it: group i of n sits at
  * i/n along the ramp; the others sit between the groups they fall between.
  */
-function ladderOf(rows, aside) {
+function ladderOf(rows, aside, lead = null) {
   const raw = []
+  if (lead) raw.push({ type: 'group', tier: lead.rank.tier, rows: [lead], lead: true })
   if (aside?.length) raw.push({ type: 'aside', members: aside })
   for (const row of rows) {
     const prev = raw[raw.length - 1]
     if (row.rank.lateral) raw.push({ type: 'lateral', row })
-    else if (prev?.type === 'group' && prev.tier === row.rank.tier) prev.rows.push(row)
+    else if (prev?.type === 'group' && !prev.lead && prev.tier === row.rank.tier) prev.rows.push(row)
     else raw.push({ type: 'group', tier: row.rank.tier, rows: [row] })
   }
   const n = Math.max(1, raw.filter((i) => i.type === 'group').length)
@@ -80,7 +81,10 @@ const countOf = (rows) => rows.reduce((n, r) => n + r.members.length, 0)
 function branchOf(b) {
   const aside = b.aside ?? []
   const members = b.head.members
-  const ladder = ladderOf(b.rows, aside)
+  // The bar shows two head members; the rest become the first row of the opened ladder, so
+  // nobody is left off the page (Venerable Dreadnoughts can have many holders).
+  const lead = !b.head.vacant && members.length > 2 ? { rank: b.head.rank, members: members.slice(2) } : null
+  const ladder = ladderOf(b.rows, aside, lead)
   return {
     key: b.key, kind: b.kind, label: b.label, number: b.number ?? null,
     sigil: SIGILS[b.key] ?? '',

@@ -27,6 +27,17 @@ describe('roster styles', () => {
     }
   })
 
+  it('head chips let clicks through to the stretched bar button', () => {
+    // The button's ::after covers the whole bar. A chip raised above it (z-index) swallows the
+    // tap, and on a phone the head row is most of the bar. pointer-events: none lets it through.
+    const source = readFileSync(new URL('RosterBranch.vue', dir), 'utf8')
+    const at = source.indexOf('.rs-head :deep(.rs-member)')
+    expect(at, 'a rule for head chips').toBeGreaterThan(-1)
+    const rule = source.slice(at, source.indexOf('}', at))
+    expect(rule).toContain('pointer-events: none')
+    expect(rule).not.toContain('z-index')
+  })
+
   it('the open-state spine rules are present and keyed to the branch panel', () => {
     const ladder = readFileSync(new URL('RosterLadder.vue', dir), 'utf8')
     for (const sel of ['.rs-panel[data-open] .rs-step::before', '.rs-panel[data-open] .rs-node', '.rs-panel[data-open] .rs-lateral .rs-node']) {

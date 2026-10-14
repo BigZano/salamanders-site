@@ -179,9 +179,10 @@ const bodyId = `rs-body-${props.branch.key}`
   display: contents;
   list-style: none;
 }
+/* Chips here are not controls. Let a click or tap go through to the stretched
+   button under them, so the whole bar toggles; a raised chip would swallow it. */
 .rs-head :deep(.rs-member) {
-  position: relative;
-  z-index: 1; /* above the stretched button, so a chip's hover still works */
+  pointer-events: none;
 }
 .rs-more {
   font-family: var(--font-mono);
