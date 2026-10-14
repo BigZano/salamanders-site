@@ -2,7 +2,7 @@
   "Tactical": {
     "ability": "Auspex Scan",
     "description": "A balanced frontline class built around accurate firepower and target amplification.",
-    "starting": "Any unequipped ranged weapon reloads automatically after 10 seconds.",
+    "starting": "Bolt Weapons now penetrate 1 additional enemy and Bolter Weapons get +20% Non Head Shot Damage",
     "weapons": {
       "primary": [
         "Auto Bolt Rifle",
@@ -33,29 +33,29 @@
         "Heightened Vigour",
         "Emperor's Judgement",
         "Secure Stockpile",
-        "Vital Data",
+        "Improved Efficiency",
         "Battle Focus",
-        "Close Targeting",
-        "Signal Jammer"
+        "Vital Data",
+        "Tactical Reserve"
       ],
       [
         "Plasma Boost",
         "Relentless Pursuit",
-        "Steady Aim",
+        "Focused Strike",
         "Aligned Aim",
-        "Priority Targeting",
-        "Improved Efficiency",
-        "Expert Timing",
+        "Pulse Auspex",
+        "Marksman's Mandate",
+        "Strongpoint",
         "Radiating Impact"
       ],
       [
-        "Kraken Penetrator Rounds",
+        "Armour Reinforcement",
         "Versatility",
         "Emperor's Vengeance",
         "Transhuman Physiology",
-        "Target Lock",
-        "Precise Calibration",
-        "Concentrated Fire",
+        "Mobile Auspex",
+        "Bladesman's Mandate",
+        "Prime Target",
         "Marked for Death"
       ]
     ]

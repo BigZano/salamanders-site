@@ -1,5 +1,5 @@
 {
-  "fetched": "2026-09-27T23:27:23.385Z",
+  "fetched": "2026-10-14T21:28:59.131Z",
   "classes": {
     "Tactical": {
       "perks": {
@@ -13,27 +13,27 @@
         },
         "Emperor's Judgement": {
           "level": 4,
-          "description": "After a Finisher, the equipped Ranged Weapon reloads automatically, and your Primary Weapon deals 20% more Damage for 10 seconds"
+          "description": "After a Finisher, the equipped Ranged Weapon reloads automatically and your Ranged Weapons deal 20% more Damage for 10 seconds"
         },
         "Secure Stockpile": {
           "level": 5,
-          "description": "Equipment Charge is restored by 1 for all Squad Members. Cooldown is 60 seconds."
+          "description": "Equipment Charge is restored by 1 for all Squad Members. Cooldown is 90 seconds."
         },
-        "Vital Data": {
+        "Improved Efficiency": {
           "level": 6,
-          "description": "Scanning an Extremis- or Terminus-level enemy restores Auspex Scan's Charge by 50%"
+          "description": "Auspex Scan recharges 25% faster"
         },
         "Battle Focus": {
           "level": 7,
           "description": "A perfectly timed Parry or Block gives the parried enemy a mark from Auspex Scan"
         },
-        "Close Targeting": {
+        "Vital Data": {
           "level": 8,
-          "description": "When Auspex Scan is in cooldown, Melee Damage increases by 25%"
+          "description": "Scanning an Extremis- or Terminus-level enemy restores 50% Auspex Scan Charge"
         },
-        "Signal Jammer": {
+        "Tactical Reserve": {
           "level": 9,
-          "description": "Enemies marked by Auspex Scan cannot call for reinforcements and automatically explode upon attempting to do so"
+          "description": "Your Secondary Weapon is replaced with a Primary Bolt Rifle"
         },
         "Plasma Boost": {
           "level": 10,
@@ -43,61 +43,61 @@
           "level": 11,
           "description": "After a Gun Strike, Ranged Damage increases by 25% for 5 seconds"
         },
-        "Steady Aim": {
+        "Focused Strike": {
           "level": 12,
-          "description": "Weapon Spread and Recoil is reduced by 20% and Ranged Damage against Terminus-level enemies is increased by 20%"
+          "description": "During a Gun Strike, you do not lose control upon taking Heavy Hits, cannot be knocked back, and take 30% less Damage"
         },
         "Aligned Aim": {
           "level": 13,
           "description": "Ranged Damage increases by 15% for all Squad Members"
         },
-        "Priority Targeting": {
+        "Pulse Auspex": {
           "level": 14,
-          "description": "The Mark from Auspex Scan lasts 8 seconds longer (base: 8), but Auspex Scan ignores Minoris-level enemies"
+          "description": "Auspex Scan emits a single pulse instead of creating a Scan zone. It has 2 Charges, but the radius is reduced by 25%."
         },
-        "Improved Efficiency": {
+        "Marksman's Mandate": {
           "level": 15,
-          "description": "Scanning any 10 enemies or 3 Majoris-level or higher enemies with one Auspex Scan restores Equipment Charge by 1"
+          "description": "Enemies marked by Auspex Scan take 40% more Ranged Damage (Base: 50%)"
         },
-        "Expert Timing": {
+        "Strongpoint": {
           "level": 16,
-          "description": "Enemies marked by Auspex Scan take an additional 75% Damage, but the mark's Duration is reduced by 4 seconds (base: 8)"
+          "description": "While in the Auspex Scan area, you and your Squad deal 20% more Melee Damage and take 20% less Health Damage"
         },
         "Radiating Impact": {
           "level": 17,
-          "description": "A Melee Finisher additionally deals area-of-effect Damage that scales with difficulty in a 10-metre radius. Cooldown is 90 seconds."
+          "description": "A Melee Finisher additionally deals significant area-of-effect Damage in a 10-metre radius. Cooldown is 90 seconds."
         },
-        "Kraken Penetrator Rounds": {
+        "Armour Reinforcement": {
           "level": 18,
-          "description": "Bolt Weapons penetrate 1 more enemies. Non-Headshot Damage increased by 50%"
+          "description": "Non-Finisher Gun Strikes restore 1 Armour Segment"
         },
         "Versatility": {
           "level": 19,
-          "description": "After switching Weapons, your Secondary Weapon does 25% more Damage. The Effect lasts until reloading or switching back to your Primary Weapon."
+          "description": "After switching Weapons, your Secondary Weapon deals 25% more Damage. The effect lasts until reloading or switching back to your Primary Weapon. If a Primary Weapon is equipped in the Secondary Weapon slot, it also benefits from this effect."
         },
         "Emperor's Vengeance": {
           "level": 20,
-          "description": "Killing a Majoris-level or higher enemy restores your Primary Weapon's Ammo by 1 magazine. For Primary Weapons that doesn't reload, 20% of maximum Ammo capacity is restored instead. Cannot exceed maximum Ammo capacity. Cooldown is 30 seconds."
+          "description": "Killing a Majoris-level or higher enemy restores your Primary Weapon's Ammo by 1 magazine. Cannot exceed maximum Ammo capacity. Cooldown is 30 seconds."
         },
         "Transhuman Physiology": {
           "level": 21,
           "description": "All Squad Members restore 30% more Contested Health from Ranged Damage"
         },
-        "Target Lock": {
+        "Mobile Auspex": {
           "level": 22,
-          "description": "Enemies marked by Auspex Scan take 75% more Equipment Damage"
+          "description": "Auspex Scan activates around you. Its radius increases by 30% and it lasts 4 seconds longer. (Base Duration: 5 seconds)"
         },
-        "Precise Calibration": {
+        "Bladesman's Mandate": {
           "level": 23,
-          "description": "Enemies marked by Auspex Scan take an additional 75% Damage, but Auspex Scan's radius is reduced by 25%"
+          "description": "Enemies marked by Auspex Scan take 60% more Melee Damage and 20% more Gun Strike Damage (Base: 50%)"
         },
-        "Concentrated Fire": {
+        "Prime Target": {
           "level": 24,
-          "description": "Auspex Scan zone lasts 60% longer, and enemies marked by Auspex Scan take an additional 120% Damage, but they lose the mark when they leave the scanned area"
+          "description": "Auspex Scan applies a Gun Strike mark to the most dangerous enemy within range"
         },
         "Marked for Death": {
           "level": 25,
-          "description": "A Headshot will instantly kill a Majoris- or Extremis-level enemy marked by Auspex Scan. Cooldown is 120 seconds."
+          "description": "Activating Auspex Scan weakens one Majoris- or Extremis-level enemy within its range. All damage bonuses applied by Auspex Scan against that target are increased by 100%"
         }
       },
       "prestige": [
@@ -133,8 +133,8 @@
         },
         {
           "level": 2,
-          "name": "Exigency Charge",
-          "description": "When your Health is less than 25%, Ability Charge regenerates 15% faster"
+          "name": "Passive Chambering",
+          "description": "Any unequipped Ranged Weapon reloads automatically after 10 seconds"
         }
       ]
     },
