@@ -1,0 +1,109 @@
+<!doctype html><meta charset="utf-8"><title>dragon flap prototype v2 (throwaway)</title>
+<style>body{margin:0;background:#0b1511;color:#cfe;font:12px system-ui;padding:10px}canvas{display:block;margin:4px 0 12px;background:#e8efe9}h4{margin:6px 0 0}#sky{background:#07110d}</style>
+<h4>Planform dragon (CC0, liftarn): the WHOLE wing bends from the body, 8 phases</h4><canvas id="a" width="1500" height="170"></canvas>
+<h4>Ragged wyrm (CC0, GDJ): wings hinge at the shoulder, 8 phases</h4><canvas id="b" width="1500" height="270"></canvas>
+<h4>Live: both directions, aimed along their travel; the giant crosses behind the near ridge</h4><canvas id="sky" width="1500" height="360"></canvas>
+<script>
+const smooth = (t) => { t = Math.max(0, Math.min(1, t)); return t * t * (3 - 2 * t) }
+let D
+/* planform dragon. x across (span), y along the body (head up). a = wing angle (+ lifts the tips). */
+const ROOT = 0.05, LEN = 0.45, YCUT = 0.13
+function warpPlan([x, y], a, k = 0.55) {
+  const ax = Math.abs(x)
+  if (ax <= ROOT) return [x, y]
+  const band = 1 - smooth((y - YCUT) / 0.05)          // 1 across the wing band, 0 for legs and tail
+  if (band <= 0) return [x, y]
+  const edge = smooth((ax - ROOT) / 0.02)             // blends in at the body edge so nothing tears
+  const t = Math.min(1, (ax - ROOT) / LEN)            // 0 at the shoulder, 1 at the tip: linear, so the WHOLE wing moves
+  const s = Math.abs(a) < 1e-4 ? t * LEN : LEN * Math.sin(a * t) / a
+  const z = Math.abs(a) < 1e-4 ? 0 : LEN * (1 - Math.cos(a * t)) / a
+  const w = band * edge
+  const xp = Math.sign(x) * (ROOT + s), yp = y - k * z
+  return [x + (xp - x) * w, y + (yp - y) * w]
+}
+/* wyrm: each wing is picked out along its OWN axis (how far along it, how near its centreline), so a wing that lies
+   along the shoulder line is not sliced in half; the part near the shoulder stays put, so the root stays attached */
+const S = { x: 0.17, y: -0.08 }
+const WINGS = [
+  { tip: { x: -0.5, y: -0.23 }, sign: -1, s0: 0.14, s1: 0.34, p0: 0.075, p1: 0.125 },   // the long thin left wing
+  { tip: { x: 0.44, y: -0.60 }, sign: 1, s0: 0.14, s1: 0.34, p0: 0.20, p1: 0.30 },      // the broad right wing
+]
+for (const w of WINGS) { const dx = w.tip.x - S.x, dy = w.tip.y - S.y, L = Math.hypot(dx, dy); w.ux = dx / L; w.uy = dy / L }
+function warpWyrm(pt, d) {
+  let [x, y] = pt
+  for (const w of WINGS) {
+    const vx = x - S.x, vy = y - S.y
+    const along = vx * w.ux + vy * w.uy, perp = Math.abs(vx * w.uy - vy * w.ux)
+    const m = smooth((along - w.s0) / (w.s1 - w.s0)) * (1 - smooth((perp - w.p0) / (w.p1 - w.p0)))
+    if (m < 1e-3) continue
+    const a = w.sign * d * m, c = Math.cos(a), sn = Math.sin(a)
+    x = S.x + vx * c - vy * sn; y = S.y + vx * sn + vy * c
+  }
+  return [x, y]
+}
+function trace(ctx, name, fn, W) {
+  for (const p of D[name].paths) { ctx.beginPath(); for (const sp of p) { sp.forEach((q, i) => { const [x, y] = fn(q); i ? ctx.lineTo(x * W, y * W) : ctx.moveTo(x * W, y * W) }); ctx.closePath() } ctx.fill('nonzero') }
+}
+/* rigid pieces: left wing, right wing and body are each clipped out of the SAME outline and drawn through their own
+   rotation about the shoulder, so nothing is stretched and nothing can tear. Pieces overlap the body a little at the root. */
+const PIV_A = { x: 0.03, y: -0.095 }, PIV_B = { x: 0.2, y: -0.075 }   // where each wing actually attaches
+// the wing pieces are cut a little further INTO the body than the body piece lets go of them (the CORE polygons), so the
+// two always overlap at the root and no seam can open; the left wing's cut steps around the head so the head stays put
+const P_A = [[-0.62, -0.33], [0.03, -0.14], [0.03, -0.062], [-0.14, -0.062], [-0.14, -0.015], [-0.62, -0.015]]
+const P_A_CORE = [[-0.62, -0.33], [0.005, -0.14], [0.005, -0.062], [-0.14, -0.062], [-0.14, -0.015], [-0.62, -0.015]]
+const P_B_CORE = [[0.225, -0.035], [0.23, -0.25], [0.325, -0.50], [0.425, -0.74], [0.62, -0.74], [0.62, -0.035]]                                // the long left wing
+const P_B = [[0.20, -0.035], [0.205, -0.25], [0.30, -0.50], [0.40, -0.74], [0.62, -0.74], [0.62, -0.035]]                                  // the broad right wing
+function drawWyrm(ctx, d, W) {
+  const poly = (pp) => { ctx.beginPath(); pp.forEach(([x, y], i) => (i ? ctx.lineTo(x * W, y * W) : ctx.moveTo(x * W, y * W))); ctx.closePath() }
+  const piece = (clipFn, ang, pv) => { ctx.save(); ctx.translate(pv.x * W, pv.y * W); ctx.rotate(ang); ctx.translate(-pv.x * W, -pv.y * W); clipFn(); ctx.clip('evenodd'); trace(ctx, 'wyrm', (q) => q, W); ctx.restore() }
+  piece(() => poly(P_A), -d, PIV_A)
+  piece(() => poly(P_B), d, PIV_B)
+  piece(() => { ctx.beginPath(); ctx.rect(-W, -W * 1.2, W * 2, W * 2.4); [P_A_CORE, P_B_CORE].forEach((pp) => { pp.forEach(([x, y], i) => (i ? ctx.lineTo(x * W, y * W) : ctx.moveTo(x * W, y * W))); ctx.closePath() }) }, 0, S)
+}
+/* place a shape: heading in radians (direction of travel on screen), base = the shape's own forward axis */
+function place(ctx, name, fn, o) {
+  ctx.save(); ctx.translate(o.x, o.y)
+  if (o.mirror) ctx.scale(-1, 1)
+  ctx.rotate(o.rot || 0)
+  if (o.tilt) ctx.scale(o.tilt, 1)
+  trace(ctx, name, fn, o.w); ctx.restore()
+}
+function sheets() {
+  const a = document.getElementById('a').getContext('2d'), b = document.getElementById('b').getContext('2d')
+  for (let i = 0; i < 8; i++) {
+    const ph = i / 8 * Math.PI * 2, ang = 0.85 * Math.cos(ph), d = 0.55 * (0.5 - 0.5 * Math.cos(ph))
+    a.fillStyle = '#050a08'; place(a, 'plan', (p) => warpPlan(p, ang), { x: 95 + i * 185, y: 82, w: 170 })
+    a.fillStyle = '#c33'; a.font = '11px system-ui'; a.fillText('a=' + ang.toFixed(2), 20 + i * 185, 12)
+    b.fillStyle = '#050a08'; b.save(); b.translate(95 + i * 185, 112); drawWyrm(b, d * 1.3, 150); b.restore()
+    b.fillStyle = '#c33'; b.font = '11px system-ui'; b.fillText('d=' + d.toFixed(2), 20 + i * 185, 12)
+    b.beginPath(); b.arc(95 + i * 185 + S.x * 150, 112 + S.y * 150, 2.5, 0, 7); b.fill()
+  }
+}
+function live() {
+  const c = document.getElementById('sky'), g = c.getContext('2d'), W = c.width, H = c.height
+  const ridge = () => { g.fillStyle = '#050a08'; g.beginPath(); g.moveTo(0, H); [[0, 280], [170, 230], [330, 292], [520, 170], [700, 285], [900, 215], [1080, 292], [1260, 190], [1500, 262]].forEach(([x, y]) => g.lineTo(x, y)); g.lineTo(W, H); g.closePath(); g.fill() }
+  const t0 = performance.now()
+  // far flyers: direction, speed, altitude. heading follows the actual velocity, so they aim where they go.
+  const far = [{ dir: 1, sp: 38, y: 120, ph: 0 }, { dir: -1, sp: 30, y: 160, ph: 1.7 }, { dir: 1, sp: 46, y: 80, ph: 3.1 }, { dir: -1, sp: 34, y: 200, ph: 4.4 }, { dir: 1, sp: 26, y: 235, ph: 2.2 }]
+  ;(function frame(now) {
+    const t = (now - t0) / 1000
+    const sky = g.createRadialGradient(W * 0.5, H * 1.12, 10, W * 0.5, H * 1.12, H * 1.3); sky.addColorStop(0, '#ff8a3a'); sky.addColorStop(0.2, '#e0431d'); sky.addColorStop(0.48, '#4a160d'); sky.addColorStop(0.82, '#12131f'); g.fillStyle = sky; g.fillRect(0, 0, W, H)
+    g.fillStyle = '#050a08'
+    far.forEach((f, k) => {
+      const span = W + 160, u = (((f.dir > 0 ? t * f.sp : -t * f.sp) + f.ph * 160) % span + span) % span, x = u - 80
+      const yb = f.y + Math.sin(t * 0.6 + f.ph) * 18, vy = Math.cos(t * 0.6 + f.ph) * 18 * 0.6, vx = f.dir * f.sp
+      const heading = Math.atan2(vy, vx)                                   // direction of travel
+      const flapping = Math.sin(t * 0.5 + f.ph * 2) > -0.2, ang = flapping ? 0.85 * Math.cos(t * 7 + f.ph) : 0.2 + 0.05 * Math.sin(t + f.ph)
+      // the shape's head is up (-y); rotate so the head leads the way, then foreshorten the span a little (we see them at an angle)
+      place(g, 'plan', (p) => warpPlan(p, ang), { x, y: yb, w: 34 + k * 6, rot: heading + Math.PI / 2, tilt: 0.8 })
+    })
+    ridge()
+    // the giant: slow, huge, behind the ridge's lower part; mirrored for direction; one heavy beat then a long glide
+    { const dir = (Math.floor(t / 40) % 2) ? -1 : 1, u = (t % 40) / 40, x = dir > 0 ? -250 + u * (W + 500) : W + 250 - u * (W + 500)
+      const y = 150 + Math.sin(t * 0.35) * 22, ph = (t % 7) / 7, d = ph < 0.4 ? 0.6 * Math.sin(ph / 0.4 * Math.PI) : 0.06
+      g.fillStyle = '#050a08'; g.save(); g.translate(x, y); if (dir > 0) g.scale(-1, 1); g.rotate(dir > 0 ? 0.1 : -0.1); drawWyrm(g, d * 1.3, 300); g.restore() }
+    requestAnimationFrame(frame)
+  })(t0)
+}
+fetch('dragons.json').then((r) => r.json()).then((s) => { D = s; sheets(); live() })
+</script>

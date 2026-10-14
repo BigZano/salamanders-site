@@ -1,0 +1,18 @@
+<!doctype html><meta charset="utf-8"><title>own dragons v2 sheets (throwaway)</title>
+<style>body{margin:0;background:#0b1511;color:#cfe;font:12px system-ui;padding:10px}canvas{display:block;margin:4px 0 12px;background:#e8efe9}h4{margin:6px 0 0}</style>
+<h4>Drake (traditional): wings now hinge at the SHOULDER, over the forelegs, behind the neck base. 8 phases</h4><canvas id="a" width="1560" height="300"></canvas>
+<h4>True wyrm (no legs): body undulates, wings off the shoulders. 6 phases</h4><canvas id="b" width="1560" height="330"></canvas>
+<h4>Small planform dragon (liftarn, CC0): whole wing bends from the body. 6 phases</h4><canvas id="c" width="1560" height="180"></canvas>
+<h4>Great wyrm, dorsal: wingspan vertical, gliding. glide / flex / bank</h4><canvas id="d" width="1560" height="420"></canvas>
+<script src="own.js"></script>
+<script>
+const Ds = spineData(SWIFT)
+const a = document.getElementById('a').getContext('2d'), b = document.getElementById('b').getContext('2d'), c = document.getElementById('c').getContext('2d'), d = document.getElementById('d').getContext('2d')
+for (let i = 0; i < 8; i++) { const u = 0.5 - 0.5 * Math.cos(i / 8 * Math.PI * 2); a.save(); a.translate(110 + i * 190, 240); a.fillStyle = '#050a08'; drawDragon(a, SWIFT, Ds, u, 46, { swing: i }); a.restore(); a.fillStyle = '#c33'; a.fillText('u=' + u.toFixed(2), 14 + i * 190, 14) }
+for (let i = 0; i < 6; i++) { const ph = i / 6 * Math.PI * 2, u = 0.5 - 0.5 * Math.cos(ph), Dw = spineData(WYRM, wyrmWave(i * 0.9)); b.save(); b.translate(150 + i * 255, 265); b.fillStyle = '#050a08'; drawDragon(b, WYRM, Dw, u, 36, {}); b.restore(); b.fillStyle = '#c33'; b.fillText('u=' + u.toFixed(2), 14 + i * 255, 14) }
+fetch('dragons.json').then((r) => r.json()).then((s) => {
+  PLAN = s.plan
+  for (let i = 0; i < 6; i++) { const ph = i / 6 * Math.PI * 2, ang = 0.85 * Math.cos(ph); c.save(); c.translate(120 + i * 250, 100); c.fillStyle = '#050a08'; drawPlan(c, ang, 160); c.restore(); c.fillStyle = '#c33'; c.fillText('a=' + ang.toFixed(2), 14 + i * 250, 14) }
+})
+;[{ flex: 0, bank: 0 }, { flex: 1, bank: 0 }, { flex: 0.3, bank: 0.12 }].forEach((o, i) => { d.save(); d.translate(340 + i * 520, 210); d.fillStyle = '#050a08'; drawDorsal(d, 38, o); d.restore(); d.fillStyle = '#c33'; d.fillText(JSON.stringify(o), 14 + i * 520, 14) })
+</script>

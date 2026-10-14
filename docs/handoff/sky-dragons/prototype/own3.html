@@ -1,0 +1,84 @@
+<!doctype html><meta charset="utf-8"><title>own dragons live scene v2 (throwaway)</title>
+<style>body{margin:0;background:#050807}canvas{display:block;width:100%;height:auto}</style>
+<canvas id="c" width="1500" height="720"></canvas>
+<script src="own.js"></script>
+<script>
+const q = new URLSearchParams(location.search)
+const fixed = q.has('t') ? parseFloat(q.get('t')) : null
+const c = document.getElementById('c'), g = c.getContext('2d'), W = c.width, H = c.height
+const Ds = spineData(SWIFT)
+const wrap = (x) => ((x % (W + 500)) + (W + 500)) % (W + 500) - 250
+
+function poly(pts, fill) { g.beginPath(); pts.forEach(([x, y], i) => (i ? g.lineTo(x, y) : g.moveTo(x, y))); g.closePath(); g.fillStyle = fill; g.fill() }
+function sky() {
+  const s = g.createLinearGradient(0, 0, 0, H)
+  s.addColorStop(0, '#0a0d16'); s.addColorStop(0.45, '#1a0f16'); s.addColorStop(0.75, '#3a150f'); s.addColorStop(1, '#5a1e0c')
+  g.fillStyle = s; g.fillRect(0, 0, W, H)
+  const r = g.createRadialGradient(760, 300, 10, 760, 300, 520)
+  r.addColorStop(0, 'rgba(255,170,70,0.85)'); r.addColorStop(0.18, 'rgba(240,100,35,0.5)'); r.addColorStop(0.5, 'rgba(150,50,20,0.22)'); r.addColorStop(1, 'rgba(0,0,0,0)')
+  g.fillStyle = r; g.fillRect(0, 0, W, H)
+  const p = g.createRadialGradient(760, 150, 10, 760, 190, 230)
+  p.addColorStop(0, 'rgba(255,130,50,0.35)'); p.addColorStop(0.5, 'rgba(180,70,30,0.18)'); p.addColorStop(1, 'rgba(0,0,0,0)')
+  g.save(); g.scale(0.7, 1); g.fillStyle = p; g.fillRect(0, 0, W / 0.7, H); g.restore()
+}
+const farRidge = [[0, 470], [140, 430], [260, 455], [420, 400], [560, 440], [660, 395], [860, 380], [980, 420], [1120, 385], [1280, 430], [1400, 410], [1500, 440], [1500, 720], [0, 720]]
+const cone = [[0, 600], [130, 560], [330, 500], [520, 410], [650, 330], [700, 300], [735, 296], [770, 306], [800, 300], [840, 316], [930, 380], [1080, 460], [1260, 520], [1500, 560], [1500, 720], [0, 720]]
+const nearRidge = [[0, 640], [160, 600], [300, 628], [520, 590], [760, 640], [1000, 610], [1180, 636], [1360, 596], [1500, 624], [1500, 720], [0, 720]]
+
+// side-view model (drake / wyrm): translate, mirror for direction, pitch along travel; ember rim drawn first, offset down
+function side(P, D, u, S, x, y, pitch, flip, color, rimCol, rimOff, swing) {
+  g.save(); g.translate(x, y); g.scale(flip, 1); g.rotate(pitch)
+  if (rimCol) { g.fillStyle = rimCol; g.translate(0, rimOff); drawDragon(g, P, D, u, S, { swing }); g.translate(0, -rimOff) }
+  g.fillStyle = color; drawDragon(g, P, D, u, S, { swing })
+  g.restore()
+}
+// planform model: head up in the art, so rotate heading + 90deg, foreshorten the span
+function plan(a, w, x, y, heading, color, rimCol, rimOff) {
+  g.save(); g.translate(x, y); g.rotate(heading + Math.PI / 2); g.scale(0.8, 1)
+  if (rimCol) { g.fillStyle = rimCol; g.translate(0, rimOff); drawPlan(g, a, w); g.translate(0, -rimOff) }
+  g.fillStyle = color; drawPlan(g, a, w); g.restore()
+}
+function giant(S, x, y, flip, flex, bank, color, rimCol, rimOff) {
+  g.save(); g.translate(x, y); g.scale(flip, 1)
+  if (rimCol) { g.fillStyle = rimCol; g.translate(0, rimOff); drawDorsal(g, S, { flex, bank }); g.translate(0, -rimOff) }
+  g.fillStyle = color; drawDorsal(g, S, { flex, bank }); g.restore()
+}
+const flap = (t, f, k, thr) => (Math.sin(t * 0.5 + k * 2.1) > thr ? 0.5 - 0.5 * Math.cos(t * f + k) : 0.45 + 0.05 * Math.sin(t * 1.3 + k))
+
+function frame(t) {
+  sky()
+  // --- great wyrm: dorsal, wingspan vertical, far behind everything, hazed toward the sky, a slow glide with barely a flex
+  const gS = q.has('gs') ? parseFloat(q.get('gs')) : 62, gdir = q.has('gdir') ? parseFloat(q.get('gdir')) : 1
+  const gx = q.has('gx') ? parseFloat(q.get('gx')) : (gdir > 0 ? -400 + 14 * t : W + 400 - 14 * t), gy = q.has('gy') ? parseFloat(q.get('gy')) : 215 + 14 * Math.sin(t * 0.09)
+  g.save(); g.filter = 'blur(1.4px)'
+  giant(gS, gx, gy, gdir, 0.5 + 0.5 * Math.sin(t * 0.7), 0.07 * Math.sin(t * 0.13), '#1d0c0c', 'rgba(255,120,50,0.38)', 4)
+  g.restore()
+  poly(farRidge, '#1b0b0a')
+  // mid distance, tiny, between the ridges: drakes and planform dragons
+  ;[{ S: 11, x0: 300, y: 372, sp: 28, d: -1 }, { S: 9, x0: 1000, y: 346, sp: 33, d: 1 }].forEach((m, k) => {
+    const x = wrap(m.x0 + m.d * m.sp * t), y = m.y + Math.sin(t * 0.8 + k) * 9
+    side(SWIFT, Ds, flap(t, 9.5, k, -0.2), m.S, x, y, Math.cos(t * 0.8 + k) * 0.06, m.d, '#0c0606', 'rgba(255,120,50,0.5)', 1, t * 2 + k)
+  })
+  ;[{ w: 34, x0: 600, y: 350, sp: 30, d: 1 }, { w: 40, x0: 1250, y: 385, sp: 24, d: -1 }].forEach((m, k) => {
+    const x = wrap(m.x0 + m.d * m.sp * t), y = m.y + Math.sin(t * 0.7 + k) * 8, hd = m.d > 0 ? 0 : Math.PI
+    plan(0.85 * Math.cos(t * 8 + k) * (Math.sin(t * 0.5 + k) > -0.2 ? 1 : 0.2), m.w, x, y, hd, '#0c0606', 'rgba(255,120,50,0.3)', 0.6)
+  })
+  poly(cone, '#070908')
+  g.strokeStyle = 'rgba(255,120,40,0.75)'; g.lineWidth = 3; g.lineCap = 'round'
+  ;[[[735, 298], [700, 360], [688, 430], [650, 520]], [[770, 304], [800, 380], [826, 440], [880, 510]], [[750, 300], [748, 380], [740, 470]]].forEach((l) => { g.beginPath(); l.forEach(([x, y], i) => (i ? g.lineTo(x, y) : g.moveTo(x, y))); g.stroke() })
+  // near: a wyrm, a drake, a planform dragon, in front of the glow
+  { const m = { S: 24, x0: 150, y: 160, sp: 56, d: 1 }, x = wrap(m.x0 + m.d * m.sp * t), y = m.y + Math.sin(t * 0.5) * 20
+    const u = flap(t, 5.2, 0, -0.1), Dw = spineData(WYRM, wyrmWave(t, 1))
+    side(WYRM, Dw, u, m.S, x, y, Math.cos(t * 0.5) * 0.07 - 0.03, m.d, '#050707', 'rgba(255,120,50,0.6)', 2, 0) }
+  { const m = { S: 32, x0: 1250, y: 255, sp: 66, d: -1 }, x = wrap(m.x0 + m.d * m.sp * t), y = m.y + Math.sin(t * 0.6 + 3) * 22
+    side(SWIFT, Ds, flap(t, 6.6, 1, -0.15), m.S, x, y, Math.cos(t * 0.6 + 3) * 0.1 + 0.02, m.d, '#050707', 'rgba(255,120,50,0.6)', 2, t * 2) }
+  { const m = { w: 60, x0: 900, y: 120, sp: 48, d: 1 }, x = wrap(m.x0 + m.d * m.sp * t), y = m.y + Math.sin(t * 0.4 + 1) * 16
+    plan(0.85 * Math.cos(t * 7 + 2) * (Math.sin(t * 0.45 + 2) > -0.1 ? 1 : 0.25), m.w, x, y, Math.cos(t * 0.4 + 1) * 0.12, '#050707', 'rgba(255,120,50,0.6)', 2) }
+  poly(nearRidge, '#030504')
+}
+fetch('dragons.json').then((r) => r.json()).then((s) => {
+  PLAN = s.plan
+  if (fixed !== null) frame(fixed)
+  else { const t0 = performance.now(); (function loop(now) { frame((now - t0) / 1000 + (q.has('t0') ? parseFloat(q.get('t0')) : 0)); requestAnimationFrame(loop) })(t0) }
+})
+</script>
