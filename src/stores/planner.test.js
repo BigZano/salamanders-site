@@ -194,3 +194,112 @@ describe('toggleWeaponPerk validIds', () => {
     expect(planner.weaponPerks.Gun).not.toHaveProperty('c')
   })
 })
+
+describe('Patch 15.0 migration', () => {
+  const KEY = 'salamanders-planner-v1'
+  const encode = (payload) =>
+    btoa(unescape(encodeURIComponent(JSON.stringify(payload)))).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '')
+  const stale = {
+    className: 'Tactical',
+    perkIds: { 7: 'Signal Jammer' },
+    justifications: { 7: 'jam' },
+    prestigePicks: ['Exigency Charge', null, null, null],
+    createdAt: '2026-09-20T00:00:00Z',
+  }
+
+  it('drops a replaced perk, its rationale and a replaced prestige pick when a build is applied', () => {
+    const planner = usePlanner()
+    planner.applyBuildData(stale)
+    expect(planner.selected).not.toHaveProperty('7')
+    expect(planner.justified).not.toHaveProperty('7')
+    expect(planner.prestigePicks.Tactical).toEqual([null, null, null, null])
+    expect(planner.staleNotices).toHaveLength(2)
+  })
+
+  it('keeps a reworked perk and flags it', () => {
+    const planner = usePlanner()
+    planner.applyBuildData({ ...stale, perkIds: { 7: 'Marked for Death' }, justifications: {}, prestigePicks: [] })
+    expect(planner.selected[7]).toBe('Marked for Death')
+    expect(planner.staleNotices[0].kind).toBe('reworked')
+  })
+
+  it('migrates a share link, without a date so a reworked perk is not flagged', () => {
+    const planner = usePlanner()
+    planner.applyEncoded(encode({ c: 'Tactical', p: { 7: 'Signal Jammer' }, j: { 7: 'jam' } }))
+    expect(planner.selected).not.toHaveProperty('7')
+    expect(planner.staleNotices).toHaveLength(1)
+    planner.applyEncoded(encode({ c: 'Tactical', p: { 7: 'Marked for Death' } }))
+    expect(planner.selected[7]).toBe('Marked for Death')
+    expect(planner.staleNotices).toEqual([])
+  })
+
+  it('migrates saved state on hydrate', () => {
+    localStorage.setItem(KEY, JSON.stringify({
+      activeClass: 'Tactical',
+      selectedPerks: { Tactical: { 7: 'Signal Jammer', 0: 'Balanced Distribution' } },
+      justifications: { Tactical: { 7: 'jam', 0: 'keep' } },
+      prestigePicks: { Tactical: ['Exigency Charge', null, null, null] },
+    }))
+    const planner = usePlanner()
+    planner.hydrate()
+    expect(planner.selectedPerks.Tactical).toEqual({ 0: 'Balanced Distribution' })
+    expect(planner.justifications.Tactical).toEqual({ 0: 'keep' })
+    expect(planner.prestigePicks.Tactical).toEqual([null, null, null, null])
+    expect(planner.staleNotices).toHaveLength(2)
+  })
+
+  it('does not throw on malformed saved state', () => {
+    localStorage.setItem(KEY, '{not json')
+    const planner = usePlanner()
+    expect(() => planner.hydrate()).not.toThrow()
+    expect(planner.staleNotices).toEqual([])
+  })
+
+  it('ignores a staleNotices value in saved state that is not a list', () => {
+    localStorage.setItem(KEY, JSON.stringify({ activeClass: 'Vanguard', staleNotices: 'oops' }))
+    const planner = usePlanner()
+    planner.hydrate()
+    expect(planner.staleNotices).toEqual([])
+  })
+
+  it('does not flag a current Tactical build or another class', () => {
+    const planner = usePlanner()
+    planner.applyBuildData({ ...stale, perkIds: { 7: 'Tactical Reserve' }, justifications: {}, prestigePicks: ['Passive Chambering'] })
+    expect(planner.staleNotices).toEqual([])
+    planner.applyBuildData({ className: 'Vanguard', perkIds: { 7: 'Signal Jammer' }, justifications: {} })
+    expect(planner.staleNotices).toEqual([])
+    expect(planner.selected[7]).toBe('Signal Jammer')
+  })
+
+  it('replaces the notices when a different build is loaded', () => {
+    const planner = usePlanner()
+    planner.applyBuildData(stale)
+    expect(planner.staleNotices).toHaveLength(2)
+    planner.applyBuildData({ className: 'Vanguard', perkIds: {}, justifications: {} })
+    expect(planner.staleNotices).toEqual([])
+  })
+
+  it('clears the notices when the class changes, not when the same class is re-selected', () => {
+    const planner = usePlanner()
+    planner.applyBuildData(stale)
+    planner.setClass('Tactical')
+    expect(planner.staleNotices).toHaveLength(2)
+    planner.setClass('Vanguard')
+    expect(planner.staleNotices).toEqual([])
+  })
+
+  it('keeps the notices across a reload until they are dismissed', () => {
+    const first = usePlanner()
+    first.applyBuildData(stale)
+    setActivePinia(createPinia())
+    const reloaded = usePlanner()
+    reloaded.hydrate()
+    expect(reloaded.staleNotices).toHaveLength(2)
+    reloaded.dismissStaleNotices()
+    expect(reloaded.staleNotices).toEqual([])
+    setActivePinia(createPinia())
+    const again = usePlanner()
+    again.hydrate()
+    expect(again.staleNotices).toEqual([])
+  })
+})

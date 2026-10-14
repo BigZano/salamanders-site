@@ -1,6 +1,7 @@
 import { defineStore } from 'pinia'
 import classes from '../data/classes.json'
 import perkDetails from '../data/perk-details.json'
+import { migrateSelection } from '../lib/patchMigration'
 
 // Wiki-baked perk text, keyed by class then perk name. See scripts/fetch-wiki-perks.mjs.
 export const detailsFor = (className) => perkDetails.classes[className] || { perks: {}, prestige: [] }
@@ -16,6 +17,29 @@ export const HEADS = ['CORE', 'CORE', 'CORE', 'TEAM', 'GEAR', 'GEAR', 'GEAR', 'S
 export const SLOTS = ['CORE 1', 'CORE 2', 'CORE 3', 'TEAM', 'GEAR 1', 'GEAR 2', 'GEAR 3', 'SIGNATURE']
 
 const STORAGE_KEY = 'salamanders-planner-v1'
+
+/**
+ * Run the patch migration (see lib/patchMigration.js) over one class's saved
+ * picks, writing the result back in place, and return its notices. Only keys
+ * that already exist are written, so a class with no saved state stays empty.
+ */
+function migrateInPlace(store, className, createdAt) {
+  const r = migrateSelection({
+    className,
+    selectedPerks: store.selectedPerks[className],
+    justifications: store.justifications[className],
+    prestigePicks: store.prestigePicks[className],
+    createdAt,
+  })
+  if (r.notices.length) {
+    if (store.selectedPerks[className]) store.selectedPerks[className] = r.selectedPerks
+    if (store.justifications[className]) store.justifications[className] = r.justifications
+    if (Array.isArray(store.prestigePicks[className])) store.prestigePicks[className] = r.prestigePicks
+  }
+  return r.notices
+}
+
+const isNotice = (n) => n && typeof n === 'object' && typeof n.was === 'string' && typeof n.now === 'string'
 
 // Column c holds perks at levels 2+c, 10+c, 18+c (one per tier).
 function columnsFor(className) {
@@ -52,6 +76,9 @@ export const usePlanner = defineStore('planner', {
     weaponPerks: {},
     // per-weapon point budgets: { [weapon]: number }
     weaponBudgets: {},
+    // Perks the Patch 15.0 migration dropped or flagged in the build just loaded,
+    // shown until dismissed. See lib/patchMigration.js.
+    staleNotices: [],
   }),
 
   getters: {
@@ -120,7 +147,15 @@ export const usePlanner = defineStore('planner', {
 
   actions: {
     setClass(name) {
-      if (classes[name]) this.activeClass = name
+      if (classes[name]) {
+        // The notices describe the build that was loaded, not the new class.
+        if (name !== this.activeClass) this.staleNotices = []
+        this.activeClass = name
+      }
+      this.persist()
+    },
+    dismissStaleNotices() {
+      this.staleNotices = []
       this.persist()
     },
     togglePerk(perk) {
@@ -223,6 +258,7 @@ export const usePlanner = defineStore('planner', {
       for (const [w, perks] of Object.entries(r.weaponPerks || {})) {
         this.weaponPerks[w] = { ...perks }
       }
+      this.staleNotices = migrateInPlace(this, r.className, r.createdAt)
       this.persist()
     },
 
@@ -271,6 +307,7 @@ export const usePlanner = defineStore('planner', {
             weapons: this.weapons,
             weaponPerks: this.weaponPerks,
             weaponBudgets: this.weaponBudgets,
+            staleNotices: this.staleNotices,
           }),
         )
       } catch {}
@@ -278,7 +315,20 @@ export const usePlanner = defineStore('planner', {
     hydrate() {
       try {
         const saved = JSON.parse(localStorage.getItem(STORAGE_KEY))
-        if (saved) this.$patch(saved)
+        if (!saved) return
+        this.$patch(saved)
+        // Notices saved with the state stay until dismissed; anything the patch
+        // migration finds now is added to them.
+        const carried = Array.isArray(this.staleNotices) ? this.staleNotices.filter(isNotice) : []
+        const found = []
+        const names = new Set([
+          ...Object.keys(this.selectedPerks),
+          ...Object.keys(this.justifications),
+          ...Object.keys(this.prestigePicks),
+        ])
+        for (const name of names) found.push(...migrateInPlace(this, name))
+        this.staleNotices = [...carried, ...found]
+        if (found.length) this.persist()
       } catch {}
     },
     encode() {
@@ -310,6 +360,7 @@ export const usePlanner = defineStore('planner', {
         for (const [w, perks] of Object.entries(json.wp || {})) {
           this.weaponPerks[w] = { ...perks }
         }
+        this.staleNotices = migrateInPlace(this, json.c)
         this.persist()
       } catch {}
     },
