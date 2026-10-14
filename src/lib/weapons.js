@@ -43,6 +43,20 @@ export const SOURCE_LABEL = {
   offline: 'Offline data',
 }
 
+/**
+ * Weapon keys are what saved builds store, so they never change; this maps a key
+ * to the name the game uses when the two differ. Patch 15.0 added a one-handed
+ * Thunder Hammer, so the original one is now the "Two-Handed" Thunder Hammer.
+ */
+export const DISPLAY_NAME = { 'Thunder Hammer': 'Two-Handed Thunder Hammer' }
+
+export const weaponLabel = (name) => (Object.hasOwn(DISPLAY_NAME, name) ? DISPLAY_NAME[name] : name)
+
+/** "Master-Crafted - Beta — Master-Crafted · Fencing": name, then quality, then melee defence type. */
+export function versionLabel(v) {
+  return `${v.name}${v.quality ? ` — ${v.quality}` : ''}${v.defence ? ` · ${v.defence}` : ''}`
+}
+
 /** The baseline version of a weapon — the plain Standard one where it exists. */
 export function baseVersion(weapon) {
   const vs = weapon?.versions || []

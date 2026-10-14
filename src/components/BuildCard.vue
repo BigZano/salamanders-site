@@ -1,5 +1,6 @@
 <script setup>
 import { isStaleBuild } from '../lib/patchMigration'
+import { weaponLabel } from '../lib/weapons'
 
 defineProps({
   build: { type: Object, required: true },
@@ -49,7 +50,7 @@ const slots = [
             class="b-weapon"
             :to="{ path: '/armoury', query: { w: build.weapons[s.key] } }"
           >
-            {{ build.weapons[s.key] }}
+            {{ weaponLabel(build.weapons[s.key]) }}
           </RouterLink>
           <span v-else>—</span>
         </dd>

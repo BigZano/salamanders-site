@@ -5,7 +5,7 @@ import weapons from '../data/weapons.json'
 import classes from '../data/classes.json'
 import { usePlanner } from '../stores/planner'
 import { WIKI } from '../lib/wiki'
-import { resolveWeapon, SOURCE_LABEL, slotAverages, GAUGE_MAX } from '../lib/weapons'
+import { resolveWeapon, SOURCE_LABEL, slotAverages, GAUGE_MAX, weaponLabel, versionLabel } from '../lib/weapons'
 import WeaponTree from '../components/WeaponTree.vue'
 
 const planner = usePlanner()
@@ -24,7 +24,10 @@ const classesFor = (name) =>
 
 const list = computed(() =>
   weapons.fallbackWeapons[active.value]
-    .filter((w) => w.toLowerCase().includes(q.value.trim().toLowerCase()))
+    .filter((w) => {
+      const needle = q.value.trim().toLowerCase()
+      return w.toLowerCase().includes(needle) || weaponLabel(w).toLowerCase().includes(needle)
+    })
     .map((w) => ({
       name: w,
       users: classNames.filter((c) => classes[c].weapons[active.value]?.includes(w)),
@@ -167,7 +170,7 @@ watch(() => route.query.w, openFromQuery)
           :class="{ on: activeWeapon === w.name }"
           @click="selectWeapon(w.name)"
         >
-          {{ w.name }}
+          {{ weaponLabel(w.name) }}
           <span class="w-item-users">{{ w.users.length }}</span>
         </button>
         <p v-if="!list.length" class="w-empty">No weapons match “{{ q }}”.</p>
@@ -181,11 +184,11 @@ watch(() => route.query.w, openFromQuery)
         </div>
 
         <div v-else-if="status === 'loading'" class="w-loading">
-          <span class="spinner" /> Syncing {{ activeWeapon }} from the wiki…
+          <span class="spinner" /> Syncing {{ weaponLabel(activeWeapon) }} from the wiki…
         </div>
 
         <div v-else-if="status === 'error'" class="w-error">
-          <h2>{{ activeWeapon }}</h2>
+          <h2>{{ weaponLabel(activeWeapon) }}</h2>
           <p>{{ errorMsg }}</p>
           <div class="w-error-actions">
             <button class="btn-drake btn-sm" @click="selectWeapon(activeWeapon)">Retry</button>
@@ -199,7 +202,7 @@ watch(() => route.query.w, openFromQuery)
               <p class="eyebrow">
                 {{ data.meta?.slot || active }}<span v-if="data.meta?.category"> · {{ data.meta.category }}</span>
               </p>
-              <h2 class="w-hero-name">{{ activeWeapon }}</h2>
+              <h2 class="w-hero-name">{{ weaponLabel(activeWeapon) }}</h2>
             </div>
             <span class="w-src" :class="data.source">
               {{ SOURCE_LABEL[data.source] }}
@@ -223,11 +226,12 @@ watch(() => route.query.w, openFromQuery)
           <section v-if="versions.length" class="stats">
             <div class="stats-head">
               <h3 class="stats-title">Statistics</h3>
+              <span v-if="version?.defence" class="defence" :data-defence="version.defence">{{ version.defence }}</span>
               <label class="stats-version">
                 <span>Version</span>
                 <select v-model.number="versionIndex">
                   <option v-for="(v, i) in versions" :key="i" :value="i">
-                    {{ v.name }}<span v-if="v.quality"> — {{ v.quality }}</span>
+                    {{ versionLabel(v) }}
                   </option>
                 </select>
               </label>
@@ -274,7 +278,10 @@ watch(() => route.query.w, openFromQuery)
             </a>
           </div>
 
-          <WeaponTree :weapon="activeWeapon" :data="data" />
+          <WeaponTree v-if="!data.perksPending" :weapon="activeWeapon" :data="data" />
+          <p v-else class="w-pending">
+            Perk tree not published yet. The wiki has this weapon's stats but not its perk list.
+          </p>
         </template>
       </div>
     </div>
@@ -545,6 +552,36 @@ watch(() => route.query.w, openFromQuery)
   font-weight: 700;
   font-size: 0.95rem;
   color: var(--color-bone);
+}
+/* Melee defence type, beside the title; the version picker stays on the right. */
+.defence {
+  margin-right: auto;
+  align-self: center;
+  font-family: var(--font-mono);
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+  font-size: 0.62rem;
+  padding: 2px 8px;
+  border: 1px solid currentColor;
+  border-radius: 2px;
+  color: var(--color-smoke);
+}
+.defence[data-defence='Block'] {
+  color: var(--color-cobalt);
+}
+.defence[data-defence='Balanced'] {
+  color: var(--color-gold);
+}
+.defence[data-defence='Fencing'] {
+  color: var(--color-ember);
+}
+.w-pending {
+  margin: 1.2rem 0 0;
+  padding: 1rem 1.2rem;
+  border: 1px dashed var(--color-ash);
+  border-radius: 4px;
+  color: var(--color-smoke);
+  font-size: 0.9rem;
 }
 .stats-version {
   display: flex;

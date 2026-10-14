@@ -26,6 +26,15 @@ describe('BuildCard byline', () => {
   })
 })
 
+describe('BuildCard weapon names', () => {
+  it('shows the two-handed Thunder Hammer by its in-game name and still links by its key', () => {
+    const b = { ...build({ id: '1', displayName: 'Vulkan' }), weapons: { melee: 'Thunder Hammer' } }
+    const link = mount(BuildCard, { props: { build: b }, global: { plugins: [router] } }).find('.b-weapon')
+    expect(link.text()).toBe('Two-Handed Thunder Hammer')
+    expect(link.attributes('href')).toBe('/armoury?w=Thunder+Hammer')
+  })
+})
+
 describe('BuildCard pre-15.0 chip', () => {
   const author = { id: '1', displayName: 'Vulkan' }
   const chip = (over) =>
