@@ -136,7 +136,7 @@ The drift report is saved in the handoff for Bret's in-game check. Anything he c
 ## Other open items
 
 - Passive Chambering is not on the wiki yet, so it lives in overrides until the wiki catches up.
-- The One-Handed Thunder Hammer perk tree (see the Design section) was filled on 2026-10-14 from Bret's in-game perk list (`docs/handoff/sources/`). The list has no Heroic perk for the Power Maul; ask whether it has one.
+- The One-Handed Thunder Hammer perk tree (see the Design section) was filled on 2026-10-14 from Bret's in-game perk list (`docs/handoff/sources/`). Bret confirmed the Heroic Power Maul has no perk yet.
 - Hotfix 15.1's One-Handed Thunder Hammer numbers (+10% base damage, Power Maul +30% per charge) are PvE damage figures we don't bake, so there is nothing to update.
 
 ## Out of scope
