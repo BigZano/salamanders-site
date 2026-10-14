@@ -8,7 +8,7 @@
           "level": 6,
           "name": "Improved Efficiency",
           "description": "Auspex Scan recharges 25% faster",
-          "sources": ["Patch Notes 15.0 (Focus)", "Neonsect Tactical guide"]
+          "sources": ["Patch Notes 15.0 (Focus)", "Neonsect Tactical guide", "sealed.build game data for Hotfix 15.1 (third party)"]
         }
       ],
       "prestige": [
@@ -16,41 +16,21 @@
           "replaces": "Exigency Charge",
           "name": "Passive Chambering",
           "description": "Any unequipped Ranged Weapon reloads automatically after 10 seconds",
-          "sources": ["Patch Notes 15.0 (Focus)", "Neonsect Tactical guide"]
+          "sources": ["Patch Notes 15.0 (Focus)", "Neonsect Tactical guide", "sealed.build game data for Hotfix 15.1 (third party)"]
         }
       ],
       "starting": {
         "text": "Bolt Weapons now penetrate 1 additional enemy and Bolter Weapons get +20% Non Head Shot Damage",
         "sources": ["Patch Notes 15.0 (Focus)", "Neonsect Tactical guide"]
-      },
-      "pins": [
+      }
+    },
+    "Heavy": {
+      "prestige": [
         {
-          "name": "Balanced Distribution",
-          "description": "Your Primary Weapon deals 10% more Damage, but your Secondary Weapon deals 10% less Damage",
-          "wikiSaid": "Your Primary Weapon deals 15% more Damage, but your Secondary Weapon deals 15% less Damage",
-          "reason": "Not in Patch Notes 15.0 or the Neonsect guide; presumed false",
-          "sources": ["Patch Notes 15.0 (Focus): not mentioned", "Neonsect Tactical guide: not mentioned"]
-        },
-        {
-          "name": "Heightened Vigour",
-          "description": "After a perfectly timed Parry or Dodge, you deal 10% more Melee and Gun Strike Damage, do not lose control upon taking Heavy Hits and you cannot be knocked back for 10 seconds",
-          "wikiSaid": "After a perfectly timed Parry, Block, or Dodge, you deal 10% more Melee and Gun Strike Damage, do not lose control upon taking Heavy Hits, and cannot be knocked back for 10 seconds",
-          "reason": "Not in Patch Notes 15.0 or the Neonsect guide; presumed false",
-          "sources": ["Patch Notes 15.0 (Focus): not mentioned", "Neonsect Tactical guide: not mentioned"]
-        },
-        {
-          "name": "Plasma Boost",
-          "description": "When the Plasma Incinerator is 30% Overheated, its Damage increases by 40% and their Charged Shots use 1 less energy",
-          "wikiSaid": "When Plasma Weapons are 30% Overheated, their Damage increases by 40% and their Charged Shots use 1 less energy",
-          "reason": "Not in Patch Notes 15.0 or the Neonsect guide; presumed false",
-          "sources": ["Patch Notes 15.0 (Focus): not mentioned", "Neonsect Tactical guide: not mentioned"]
-        },
-        {
-          "name": "Relentless Pursuit",
-          "description": "After a Gun Strike, Ranged Damage increases by 25% for 5 seconds",
-          "wikiSaid": "After a Gun Strike, Ranged Damage increases by 25% for 10 seconds",
-          "reason": "Not in Patch Notes 15.0 or the Neonsect guide; presumed false",
-          "sources": ["Patch Notes 15.0 (Focus): not mentioned", "Neonsect Tactical guide: not mentioned"]
+          "replaces": "Restorative Capacity",
+          "name": "Honed Precision",
+          "description": "Equipped Weapon's Maximum Spread decreases by 25% when firing without aiming.",
+          "sources": ["sealed.build game data for Hotfix 15.1 (third party): lists Honed Precision (Prestige 2) and no Restorative Capacity"]
         }
       ]
     }

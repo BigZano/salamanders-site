@@ -1,6 +1,5 @@
 <script setup>
 import { computed } from 'vue'
-import migrations from '../data/perk-migrations.json'
 
 const props = defineProps({ notices: { type: Array, default: () => [] } })
 defineEmits(['dismiss'])
@@ -9,8 +8,13 @@ const replaced = computed(() => props.notices.filter((n) => n.kind === 'replaced
 const noun = (n) => `${n} perk${n === 1 ? '' : 's'}`
 const heading = computed(() =>
   replaced.value
-    ? `Patch ${migrations.patch} rework: re-pick ${noun(replaced.value)}`
-    : `Patch ${migrations.patch} rework: review ${noun(props.notices.length)}`,
+    ? `Perks changed: re-pick ${noun(replaced.value)}`
+    : `Perks changed: review ${noun(props.notices.length)}`,
+)
+const lead = computed(() =>
+  replaced.value
+    ? 'This build was made before some perks changed. The ones that no longer exist were removed along with their notes.'
+    : 'This build was made before some perks changed. Check that your notes still fit.',
 )
 const where = (n) => (n.level === null ? 'Prestige' : `Level ${n.level}`)
 </script>
@@ -21,10 +25,7 @@ const where = (n) => (n.level === null ? 'Prestige' : `Level ${n.level}`)
       <h2 class="stale-head">{{ heading }}</h2>
       <button type="button" class="stale-dismiss" @click="$emit('dismiss')">Dismiss</button>
     </div>
-    <p class="stale-lead">
-      This build was made before the patch changed some perks. The ones that no longer exist were
-      removed along with their notes.
-    </p>
+    <p class="stale-lead">{{ lead }}</p>
     <ul class="stale-list">
       <li v-for="(n, i) in notices" :key="i" class="stale-item">
         <span class="stale-where">{{ where(n) }}</span>

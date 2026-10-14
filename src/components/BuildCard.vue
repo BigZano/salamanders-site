@@ -26,8 +26,8 @@ const slots = [
         <span
           v-if="isStaleBuild(build)"
           class="b-stale"
-          title="Perks in this build changed in Patch 15.0. Open it in the builder to review."
-          >Pre-15.0 · needs review</span
+          title="Perks in this build changed after it was made. Open it in the builder to review."
+          >Needs review</span
         >
       </span>
     </div>

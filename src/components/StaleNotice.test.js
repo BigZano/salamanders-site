@@ -29,6 +29,17 @@ describe('StaleNotice', () => {
     expect(w.findAll('.stale-item')[1].text()).toContain('Prestige')
   })
 
+  it('does not tie the heading to one patch, since the notices can come from any perk change', () => {
+    const head = mount(StaleNotice, { props: { notices: [replaced] } }).find('.stale-head').text()
+    expect(head).toContain('Perks changed')
+    expect(head).not.toMatch(/patch/i)
+  })
+
+  it('only says perks were removed when some were', () => {
+    expect(mount(StaleNotice, { props: { notices: [replaced] } }).find('.stale-lead').text()).toContain('removed')
+    expect(mount(StaleNotice, { props: { notices: [reworked] } }).find('.stale-lead').text()).not.toContain('removed')
+  })
+
   it('asks for a review, not a re-pick, when only reworked perks are flagged', () => {
     const head = mount(StaleNotice, { props: { notices: [reworked] } }).find('.stale-head').text()
     expect(head).not.toContain('re-pick')

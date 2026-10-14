@@ -69,7 +69,8 @@ export function parseVersions(doc) {
   const recs = tableRecords(tableAfter(doc, 'In-game shown stats'))
   return recs
     .map((r) => {
-      const name = r['Version Name'] || r.Version || ''
+      // The wiki sets some dashes as en or em dashes; the game uses a plain hyphen.
+      const name = (r['Version Name'] || r.Version || '').replace(/\s*[–—]\s*/g, ' - ')
       if (!name) return null
 
       const gauges = {}

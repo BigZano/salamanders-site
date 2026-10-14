@@ -18,6 +18,12 @@
         { "level": 25, "was": "Marked for Death", "now": "Marked for Death", "action": "reworked", "note": "Now weakens one Majoris- or Extremis-level enemy instead of killing on a headshot" }
       ],
       "prestige": [{ "was": "Exigency Charge", "now": "Passive Chambering", "action": "replaced" }]
+    },
+    "Assault": {
+      "slots": [
+        { "level": 14, "was": "Strong Strikes", "now": "Furious Strikes", "action": "replaced", "note": "Strong Strikes is no longer in the game data at this level" }
+      ],
+      "prestige": []
     }
   }
 }

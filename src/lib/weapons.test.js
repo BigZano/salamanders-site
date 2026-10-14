@@ -25,6 +25,10 @@ describe('weapon labels', () => {
     expect(DISPLAY_NAME['Thunder Hammer']).toBe('Two-Handed Thunder Hammer')
   })
 
+  it('shows the Techmarine axe as the game spells it (the wiki says Omnissiah)', () => {
+    expect(weaponLabel('Omnissiah Axe')).toBe('Omnissian Axe')
+  })
+
   it('does not treat object prototype names as aliases', () => {
     expect(weaponLabel('constructor')).toBe('constructor')
     expect(weaponLabel('toString')).toBe('toString')

@@ -151,14 +151,6 @@
         "perkName": "Honed Precision",
         "description": null,
         "createdAt": "2026-09-27T00:00:00.000Z"
-      },
-      {
-        "id": 19,
-        "op": "add",
-        "quality": "Relic",
-        "perkName": "Divine Might",
-        "description": "Damage increases by 10%",
-        "createdAt": "2026-09-27T00:00:00.000Z"
       }
     ],
     "Stalker Bolt Rifle": [
@@ -258,24 +250,6 @@
         "quality": "Relic",
         "perkName": "Divine Might",
         "description": "Damage increases by 10%",
-        "createdAt": "2026-09-27T00:00:00.000Z"
-      }
-    ],
-    "Inferno Pistol": [
-      {
-        "id": 32,
-        "op": "remove",
-        "quality": "Artificer",
-        "perkName": "Motivated Melee",
-        "description": null,
-        "createdAt": "2026-09-27T00:00:00.000Z"
-      },
-      {
-        "id": 33,
-        "op": "add",
-        "quality": "Artificer",
-        "perkName": "Know No Fear",
-        "description": "If your Armour is fully depleted, Reload Speed increases by 20%",
         "createdAt": "2026-09-27T00:00:00.000Z"
       }
     ],

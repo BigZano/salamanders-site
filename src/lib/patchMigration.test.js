@@ -103,14 +103,23 @@ describe('migrateSelection', () => {
     expect(migrateSelection({ className: 'Nope', selectedPerks: { 1: 'x' } }).selectedPerks).toEqual({ 1: 'x' })
   })
 
-  it('only drops names that the new grid no longer has in that slot', () => {
+  it('only drops names that the new grid no longer has in that slot, for every class in the table', () => {
     // Guard against a table entry that points at what is actually still there.
-    const rows = classes.Tactical.rows
-    for (const s of migrations.classes.Tactical.slots.filter((x) => x.action === 'replaced')) {
-      const slot = rows[Math.floor((s.level - 2) / 8)][(s.level - 2) % 8]
-      expect(slot, `level ${s.level}`).toBe(s.now)
-      expect(slot, `level ${s.level}`).not.toBe(s.was)
+    for (const [cls, rules] of Object.entries(migrations.classes)) {
+      const rows = classes[cls].rows
+      for (const s of rules.slots.filter((x) => x.action === 'replaced')) {
+        const slot = rows[Math.floor((s.level - 2) / 8)][(s.level - 2) % 8]
+        expect(slot, `${cls} level ${s.level}`).toBe(s.now)
+        expect(slot, `${cls} level ${s.level}`).not.toBe(s.was)
+      }
     }
+  })
+
+  it('migrates an Assault build that holds Strong Strikes, which the game replaced with Furious Strikes at level 14', () => {
+    const r = migrateSelection({ className: 'Assault', selectedPerks: { 4: 'Strong Strikes', 0: 'Fortitude' }, justifications: { 4: 'why', 0: 'keep' }, prestigePicks: [null] })
+    expect(r.selectedPerks).toEqual({ 0: 'Fortitude' })
+    expect(r.justifications).toEqual({ 0: 'keep' })
+    expect(r.notices).toEqual([expect.objectContaining({ kind: 'replaced', className: 'Assault', level: 14, was: 'Strong Strikes', now: 'Furious Strikes' })])
   })
 })
 

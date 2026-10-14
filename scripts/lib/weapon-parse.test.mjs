@@ -73,6 +73,18 @@ describe('parseVersions', () => {
     expect(v.gauges.Strength.value).toBe(5)
   })
 
+  it('writes dashes in version names as plain hyphens, as the game does', () => {
+    const html = `
+      <h3>In-game shown stats</h3>
+      <table>
+        <tr><th>Quality</th><th>Version Name</th><th>Firepower</th></tr>
+        <tr><td>Master-Crafted</td><td>Master-Crafted — Alpha</td><td>5</td></tr>
+        <tr><td>Master-Crafted</td><td>Master-Crafted – Beta</td><td>5</td></tr>
+        <tr><td>Master-Crafted</td><td>Master-Crafted - Gamma</td><td>5</td></tr>
+      </table>`
+    expect(parseVersions(doc(html)).map((v) => v.name)).toEqual(['Master-Crafted - Alpha', 'Master-Crafted - Beta', 'Master-Crafted - Gamma'])
+  })
+
   it('gives no defence key for an unrecognised value', () => {
     const html = meleeStats.replace('Fencing', 'Parry')
     expect('defence' in parseVersions(doc(html))[2]).toBe(false)

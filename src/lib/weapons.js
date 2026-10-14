@@ -48,7 +48,11 @@ export const SOURCE_LABEL = {
  * to the name the game uses when the two differ. Patch 15.0 added a one-handed
  * Thunder Hammer, so the original one is now the "Two-Handed" Thunder Hammer.
  */
-export const DISPLAY_NAME = { 'Thunder Hammer': 'Two-Handed Thunder Hammer' }
+export const DISPLAY_NAME = {
+  'Thunder Hammer': 'Two-Handed Thunder Hammer',
+  // The wiki spells it Omnissiah; the game, and the 12.0 patch notes, say Omnissian.
+  'Omnissiah Axe': 'Omnissian Axe',
+}
 
 export const weaponLabel = (name) => (Object.hasOwn(DISPLAY_NAME, name) ? DISPLAY_NAME[name] : name)
 

@@ -76,12 +76,23 @@ describe('weapons', () => {
     expect(keys.filter((k, i) => keys.indexOf(k) !== i)).toEqual([])
   })
 
-  it('holds weapon perk text at the previous bake (Fast Reload)', () => {
+  it('takes the wiki weapon perk text, which matches the game data (Fast Reload)', () => {
     const fast = baked['Auto Bolt Rifle'].perks.find((p) => p.name === 'Fast Reload' && p.quality === 'Master-Crafted')
-    // The wiki says "This Weapon reloads 10% faster"; Patch Notes 15.0 do not mention it.
-    expect(fast.description, 'HELD ON PURPOSE (docs/handoff/2026-10-14-patch-15-data.md): update this test when the wiki weapon perks are adopted').toBe(
-      'Reload all Weapons 10% faster',
-    )
+    expect(fast.description).toBe('This Weapon reloads 10% faster')
+  })
+
+  it('has the Hotfix 15.1 Melta Rifle ammo (magazine 6, ammo pool 12 on the default versions)', () => {
+    const std = version('Melta Rifle', 'Standard-Issue')
+    expect(std.figures['Magazine Capacity']).toBe('6')
+    expect(std.figures['Ammo Reserve']).toContain('12')
+    expect(version('Melta Rifle', 'Master-Crafted - Alpha').figures).toMatchObject({ 'Magazine Capacity': '6', 'Ammo Reserve': '12' })
+  })
+
+  it('lists the twelve Bolt Carbine versions the game has, with no leftover PvP row', () => {
+    const names = baked['Bolt Carbine'].versions.map((v) => v.name)
+    expect(names).toHaveLength(12)
+    expect(names).not.toContain('Marksman Bolt Carbine (PVP)')
+    expect(names.filter((n) => n === 'Master-Crafted Marksman')).toHaveLength(1)
   })
 
   it('updates the class melee lists for Patch 15.0', () => {
@@ -138,14 +149,14 @@ describe('class perks', () => {
     expect(tactical.starting).toBe(tacticalOverrides.starting.text)
   })
 
-  it('holds each pinned perk at its pre-15.0 text', () => {
-    expect(tacticalOverrides.pins.map((p) => p.name)).toEqual([
-      'Balanced Distribution',
-      'Heightened Vigour',
-      'Plasma Boost',
-      'Relentless Pursuit',
-    ])
-    for (const pin of tacticalOverrides.pins) expect(tacticalPerks[pin.name].description, pin.name).toBe(pin.description)
+  it('takes the wiki text for the four perks that were pinned before the game-data cross-check', () => {
+    // Pins held the old wording against wiki edits the patch notes did not mention; the
+    // game data agreed with the wiki on all four, so the pins were removed.
+    expect(tacticalOverrides.pins ?? []).toEqual([])
+    expect(tacticalPerks['Balanced Distribution'].description).toContain('15% more Damage')
+    expect(tacticalPerks['Heightened Vigour'].description).toContain('Parry, Block, or Dodge')
+    expect(tacticalPerks['Plasma Boost'].description).toContain('Plasma Weapons')
+    expect(tacticalPerks['Relentless Pursuit'].description).toContain('10 seconds')
   })
 
   it('accepts the wiki edits that follow from Tactical Reserve and the rest of the corroborated wording', () => {
@@ -154,18 +165,30 @@ describe('class perks', () => {
     expect(tacticalPerks['Secure Stockpile'].description).toContain('90 seconds')
   })
 
-  it('names a source on every override entry', () => {
-    const entries = [...tacticalOverrides.grid, ...tacticalOverrides.prestige, ...tacticalOverrides.pins, tacticalOverrides.starting]
+  it('names a source on every override entry, in every class', () => {
+    const entries = Object.values(overrides.classes).flatMap((o) => [
+      ...(o.grid ?? []),
+      ...(o.prestige ?? []),
+      ...(o.pins ?? []),
+      ...(o.starting ? [o.starting] : []),
+    ])
+    expect(entries.length).toBeGreaterThan(0)
     for (const e of entries) {
       expect(Array.isArray(e.sources) && e.sources.length > 0 && e.sources.every(Boolean), JSON.stringify(e).slice(0, 60)).toBe(true)
     }
   })
 
-  it('holds the other classes at the previous bake (Heavy prestige)', () => {
+  it('moves Assault level 14 to Furious Strikes, as the wiki and the game data have it', () => {
+    expect(classes.Assault.rows[1][4]).toBe('Furious Strikes')
+    expect(details.classes.Assault.perks['Furious Strikes'].description).toContain('Jump Pack Dash')
+    expect(Object.keys(details.classes.Assault.perks)).not.toContain('Strong Strikes')
+  })
+
+  it('keeps the Heavy prestige perk Honed Precision by override: the wiki swapped it for Restorative Capacity, the game data has not', () => {
     const names = details.classes.Heavy.prestige.map((p) => p.name)
-    // The wiki swapped it for Restorative Capacity; Patch Notes 15.0 do not mention it.
-    const why = 'HELD ON PURPOSE (docs/handoff/2026-10-14-patch-15-data.md): update this test, and add a perk-migrations entry, when Heavy is adopted'
+    const why = 'src/data/patch-overrides.json Heavy.prestige: delete the override and update this test once the wiki and the game agree'
     expect(names, why).toContain('Honed Precision')
     expect(names, why).not.toContain('Restorative Capacity')
+    expect(overrides.classes.Heavy.prestige[0].sources.length).toBeGreaterThan(0)
   })
 })

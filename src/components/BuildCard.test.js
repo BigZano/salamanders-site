@@ -44,7 +44,7 @@ describe('BuildCard pre-15.0 chip', () => {
   it('flags a Tactical build holding a perk the patch replaced', () => {
     const c = chip({ perks: at7('Signal Jammer') })
     expect(c.exists()).toBe(true)
-    expect(c.text()).toBe('Pre-15.0 · needs review')
+    expect(c.text()).toBe('Needs review')
   })
 
   it('does not flag the same build with the new perk', () => {
