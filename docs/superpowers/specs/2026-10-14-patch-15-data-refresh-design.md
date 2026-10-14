@@ -15,7 +15,7 @@ Bring the baked game data up to Patch 15.0 (1 October 2026) and make the Armoury
 - Defence type belongs to a weapon **version**, not a weapon. The Thunder Hammer is Balance at Standard-Issue, Fencing at Master-Crafted Beta and Block at Master-Crafted Gamma.
 - The wiki's Tactical page now matches 15.0 in 11 grid slots, but lists *Marksman's Mandate* at both level 6 and level 15. The official notes say level 6 became *Improved Efficiency*. That is a wiki error.
 - The wiki still shows the prestige perk *Exigency Charge*. The notes say it became *Passive Chambering*.
-- The wiki's Tactical text differs from our bake in ten same-name perks (see "Uncorroborated"). Neither the patch notes nor the third-party guide mention them.
+- The wiki's Tactical text differs from our bake in ten same-name perks (see "Wiki-only edits"). Neither the patch notes nor the third-party guide mention them.
 
 ## Sources and corroboration
 
@@ -23,9 +23,10 @@ Use the wiki, official patch notes, game media and any other trustworthy source,
 
 1. Official patch notes win a conflict. The wiki is the structural baseline (grids, weapon lists, stat tables).
 2. Each override records its sources. Each fact is tagged **corroborated** (two or more independent sources agree), **single-source** or **wiki-only**.
-3. Third-party-only facts, such as slot layouts from community guides, stay tagged and are verified in-game before they are treated as settled.
-4. Bret's in-game check is the final word, as with perk corrections.
-5. Game media (screenshots, official images) can be read directly. Video cannot, so those facts need Bret's eyes.
+3. **A wiki change the patch notes do not mention is presumed false** when it changes a number or a behaviour. The previously baked value stays, pinned in overrides. Two kinds of uncorroborated change are accepted: wording-only edits, and edits that follow directly from a corroborated change (for example, text that must cover a Primary Weapon in the Secondary slot because *Tactical Reserve* exists). Every pinned or accepted-uncorroborated item goes on Bret's in-game list. This applies to all classes, not only Tactical.
+4. Third-party-only facts, such as slot layouts from community guides, stay tagged and are verified in-game before they are treated as settled.
+5. Bret's in-game check is the final word, as with perk corrections.
+6. Game media (screenshots, official images) can be read directly. Video cannot, so those facts need Bret's eyes.
 
 Sources used so far: Patch Notes 15.0 (Focus community blog), the September Community Update, the Fandom wiki, and the Neonsect Tactical guide (third party).
 
@@ -45,6 +46,7 @@ Sources used so far: Patch Notes 15.0 (Focus community blog), the September Comm
   - Tactical level 6 becomes *Improved Efficiency* ("Auspex Scan recharges 25% faster").
   - Prestige *Exigency Charge* becomes *Passive Chambering* ("Any unequipped Ranged Weapon reloads automatically after 10 seconds").
   - Tactical's starting perk text becomes the notes' wording: "Bolt Weapons now penetrate 1 additional enemy and Bolter Weapons get +20% Non Head Shot Damage". Corroborated by the Neonsect guide, which gives the same effects in its own words. The wiki class page is checked at bake time, and the class perk's own wording is confirmed in-game.
+  - Four pins that keep the pre-15.0 text for wiki-only changes (see "Wiki-only edits").
 - **Patch marker.** `last-patch.json` is bumped to 15.0 by running `check-updates` once the data is in.
 
 ### 2. Existing saved builds
@@ -91,25 +93,26 @@ Numeric tweaks (for example Secure Stockpile 60 to 90 seconds) neither drop nor 
 
 - Parser test for `Defence`, using saved wiki HTML. "Balance" becomes "Balanced", ranged versions have none, a row with no `Defence` column does not break.
 - Data integrity tests: no duplicate perk within a class grid (would have caught Marksman's Mandate), every grid perk has a description, every class weapon exists in the bake, every override names a source.
+- Pin tests: after a re-bake, each pinned perk still carries its pre-15.0 text, and the bake warns when the wiki text for a pin changes or when patch-note support appears.
 - Migration tests: each row in the table above, including that the same name at a different column is not touched, and that a post-patch build is not flagged.
 - Component tests for the Armoury badge and the gallery chip.
 
-## Uncorroborated (wiki-only, needs in-game check)
+## Wiki-only edits (decided by the blend rule)
 
-Present in the wiki's Tactical text; not in the patch notes or the third-party guide:
+The wiki's Tactical text differs from our bake in eight same-name perks that neither the patch notes nor the third-party guide mention. By rule 3 above:
 
-| Level | Perk | Old to new |
-|---|---|---|
-| 2 | Balanced Distribution | 10% to 15% |
-| 3 | Heightened Vigour | now includes Block |
-| 4 | Emperor's Judgement | Primary Weapon to Ranged Weapons |
-| 10 | Plasma Boost | Plasma Incinerator to all Plasma Weapons |
-| 11 | Relentless Pursuit | 5 to 10 seconds |
-| 17 | Radiating Impact | wording: "scales with difficulty" removed |
-| 19 | Versatility | adds "a Primary in the Secondary slot also benefits" |
-| 20 | Emperor's Vengeance | drops the non-reload fallback |
+| Level | Perk | Wiki change | Decision | Why |
+|---|---|---|---|---|
+| 2 | Balanced Distribution | 10% to 15% | **Pin old (10%)** | Numeric balance change, not in the notes |
+| 3 | Heightened Vigour | adds Block to Parry or Dodge | **Pin old** | Behaviour change, not in the notes |
+| 4 | Emperor's Judgement | Primary Weapon to Ranged Weapons | Accept | Follows from Tactical Reserve (a Primary can sit in the Secondary slot) |
+| 10 | Plasma Boost | Plasma Incinerator to all Plasma Weapons | **Pin old** | Scope broadened, not in the notes |
+| 11 | Relentless Pursuit | 5 to 10 seconds | **Pin old (5)** | Numeric balance change, not in the notes |
+| 17 | Radiating Impact | "scales with difficulty" removed | Accept | Wording only; the notes mention only an ally-damage bug fix |
+| 19 | Versatility | adds "a Primary in the Secondary slot also benefits" | Accept | Follows from Tactical Reserve |
+| 20 | Emperor's Vengeance | drops the non-reload fallback | Accept | No practical effect for Tactical (it has no non-reloading Primary) |
 
-These keep the wiki text and are listed for Bret to verify in-game. Tactical Reserve itself is corroborated; its interaction with Versatility rests only on the wiki text in the Versatility row.
+Four pins, four accepts. All eight go on Bret's in-game list, and any decision can be flipped by editing one override entry. The re-bake's text diff across every class applies the same rule to any other wiki-only change it finds.
 
 ## Other open items
 
