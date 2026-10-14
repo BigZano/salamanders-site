@@ -40,6 +40,16 @@ describe('perk corrections store', () => {
     }
   })
 
+  // An addition the bake already has would show the perk twice: drop that correction too.
+  it('no bundled addition is already in the bake', () => {
+    for (const [weapon, list] of Object.entries(bundled.weapons)) {
+      for (const c of list.filter((c) => c.op === 'add')) {
+        const inBake = baked.weapons[weapon].perks.some((p) => p.quality === c.quality && p.name === c.perkName)
+        expect(inBake, `${weapon} / ${c.quality} / ${c.perkName} is already in the bake`).toBe(false)
+      }
+    }
+  })
+
   it('an API failure keeps the snapshot and disables editing', async () => {
     api.getCorrections.mockRejectedValue(new Error('down'))
     api.getPrivileges.mockResolvedValue({ editor: true })

@@ -281,6 +281,29 @@ describe('Patch 15.0 migration', () => {
     expect(planner.staleNotices[0].className).toBe('Tactical')
   })
 
+  it.each([['constructor'], ['toString'], ['__proto__']])('ignores the object-prototype class name %s in every entry point', (name) => {
+    const planner = usePlanner()
+    const before = planner.activeClass
+    planner.setClass(name)
+    expect(planner.activeClass).toBe(before)
+    planner.applyBuildData({ className: name, perkIds: {}, justifications: {} })
+    expect(planner.activeClass).toBe(before)
+    planner.applyEncoded(encode({ c: name, p: {} }))
+    expect(planner.activeClass).toBe(before)
+    expect(planner.meta).toBeTruthy()
+  })
+
+  it('falls back to the first class when saved state names one that does not exist', () => {
+    for (const activeClass of ['constructor', 'Nope', 7, null]) {
+      localStorage.setItem(KEY, JSON.stringify({ activeClass }))
+      setActivePinia(createPinia())
+      const planner = usePlanner()
+      planner.hydrate()
+      expect(planner.activeClass, String(activeClass)).toBe('Tactical')
+      expect(() => planner.columns).not.toThrow()
+    }
+  })
+
   it('does not flag a current Tactical build or another class', () => {
     const planner = usePlanner()
     planner.applyBuildData({ ...stale, perkIds: { 7: 'Tactical Reserve' }, justifications: {}, prestigePicks: ['Passive Chambering'] })

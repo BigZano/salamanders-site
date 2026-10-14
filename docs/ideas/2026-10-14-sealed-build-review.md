@@ -18,13 +18,13 @@ A Space Marine 2 build planner with a public build library, a "Codex" reference 
 - **A ledger of every game version since launch** (38 entries, 2024-09-09 to Hotfix 15.1). Each entry has the date, a build-relevant summary, an `impact` rating (none / low / medium / high), a link to the official notes, and a `changed` list of the classes, perks and weapons it touched.
 - **Builds remember their patch.** A build shows "sealed for current patch" or "older patch", a patch history of its own versions, and a "still works on Hotfix 15.1" vote. A build is flagged when a later patch changes a class, perk or weapon it uses, so "nobody walks into Absolute with a nerfed loadout".
 - **The data version is detected from the game files** (the Steam build id and the dates on the pak files), not typed in.
-- **Why it matters to us.** Our "Pre-15.0 · needs review" chip and the saved-build migration are a one-off for one patch and one class. Their ledger is the general mechanism, and it covers every patch in the same shape.
+- **Why it matters to us.** Our "Needs review" chip and the saved-build migration are a one-off table (Tactical and one Assault slot) that someone has to write by hand for each patch. Their ledger is the general mechanism, and it covers every patch in the same shape.
 
 ## What the cross-check found about our own data
 
 Their Hotfix 15.1 game data was compared, by script and in scratch space only, with what we hold back from the wiki:
 
-- **Every held wiki edit that their data covers matches the wiki's new text, not our old text.** 60 class perk edits (22 numeric, 38 wording), 102 weapon perk edits (30 numeric, 72 wording) and all 23 weapon version stat edits (Melta Rifle, Multi-Melta, Plasma Incinerator, Las Fusil, Heavy Bolter, Heavy Plasma Incinerator). Nothing went the other way.
+- **Every held wiki edit that their data covers matches the wiki's new text, not our old text.** 60 class perk edits (22 numeric, 38 wording), 102 weapon perk edits (30 numeric, 72 wording) and all 23 weapon version stat edits (Melta Rifle, Multi-Melta, Plasma Incinerator, Las Fusil, Heavy Bolter, Heavy Plasma Incinerator), though only their PvE numbers could be checked (the game data has no PvP figures). Nothing went the other way.
 - **All four Tactical pins are contradicted** (Balanced Distribution 15%, Heightened Vigour with Block, Plasma Boost on all Plasma Weapons, Relentless Pursuit 10 seconds). The pins were wrong.
 - **The official Hotfix 15.1 text also changes the Melta Rifle** (magazine 6, ammo pool 12, falloff distances), the Heavy Melta Rifle's falloff, an Auspex Scan Gun Strike fix and a Tactical Reserve fix. An earlier note in the spec says it touched only the One-Handed Thunder Hammer; that was wrong.
 - **One exception, in our favour:** the wiki swaps Heavy's prestige perk *Honed Precision* for *Restorative Capacity*, but their data keeps *Honed Precision* and has no *Restorative Capacity*. That hold was right.

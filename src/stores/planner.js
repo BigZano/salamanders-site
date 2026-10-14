@@ -4,13 +4,16 @@ import perkDetails from '../data/perk-details.json'
 import { migrateSelection } from '../lib/patchMigration'
 
 // Wiki-baked perk text, keyed by class then perk name. See scripts/fetch-wiki-perks.mjs.
-export const detailsFor = (className) => perkDetails.classes[className] || { perks: {}, prestige: [] }
+export const detailsFor = (className) =>
+  (Object.hasOwn(perkDetails.classes, className) && perkDetails.classes[className]) || { perks: {}, prestige: [] }
 // A class can prestige 4 times, each rank granting one perk pick. The wiki only
 // documents which perks unlock at ranks 1 and 2, so the candidate pool is
 // smaller than the rank cap — that's a data gap, not a rule.
 export const MAX_PRESTIGE = 4
 
 export const CLASS_NAMES = Object.keys(classes)
+// hasOwn, so "constructor" or "toString" from a share link or saved state is not a class.
+const isClass = (name) => typeof name === 'string' && Object.hasOwn(classes, name)
 // Column categories, headers, and build-slot labels — mirrors the original.
 export const CATS = ['core', 'core', 'core', 'team', 'gear', 'gear', 'gear', 'signature']
 export const HEADS = ['CORE', 'CORE', 'CORE', 'TEAM', 'GEAR', 'GEAR', 'GEAR', 'SIGNATURE']
@@ -153,7 +156,7 @@ export const usePlanner = defineStore('planner', {
 
   actions: {
     setClass(name) {
-      if (classes[name]) this.activeClass = name
+      if (isClass(name)) this.activeClass = name
       this.persist()
     },
     /** Dismiss the notices for the class on screen; other classes keep theirs. */
@@ -251,7 +254,7 @@ export const usePlanner = defineStore('planner', {
     },
     /** Load a build fetched from the API (see rowToBuild in server/src/index.js) into the editor. */
     applyBuildData(r) {
-      if (!r?.className || !classes[r.className]) return
+      if (!r?.className || !isClass(r.className)) return
       this.activeClass = r.className
       this.level = r.level || this.level
       this.prestigePicks[r.className] = [...(r.prestigePicks || [])]
@@ -320,6 +323,7 @@ export const usePlanner = defineStore('planner', {
         const saved = JSON.parse(localStorage.getItem(STORAGE_KEY))
         if (!saved) return
         this.$patch(saved)
+        if (!isClass(this.activeClass)) this.activeClass = CLASS_NAMES[0]
         // Notices saved with the state stay until dismissed; anything the patch
         // migration finds now is added to them. Sanitise them first, so a saved
         // state that makes the rest of this throw cannot leave junk behind.
@@ -356,7 +360,7 @@ export const usePlanner = defineStore('planner', {
         const json = JSON.parse(
           decodeURIComponent(escape(atob(raw.replace(/-/g, '+').replace(/_/g, '/')))),
         )
-        if (!classes[json.c]) return
+        if (!isClass(json.c)) return
         this.activeClass = json.c
         this.prestigePicks[json.c] = Array.isArray(json.pp) ? json.pp : []
         this.selectedPerks[json.c] = json.p || {}
