@@ -249,11 +249,6 @@ const bodyId = `rs-body-${props.branch.key}`
   visibility: visible;
   transition-delay: 0s;
 }
-/* a bulk change or a jump snaps open (see src/lib/pinReader.js) */
-:global(.rs-instant) .rs-body,
-:global(.rs-instant) .rs-body-in {
-  transition: none !important;
-}
 
 @media (max-width: 760px) {
   .rs-bar {
@@ -272,5 +267,14 @@ const bodyId = `rs-body-${props.branch.key}`
     grid-column: 3;
     grid-row: 1;
   }
+}
+</style>
+
+<!-- unscoped on purpose: the class is on <html> (see pinReader.js and styles.test.js) -->
+<style>
+/* a bulk change or a jump snaps open */
+.rs-instant .rs-body,
+.rs-instant .rs-body-in {
+  transition: none !important;
 }
 </style>

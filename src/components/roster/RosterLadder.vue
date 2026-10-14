@@ -77,11 +77,6 @@ const styleOf = (item) => ({ '--s': item.s, '--h': item.heat.h, '--hp': item.hea
   bottom: auto;
   height: var(--node-y);
 }
-:global([data-open]) .rs-step::before {
-  transform: scaleY(1);
-  transition-duration: 0.18s;
-  transition-delay: calc(var(--s) * var(--pour) + 40ms);
-}
 
 /* The node: a diamond on the spine that lights as the heat reaches it. */
 .rs-node {
@@ -93,12 +88,6 @@ const styleOf = (item) => ({ '--s': item.s, '--h': item.heat.h, '--hp': item.hea
   background: var(--h);
   transform: translate(-50%, -50%) rotate(45deg) scale(0);
   transition: transform 0.15s, box-shadow 0.2s;
-}
-:global([data-open]) .rs-node {
-  transform: translate(-50%, -50%) rotate(45deg) scale(1);
-  box-shadow: 0 0 12px 1px var(--h);
-  transition: transform 0.32s cubic-bezier(0.3, 1.7, 0.5, 1), box-shadow 0.5s;
-  transition-delay: calc(var(--s) * var(--pour) + 90ms);
 }
 
 /* A lateral rank (Terminator): a hollow node on a dashed stub off the spine. */
@@ -113,9 +102,6 @@ const styleOf = (item) => ({ '--s': item.s, '--h': item.heat.h, '--hp': item.hea
   background: var(--color-obsidian);
   border: 1.5px solid var(--h);
   box-shadow: none;
-}
-:global([data-open]) .rs-lateral .rs-node {
-  box-shadow: 0 0 8px -1px var(--h);
 }
 .rs-lateral::after {
   content: '';
@@ -204,5 +190,28 @@ const styleOf = (item) => ({ '--s': item.s, '--h': item.heat.h, '--hp': item.hea
   .rs-no-spine .rs-step {
     padding-left: 0;
   }
+}
+</style>
+
+<!--
+  The open state belongs to the branch panel, which is another component, so these
+  rules cannot be scoped. Do NOT write :global(x) .y in a scoped block: Vue's scoped
+  compiler drops everything after :global(), leaving a bare [data-open] rule that
+  rotates whole panels (see src/components/roster/styles.test.js).
+-->
+<style>
+.rs-panel[data-open] .rs-step::before {
+  transform: scaleY(1);
+  transition-duration: 0.18s;
+  transition-delay: calc(var(--s) * var(--pour) + 40ms);
+}
+.rs-panel[data-open] .rs-node {
+  transform: translate(-50%, -50%) rotate(45deg) scale(1);
+  box-shadow: 0 0 12px 1px var(--h);
+  transition: transform 0.32s cubic-bezier(0.3, 1.7, 0.5, 1), box-shadow 0.5s;
+  transition-delay: calc(var(--s) * var(--pour) + 90ms);
+}
+.rs-panel[data-open] .rs-lateral .rs-node {
+  box-shadow: 0 0 8px -1px var(--h);
 }
 </style>
