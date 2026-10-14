@@ -80,13 +80,36 @@ describe('Armoury defence badge', () => {
   })
 })
 
+// The One-Handed Thunder Hammer is borrowed as the weapon whose perks the wiki has not published.
+async function withPendingHammer(fn) {
+  const t = trees.weapons['One-Handed Thunder Hammer']
+  const saved = { perks: t.perks, perksPending: t.perksPending }
+  t.perks = []
+  t.perksPending = true
+  try {
+    return await fn()
+  } finally {
+    t.perks = saved.perks
+    if (saved.perksPending === undefined) delete t.perksPending
+    else t.perksPending = saved.perksPending
+  }
+}
+
 describe('Armoury weapon with no perk tree', () => {
   it('shows stats and a pending message instead of an empty tree', async () => {
+    await withPendingHammer(async () => {
+      const w = await open('Melee', 'One-Handed Thunder Hammer')
+      expect(w.find('.stats').exists()).toBe(true)
+      expect(w.find('.w-pending').text()).toContain('not published yet')
+      expect(w.findComponent({ name: 'WeaponTree' }).exists()).toBe(false)
+      expect(w.find('.defence').text()).toBe('Balanced')
+    })
+  })
+
+  it('shows the One-Handed Thunder Hammer tree now that its perks are baked', async () => {
     const w = await open('Melee', 'One-Handed Thunder Hammer')
-    expect(w.find('.stats').exists()).toBe(true)
-    expect(w.find('.w-pending').text()).toContain('not published yet')
-    expect(w.findComponent({ name: 'WeaponTree' }).exists()).toBe(false)
-    expect(w.find('.defence').text()).toBe('Balanced')
+    expect(w.find('.w-pending').exists()).toBe(false)
+    expect(w.findComponent({ name: 'WeaponTree' }).exists()).toBe(true)
   })
 
   it('still shows the tree for a weapon that has one', async () => {

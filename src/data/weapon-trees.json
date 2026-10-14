@@ -10744,7 +10744,108 @@
       ]
     },
     "One-Handed Thunder Hammer": {
-      "perks": [],
+      "perks": [
+        {
+          "name": "Perpetual Strength",
+          "quality": "Standard",
+          "description": "Melee Damage increases by 5%"
+        },
+        {
+          "name": "Perpetual Speed",
+          "quality": "Standard",
+          "description": "Melee Attack Speed increases by 5%"
+        },
+        {
+          "name": "Sustained Charge",
+          "quality": "Master-Crafted",
+          "description": "Increases the time before a Power Charge is lost without dealing damage from 5 to 10 seconds"
+        },
+        {
+          "name": "Perpetual Strength",
+          "quality": "Master-Crafted",
+          "description": "Melee Damage increases by 5%"
+        },
+        {
+          "name": "Charge Overflow",
+          "quality": "Master-Crafted",
+          "description": "Reaching the Maximum Power Charge stack increases Damage by 10% for 20 seconds"
+        },
+        {
+          "name": "Hard Target",
+          "quality": "Master-Crafted",
+          "description": "While performing a Light Combo, you take 15% less Ranged Damage"
+        },
+        {
+          "name": "Perpetual Speed",
+          "quality": "Master-Crafted",
+          "description": "Melee Attack Speed increases by 5%"
+        },
+        {
+          "name": "Energetic Nimbus",
+          "quality": "Master-Crafted",
+          "description": "Incoming ranged damage is reduced by 15% while having a Power Charge stack of 1"
+        },
+        {
+          "name": "Adamant Stance",
+          "quality": "Artificer",
+          "description": "While in Accumulation Stance you don't lose control when taking Heavy Hits and cannot be knocked back"
+        },
+        {
+          "name": "Perpetual Strength",
+          "quality": "Artificer",
+          "description": "Melee Damage increases by 5%"
+        },
+        {
+          "name": "Expanded Impact",
+          "quality": "Artificer",
+          "description": "Area-of-effect radius of Ground Slam is increased by 50%"
+        },
+        {
+          "name": "Hyperenergetic Loop",
+          "quality": "Artificer",
+          "description": "Energy Loop gains 2 Charges instead of 1"
+        },
+        {
+          "name": "Rapid Recharge",
+          "quality": "Artificer",
+          "description": "Killing 5 foes in quick succession with the Light Combo restores 1 Power Charges. Cooldown is 15 seconds"
+        },
+        {
+          "name": "Perfect Reprisal",
+          "quality": "Artificer",
+          "description": "After a Perfect Parry, Perfect Block, or Perfect Dodge, The next Light Attack deals 25% more damage for 7 seconds"
+        },
+        {
+          "name": "Preparedness",
+          "quality": "Artificer",
+          "description": "Killing Majoris-level or higher enemies reduces the cooldown of your class ability by 3%"
+        },
+        {
+          "name": "Deflective Charge",
+          "quality": "Artificer",
+          "description": "Perfect Parry, Perfect Block, and Perfect Dodge instantly generate 1 Power Charges. Cooldown is 20 seconds"
+        },
+        {
+          "name": "Capacity Increase",
+          "quality": "Relic",
+          "description": "Maximum number of Power Charges increases to 4"
+        },
+        {
+          "name": "Reverberating Slam",
+          "quality": "Relic",
+          "description": "Charged Impact hits the ground twice"
+        },
+        {
+          "name": "Brutal Force",
+          "quality": "Relic",
+          "description": "Killing a Majoris-level or higher enemy restores 1 Armour Segment if Health is lower than 30%"
+        },
+        {
+          "name": "Echoing Swing",
+          "quality": "Relic",
+          "description": "Underhand Swing Attacks spawn shockwaves"
+        }
+      ],
       "budget": 10,
       "intro": [],
       "meta": {
@@ -10951,8 +11052,7 @@
           "figures": {},
           "defence": "Balanced"
         }
-      ],
-      "perksPending": true
+      ]
     },
     "Power Axe": {
       "perks": [

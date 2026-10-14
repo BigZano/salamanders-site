@@ -58,11 +58,22 @@ describe('weapons', () => {
     }
   })
 
-  it('bakes the One-Handed Thunder Hammer with ten versions and no perk tree yet', () => {
+  it("bakes the One-Handed Thunder Hammer with ten versions and the perk tree from Bret's in-game list", () => {
     const t = baked['One-Handed Thunder Hammer']
-    expect(t.perksPending).toBe(true)
-    expect(t.perks).toEqual([])
+    expect('perksPending' in t).toBe(false)
     expect(t.versions).toHaveLength(10)
+    const count = (q) => t.perks.filter((p) => p.quality === q).length
+    expect(['Standard', 'Master-Crafted', 'Artificer', 'Relic'].map(count)).toEqual([2, 6, 8, 4])
+    expect(t.perks).toHaveLength(20)
+    for (const p of t.perks) expect(p.description, p.name).toBeTruthy()
+    const at = (q, n) => t.perks.find((p) => p.quality === q && p.name === n)?.description
+    expect(at('Master-Crafted', 'Charge Overflow')).toBe('Reaching the Maximum Power Charge stack increases Damage by 10% for 20 seconds')
+    expect(at('Relic', 'Capacity Increase')).toBe('Maximum number of Power Charges increases to 4')
+  })
+
+  it('lists each One-Handed Thunder Hammer perk once per quality', () => {
+    const keys = baked['One-Handed Thunder Hammer'].perks.map((p) => `${p.quality}|${p.name}`)
+    expect(keys.filter((k, i) => keys.indexOf(k) !== i)).toEqual([])
   })
 
   it('holds weapon perk text at the previous bake (Fast Reload)', () => {

@@ -5,6 +5,7 @@ import { createPinia, setActivePinia } from 'pinia'
 import WeaponSlot from './WeaponSlot.vue'
 import WeaponTree from './WeaponTree.vue'
 import { usePlanner } from '../stores/planner'
+import trees from '../data/weapon-trees.json'
 
 let planner
 beforeEach(() => {
@@ -17,13 +18,34 @@ const slot = () => mount(WeaponSlot, { props: { slot: 'melee', label: 'Melee' },
 
 describe('WeaponSlot', () => {
   it('says the perk tree is not published yet for a weapon without one', async () => {
+    // The One-Handed Thunder Hammer is borrowed as the weapon whose perks the wiki has not published.
+    const t = trees.weapons['One-Handed Thunder Hammer']
+    const saved = { perks: t.perks, perksPending: t.perksPending }
+    t.perks = []
+    t.perksPending = true
+    try {
+      planner.setClass('Tactical')
+      planner.setWeapon('melee', 'One-Handed Thunder Hammer')
+      const w = slot()
+      await w.find('.slot-toggle').trigger('click')
+      await flushPromises()
+      expect(w.find('.slot-pending').text()).toContain('not published yet')
+      expect(w.findComponent(WeaponTree).exists()).toBe(false)
+    } finally {
+      t.perks = saved.perks
+      if (saved.perksPending === undefined) delete t.perksPending
+      else t.perksPending = saved.perksPending
+    }
+  })
+
+  it('opens the One-Handed Thunder Hammer tree now that its perks are baked', async () => {
     planner.setClass('Tactical')
     planner.setWeapon('melee', 'One-Handed Thunder Hammer')
     const w = slot()
     await w.find('.slot-toggle').trigger('click')
     await flushPromises()
-    expect(w.find('.slot-pending').text()).toContain('not published yet')
-    expect(w.findComponent(WeaponTree).exists()).toBe(false)
+    expect(w.find('.slot-pending').exists()).toBe(false)
+    expect(w.findComponent(WeaponTree).exists()).toBe(true)
   })
 
   it('still opens the tree for a weapon that has one', async () => {
