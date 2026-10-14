@@ -1,4 +1,6 @@
 <script setup>
+import { isStaleBuild } from '../lib/patchMigration'
+
 defineProps({
   build: { type: Object, required: true },
   showBadge: { type: Boolean, default: false },
@@ -18,7 +20,15 @@ const slots = [
   <article class="b-card panel-forge">
     <div class="b-card-top">
       <h2 class="b-name">{{ build.title }}</h2>
-      <span class="b-class">{{ build.className }}</span>
+      <span class="b-tags">
+        <span class="b-class">{{ build.className }}</span>
+        <span
+          v-if="isStaleBuild(build)"
+          class="b-stale"
+          title="Perks in this build changed in Patch 15.0. Open it in the builder to review."
+          >Pre-15.0 · needs review</span
+        >
+      </span>
     </div>
     <p class="b-meta">
       Level {{ build.level }}<span v-if="build.prestige"> · Prestige {{ build.prestige }}</span
@@ -86,7 +96,15 @@ const slots = [
   color: var(--color-bone);
   line-height: 1.1;
 }
-.b-class {
+.b-tags {
+  flex: none;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 0.3rem;
+}
+.b-class,
+.b-stale {
   flex: none;
   font-family: var(--font-mono);
   text-transform: uppercase;
@@ -96,6 +114,11 @@ const slots = [
   border: 1px solid rgba(89, 214, 108, 0.35);
   border-radius: 2px;
   padding: 2px 6px;
+}
+.b-stale {
+  color: var(--color-ember);
+  border-color: rgba(255, 106, 43, 0.45);
+  white-space: nowrap;
 }
 .b-meta {
   color: var(--color-smoke);
