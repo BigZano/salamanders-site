@@ -4,6 +4,19 @@ Branch: `feat/patch-15-data` (worktree off `main`). Date: 2026-10-14.
 
 Spec A of two. **Spec B+C** (Perk Builder: melee version picker, Tactical slot rules, rationale boxes for weapons and prestige picks) is separate and builds on this one.
 
+## Amendment (2026-10-14, after the game-data cross-check)
+
+The sections below record what was designed first. These parts were overturned the same day:
+
+- **Source rule 3 is withdrawn.** "A wiki change the patch notes do not mention is presumed false" was wrong. It had only been tested against the Patch 15.0 notes. A cross-check against datamined Hotfix 15.1 game data (sealed.build, read once, not copied) found every held wiki edit that it covers true: 60 class perk edits, 102 weapon perk edits and 23 weapon version stat edits. Treat a changed wiki value as probably a catch-up, check it against all patch notes since the data was baked and any game-data source, and hold only on a contradiction.
+- **The four pins are removed** (Balanced Distribution, Heightened Vigour, Plasma Boost, Relentless Pursuit): the game data agrees with the wiki on all four. The "Wiki-only edits" table below is therefore historical.
+- **"Held drift" is adopted**, not held, with one exception: the wiki swaps Heavy's prestige perk *Honed Precision* for *Restorative Capacity*, but the game data keeps *Honed Precision*, so an override in `patch-overrides.json` keeps it. Both bakes now run with no hold flags; the flags stay available.
+- **Hotfix 15.1 is not limited to the One-Handed Thunder Hammer.** It also changes the Melta Rifle (default magazine 6, ammo pool 12, falloff distances), the Heavy Melta Rifle's falloff, an Auspex Scan Gun Strike fix and a Tactical Reserve fix. The statement in "What we found" that it touches only the One-Handed Thunder Hammer is wrong.
+- **Assault level 14** changed (*Strong Strikes* to *Furious Strikes*) and is migrated like the Tactical slots. Because it is not a Patch 15.0 change, the notice and the gallery chip no longer name a patch.
+- The Techmarine axe is labelled *Omnissian Axe*, as in the game.
+
+Open items are in `docs/handoff/2026-10-14-patch-15-data.md`.
+
 ## Goal
 
 Bring the baked game data up to Patch 15.0 (1 October 2026) and make the Armoury show each melee weapon version's defence type (Block, Balanced or Fencing). No server or DB change.

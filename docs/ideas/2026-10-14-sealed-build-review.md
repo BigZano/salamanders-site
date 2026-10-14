@@ -31,6 +31,8 @@ Their Hotfix 15.1 game data was compared, by script and in scratch space only, w
 - Assault level 14 really did change (*Furious Strikes* exists in their data), so it needs a migration entry when adopted.
 - **One-Handed Thunder Hammer:** our stats and defence types match theirs on all 10 versions, and 16 of our 20 perks match word for word. Differences to recheck in the game: they call the Relic perk *Brutal Reforge* (as does the Hotfix 15.1 text) where our in-game list says *Brutal Force*; they list a Heroic perk, *Crackling Hammerfall* ("Hold the Attack button to perform a powerful Ground Slam that consumes all Charges. Damage is increased by 30% per Charge spent"), which fits the hotfix line about the Power Maul's 30% per charge; *Perfect Reprisal* and *Preparedness* have the post-hotfix wording ("Light Attacks", "with the One-Handed Thunder Hammer").
 
+**Status: done in `ab68ad3`** (the adoption pass: bakes re-run with no hold flags, the four pins removed, Heavy's *Honed Precision* kept by override, Assault level 14 migrated). A full audit afterwards, against 168 class perks, 535 weapon perks and 1,808 stat cells, is summarised in `docs/handoff/2026-10-14-patch-15-data.md`.
+
 Reading: the wiki was behind the game in September and has since caught up, and our hold rule treated that catch-up as suspect. The rule only looked at the Patch 15.0 notes; older notes (for example Hotfix 12.2 buffed Moving Target and Retribution) already backed several of the edits. Next step is an adoption pass, not more holding. See `2026-10-14-game-files-source-of-truth.md` for the real fix.
 
 ## Where we differ

@@ -1,6 +1,6 @@
 # Game files as the source of truth (plan sketch)
 
-Status: **not started**. Pinned 2026-10-14 at Bret's request: "if it's from game data, I have it installed ... that'd be the ultimate source of truth". This is a sketch to brainstorm from, not a spec. It supersedes the "wiki first" order in the data-source policy once it works.
+Status: **not started, and its own project** (decided 2026-10-14: keep it out of the Patch 15.0 branch and out of the dragons work). Pinned at Bret's request: "if it's from game data, I have it installed ... that'd be the ultimate source of truth". This is a sketch to brainstorm from, not a spec. It supersedes the "wiki first" order in the data-source policy once it works.
 
 ## Why
 
@@ -23,7 +23,7 @@ A local extraction step, run by Bret after each game update, that reads the inst
 
 ## Things to settle before building
 
-- **Is it allowed?** Reading your own install for your own tooling is common practice, but check Focus and Saber's policy on datamining and on republishing extracted text and numbers. This site is a fan project; the text and stats are already public on the wiki, but icons and models are a different matter, which is why the first version leaves them out.
+- **Is it allowed?** Bret's view (2026-10-14): Saber is very mod-friendly and has even given the community tools to help, so reading the install is fine. Still check what they have published about tools and about republishing extracted text and numbers before committing a snapshot. The text and stats are already public on the wiki; icons and models are a different matter, which is why the first version leaves them out. Their official modding tools may also make the spike easier than an open-source Unreal reader: look there first.
 - **Where it runs.** Locally only: the game files do not go in the repo or in CI. The committed snapshot is what CI and the server use, so no install is needed there.
 - **Format and tooling** are unknown until the spike. Do not pick a parser first.
 - **Maintenance.** A game update can change the format. The spike should say how fragile it is.

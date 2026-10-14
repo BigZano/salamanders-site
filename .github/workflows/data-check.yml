@@ -63,9 +63,7 @@ jobs:
             ```
 
             Review the diff before merging — a bad wiki edit lands here too.
-            Since Patch 15.0 the repo deliberately holds back wiki edits that the official
-            patch notes do not back; this PR proposes all of them again. See
-            docs/handoff/2026-10-14-patch-15-data.md before adopting any. Adopting them
-            fails the two "HELD ON PURPOSE" tests in src/data/data-integrity.test.js, and
-            this PR does not run the tests, so run them on the PR branch first.
+            Corrections we know the wiki gets wrong live in src/data/patch-overrides.json and
+            are re-applied on every run; the job log warns when one has gone stale. This PR
+            does not run the tests: run `bun run test` on the PR branch before merging.
             Merging deploys automatically.
