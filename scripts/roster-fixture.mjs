@@ -6,8 +6,15 @@
  * here (the repo is public).
  *
  *   node scripts/roster-fixture.mjs
+ *   node scripts/roster-fixture.mjs --scale 5 --out some/other.json   (for performance checks)
+ *
+ * --scale N multiplies every waterfall rank in every branch (not the heads, High
+ * Command or servitors). Scale 1 is exactly the committed fixture; a test fails if
+ * they drift. Write a scaled one somewhere else, or over the committed file only
+ * temporarily and restore it with git.
  */
 import { writeFile } from 'node:fs/promises'
+import { resolve } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import { buildInfirmary, buildRoster } from '../server/src/rosterCore.js'
 import * as L from '../server/src/rosterLadder.js'
@@ -24,7 +31,8 @@ const cmd = (n) => L.COMPANIES[n - 1].commandRoleIds[0]
 const cr = (key) => L.COMPANY_RANKS.find((r) => r.key === key)
 const spec = (key) => L.SPECIALTIES.find((s) => s.key === key)
 
-export function syntheticGuild() {
+export function syntheticGuild(scale = 1) {
+  if (!Number.isInteger(scale) || scale < 1) throw new Error(`scale must be a positive whole number, got ${scale}`)
   let n = 0
   const members = []
   /** One made-up member. Ids are 18-digit and start with 9: synthetic and unmistakable in the fixture. A real account could in theory share the range, but no real data attaches to these. */
@@ -48,14 +56,14 @@ export function syntheticGuild() {
   for (const c of L.COMPANIES) {
     const k = c.number
     if (k !== 2 && k !== 4 && k !== 6) add([L.CAPTAIN.id, c.roleId, c.commandRoleIds[0]])
-    for (let i = 0; i < 2; i++) add([cr('lieutenant').id, c.roleId])
-    add([(k % 2 ? cr('company-ancient') : cr('company-champion')).id, c.roleId])
-    add([cr('veteran-sergeant').id, c.roleId])
-    for (let i = 0; i < 3; i++) add([cr('sergeant').id, c.roleId])
-    add([cr('terminator').id, c.roleId])
-    for (let i = 0; i < 3; i++) add([cr('company-veteran').id, c.roleId])
-    for (let i = 0; i < 6; i++) add([cr('battle-brother').id, c.roleId])
-    for (let i = 0; i < (k === 7 ? 24 : 3); i++) add([cr('scout').id, c.roleId])
+    for (let i = 0; i < 2 * scale; i++) add([cr('lieutenant').id, c.roleId])
+    for (let i = 0; i < scale; i++) add([(k % 2 ? cr('company-ancient') : cr('company-champion')).id, c.roleId])
+    for (let i = 0; i < scale; i++) add([cr('veteran-sergeant').id, c.roleId])
+    for (let i = 0; i < 3 * scale; i++) add([cr('sergeant').id, c.roleId])
+    for (let i = 0; i < scale; i++) add([cr('terminator').id, c.roleId])
+    for (let i = 0; i < 3 * scale; i++) add([cr('company-veteran').id, c.roleId])
+    for (let i = 0; i < 6 * scale; i++) add([cr('battle-brother').id, c.roleId])
+    for (let i = 0; i < (k === 7 ? 24 : 3) * scale; i++) add([cr('scout').id, c.roleId])
   }
   add([cr('sergeant').variants[0].id, co(1)]) // a Firedrake Sergeant
   add([cr('sergeant').variants[1].id, co(7)]) // a Scout Sergeant
@@ -73,7 +81,7 @@ export function syntheticGuild() {
   for (const s of L.SPECIALTIES) {
     for (let i = 0; i < (s.key === 'forge' ? 2 : 1); i++) add([s.head.id, ...(i === 0 ? [] : [co(1)])])
     s.ranks.forEach((r, ri) => {
-      for (let i = 0; i < 2; i++) add([r.id, ...(i === 0 ? [co(((ri + i) % 7) + 1)] : [])])
+      for (let i = 0; i < 2 * scale; i++) add([r.id, ...(i === 0 ? [co(((ri + i) % 7) + 1)] : [])])
     })
   }
   add([spec('reclusiam').ranks[0].variants[0].id]) // a Firedrake Chaplain with no company role
@@ -102,14 +110,19 @@ export function syntheticGuild() {
   return members
 }
 
-export function buildFixture() {
-  const guild = syntheticGuild()
+export function buildFixture(scale = 1) {
+  const guild = syntheticGuild(scale)
   const roster = { fetchedAt: FETCHED_AT, stale: false, viewer: { infirmary: true }, ...buildRoster(guild, { guildId: GUILD }) }
   const members = buildInfirmary(guild, { guildId: GUILD })
   return { _fixture: true, roster, infirmary: { fetchedAt: FETCHED_AT, stale: false, count: members.length, members } }
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
-  await writeFile(OUT, JSON.stringify(buildFixture(), null, 2) + '\n')
-  console.log(`Wrote ${OUT.pathname}`)
+  const flag = (name) => {
+    const at = process.argv.indexOf(name)
+    return at > -1 ? process.argv[at + 1] : undefined
+  }
+  const out = flag('--out') ? pathToFileURL(resolve(flag('--out'))) : OUT
+  await writeFile(out, JSON.stringify(buildFixture(Number(flag('--scale') ?? 1)), null, 2) + '\n')
+  console.log(`Wrote ${out.pathname}`)
 }

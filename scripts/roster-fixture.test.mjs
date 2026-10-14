@@ -59,3 +59,38 @@ describe('the synthetic roster fixture', () => {
     for (const m of fx.infirmary.members) expect(rosterIds.has(`"id":"${m.id}"`)).toBe(false)
   })
 })
+
+describe('the scaled fixture (for performance checks)', () => {
+  const big = buildFixture(5)
+  const inRows = (f) => f.roster.branches.flatMap((b) => b.rows.flatMap((r) => r.members))
+  const bigBranch = (key) => big.roster.branches.find((b) => b.key === key)
+
+  it('scale 1 is the committed fixture', () => {
+    expect(buildFixture(1)).toEqual(committed)
+    expect(buildFixture()).toEqual(committed)
+  })
+
+  it('scale 5 has about five times the waterfall members', () => {
+    expect(inRows(big).length).toBeGreaterThanOrEqual(inRows(fx).length * 4.5)
+    expect(bigBranch('company-7').rows.find((r) => r.rank.key === 'scout').members.length).toBe(24 * 5)
+  })
+
+  it('scale 5 keeps the shape: twelve branches, the same High Command, the same gaps', () => {
+    expect(big.roster.branches.map((b) => b.key)).toEqual(fx.roster.branches.map((b) => b.key))
+    expect(big.roster.highCommand.map((r) => r.rank.key)).toEqual(fx.roster.highCommand.map((r) => r.rank.key))
+    expect(bigBranch('company-6').head.vacant).toBe(true)
+    expect(bigBranch('company-2').head.members.every((m) => m.acting)).toBe(true)
+    expect(bigBranch('company-1').rows.some((r) => r.rank.lateral)).toBe(true)
+    expect(bigBranch('company-1').aside.length).toBe(branch('company-1').aside.length)
+  })
+
+  it('scale 5 ids are unique and in the synthetic range', () => {
+    const ids = [...inRows(big), ...big.roster.unassigned.rows.flatMap((r) => r.members), ...big.roster.servitors].map((m) => m.id)
+    expect(new Set(ids).size).toBe(ids.length)
+    for (const id of ids) expect(id).toMatch(/^9\d{17}$/)
+  })
+
+  it('rejects a scale that is not a positive whole number', () => {
+    for (const bad of [0, -1, 1.5, NaN, '3']) expect(() => buildFixture(bad), String(bad)).toThrow(/scale/)
+  })
+})
