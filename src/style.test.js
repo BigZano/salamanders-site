@@ -1,17 +1,8 @@
 import { describe, it, expect } from 'vitest'
 import { readFileSync } from 'node:fs'
+import { TEXT, contrast, over } from './test-utils/contrast'
 
 const css = readFileSync(new URL('./style.css', import.meta.url), 'utf8')
-
-const channel = (c) => {
-  const s = c / 255
-  return s <= 0.03928 ? s / 12.92 : ((s + 0.055) / 1.055) ** 2.4
-}
-const luminance = ([r, g, b]) => 0.2126 * channel(r) + 0.7152 * channel(g) + 0.0722 * channel(b)
-const contrast = (a, b) => {
-  const [hi, lo] = [luminance(a), luminance(b)].sort((x, y) => y - x)
-  return (hi + 0.05) / (lo + 0.05)
-}
 
 describe('style.css', () => {
   it('defines the roster tokens', () => {
@@ -24,10 +15,7 @@ describe('style.css', () => {
     const rule = css.match(/\.surface\s*\{([^}]*)\}/)
     expect(rule).not.toBeNull()
     const [, r, g, b, a] = rule[1].match(/rgba\((\d+),\s*(\d+),\s*(\d+),\s*([\d.]+)\)/)
-    const lava = [255, 176, 102]
-    const alpha = Number(a)
-    const blended = [r, g, b].map((c, i) => Number(c) * alpha + lava[i] * (1 - alpha))
-    expect(contrast(blended, [195, 208, 198])).toBeGreaterThanOrEqual(4.5)
+    expect(contrast(over([r, g, b], Number(a)), TEXT)).toBeGreaterThanOrEqual(4.5)
   })
 
   it('guards reduced motion without breaking transitionend', () => {

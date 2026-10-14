@@ -1,6 +1,7 @@
 <script setup>
 import { ref, computed } from 'vue'
 import companies from '../data/companies.json'
+import PageHeader from '../components/PageHeader.vue'
 
 const query = ref('')
 
@@ -36,13 +37,12 @@ function initials(name) {
 
 <template>
   <section class="companies">
-    <header class="c-head">
-      <p class="eyebrow">The Chapter</p>
-      <h1 class="c-title">Companies &amp; Sections</h1>
-      <p class="c-intro">
-        The XVIII Legion is forged from many hearths. These are our companies and
-        institutions — and the brothers who hold the line.
-      </p>
+    <PageHeader
+      class="c-head"
+      eyebrow="The Chapter"
+      title="Companies & Sections"
+      lede="The XVIII Legion is forged from many hearths. These are our companies and institutions — and the brothers who hold the line."
+    >
       <input
         v-model="query"
         class="c-search"
@@ -50,7 +50,7 @@ function initials(name) {
         placeholder="Search companies, sections, brothers…"
         aria-label="Search companies"
       />
-    </header>
+    </PageHeader>
 
     <!-- Company index -->
     <nav class="c-index" aria-label="Jump to company">
@@ -79,7 +79,7 @@ function initials(name) {
       </div>
 
       <div class="company-body">
-        <section v-for="(s, i) in c.sections" :key="i" class="block">
+        <section v-for="(s, i) in c.sections" :key="i" class="block surface">
           <h3 class="block-h">{{ s.h }}</h3>
 
           <template v-if="s.p">
@@ -118,20 +118,6 @@ function initials(name) {
 }
 .c-head {
   margin-bottom: 2rem;
-}
-.c-title {
-  font-family: var(--font-display);
-  text-transform: uppercase;
-  font-weight: 700;
-  font-size: clamp(2.2rem, 7vw, 3.6rem);
-  letter-spacing: 0.01em;
-  margin: 0.4rem 0 0.6rem;
-  color: var(--color-bone);
-}
-.c-intro {
-  color: var(--color-smoke);
-  max-width: 52ch;
-  line-height: 1.6;
 }
 .c-search {
   margin-top: 1.4rem;
@@ -231,6 +217,28 @@ function initials(name) {
 
 .block {
   margin: 0 0 1.6rem;
+}
+/* Text over the volcano. On phones each block sits on the shared .surface (padding
+   here, the panel itself from style.css). On wide screens the text is a left column
+   with the mountain in the empty right half, so a scrim that fades out to the right
+   does the same job without boxing the page: it holds 4.5:1 against the brightest
+   lava across the whole text width (Companies.test.js checks the numbers). */
+@media (max-width: 760px) {
+  .block {
+    padding: 1rem 1.1rem;
+    border-radius: 3px;
+  }
+}
+@media (min-width: 761px) {
+  /* padding, not margin, between blocks: the scrim then runs unbroken down the company
+     instead of leaving bright stripes across the mountain between blocks */
+  .block.surface {
+    margin: 0;
+    padding: 0.8rem 0;
+    border: 0;
+    backdrop-filter: none;
+    background: linear-gradient(90deg, rgba(5, 10, 8, 0.8) 0%, rgba(5, 10, 8, 0.7) 62%, transparent 100%);
+  }
 }
 .block-h {
   font-family: var(--font-mono);
