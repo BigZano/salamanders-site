@@ -1,0 +1,23 @@
+{
+  "patch": "15.0",
+  "date": "2026-10-01",
+  "classes": {
+    "Tactical": {
+      "slots": [
+        { "level": 6, "was": "Vital Data", "now": "Improved Efficiency", "action": "replaced", "note": "Vital Data moved to level 8" },
+        { "level": 8, "was": "Close Targeting", "now": "Vital Data", "action": "replaced" },
+        { "level": 9, "was": "Signal Jammer", "now": "Tactical Reserve", "action": "replaced" },
+        { "level": 12, "was": "Steady Aim", "now": "Focused Strike", "action": "replaced" },
+        { "level": 14, "was": "Priority Targeting", "now": "Pulse Auspex", "action": "replaced" },
+        { "level": 15, "was": "Improved Efficiency", "now": "Marksman's Mandate", "action": "replaced" },
+        { "level": 16, "was": "Expert Timing", "now": "Strongpoint", "action": "replaced" },
+        { "level": 18, "was": "Kraken Penetrator Rounds", "now": "Armour Reinforcement", "action": "replaced", "note": "its effect moved into the starting perk" },
+        { "level": 22, "was": "Target Lock", "now": "Mobile Auspex", "action": "replaced" },
+        { "level": 23, "was": "Precise Calibration", "now": "Bladesman's Mandate", "action": "replaced" },
+        { "level": 24, "was": "Concentrated Fire", "now": "Prime Target", "action": "replaced" },
+        { "level": 25, "was": "Marked for Death", "now": "Marked for Death", "action": "reworked", "note": "Now weakens one Majoris- or Extremis-level enemy instead of killing on a headshot" }
+      ],
+      "prestige": [{ "was": "Exigency Charge", "now": "Passive Chambering", "action": "replaced" }]
+    }
+  }
+}
