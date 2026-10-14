@@ -91,6 +91,12 @@ describe('migrateSelection', () => {
     expect(() => migrateSelection(input)).not.toThrow()
   })
 
+  it.each([['constructor'], ['toString'], ['__proto__'], ['hasOwnProperty']])('treats the class name %s as an unknown class', (className) => {
+    const r = migrateSelection({ className, selectedPerks: { 1: 'x' }, justifications: { 1: 'y' }, prestigePicks: ['z'] })
+    expect(r).toMatchObject({ selectedPerks: { 1: 'x' }, justifications: { 1: 'y' }, prestigePicks: ['z'], notices: [] })
+    expect(isStaleBuild({ className, perks: ['x'] })).toBe(false)
+  })
+
   it('tolerates missing pieces', () => {
     expect(migrateSelection({ className: 'Tactical' })).toMatchObject({ notices: [] })
     expect(migrateSelection({ className: 'Tactical', selectedPerks: null, justifications: null, prestigePicks: null })).toMatchObject({ notices: [] })

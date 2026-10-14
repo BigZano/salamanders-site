@@ -39,7 +39,7 @@ Sources used so far: Patch Notes 15.0 (Focus community blog), the September Comm
 
 - **Defence type.** `parseVersions` reads the `Defence` column into `version.defence`, one of `Block`, `Balanced`, `Fencing`. It maps the wiki's "Balance" to "Balanced". Ranged versions have none. Gauges are unchanged.
 - **Weapon list.** `One-Handed Thunder Hammer` joins the melee list in `weapons.json` that drives the bake. The heroic variants arrive as versions: the wiki lists Frost Axe (Power Axe) and Power Maul (One-Handed Thunder Hammer) as Balanced, which matches the notes. Iron Hands is a heroic Auto Bolt Rifle, and the bake picks it up if the wiki lists it.
-- **No perk tree yet for the One-Handed Thunder Hammer.** A weapon with versions but no perk table is baked with `perks: []` and `perksPending: true` instead of failing. The Armoury and the Perk Builder show "Perk tree not published yet" for it, and the tree is filled later by a wiki bake or by adding the perks to `weapon-trees.json` by hand. The perk-corrections editor cannot do it: it has no add button for an empty tree, and the page would keep saying "not published yet" because it reads the bake flag.
+- **No perk tree on the wiki for the One-Handed Thunder Hammer** (since filled from Bret's in-game list; the pending path below remains for any weapon the wiki lacks). A weapon with versions but no perk table is baked with `perks: []` and `perksPending: true` instead of failing. The Armoury and the Perk Builder show "Perk tree not published yet" for it, and the tree is filled later by a wiki bake or by adding the perks to `weapon-trees.json` by hand. The perk-corrections editor cannot do it: it has no add button for an empty tree, and the page would keep saying "not published yet" because it reads the bake flag.
 - **Thunder Hammer name.** Keep the key `Thunder Hammer`, because saved builds store weapon names. Add a display alias map so the UI reads "Two-Handed Thunder Hammer" (the official notes use that name).
 - **Class weapon lists.** Update the melee lists in `classes.json`, corroborated by the wiki's per-class weapon tables and the official notes:
   - Tactical: add Power Sword, Power Axe and One-Handed Thunder Hammer.
@@ -54,7 +54,7 @@ Sources used so far: Patch Notes 15.0 (Focus community blog), the September Comm
   - Four pins that keep the pre-15.0 text for wiki-only changes (see "Wiki-only edits").
 - **Held drift.** By rule 3, wiki-only changes are not adopted. Two opt-in flags make that mechanical, and the default behaviour of both scripts is unchanged, so the weekly `data-check` workflow (which runs `wiki:all` and opens a PR) keeps working:
   - `bun run wiki:perks -- --classes Tactical` adopts the wiki for the named classes only, applies overrides, and holds every other class at its previous bake.
-  - `bun run wiki:weapons -- --keep-perks` keeps `perks` and `budget` for weapons already in the bake, and takes fresh `versions`, `meta` and `intro`. New weapons are taken whole.
+  - `bun run wiki:weapons -- --keep-perks` keeps `perks`, `budget` and the stats of existing versions for weapons already in the bake, and takes fresh `meta`, `intro`, new versions and defence types. New weapons are taken whole.
   Both print a drift report of everything held. Adopting a held class or weapon later is one re-run without the flag.
 - **Patch marker.** `last-patch.json` is bumped by running `check-updates` once the data is in. That records the latest official announcement, which is Hotfix 15.1 (8 October).
 
@@ -128,7 +128,7 @@ Four pins, four accepts. All eight go on Bret's in-game list, and any decision c
 
 Measured on 2026-10-14 against the 27 September bake. None of it is in the patch notes, so all of it is held:
 
-- **Weapon perks:** 103 wording-only edits, 30 numeric or behavioural ones, and 12 add/remove pairs (mostly capitalisation renames such as *Tide of Battle*). Examples of the numeric ones: Elite Hunter 50% to 25%, Tactical Precision 30% to 20%, Able Precision 5 to 10 seconds, Fast Reload "all Weapons" to "this Weapon".
+- **Weapon perks:** 103 wording-only edits, 30 numeric or behavioural ones, and 6 added and 6 removed perks (mostly capitalisation renames such as *Tide of Battle*). Examples of the numeric ones: Elite Hunter 50% to 25%, Tactical Precision 30% to 20%, Able Precision 5 to 10 seconds, Fast Reload "all Weapons" to "this Weapon".
 - **Class perks, non-Tactical:** about 20 numeric or behavioural edits across Vanguard, Techmarine, Heavy, Bulwark, Sniper and Assault; one changed grid slot for Assault; one changed prestige perk for Heavy (*Honed Precision* to *Restorative Capacity*).
 
 The drift report is saved in the handoff for Bret's in-game check. Anything he confirms is adopted by re-running that class or weapon without the hold flag.

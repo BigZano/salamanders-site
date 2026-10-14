@@ -183,6 +183,25 @@ describe('mergeTrees', () => {
     expect(out.A.versions.map((v) => [v.name, v.gauges.Strength.value])).toEqual([['Standard-Issue', 5], ['New', 2]])
   })
 
+  it('without keepPerks a name the wiki lists twice is kept once, at its last row', () => {
+    const prev = tree({ versions: [ver('Standard-Issue', 5)] })
+    const next = fresh({ versions: [ver('Standard-Issue', 5), ver('MC Marksman', 7), ver('Master-Crafted', 6), ver('MC Marksman', 9)] })
+    const out = mergeTrees({ A: prev }, { A: next }, { keepPerks: false })
+    expect(out.A.versions.map((v) => [v.name, v.gauges.Strength.value])).toEqual([
+      ['Standard-Issue', 5],
+      ['Master-Crafted', 6],
+      ['MC Marksman', 9],
+    ])
+  })
+
+  it('a weapon only in fresh is taken with a duplicated version name kept once', () => {
+    const next = fresh({ versions: [ver('New', 1), ver('New', 2)] })
+    for (const keepPerks of [true, false]) {
+      const out = mergeTrees({}, { B: next }, { keepPerks })
+      expect(out.B.versions.map((v) => [v.name, v.gauges.Strength.value])).toEqual([['New', 2]])
+    }
+  })
+
   it('without keepPerks the fresh versions win wholesale', () => {
     const prev = tree({ versions: [ver('Standard-Issue', 5), ver('Marksman (PVP)', 7)] })
     const next = fresh({ versions: [ver('Standard-Issue', 6)] })

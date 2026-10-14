@@ -321,8 +321,10 @@ export const usePlanner = defineStore('planner', {
         if (!saved) return
         this.$patch(saved)
         // Notices saved with the state stay until dismissed; anything the patch
-        // migration finds now is added to them.
+        // migration finds now is added to them. Sanitise them first, so a saved
+        // state that makes the rest of this throw cannot leave junk behind.
         const carried = Array.isArray(this.staleNotices) ? this.staleNotices.filter(isNotice) : []
+        this.staleNotices = carried
         const found = []
         const names = new Set([
           ...Object.keys(this.selectedPerks),

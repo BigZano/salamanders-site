@@ -9,11 +9,12 @@
  *   bun run wiki:weapons
  *   bun run wiki:weapons -- --keep-perks
  *
- * --keep-perks keeps the perk lists and budgets already in the bake for weapons
- * that are in it, and takes only the fresh versions (stats, defence type),
- * meta and intro. The wiki has drifted from the patch notes in places; this
- * lets a re-bake pick up new weapons and stats without adopting every
- * uncorroborated perk edit. What it held back is printed as a drift report.
+ * --keep-perks keeps the perk lists, budgets and version stats already in the
+ * bake for weapons that are in it, and takes only the fresh meta, intro, new
+ * versions and defence types. The wiki has drifted from the patch notes in
+ * places; this lets a re-bake pick up new weapons and defence types without
+ * adopting every uncorroborated perk or stat edit. What it held back is
+ * printed as a drift report.
  */
 import { readFile, writeFile } from 'node:fs/promises'
 import { fetchPage, sleep } from './lib/wiki.mjs'
@@ -87,6 +88,9 @@ async function run() {
       const doc = await fetchPage(name)
       trees[name] = buildTree(doc)
       const t = trees[name]
+      const versionNames = t.versions.map((v) => v.name)
+      const repeated = [...new Set(versionNames.filter((n, i) => versionNames.indexOf(n) !== i))]
+      if (repeated.length) console.warn(`  ! ${name}: the wiki lists ${repeated.join(', ')} more than once; the last row is kept`)
       console.log(
         `  ${name}: ${t.perks.length} perks${t.perksPending ? ' (pending)' : ''}, budget ${t.budget}, ${t.versions.length} versions`,
       )

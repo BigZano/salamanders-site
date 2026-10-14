@@ -148,6 +148,13 @@ export function buildTree(doc) {
  * a version the wiki has dropped is kept. The wiki's stat edits (magazine
  * sizes, ammo reserves) are as uncorroborated as its perk edits.
  */
+// A name the wiki lists twice is a mislabelled row; the version picker needs unique
+// names, so keep the last row of each.
+const keepLastOfEachName = (versions) => {
+  const lastAt = new Map(versions.map((v, i) => [v.name, i]))
+  return versions.filter((v, i) => lastAt.get(v.name) === i)
+}
+
 function holdVersions(previous, fresh) {
   const before = new Map(previous.map((v) => [v.name, v]))
   const lastAt = new Map(fresh.map((f, i) => [f.name, i]))
@@ -180,10 +187,10 @@ export function mergeTrees(previous, fresh, { keepPerks }) {
   for (const [name, f] of Object.entries(fresh)) {
     const p = previous[name]
     if (!p) {
-      out[name] = f
+      out[name] = { ...f, versions: keepLastOfEachName(f.versions) }
       continue
     }
-    const versions = keepPerks ? holdVersions(p.versions || [], f.versions) : f.versions
+    const versions = keepPerks ? holdVersions(p.versions || [], f.versions) : keepLastOfEachName(f.versions)
     if (p.perks?.length > 0 && (keepPerks || f.perksPending)) {
       const { perksPending, ...rest } = f
       out[name] = { ...rest, perks: p.perks, budget: p.budget, versions }

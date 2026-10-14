@@ -262,6 +262,25 @@ describe('Patch 15.0 migration', () => {
     expect(planner.staleNotices).toEqual([])
   })
 
+  it('keeps the notices list usable when saved state is crafted so that loading it throws part-way', () => {
+    localStorage.setItem(KEY, JSON.stringify({ activeClass: 'Tactical', justifications: null, staleNotices: 'oops' }))
+    const planner = usePlanner()
+    expect(() => planner.hydrate()).not.toThrow()
+    expect(planner.staleNotices).toEqual([])
+    expect(planner.activeStaleNotices).toEqual([])
+  })
+
+  it('does not throw on a saved class name that is an object prototype key', () => {
+    localStorage.setItem(KEY, JSON.stringify({
+      activeClass: 'Vanguard',
+      selectedPerks: { constructor: { 1: 'x' }, Tactical: { 7: 'Signal Jammer' } },
+    }))
+    const planner = usePlanner()
+    planner.hydrate()
+    expect(planner.staleNotices).toHaveLength(1)
+    expect(planner.staleNotices[0].className).toBe('Tactical')
+  })
+
   it('does not flag a current Tactical build or another class', () => {
     const planner = usePlanner()
     planner.applyBuildData({ ...stale, perkIds: { 7: 'Tactical Reserve' }, justifications: {}, prestigePicks: ['Passive Chambering'] })

@@ -40,7 +40,8 @@ const notice = (entry, level, className) => ({
  * @returns {{ selectedPerks: object, justifications: object, prestigePicks: any, notices: Notice[] }}
  */
 export function migrateSelection({ className, selectedPerks, justifications, prestigePicks, createdAt }) {
-  const rules = migrations.classes[className]
+  // hasOwn: a class name like "constructor" must not resolve to Object.prototype.
+  const rules = Object.hasOwn(migrations.classes, className) ? migrations.classes[className] : undefined
   const picks = { ...selectedPerks }
   const why = { ...justifications }
   let prestige = prestigePicks
