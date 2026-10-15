@@ -140,6 +140,12 @@ export const ROUTE_PROFILE_DEFAULTS = {
   // The mountain belongs in that empty half, not under the text.
   '/companies': { bearing: 0.52, scale: 0.65, variance: 0.75, density: 0.7 },
 
+  // Roster: a wide, long page of panels (twelve branch bars that each open into a
+  // ladder). A full cone would put its peak and glow right behind the header and
+  // controls, so it drops to a low horizon like the planner's and armoury's. Density
+  // stays modest so the panels over it read cleanly.
+  '/roster': { bearing: 0.5, scale: 0.5, variance: 0.8, density: 0.55 },
+
   // Anything unrouted — the 404. Somewhere you haven't been before.
   '*': { bearing: 0.3, scale: 0.85, variance: 1, density: 0.85 },
 }

@@ -4,6 +4,7 @@ import { setActivePinia, createPinia } from 'pinia'
 
 vi.mock('../lib/discordAuth', async (orig) => ({ ...(await orig()), beginSignIn: vi.fn() }))
 const { useAuth } = await import('./auth')
+const { useRoster } = await import('./roster')
 const { takeAnchor } = await import('../lib/archive/anchor')
 
 beforeEach(() => {
@@ -21,5 +22,14 @@ describe('auth.signIn keeps the archive message anchor, whichever button started
     history.replaceState(null, '', '/builds#m-200000000000000011')
     useAuth().signIn()
     expect(takeAnchor('/builds')).toBeNull()
+  })
+})
+
+describe('auth.signOut', () => {
+  it('drops the roster and Infirmary list from memory', () => {
+    const roster = useRoster()
+    roster.$patch({ status: 'ready', roster: { fetchedAt: 'x' }, infirmaryStatus: 'ready', infirmary: { count: 1 } })
+    useAuth().signOut()
+    expect(roster).toMatchObject({ status: 'idle', roster: null, infirmary: null, infirmaryStatus: 'idle' })
   })
 })

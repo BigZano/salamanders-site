@@ -25,3 +25,47 @@ describe('BuildCard byline', () => {
     expect(byline({ id: '1', displayName })).toBe('by Community Member')
   })
 })
+
+describe('BuildCard weapon names', () => {
+  it('shows the two-handed Thunder Hammer by its in-game name and still links by its key', () => {
+    const b = { ...build({ id: '1', displayName: 'Vulkan' }), weapons: { melee: 'Thunder Hammer' } }
+    const link = mount(BuildCard, { props: { build: b }, global: { plugins: [router] } }).find('.b-weapon')
+    expect(link.text()).toBe('Two-Handed Thunder Hammer')
+    expect(link.attributes('href')).toBe('/armoury?w=Thunder+Hammer')
+  })
+})
+
+describe('BuildCard pre-15.0 chip', () => {
+  const author = { id: '1', displayName: 'Vulkan' }
+  const chip = (over) =>
+    mount(BuildCard, { props: { build: { ...build(author), className: 'Tactical', ...over } }, global: { plugins: [router] } }).find('.b-stale')
+  const at7 = (name) => [null, null, null, null, null, null, null, name]
+
+  it('flags a Tactical build holding a perk the patch replaced', () => {
+    const c = chip({ perks: at7('Signal Jammer') })
+    expect(c.exists()).toBe(true)
+    expect(c.text()).toBe('Needs review')
+  })
+
+  it('does not flag the same build with the new perk', () => {
+    expect(chip({ perks: at7('Tactical Reserve') }).exists()).toBe(false)
+  })
+
+  it('flags a reworked perk on a build made before the patch', () => {
+    expect(chip({ perks: at7('Marked for Death'), createdAt: '2026-09-20T00:00:00Z' }).exists()).toBe(true)
+    expect(chip({ perks: at7('Marked for Death'), createdAt: '2026-10-05T00:00:00Z' }).exists()).toBe(false)
+  })
+
+  it('flags a replaced prestige pick', () => {
+    expect(chip({ prestigePicks: ['Exigency Charge', null, null, null] }).exists()).toBe(true)
+  })
+
+  it('leaves a build with no perks, prestige picks or date alone', () => {
+    expect(chip({}).exists()).toBe(false)
+    expect(chip({ prestigePicks: null }).exists()).toBe(false)
+  })
+
+  it('does not flag another class holding the same names', () => {
+    expect(chip({ className: 'Vanguard', perks: at7('Signal Jammer') }).exists()).toBe(false)
+  })
+})

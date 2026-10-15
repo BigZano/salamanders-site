@@ -1,9 +1,10 @@
 <script setup>
-import { computed, onMounted, ref, watch } from 'vue'
+import { onMounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { usePlanner } from '../stores/planner'
 import { useAuth } from '../stores/auth'
 import { usePerkCorrections } from '../stores/perkCorrections'
+import { useNavLinks } from '../lib/useNavLinks'
 
 const open = ref(false)
 const route = useRoute()
@@ -13,27 +14,8 @@ const auth = useAuth()
 const corrections = usePerkCorrections()
 const DISCORD = 'https://discord.gg/salamanders'
 
-const baseLinks = [
-  { to: '/', label: 'Home' },
-  { to: '/planner', label: 'Perk Builder' },
-  { to: '/armoury', label: 'Armoury' },
-  { to: '/builds', label: 'Builds' },
-  { to: '/companies', label: 'Companies' },
-]
-// A UX hint only — the real gate is the server's role check (see
-// src/lib/archive/client.js). Non-members never see the entries.
-const links = computed(() => {
-  const out = auth.member?.isMember
-    ? [
-        ...baseLinks,
-        { to: '/accolades', label: 'Accolades', section: true },
-        { to: '/ranks', label: 'Ranks', section: true },
-        { to: '/reports', label: 'Reports', section: true },
-      ]
-    : [...baseLinks]
-  if (corrections.privileges?.historyViewer) out.push({ to: '/history', label: 'Version History', section: true })
-  return out
-})
+// Shared with the footer; see src/lib/useNavLinks.js.
+const links = useNavLinks()
 
 // Close the mobile menu on navigation.
 watch(

@@ -1,0 +1,22 @@
+/*
+ * Roster page hooks. Styles live with their components (scoped, in
+ * src/components/roster/*.vue); this file lists what the tests and e2e rely on,
+ * so a restyle knows what to keep.
+ *
+ * Class hooks
+ *   page       .roster  .rs-meta  .rs-signin  .rs-find  .rs-expand-all  .rs-dev-scenes (dev only)
+ *   banner     .rs-high-command
+ *   branches   .rs-branches  .rs-branch  .rs-head  .rs-aside  .rs-row  .rs-body
+ *   members    .rs-member  .rs-avatar  .rs-initials  .rs-name  .rs-tag  .rs-badge  .rs-warn  .rs-you  .rs-me
+ *   groups     .rs-unassigned (not .rs-branch)  .rs-servitors
+ *   infirmary  .rs-infirmary-toggle  .rs-infirmary  .rs-rank
+ *   state      .rs-instant (on <html> while a bulk change or jump snaps)  .rs-flash  .rs-ping
+ * Attribute hooks
+ *   data-branch  company-1..7, venerable-dreadnoughts, forge, librarius, apothecarion, reclusiam
+ *   data-kind    company | dreadnoughts | specialty
+ *   data-rank    the rank key;  data-tier  branch rows only, equal tier = peers
+ *   data-lateral present on the Terminator row only (a specialization, not a rung);  data-id  Discord id
+ *   data-jump    the key a status link, Find me or #hash lands on: a branch key,
+ *                'unassigned' or 'high-command'
+ *   data-open    on a branch panel while it is open
+ */

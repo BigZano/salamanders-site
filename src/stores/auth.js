@@ -1,6 +1,7 @@
 import { defineStore } from 'pinia'
 import * as discordAuth from '../lib/discordAuth'
 import { useArchive } from './archive'
+import { useRoster } from './roster'
 import { stashAnchor } from '../lib/archive/anchor'
 
 // Thin reactive wrapper around discordAuth.js. Sign-in itself is a full-page
@@ -28,6 +29,8 @@ export const useAuth = defineStore('auth', {
       // Wherever sign-out happens, drop the Legion Archive key, decrypted
       // content and blob URLs with it — not only when an archive page is open.
       useArchive().reset()
+      // Likewise the roster (and Infirmary list), held in memory only.
+      useRoster().reset()
     },
   },
 })

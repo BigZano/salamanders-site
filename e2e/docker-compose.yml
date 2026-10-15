@@ -42,6 +42,7 @@ services:
       DISCORD_BOT_TOKEN: unused-in-e2e
       ARCHIVE_ROLE_ID: '1377787723976409211'
       ARCHIVE_MEMBERS_URL: http://discord-mock:4400/members.json
+      ROSTER_TTL_MS: '2000'
       BAKE_BASE_URL: http://discord-mock:4400/bake/
       # Throwaway key for the synthetic fixture only. Must match the web
       # service's E2E_ARCHIVE_KEY below.
