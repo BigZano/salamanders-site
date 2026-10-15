@@ -37,14 +37,12 @@ export function useCompanyRoster({ infirmaryOpen }) {
   const updated = computed(() => (store.roster ? new Date(store.roster.fetchedAt).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' }) : ''))
   const stale = computed(() => Boolean(store.roster?.stale))
 
-  // The token to send, or none when signed out. Not just auth.token: that store getter has nothing reactive
-  // in it, so it caches its first value and after signOut() still hands back the old, still valid token,
-  // which would bring the full roster back for someone who just signed out.
-  const tokenNow = () => (auth.member ? auth.token : null)
-  const loadInfirmary = () => store.loadInfirmary(tokenNow())
+  // auth.token is null once the member signs out (stores/auth.js), so a refresh after signing out asks with
+  // no token and the page drops to the public view; useCompanyRoster.auth.test.js pins that over the real store.
+  const loadInfirmary = () => store.loadInfirmary(auth.token)
 
   // Returned, so the polling chain waits for the requests: a slow one must not be overtaken by the next tick.
-  const loadMember = () => Promise.all([store.load(tokenNow()), infirmaryOpen.value ? loadInfirmary() : null]).then(() => {})
+  const loadMember = () => Promise.all([store.load(auth.token), infirmaryOpen.value ? loadInfirmary() : null]).then(() => {})
 
   async function tick() {
     await loadMember()

@@ -12,14 +12,17 @@ defineOptions({ inheritAttrs: false })
 </template>
 
 <style scoped>
-/* Measured on the fixture: the panel is 229px on a wide screen and 473px under 800px, where its two columns stack. */
+/* Measured on the live roster (2026-10-15): the panel is 309-316px on a wide screen and 553px under 800px,
+   where its two columns stack. (The fixture's smaller court gave 229px and 473px, which left the real
+   panel 80px taller than its placeholder.) The real height follows who holds High Command, so this is a
+   close estimate, not a promise; the page's deep-link scroll does not depend on it being exact. */
 .rs-hc-loading {
-  min-height: 14.3rem;
+  min-height: 19.5rem;
   border-radius: 3px;
 }
 @media (max-width: 800px) {
   .rs-hc-loading {
-    min-height: 29.6rem;
+    min-height: 34.6rem;
   }
 }
 </style>
