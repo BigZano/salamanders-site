@@ -16,6 +16,7 @@ export default {
     'server/src/rosterCore.js',
     'server/src/roster.js',
     'server/src/rosterHandler.js',
+    'server/src/rosterPublic.js',
   ],
   coverageAnalysis: 'perTest',
   thresholds: { high: 100, low: 100, break: 100 },
