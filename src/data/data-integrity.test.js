@@ -23,14 +23,45 @@ describe('weapons', () => {
     expect(missing).toEqual([])
   })
 
-  it('only gives a class weapons that exist for that slot', () => {
-    const bad = []
+  // Tactical Reserve swaps the Secondary for a Primary Bolt Rifle. Anything else
+  // in the wrong slot is a data error, so this list is exact, not a floor.
+  const OFF_SLOT = ['Tactical secondary: Bolt Rifle']
+  const offSlot = () => {
+    const found = []
     for (const [cls, c] of Object.entries(classes)) {
       for (const [slot, names] of Object.entries(c.weapons)) {
-        for (const n of names) if (!weaponList.fallbackWeapons[slot].includes(n)) bad.push(`${cls} ${slot}: ${n}`)
+        for (const n of names) if (!weaponList.fallbackWeapons[slot].includes(n)) found.push(`${cls} ${slot}: ${n}`)
       }
     }
-    expect(bad).toEqual([])
+    return found
+  }
+
+  it('only gives a class weapons that exist for that slot, bar the Bolt Rifle Tactical Reserve allows', () => {
+    expect(offSlot()).toEqual(OFF_SLOT)
+  })
+
+  it('only places a weapon in the wrong slot when another slot lists it', () => {
+    const everyWeapon = Object.values(weaponList.fallbackWeapons).flat()
+    for (const entry of offSlot()) expect(everyWeapon, entry).toContain(entry.split(': ')[1])
+  })
+
+  it('lists no weapon in more than one slot', () => {
+    const seen = new Map()
+    const twice = []
+    for (const [slot, names] of Object.entries(weaponList.fallbackWeapons)) {
+      for (const n of names) {
+        if (seen.has(n)) twice.push(`${n}: ${seen.get(n)} and ${slot}`)
+        seen.set(n, slot)
+      }
+    }
+    expect(twice).toEqual([])
+  })
+
+  it('lets Tactical take the Bolt Rifle as a Secondary as well as a Primary, and no other primary', () => {
+    expect(classes.Tactical.weapons.primary).toContain('Bolt Rifle')
+    expect(classes.Tactical.weapons.secondary).toContain('Bolt Rifle')
+    const otherPrimaries = classes.Tactical.weapons.primary.filter((n) => n !== 'Bolt Rifle')
+    for (const n of otherPrimaries) expect(classes.Tactical.weapons.secondary, n).not.toContain(n)
   })
 
   it('lists each version of a weapon once', () => {
