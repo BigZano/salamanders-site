@@ -195,6 +195,127 @@ describe('toggleWeaponPerk validIds', () => {
   })
 })
 
+describe('the same weapon in two slots', () => {
+  const SECONDARY = 'Bolt Rifle (Secondary)'
+
+  function bothSlots(planner) {
+    planner.setClass('Tactical')
+    planner.setWeapon('primary', 'Bolt Rifle')
+    planner.setWeapon('secondary', 'Bolt Rifle')
+  }
+
+  it('snapshots a perk tree for each copy under its own key', () => {
+    const planner = usePlanner()
+    bothSlots(planner)
+    planner.toggleWeaponPerk('Bolt Rifle', 'a')
+    planner.toggleWeaponPerk(SECONDARY, 'b')
+
+    expect(planner.buildSnapshot().weaponPerks).toEqual({ 'Bolt Rifle': { a: true }, [SECONDARY]: { b: true } })
+  })
+
+  it('starts the Secondary copy empty even when the Primary copy already has picks', () => {
+    const planner = usePlanner()
+    planner.setClass('Tactical')
+    planner.setWeapon('primary', 'Bolt Rifle')
+    planner.toggleWeaponPerk('Bolt Rifle', 'a')
+    planner.setWeapon('secondary', 'Bolt Rifle')
+
+    expect(planner.buildSnapshot().weaponPerks).toEqual({ 'Bolt Rifle': { a: true } })
+    expect(planner.weaponUsed(SECONDARY)).toBe(0)
+  })
+
+  it('keeps a separate budget for each copy', () => {
+    const planner = usePlanner()
+    bothSlots(planner)
+    planner.setWeaponBudget(SECONDARY, 2)
+    for (const id of ['a', 'b', 'c']) {
+      planner.toggleWeaponPerk('Bolt Rifle', id)
+      planner.toggleWeaponPerk(SECONDARY, id)
+    }
+
+    expect(planner.weaponUsed('Bolt Rifle')).toBe(3)
+    expect(planner.weaponUsed(SECONDARY)).toBe(2)
+  })
+
+  it('resets one copy without touching the other', () => {
+    const planner = usePlanner()
+    bothSlots(planner)
+    planner.toggleWeaponPerk('Bolt Rifle', 'a')
+    planner.toggleWeaponPerk(SECONDARY, 'b')
+    planner.resetWeaponTree(SECONDARY)
+
+    expect(planner.buildSnapshot().weaponPerks).toEqual({ 'Bolt Rifle': { a: true } })
+  })
+
+  it('brings back the Secondary copy picks, not the Primary ones, when the Secondary returns', () => {
+    const planner = usePlanner()
+    bothSlots(planner)
+    planner.toggleWeaponPerk('Bolt Rifle', 'a')
+    planner.toggleWeaponPerk(SECONDARY, 'b')
+
+    planner.setWeapon('secondary', 'Bolt Pistol')
+    expect(planner.buildSnapshot().weaponPerks).toEqual({ 'Bolt Rifle': { a: true } })
+
+    planner.setWeapon('secondary', 'Bolt Rifle')
+    expect(planner.buildSnapshot().weaponPerks).toEqual({ 'Bolt Rifle': { a: true }, [SECONDARY]: { b: true } })
+  })
+
+  it('round-trips both copies through a saved build', () => {
+    const source = usePlanner()
+    bothSlots(source)
+    source.toggleWeaponPerk('Bolt Rifle', 'a')
+    source.toggleWeaponPerk(SECONDARY, 'b')
+    const snap = source.buildSnapshot({ title: 'Two rifles' })
+
+    setActivePinia(createPinia())
+    const target = usePlanner()
+    target.applyBuildData({ ...snap, id: 1, author: { id: '1', username: 'x' }, createdAt: 'now' })
+
+    expect(target.activeWeapons).toEqual({ primary: 'Bolt Rifle', secondary: 'Bolt Rifle' })
+    expect(target.weaponPerks).toEqual({ 'Bolt Rifle': { a: true }, [SECONDARY]: { b: true } })
+  })
+
+  it('round-trips both copies through a share link', () => {
+    const source = usePlanner()
+    bothSlots(source)
+    source.toggleWeaponPerk('Bolt Rifle', 'a')
+    source.toggleWeaponPerk(SECONDARY, 'b')
+    const link = source.encode()
+
+    setActivePinia(createPinia())
+    const target = usePlanner()
+    target.applyEncoded(link)
+
+    expect(target.activeWeapons).toEqual({ primary: 'Bolt Rifle', secondary: 'Bolt Rifle' })
+    expect(target.weaponPerks).toEqual({ 'Bolt Rifle': { a: true }, [SECONDARY]: { b: true } })
+  })
+
+  it('keeps the plain key for a weapon in its own slot, so older links and builds still load', () => {
+    const planner = usePlanner()
+    planner.setClass('Tactical')
+    planner.setWeapon('primary', 'Bolt Rifle')
+    planner.setWeapon('secondary', 'Bolt Pistol')
+    planner.toggleWeaponPerk('Bolt Rifle', 'a')
+    planner.toggleWeaponPerk('Bolt Pistol', 'p')
+    expect(planner.buildSnapshot().weaponPerks).toEqual({ 'Bolt Rifle': { a: true }, 'Bolt Pistol': { p: true } })
+
+    const legacy = btoa(JSON.stringify({ c: 'Tactical', w: { primary: 'Bolt Rifle' }, wp: { 'Bolt Rifle': { z: true } } }))
+    setActivePinia(createPinia())
+    const loaded = usePlanner()
+    loaded.applyEncoded(legacy)
+    expect(loaded.buildSnapshot().weaponPerks).toEqual({ 'Bolt Rifle': { z: true } })
+  })
+
+  it('leaves out a slot with no weapon even if perks are parked under the empty key', () => {
+    const planner = usePlanner()
+    planner.setClass('Tactical')
+    planner.toggleWeaponPerk('', 'ghost')
+    planner.setWeapon('secondary', '')
+
+    expect(Object.keys(planner.buildSnapshot().weaponPerks)).not.toContain('')
+  })
+})
+
 describe('Patch 15.0 migration', () => {
   const KEY = 'salamanders-planner-v1'
   const encode = (payload) =>

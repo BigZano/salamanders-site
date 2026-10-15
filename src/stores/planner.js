@@ -2,6 +2,7 @@ import { defineStore } from 'pinia'
 import classes from '../data/classes.json'
 import perkDetails from '../data/perk-details.json'
 import { migrateSelection } from '../lib/patchMigration'
+import { perkStateKey } from '../lib/perkStateKey'
 
 // Wiki-baked perk text, keyed by class then perk name. See scripts/fetch-wiki-perks.mjs.
 export const detailsFor = (className) =>
@@ -224,11 +225,13 @@ export const usePlanner = defineStore('planner', {
     },
 
     // ---- shared builds gallery (server-backed — see src/lib/buildsApi.js) ----
+    // One entry per equipped slot, under the key perkStateKey gives it, so the
+    // same weapon in two slots keeps two separate trees.
     snapshotWeaponPerks() {
-      const equipped = Object.values(this.weapons[this.activeClass] || {}).filter(Boolean)
       const out = {}
-      for (const w of equipped) {
-        if (this.weaponPerks[w]) out[w] = { ...this.weaponPerks[w] }
+      for (const [slot, weapon] of Object.entries(this.weapons[this.activeClass] || {})) {
+        const key = perkStateKey(slot, weapon)
+        if (key && this.weaponPerks[key]) out[key] = { ...this.weaponPerks[key] }
       }
       return out
     },
