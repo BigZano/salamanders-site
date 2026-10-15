@@ -1,7 +1,7 @@
 # Companies and Roster merge — design
 
-Status: approved. 2026-10-14. PR 1 (the server endpoint) is merged as #5. PR 2 (the page) is built on branch
-`feat/companies-roster-page` and waits for review and merge.
+Status: shipped. 2026-10-15. PR 1 (the server endpoint, #5) and PR 2 (the page, #10) are merged and live. History points
+(rollback tags, what the reviews caught, open items): docs/handoff/2026-10-15-companies-roster-merge.md.
 
 Fold the members-only `/roster` page into the public `/companies` page. Each
 company gets a collapsed **Ranks** bar under its header. Signed-out visitors see
