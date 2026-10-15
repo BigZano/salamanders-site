@@ -4,7 +4,8 @@ import { mount } from '@vue/test-utils'
 import companies from '../data/companies.json'
 import { TEXT, contrast, over } from '../test-utils/contrast'
 import Companies from './Companies.vue'
-import source from './Companies.vue?raw'
+// the story's styles, including the scrim rule, live with the article
+import source from '../components/company/CompanyArticle.vue?raw'
 
 const render = () => mount(Companies)
 
@@ -31,6 +32,27 @@ describe('Companies', () => {
     await w.find('.c-search').setValue('zzzzzz')
     expect(w.findAll('article.company')).toHaveLength(0)
     expect(w.find('.c-empty').text()).toBe('No companies match “zzzzzz”.')
+  })
+
+  it('jumps to a company from its chip', async () => {
+    const scrolled = []
+    Element.prototype.scrollIntoView = function () { scrolled.push(this.id) }
+    const w = mount(Companies, { attachTo: document.body }) // the jump looks the article up in the document
+    await w.findAll('.c-chip')[2].trigger('click')
+    expect(scrolled).toEqual([companies[2].id])
+    w.unmount()
+  })
+
+  it('takes a visitor from any company back to the chip row, and moves focus there', async () => {
+    const scrolled = []
+    Element.prototype.scrollIntoView = function () { scrolled.push(this.id) }
+    const w = mount(Companies, { attachTo: document.body })
+    expect(w.find('nav.c-index').attributes('id')).toBe('company-index')
+    expect(w.find('nav.c-index').attributes('tabindex')).toBe('-1')
+    await w.findAll('article.company')[3].find('button.c-top').trigger('click')
+    expect(scrolled).toEqual(['company-index'])
+    expect(document.activeElement).toBe(w.find('nav.c-index').element)
+    w.unmount()
   })
 
   it('puts each text block on the readable surface', () => {
