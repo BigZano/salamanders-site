@@ -64,7 +64,7 @@ const roster = createRoster({
   ttlMs: Number(process.env.ROSTER_TTL_MS) || undefined,
 })
 const rosterRoutes = createRosterHandler({ roles, roster })
-// The same cache, served to everyone as leaders by name and everyone else as counts.
+// Public and unauthenticated: the same cache, projected to leaders by name and everyone else as counts.
 const rosterPublicRoutes = createRosterPublicHandler({ roster })
 
 // Member reports — see reports.js. Role ids default to XVIIILegion (files)

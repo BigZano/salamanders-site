@@ -17,7 +17,7 @@
 1. **Dev fixture:** the public fixture is derived at runtime in dev (`rosterFixture.js` calls `publicRoster` on the fixture roster), not written as a second JSON file by `scripts/roster-fixture.mjs`. No second committed file, so no drift test.
 2. **Public members carry a local id:** `pub-<rankKey>-<n>`, never a Discord id, so the existing `RosterMember`, `RosterRank`, `RosterBanner` need no change.
 3. **Polling stops** when the member load answers 401 or 403 (a signed-in non-Legion visitor must not hit the server every minute on a now-popular public page), and the page falls back to the public view.
-4. **Server memoization** keys on the snapshot's `roster` object; the projection function is injectable (`project`) so a test can count calls.
+4. **Server memoization** keys on the snapshot's `roster` object; the memo is tested through behaviour (a roster object edited in place keeps serving its first projection; a replaced roster object is projected again), with no injectable `project` seam.
 5. **`/roster` route name removed;** only the path redirect remains (nothing links by route name).
 
 ## Global Constraints
@@ -83,7 +83,7 @@ Failure modes the spec implies that no single task's happy path covers. Each has
 
 **Interfaces:**
 - Consumes: `publicRoster` (Task 1); a `roster` object with `current(): Promise<{ roster, fetchedAt, stale } | null>` (`server/src/roster.js`).
-- Produces: `export function createRosterPublicHandler({ roster, project = publicRoster }): (request: Request, url: URL) => Promise<Response | null>`; returns `null` for anything that is not `GET /roster/public`.
+- Produces: `export function createRosterPublicHandler({ roster }): (request: Request, url: URL) => Promise<Response | null>`; returns `null` for anything that is not `GET /roster/public`.
 
 - [ ] **Step 1: Write the failing tests** (set up like `rosterHandler.test.js`: a `setup()` returning `ask(path, method, headers)`):
   - routing: `it.each` of `/roster`, `/roster/infirmary`, `/roster/public/x`, `/roster/publics`, `/builds`, `/` return `null`; `POST`, `PUT`, `DELETE` on `/roster/public` return `null`.
@@ -91,7 +91,7 @@ Failure modes the spec implies that no single task's happy path covers. Each has
   - `passes stale through`.
   - `ignores an Authorization header`: same 200 body with a header, with a garbage header, and with none.
   - `is 503 and no-store when no roster has loaded`: body `{ error: 'The roster is not available yet. Try again.' }`.
-  - `computes the projection once per snapshot`: two requests against the same snapshot object with a counting `project`: count is 1; a new snapshot object: count is 2.
+  - `serves the memoized projection`: the roster object is edited in place between two requests (each through a fresh snapshot wrapper) and the second body equals the first; a replaced roster object is projected again.
   - `lets a thrown error from current() propagate` (`rejects.toThrow`), matching the member handler's behaviour.
 - [ ] **Step 2: Run** `$T server/src/rosterPublicHandler.test.js`. Expected: FAIL.
 - [ ] **Step 3: Implement** `createRosterPublicHandler` in `server/src/rosterPublicHandler.js`; memoize with a `WeakMap` keyed on `snap.roster`.

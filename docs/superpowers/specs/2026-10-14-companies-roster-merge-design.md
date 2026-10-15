@@ -181,12 +181,13 @@ Behaviour:
 - `GET` only. Any other method is not owned (404 JSON, as for unknown paths).
 - No `Authorization` header is read. A token, if sent, is ignored.
 - Reads `roster.current()` only. The snapshot is TTL-bounded (5 min,
-  stale-while-revalidate), so anonymous traffic cannot cause more than one Discord
-  sweep per TTL, however many requests arrive.
+  stale-while-revalidate; a failed load retries after 60 s), so anonymous traffic
+  cannot cause more than one Discord sweep at a time, or more than one per TTL (per
+  retry interval after a failure), however many requests arrive.
 - 200 with the projection. 503 `{ error }` if no roster has ever loaded.
 - `Cache-Control: public, max-age=60`. CORS through the existing `cors()` wrapper.
-- The projection is computed once per snapshot (memoized on the snapshot object),
-  not per request.
+- The projection is computed once per refresh (memoized on the snapshot's roster
+  object, which the roster module replaces on every refresh), not per request.
 
 Response (allowlist; anything not listed is dropped):
 
@@ -234,9 +235,9 @@ Route view stays thin (composition only), per `vue-best-practices`.
 above. `RosterStatus`, `RosterBanner`, `RosterLadder`, `RosterRank`, `RosterMember`
 and `RosterInfirmary` are reused as they are.
 
-The dev fixture: `scripts/roster-fixture.mjs` also writes a public fixture by calling
-the server projection on the synthetic roster, so `VITE_ROSTER_FIXTURE=1` shows both
-modes against synthetic members.
+The dev fixture: `src/lib/rosterFixture.js` derives the public fixture at runtime by
+calling the server projection on the synthetic roster, so `VITE_ROSTER_FIXTURE=1`
+shows both modes against synthetic members. No second committed JSON file.
 
 ## Privacy and security
 
@@ -283,7 +284,7 @@ wide window and a phone width.
 
 ## Delivery
 
-PR 1 (`GET /roster/public`): projection, handler, wiring, fixture script, tests,
+PR 1 (`GET /roster/public`): projection, handler, wiring, tests,
 Opus security review. Deploy to Vulkan and check with `curl` that the body has no
 ids or avatar URLs and that `/roster` still answers 401 without a token. Nothing
 user-visible changes. This spec and the plan ride along.

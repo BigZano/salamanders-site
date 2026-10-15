@@ -15,9 +15,9 @@ const SNAP = {
   stale: false,
 }
 
-function setup({ current, project } = {}) {
+function setup({ current } = {}) {
   const roster = { current: current ?? (async () => SNAP) }
-  const handle = createRosterPublicHandler({ roster, ...(project ? { project } : {}) })
+  const handle = createRosterPublicHandler({ roster })
   const ask = (path, method = 'GET', headers = {}) =>
     handle(new Request(`https://api.test${path}`, { method, headers }), new URL(`https://api.test${path}`))
   return { ask }
@@ -25,11 +25,11 @@ function setup({ current, project } = {}) {
 const body = (res) => res.json()
 
 describe('routing', () => {
-  it.each([['/roster'], ['/roster/infirmary'], ['/roster/public/x'], ['/roster/publics'], ['/builds'], ['/health'], ['/']])('does not own %s', async (path) => {
+  it.each([['/roster'], ['/roster/infirmary'], ['/roster/public/x'], ['/roster/public/'], ['/roster/publics'], ['/Roster/Public'], ['/builds'], ['/health'], ['/']])('does not own %s', async (path) => {
     expect(await setup().ask(path)).toBe(null)
   })
 
-  it.each(['POST', 'PUT', 'DELETE', 'PATCH'])('does not own %s /roster/public', async (method) => {
+  it.each(['POST', 'PUT', 'DELETE', 'PATCH', 'HEAD', 'OPTIONS'])('does not own %s /roster/public', async (method) => {
     expect(await setup().ask('/roster/public', method)).toBe(null)
   })
 })
@@ -44,12 +44,18 @@ describe('GET /roster/public', () => {
   })
 
   it('names the heads and nobody else, and carries no id or avatar', async () => {
-    const text = JSON.stringify(await body(await setup().ask('/roster/public')))
-    expect(text).toContain('Hero')
-    expect(text).toContain('Cap')
+    const out = await body(await setup().ask('/roster/public'))
+    expect(out.highCommand[0].members).toEqual([{ name: 'Hero' }])
+    expect(out.branches[0].head.members).toEqual([{ name: 'Cap' }])
+    const text = JSON.stringify(out)
     expect(text).not.toContain('Infirm')
     expect(text).not.toMatch(/\d{17,20}/)
     expect(text).not.toContain('cdn.discordapp.com')
+  })
+
+  it('ignores a query string', async () => {
+    const res = await setup().ask('/roster/public?cachebust=1')
+    expect(res.status).toBe(200)
   })
 
   it('passes stale through', async () => {
@@ -70,21 +76,22 @@ describe('GET /roster/public', () => {
     expect(await body(res)).toEqual({ error: 'The roster is not available yet. Try again.' })
   })
 
-  it('projects once per snapshot, and again for a new one', async () => {
-    let projected = 0
-    const project = (r) => {
-      projected++
-      return publicRoster(r)
-    }
-    let snap = SNAP
-    const s = setup({ current: async () => snap, project })
+  it('keeps serving the projection it made for a roster object, even through a fresh snapshot wrapper', async () => {
+    const roster = structuredClone(SNAP.roster)
+    const s = setup({ current: async () => ({ ...SNAP, roster }) }) // a new wrapper per call, as roster.js does
     const first = await body(await s.ask('/roster/public'))
-    const second = await body(await s.ask('/roster/public'))
-    expect(projected).toBe(1)
-    expect(second).toEqual(first)
-    snap = { ...SNAP, roster: { ...SNAP.roster } }
-    await s.ask('/roster/public')
-    expect(projected).toBe(2)
+    roster.branches[0].head.members[0].name = 'Renamed in place'
+    expect(await body(await s.ask('/roster/public'))).toEqual(first)
+  })
+
+  it('projects again when the roster object is replaced', async () => {
+    const replaced = structuredClone(SNAP.roster)
+    replaced.branches[0].head.members[0].name = 'Replacement'
+    let snap = SNAP
+    const s = setup({ current: async () => snap })
+    expect((await body(await s.ask('/roster/public'))).branches[0].head.members).toEqual([{ name: 'Cap' }])
+    snap = { ...SNAP, roster: replaced }
+    expect((await body(await s.ask('/roster/public'))).branches[0].head.members).toEqual([{ name: 'Replacement' }])
   })
 
   it('lets an unexpected error from the roster propagate', async () => {

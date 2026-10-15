@@ -7,23 +7,25 @@
  * Unassigned list, Servitors, the Infirmary. Spec:
  * docs/superpowers/specs/2026-10-14-companies-roster-merge-design.md.
  */
+import { rankView } from './rosterCore.js'
 
-const rankOf = ({ key, label, tier, lateral }) => ({ key, label, tier, ...(lateral ? { lateral: true } : {}) })
+// `lateral` marks a rank row on the ladder; a post (head, High Command) never carries it.
+const postRank = ({ key, label, tier }) => ({ key, label, tier })
 const nameOnly = (m) => ({ name: m.name })
-const headOf = (m) => ({ name: m.name, ...(m.acting ? { acting: true } : {}) })
+const headMember = (m) => ({ name: m.name, ...(m.acting ? { acting: true } : {}) })
 
 /** → { highCommand, branches } from a buildRoster() result. The caller adds fetchedAt and stale. */
 export function publicRoster(roster) {
   return {
-    highCommand: roster.highCommand.map((r) => ({ rank: rankOf(r.rank), members: r.members.map(nameOnly) })),
+    highCommand: roster.highCommand.map((r) => ({ rank: postRank(r.rank), members: r.members.map(nameOnly) })),
     branches: roster.branches.map((b) => ({
       key: b.key,
       kind: b.kind,
       label: b.label,
       ...(b.number !== undefined ? { number: b.number } : {}),
-      head: { rank: rankOf(b.head.rank), vacant: b.head.vacant, members: b.head.members.map(headOf) },
+      head: { rank: postRank(b.head.rank), vacant: b.head.vacant, members: b.head.members.map(headMember) },
       aside: b.aside.length,
-      rows: b.rows.map((r) => ({ rank: rankOf(r.rank), count: r.members.length })),
+      rows: b.rows.map((r) => ({ rank: rankView(r.rank), count: r.members.length })),
     })),
   }
 }

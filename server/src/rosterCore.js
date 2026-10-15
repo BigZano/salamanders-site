@@ -47,7 +47,7 @@ const byName = (a, b) => cmp(a.name.toLowerCase(), b.name.toLowerCase()) || cmp(
 
 /** A member's highest rank within `ranks`, counting a variant role as its owner's rank. */
 const heldRank = (roles, ranks) => ranks.find((r) => roles.has(r.id) || r.variants?.some((v) => roles.has(v.id)))
-const rankView = ({ key, label, tier, lateral }) => ({ key, label, tier, ...(lateral ? { lateral: true } : {}) })
+export const rankView = ({ key, label, tier, lateral }) => ({ key, label, tier, ...(lateral ? { lateral: true } : {}) })
 
 const VARIANT_OWNERS = [...COMPANY_RANKS, ...SPECIALTIES.flatMap((s) => s.ranks)]
 

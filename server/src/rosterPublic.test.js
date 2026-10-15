@@ -3,7 +3,10 @@ import { syntheticGuild } from '../../scripts/roster-fixture.mjs'
 import { buildRoster } from './rosterCore.js'
 import { publicRoster } from './rosterPublic.js'
 
-const RANK_KEYS = ['key', 'label', 'tier', 'lateral']
+const GUILD = '1322056087792521269'
+const HEAD_RANK_KEYS = ['key', 'label', 'tier']
+const ROW_RANK_KEYS = ['key', 'label', 'tier', 'lateral']
+const realRoster = () => buildRoster(syntheticGuild(), { guildId: GUILD })
 const extraKeys = (obj, allowed) => Object.keys(obj).filter((k) => !allowed.includes(k))
 
 const rank = (key, tier = 1) => ({ key, label: key.toUpperCase(), tier })
@@ -42,33 +45,79 @@ const ROSTER = {
 
 describe('publicRoster', () => {
   it('keeps only allowlisted keys at every level', () => {
-    const out = publicRoster(buildRoster(syntheticGuild(), { guildId: '1322056087792521269' }))
+    const out = publicRoster(realRoster())
     expect(extraKeys(out, ['highCommand', 'branches'])).toEqual([])
     for (const row of out.highCommand) {
       expect(extraKeys(row, ['rank', 'members'])).toEqual([])
-      expect(extraKeys(row.rank, RANK_KEYS)).toEqual([])
+      expect(extraKeys(row.rank, HEAD_RANK_KEYS)).toEqual([])
       for (const m of row.members) expect(extraKeys(m, ['name'])).toEqual([])
     }
     expect(out.branches.length).toBeGreaterThan(0)
     for (const b of out.branches) {
       expect(extraKeys(b, ['key', 'kind', 'label', 'number', 'head', 'aside', 'rows'])).toEqual([])
       expect(extraKeys(b.head, ['rank', 'vacant', 'members'])).toEqual([])
-      expect(extraKeys(b.head.rank, RANK_KEYS)).toEqual([])
+      expect(extraKeys(b.head.rank, HEAD_RANK_KEYS)).toEqual([])
       for (const m of b.head.members) expect(extraKeys(m, ['name', 'acting'])).toEqual([])
       expect(typeof b.aside).toBe('number')
       for (const r of b.rows) {
         expect(extraKeys(r, ['rank', 'count'])).toEqual([])
-        expect(extraKeys(r.rank, RANK_KEYS)).toEqual([])
+        expect(extraKeys(r.rank, ROW_RANK_KEYS)).toEqual([])
       }
     }
   })
 
   it('carries no snowflake, avatar url or flag anywhere in a real-shaped roster', () => {
-    const json = JSON.stringify(publicRoster(buildRoster(syntheticGuild(), { guildId: '1322056087792521269' })))
+    const json = JSON.stringify(publicRoster(realRoster()))
     expect(json).not.toMatch(/\d{17,20}/)
     for (const word of ['cdn.discordapp.com', 'avatar', 'nameMismatch', 'alsoCompanies', '"company":', '"bot":', '"roles":', '"id":']) {
       expect(json).not.toContain(word)
     }
+  })
+
+  it('drops a field added anywhere in the roster later, not just on members', () => {
+    const LEAK = 'LEAK'
+    const tainted = {
+      highCommand: [{ rank: { ...rank('chapter-master'), leak: LEAK }, members: [person('Hero One')], leak: LEAK }],
+      branches: [
+        {
+          key: 'company-3',
+          kind: 'company',
+          label: '3rd Battle Company',
+          number: 3,
+          leak: LEAK,
+          head: { rank: { ...rank('captain'), leak: LEAK }, members: [person('Cap A')], vacant: false, leak: LEAK },
+          aside: [],
+          rows: [{ rank: { ...rank('sergeant', 3), leak: LEAK }, members: [person('Serg 1')], leak: LEAK }],
+        },
+      ],
+      leak: LEAK,
+    }
+    expect(JSON.stringify(publicRoster(tainted))).not.toContain(LEAK)
+  })
+
+  it('keeps lateral on rank rows only, never on a head or High Command rank', () => {
+    const lateral = (key, tier) => ({ ...rank(key, tier), lateral: true })
+    const out = publicRoster({
+      highCommand: [{ rank: lateral('chapter-master', 1), members: [person('Hero One')] }],
+      branches: [
+        {
+          key: 'company-3',
+          kind: 'company',
+          label: '3rd Battle Company',
+          number: 3,
+          head: { rank: lateral('captain', 2), members: [person('Cap A')], vacant: false },
+          aside: [],
+          rows: [{ rank: lateral('terminator', 4), members: [person('Term')] }],
+        },
+      ],
+    })
+    expect(out.highCommand[0].rank).toEqual(rank('chapter-master', 1))
+    expect(out.branches[0].head.rank).toEqual(rank('captain', 2))
+    expect(out.branches[0].rows[0].rank).toEqual(lateral('terminator', 4))
+  })
+
+  it('projects an empty roster to empty lists', () => {
+    expect(publicRoster({ highCommand: [], branches: [], unassigned: { rows: [] }, servitors: [] })).toEqual({ highCommand: [], branches: [] })
   })
 
   it('names every holder of a head rank, including more than two', () => {
