@@ -80,12 +80,19 @@ export function useRosterActions({ root, view, open, infirmaryOpen, viewerId, lo
 
   const scrollNow = (id, options) => document.getElementById(id)?.scrollIntoView(options)
 
+  // The places the page holds with a placeholder while the roster arrives (the bars, High Command, the
+  // members' toolbar). Each is replaced by the real thing, which may be a different height.
+  const HELD = '.rs-ranks-loading, .rs-hc-loading, .rs-tools-loading'
+
   // High Command, the Muster and the bars are loaded in chunks of their own, after the story, so the
-  // target may not exist yet when the roster arrives: wait for it (two seconds at most), then scroll.
-  // Timers, not animation frames: a tab opened in the background never gets frames, and this is only
-  // waiting for an element to exist.
-  async function scrollWhenPresent(id) {
-    for (let tries = 0; tries < 40 && !document.getElementById(id); tries++) await new Promise((r) => setTimeout(r, 50))
+  // target may not exist yet when the roster arrives, and the places above it are still being held.
+  // Wait for the target and for every held place to go (two seconds at most), so the scroll is taken
+  // against the final layout, then scroll. Timers, not animation frames: a tab opened in the
+  // background never gets frames, and this is only waiting for elements to appear and disappear.
+  async function scrollWhenSettled(id) {
+    for (let tries = 0; tries < 40 && !(document.getElementById(id) && !document.querySelector(HELD)); tries++) {
+      await new Promise((r) => setTimeout(r, 50))
+    }
     scrollNow(id, { behavior: 'instant' })
   }
 
@@ -117,7 +124,7 @@ export function useRosterActions({ root, view, open, infirmaryOpen, viewerId, lo
       await nextTick()
       await openNow(() => open.openKey(key))
     }
-    await scrollWhenPresent(id)
+    await scrollWhenSettled(id)
   }
 
   return { findMessage, openableKeys, allOpen, toggleAll, toggleInfirmary, jumpToBranch, findMe, scrollToArticle, applyHash }
