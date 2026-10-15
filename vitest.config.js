@@ -10,6 +10,7 @@ const GATED = [
   'src/lib/archive/prune.js',
   'server/src/archiveKey.js',
   'src/lib/longPress.js',
+  'src/lib/perkStateKey.js',
   'server/src/displayNames.js',
   'server/src/rosterMember.js',
   'server/src/rosterCore.js',

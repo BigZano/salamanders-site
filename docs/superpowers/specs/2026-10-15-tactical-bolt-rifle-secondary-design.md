@@ -39,16 +39,19 @@ localStorage, share links and the live builds table, for one weapon. Instead the
 key stays the weapon name wherever the weapon is in its own slot (every case
 today) and is qualified only where a weapon sits in a slot it does not belong to.
 
-### `perkStateKey(slot, weapon)` — `src/lib/weapons.js`
+### `perkStateKey(slot, weapon)` — `src/lib/perkStateKey.js`
 
-Pure. "Native" means the weapon is in `weapons.json` `fallbackWeapons[slot]`.
+Pure. Lives in its own small file rather than `weapons.js`, which carries network
+fallbacks that cannot reach the 100% coverage gate; this file joins the gated
+lists in `vitest.config.js` and `stryker.config.mjs`. "Native" means the weapon
+is in `weapons.json` `fallbackWeapons[slot]`.
 
 | Input | Result |
 |---|---|
-| blank / missing `weapon` | `''` |
+| blank, missing or non-string `weapon` | `''` |
 | `weapon` native to `slot` | `weapon` |
 | `weapon` not native to `slot`, native to another slot | `"<weapon> (<Slot>)"`, e.g. `Bolt Rifle (Secondary)` |
-| `weapon` not in any slot list, or unknown `slot` | `weapon` (a weapon the bake does not know yet never gets a surprise key) |
+| `weapon` not in any slot list, or unknown / non-string `slot` (including prototype names like `constructor`) | `weapon` (a weapon the bake does not know yet never gets a surprise key) |
 
 `<Slot>` is the slot name with its first letter capitalised. The qualified key
 contains only characters the server's `PERK_NAME` already allows (letters,
