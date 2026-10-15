@@ -12,8 +12,22 @@ import { sceneOf } from './rosterScenes'
 export async function loadFixture() {
   if (import.meta.env.DEV && import.meta.env.VITE_ROSTER_FIXTURE) {
     const fixture = (await import('../data/roster.fixture.json')).default
+    // The server's own projection, run on the synthetic roster, so the public view can never drift from the real one.
+    const { publicRoster } = await import('../../server/src/rosterPublic.js')
     const asked = new URLSearchParams(globalThis.location?.search ?? '').get('scene') || String(import.meta.env.VITE_ROSTER_FIXTURE)
-    return sceneOf(fixture, asked)
+    const scene = sceneOf(fixture, asked)
+    return { ...scene, public: publicOf(scene, fixture, publicRoster) }
   }
   return null
+}
+
+/**
+ * What GET /roster/public would answer in this scene. `null` is the error scene (the request fails) and
+ * `undefined` the loading scene (it never answers); the signed-out and denied scenes still show the public view.
+ */
+function publicOf(scene, fixture, publicRoster) {
+  if (scene.scene === 'error') return null
+  if (scene.scene === 'loading') return undefined
+  const roster = scene.roster ?? fixture.roster
+  return { fetchedAt: roster.fetchedAt, stale: roster.stale, ...publicRoster(roster) }
 }

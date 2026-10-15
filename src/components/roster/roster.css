@@ -1,14 +1,15 @@
 /*
- * Roster page hooks. Styles live with their components (scoped, in
+ * Roster hooks (the roster now lives on the Companies page). Styles live with their components (scoped, in
  * src/components/roster/*.vue); this file lists what the tests and e2e rely on,
  * so a restyle knows what to keep.
  *
  * Class hooks
- *   page       .roster  .rs-meta  .rs-signin  .rs-find  .rs-expand-all  .rs-dev-scenes (dev only)
+ *   page       .companies  .c-note  .c-hc  .rs-meta  .rs-find  .rs-find-msg  .rs-expand-all  .rs-dev-scenes (dev only)
  *   banner     .rs-high-command
- *   branches   .rs-branches  .rs-branch  .rs-head  .rs-aside  .rs-row  .rs-body
+ *   branches   .rs-branch  .rs-embedded (under a company header)  .rs-head  .rs-aside  .rs-row  .rs-body
+ *   public     .rs-shape  .rs-shape-heads  .rs-shape-row  .rs-shape-signin  .rs-ranks-loading (the bar's placeholder)
  *   members    .rs-member  .rs-avatar  .rs-initials  .rs-name  .rs-tag  .rs-badge  .rs-warn  .rs-you  .rs-me
- *   groups     .rs-unassigned (not .rs-branch)  .rs-servitors
+ *   groups     .rs-unassigned (not .rs-branch)  .rs-servitors  #muster (members only)
  *   infirmary  .rs-infirmary-toggle  .rs-infirmary  .rs-rank
  *   state      .rs-instant (on <html> while a bulk change or jump snaps)  .rs-flash  .rs-ping
  * Attribute hooks

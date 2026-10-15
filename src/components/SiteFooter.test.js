@@ -13,7 +13,7 @@ const BASE = [
   { to: '/builds', label: 'Builds' },
   { to: '/companies', label: 'Companies' },
 ]
-const MEMBER = [...BASE, { to: '/roster', label: 'Roster', section: true }]
+const MEMBER = [...BASE, { to: '/reports', label: 'Reports', section: true }]
 const render = () => mount(SiteFooter, { global: { stubs: { RouterLink: RouterLinkStub } } })
 
 beforeEach(() => { state.links = BASE })
@@ -28,10 +28,10 @@ describe('SiteFooter', () => {
     expect(discord.attributes('rel')).toBe('noopener')
   })
 
-  it('shows Roster to a member and not to a visitor', () => {
-    expect(render().text()).not.toContain('Roster')
+  it('shows a member-only link to a member and not to a visitor', () => {
+    expect(render().text()).not.toContain('Reports')
     state.links = MEMBER
-    expect(render().text()).toContain('Roster')
+    expect(render().text()).toContain('Reports')
   })
 
   it('shows the current year in the fine print', () => {

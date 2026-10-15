@@ -19,6 +19,10 @@ vi.mock('../lib/rosterView', async (importOriginal) => {
 import * as api from '../lib/rosterApi'
 import { buildRosterView } from '../lib/rosterView'
 import { useRoster } from './roster'
+// The dev fixture loader pulls the server's public projection in on demand. Load it up front, so its
+// module-level code is not first run inside a test: mutation testing (stryker.config.mjs) would count
+// that as these tests covering it, and they do not test it.
+import '../../server/src/rosterPublic.js'
 
 const ROSTER = { fetchedAt: 'x', stale: false, viewer: { infirmary: true }, highCommand: [], branches: [], unassigned: { rows: [] }, servitors: [] }
 const INFIRMARY = { fetchedAt: 'x', stale: false, count: 1, members: [{ id: '1', name: 'A' }] }

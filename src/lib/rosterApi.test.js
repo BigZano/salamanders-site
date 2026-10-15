@@ -2,7 +2,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 
 vi.mock('./buildsApi', () => ({ request: vi.fn() }))
 import { request } from './buildsApi'
-import { getInfirmary, getRoster } from './rosterApi'
+import { getInfirmary, getPublicRoster, getRoster } from './rosterApi'
 
 beforeEach(() => vi.resetAllMocks())
 
@@ -17,6 +17,13 @@ describe('rosterApi', () => {
     request.mockResolvedValue({ members: [] })
     expect(await getInfirmary('tok')).toEqual({ members: [] })
     expect(request).toHaveBeenCalledWith('/roster/infirmary', { token: 'tok', cache: 'no-store' })
+  })
+
+  it('asks /roster/public with no token, and lets the HTTP cache serve it', async () => {
+    request.mockResolvedValue({ branches: [] })
+    expect(await getPublicRoster()).toEqual({ branches: [] })
+    expect(request).toHaveBeenCalledTimes(1)
+    expect(request).toHaveBeenCalledWith('/roster/public')
   })
 
   it('lets errors through for the store to classify', async () => {

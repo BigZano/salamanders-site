@@ -1,5 +1,5 @@
 <script setup>
-import { shallowRef, watch } from 'vue'
+import { computed, shallowRef, watch } from 'vue'
 import RosterLadder from './RosterLadder.vue'
 import RosterMember from './RosterMember.vue'
 
@@ -7,13 +7,21 @@ import RosterMember from './RosterMember.vue'
 // ladder. The body is CSS-collapsed, never v-if'd, so its text stays in the page
 // (find-in-page, tests); `inert` keeps keyboard and screen readers out while shut.
 // `variant="unassigned"` reuses it for the panel of members with no company role.
+// `variant="embedded"` is the bar under a company's own header on the Companies
+// page: the header already shows the sigil and title, so the bar is "Ranks", the
+// head and the count. The body is the `body` slot (the ladder unless the parent
+// supplies something else, as the public view does with counts).
 const props = defineProps({
   // a ViewBranch from rosterView.js (or the Unassigned object, which has no head)
   branch: { type: Object, required: true },
   open: { type: Boolean, default: false },
-  variant: { type: String, default: 'branch' },
+  variant: { type: String, default: 'branch' }, // 'branch' | 'embedded' | 'unassigned'
 })
 defineEmits(['toggle'])
+
+const embedded = computed(() => props.variant === 'embedded')
+// a real branch (own page or embedded) as against the Unassigned panel
+const ofBranch = computed(() => props.variant !== 'unassigned')
 
 // Avatars inside the body are requested the first time the branch opens, and kept
 // after: a closed body costs no image requests, and re-closing doesn't unload them.
@@ -30,20 +38,28 @@ const bodyId = `rs-body-${props.branch.key}`
 <template>
   <article
     class="rs-panel surface"
-    :class="[variant === 'branch' ? 'rs-branch' : 'rs-unassigned', { 'rs-static': !branch.openable }]"
-    :data-branch="variant === 'branch' ? branch.key : undefined"
-    :data-kind="variant === 'branch' ? branch.kind : undefined"
+    :class="[ofBranch ? 'rs-branch' : 'rs-unassigned', { 'rs-embedded': embedded, 'rs-static': !branch.openable }]"
+    :data-branch="ofBranch ? branch.key : undefined"
+    :data-kind="ofBranch ? branch.kind : undefined"
     :data-jump="branch.key"
     :data-open="open ? '' : undefined"
   >
     <div class="rs-bar">
-      <span class="rs-sigil" aria-hidden="true">{{ branch.sigil }}</span>
-      <h2 class="rs-title">
-        <button v-if="branch.openable" type="button" class="rs-bar-btn" :aria-expanded="open" :aria-controls="bodyId" @click="$emit('toggle')">
-          {{ branch.label }}
+      <span v-if="!embedded" class="rs-sigil" aria-hidden="true">{{ branch.sigil }}</span>
+      <component :is="embedded ? 'h3' : 'h2'" class="rs-title">
+        <button
+          v-if="branch.openable"
+          type="button"
+          class="rs-bar-btn"
+          :aria-expanded="open"
+          :aria-controls="bodyId"
+          :aria-label="embedded ? `${branch.label} ranks` : undefined"
+          @click="$emit('toggle')"
+        >
+          {{ embedded ? 'Ranks' : branch.label }}
         </button>
-        <template v-else>{{ branch.label }}</template>
-      </h2>
+        <template v-else>{{ embedded ? 'Ranks' : branch.label }}</template>
+      </component>
 
       <div v-if="branch.head" class="rs-head">
         <h3 class="rs-head-label">{{ branch.head.rank.label }}</h3>
@@ -69,13 +85,15 @@ const bodyId = `rs-body-${props.branch.key}`
 
     <div v-if="branch.openable" :id="bodyId" class="rs-body" :inert="open ? undefined : ''">
       <div class="rs-body-in">
-        <RosterLadder
-          :items="branch.ladder"
-          :branch="variant === 'branch' ? branch : null"
-          :image-ready="opened"
-          :spine="variant === 'branch'"
-          :with-tier="variant === 'branch'"
-        />
+        <slot name="body">
+          <RosterLadder
+            :items="branch.ladder"
+            :branch="ofBranch ? branch : null"
+            :image-ready="opened"
+            :spine="ofBranch"
+            :with-tier="ofBranch"
+          />
+        </slot>
       </div>
     </div>
   </article>
@@ -231,6 +249,24 @@ const bodyId = `rs-body-${props.branch.key}`
   color: var(--color-drake);
 }
 
+/* Embedded under a company's own header: no sigil or title column, so the bar is label, head, count.
+   The label matches the story's block headings (.block-h on the Companies page). */
+.rs-embedded .rs-bar {
+  grid-template-columns: minmax(4.5rem, auto) minmax(0, 1fr) 3.6rem;
+}
+.rs-embedded .rs-tail {
+  grid-column: 3;
+}
+.rs-embedded .rs-title {
+  font-family: var(--font-mono);
+  font-weight: 400;
+  font-size: 0.74rem;
+  letter-spacing: 0.16em;
+  color: var(--color-gold);
+  padding-left: 0.9rem;
+  border-left: 2px solid var(--color-ember);
+}
+
 /* The body collapses by grid-template-rows (0fr to 1fr), so nothing is measured in JS. */
 .rs-body {
   display: grid;
@@ -267,6 +303,12 @@ const bodyId = `rs-body-${props.branch.key}`
   .rs-tail {
     grid-column: 3;
     grid-row: 1;
+  }
+  .rs-embedded .rs-bar {
+    grid-template-columns: minmax(0, 1fr) auto;
+  }
+  .rs-embedded .rs-tail {
+    grid-column: 2;
   }
 }
 </style>

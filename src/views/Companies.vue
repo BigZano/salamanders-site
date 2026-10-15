@@ -1,42 +1,96 @@
 <script setup>
-import { ref, computed } from 'vue'
+import { ref, computed, defineAsyncComponent, onMounted, provide, useTemplateRef, watch } from 'vue'
 import companies from '../data/companies.json'
 import PageHeader from '../components/PageHeader.vue'
+import CompanyArticle from '../components/company/CompanyArticle.vue'
+import HighCommandPlaceholder from '../components/company/HighCommandPlaceholder.vue'
+import RanksPlaceholder from '../components/company/RanksPlaceholder.vue'
+import ToolsPlaceholder from '../components/company/ToolsPlaceholder.vue'
+import { useAuth } from '../stores/auth'
+import { HIGH_COMMAND_ENTRY, MUSTER_ENTRY } from '../lib/companyKeys'
+import { ROSTER_VIEWER } from '../lib/rosterContext'
+import { SCENES } from '../lib/rosterScenes'
+import { useCompanyRoster } from '../lib/useCompanyRoster'
+import { useOpenBranches } from '../lib/useOpenBranches'
+import { useRosterActions } from '../lib/useRosterActions'
+import '../components/roster/roster.css' // the hook reference for tests and e2e; holds no rules
+
+// The page is the story; the roster is the layer on top. A composition surface:
+// which roster to show is useCompanyRoster's job, what Find me and the rest do is
+// useRosterActions', how a bar looks is CompanyRanks'. The roster code (bars, ladders,
+// the member tools, their styles) loads after the story has painted, and only what the
+// visitor needs: a placeholder holds each bar's place meanwhile.
+const CompanyRanks = defineAsyncComponent({
+  loader: () => import('../components/company/CompanyRanks.vue'),
+  loadingComponent: RanksPlaceholder,
+  delay: 0,
+})
+const RosterBanner = defineAsyncComponent({
+  loader: () => import('../components/roster/RosterBanner.vue'),
+  loadingComponent: HighCommandPlaceholder,
+  delay: 0,
+})
+const RosterStatus = defineAsyncComponent({
+  loader: () => import('../components/roster/RosterStatus.vue'),
+  loadingComponent: ToolsPlaceholder,
+  delay: 0,
+})
+const RosterInfirmary = defineAsyncComponent(() => import('../components/roster/RosterInfirmary.vue'))
+const MusterSection = defineAsyncComponent(() => import('../components/company/MusterSection.vue'))
+
+const auth = useAuth()
+const open = useOpenBranches()
+const root = useTemplateRef('root')
+const infirmaryOpen = ref(false)
+const { mode, loading, view, store, note, updated, stale, start, loadInfirmary } = useCompanyRoster({ infirmaryOpen })
+const viewerId = computed(() => auth.member?.id ?? null)
+provide(ROSTER_VIEWER, viewerId)
+const { findMessage, openableKeys, allOpen, toggleAll, toggleInfirmary, jumpToBranch, findMe, scrollToArticle, applyHash } = useRosterActions({
+  root,
+  view,
+  open,
+  infirmaryOpen,
+  viewerId,
+  loadInfirmary,
+})
+// Dev only, with the fixture on: links that flip the page between its scenes.
+const devScenes = import.meta.env.DEV && import.meta.env.VITE_ROSTER_FIXTURE ? SCENES : null
+
+onMounted(() => {
+  start()
+  applyHash()
+})
+// /companies#third opens that company's bar once, the first time data arrives.
+watch(view, (now, before) => {
+  if (now && !before) applyHash()
+})
+// Losing the member roster (signing out, a refused token) leaves nothing for the Infirmary to show.
+watch(mode, (m) => {
+  if (m !== 'full') infirmaryOpen.value = false
+})
 
 const query = ref('')
 
-const filtered = computed(() => {
-  const q = query.value.trim().toLowerCase()
-  if (!q) return companies
-  return companies.filter((c) =>
-    (c.title + ' ' + c.subtitle + ' ' + (c.keywords || '')).toLowerCase().includes(q),
-  )
-})
+const matches = (c, q) => (c.title + ' ' + c.subtitle + ' ' + (c.keywords || '')).toLowerCase().includes(q)
+const q = computed(() => query.value.trim().toLowerCase())
+const filtered = computed(() => (q.value ? companies.filter((c) => matches(c, q.value)) : companies))
+// High Command is the first entry when somebody holds it and the search allows it
+const showHighCommand = computed(() => Boolean(view.value?.banner.hero) && (!q.value || matches(HIGH_COMMAND_ENTRY, q.value)))
+// The Muster is the last, for a Legion member with something in it, and not while searching companies
+const showMuster = computed(() => mode.value === 'full' && !q.value && Boolean(view.value?.unassigned || view.value?.servitors.length))
+const chips = computed(() => [...(showHighCommand.value ? [HIGH_COMMAND_ENTRY] : []), ...filtered.value, ...(showMuster.value ? [MUSTER_ENTRY] : [])])
+const branchByKey = computed(() => new Map((view.value?.branches ?? []).map((b) => [b.key, b])))
 
-// Scroll to a company. Can't use href="#id" here: the app runs on hash history,
-// so a bare fragment overwrites the route hash and navigates nowhere.
-function jumpTo(id) {
-  document.getElementById(id)?.scrollIntoView()
-}
-
-// Characters in a member's write-up (everything after the name). Sets the
-// card's share of its row (--bio), so longer bios get more width instead of
-// an ever-taller narrow column.
-function bioLength(m) {
-  return m.slice(1).join('').length
-}
-
-// Initials from first + last word of a name, for the member badge.
-function initials(name) {
-  const words = name.replace(/[",]/g, '').trim().split(/\s+/)
-  const a = words[0]?.[0] || ''
-  const b = words.length > 1 ? words[words.length - 1][0] : ''
-  return (a + b).toUpperCase()
+// "↑ Index" on a company: back to the chip row, with focus there so the next Tab is a chip.
+function backToIndex() {
+  const index = document.getElementById('company-index')
+  index?.scrollIntoView()
+  index?.focus({ preventScroll: true })
 }
 </script>
 
 <template>
-  <section class="companies">
+  <section ref="root" class="companies">
     <PageHeader
       class="c-head"
       eyebrow="The Chapter"
@@ -52,61 +106,77 @@ function initials(name) {
       />
     </PageHeader>
 
+    <nav v-if="devScenes" class="rs-dev-scenes" aria-label="Fixture scenes (dev only)">
+      <a v-for="scene in devScenes" :key="scene" :href="`?scene=${scene}`">{{ scene }}</a>
+    </nav>
+
+    <p v-if="note" class="c-note" role="status">{{ note }}</p>
+    <p v-if="store.status === 'error' && store.roster" class="c-note" role="alert">The roster could not be refreshed. Showing the last copy.</p>
+
+    <!-- A Legion member's tools: who is on the roll, Find me, Expand all, the Infirmary -->
+    <RosterStatus
+      v-if="mode === 'full' && view"
+      :summary="view.summary"
+      :updated="updated"
+      :stale="stale"
+      :openable="openableKeys.length > 0"
+      :all-open="allOpen"
+      :can-infirmary="store.roster.viewer.infirmary"
+      :infirmary-open="infirmaryOpen"
+      :message="findMessage"
+      @find="findMe"
+      @toggle-all="toggleAll"
+      @toggle-infirmary="toggleInfirmary"
+      @jump="jumpToBranch"
+    />
+    <!-- on the Legion list, so the toolbar is probably coming: hold its place -->
+    <ToolsPlaceholder v-else-if="loading && auth.member?.isMember && !infirmaryOpen" />
+
+    <RosterBanner v-if="showHighCommand && !infirmaryOpen" id="high-command" class="c-hc" :banner="view.banner" />
+    <!-- until the roster says whether anybody holds High Command, hold the panel's place -->
+    <HighCommandPlaceholder v-else-if="loading && !q && !infirmaryOpen" class="c-hc" />
+
     <!-- Company index -->
-    <nav class="c-index" aria-label="Jump to company">
+    <nav id="company-index" class="c-index" aria-label="Jump to company" tabindex="-1">
       <button
-        v-for="c in filtered"
+        v-for="c in chips"
         :key="c.id"
         type="button"
         class="c-chip"
-        @click="jumpTo(c.id)"
+        @click="scrollToArticle(c.id)"
       >
         <span class="c-chip-sigil">{{ c.sigil }}</span>
         <span>{{ c.title.replace(/ — .*/, '') }}</span>
       </button>
     </nav>
 
-    <p v-if="!filtered.length" class="c-empty">No companies match “{{ query }}”.</p>
+    <p v-if="!chips.length" class="c-empty">No companies match “{{ query }}”.</p>
 
-    <!-- Companies -->
-    <article v-for="c in filtered" :id="c.id" :key="c.id" class="company">
-      <div class="company-head">
-        <span class="sigil">{{ c.sigil }}</span>
-        <div>
-          <h2 class="company-title">{{ c.title }}</h2>
-          <p class="company-sub">{{ c.subtitle }}</p>
-        </div>
-      </div>
+    <!-- The Infirmary replaces the order of battle while it is open -->
+    <RosterInfirmary v-if="infirmaryOpen && mode === 'full'" :status="store.infirmaryStatus" :infirmary="store.infirmary" />
+    <template v-else>
+      <!-- Companies -->
+      <CompanyArticle v-for="c in filtered" :key="c.id" :company="c" @index="backToIndex">
+        <template #ranks>
+          <CompanyRanks
+            :branch="branchByKey.get(c.branch) ?? null"
+            :mode="mode"
+            :loading="loading"
+            :open="open.isOpen(c.branch)"
+            @toggle="open.toggle(c.branch)"
+            @sign-in="auth.signIn()"
+          />
+        </template>
+      </CompanyArticle>
 
-      <div class="company-body">
-        <section v-for="(s, i) in c.sections" :key="i" class="block surface">
-          <h3 class="block-h">{{ s.h }}</h3>
-
-          <template v-if="s.p">
-            <p v-for="(para, j) in s.p" :key="j" class="block-p">{{ para }}</p>
-          </template>
-
-          <ul v-if="s.list" class="block-list">
-            <li v-for="(item, j) in s.list" :key="j">{{ item }}</li>
-          </ul>
-
-          <div v-if="s.notables" class="notables" :data-count="s.notables.length">
-            <div
-              v-for="(m, j) in s.notables"
-              :key="j"
-              class="member panel-forge"
-              :style="{ '--bio': bioLength(m) }"
-            >
-              <div class="member-head">
-                <span class="avatar">{{ initials(m[0]) }}</span>
-                <p class="member-name">{{ m[0] }}</p>
-              </div>
-              <p v-for="(line, k) in m.slice(1)" :key="k" class="member-blurb">{{ line }}</p>
-            </div>
-          </div>
-        </section>
-      </div>
-    </article>
+      <MusterSection
+        v-if="showMuster"
+        :unassigned="view.unassigned"
+        :servitors="view.servitors"
+        :open="open.isOpen('unassigned')"
+        @toggle="open.toggle('unassigned')"
+      />
+    </template>
   </section>
 </template>
 
@@ -133,6 +203,29 @@ function initials(name) {
 .c-search::placeholder {
   color: #5f6f66;
 }
+.rs-dev-scenes {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem 0.9rem;
+  margin: 0 0 1rem;
+  font-family: var(--font-mono);
+  font-size: 0.72rem;
+  color: var(--color-smoke);
+}
+.rs-dev-scenes a:hover {
+  color: var(--color-drake);
+}
+
+.c-note {
+  margin: 0 0 1.4rem;
+  font-family: var(--font-mono);
+  font-size: 0.78rem;
+  color: var(--color-averland);
+}
+.c-hc {
+  margin: 2rem 0; /* the same for the panel and for the placeholder that holds its place; scrolled to like a company */
+  scroll-margin-top: 5rem;
+}
 
 .c-index {
   display: flex;
@@ -141,6 +234,9 @@ function initials(name) {
   margin-bottom: 3rem;
   padding-bottom: 1.5rem;
   border-bottom: 1px solid var(--color-ash);
+}
+.c-index:focus {
+  outline: none; /* focus lands here from "↑ Index"; the chips carry the visible focus */
 }
 .c-chip {
   display: inline-flex;
@@ -151,7 +247,8 @@ function initials(name) {
   border-radius: 999px;
   font-size: 0.8rem;
   color: var(--color-smoke);
-  background: transparent;
+  /* the chips sit low enough now (High Command above them) to cross the lava glow; a dark backing keeps the text readable */
+  background: rgba(5, 10, 8, 0.6);
   font-family: inherit;
   cursor: pointer;
   transition: border-color 0.15s ease, color 0.15s ease;
@@ -174,167 +271,6 @@ function initials(name) {
   background: rgba(223, 184, 91, 0.1);
   border-radius: 999px;
 }
-
-.company {
-  scroll-margin-top: 5rem;
-  margin-bottom: 3.5rem;
-}
-.company-head {
-  display: flex;
-  align-items: center;
-  gap: 1rem;
-  margin-bottom: 1.4rem;
-}
-.sigil {
-  flex: none;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 3.2rem;
-  height: 3.2rem;
-  font-family: var(--font-display);
-  font-weight: 700;
-  font-size: 1.3rem;
-  color: var(--color-gold);
-  background: linear-gradient(180deg, rgba(223, 184, 91, 0.14), rgba(223, 184, 91, 0.03));
-  border: 1px solid rgba(223, 184, 91, 0.35);
-  clip-path: polygon(15% 0, 85% 0, 100% 50%, 85% 100%, 15% 100%, 0 50%);
-}
-.company-title {
-  font-family: var(--font-display);
-  text-transform: uppercase;
-  font-weight: 700;
-  font-size: clamp(1.4rem, 4vw, 2rem);
-  letter-spacing: 0.01em;
-  color: var(--color-bone);
-  line-height: 1.05;
-}
-.company-sub {
-  color: var(--color-drake);
-  font-size: 0.92rem;
-  margin-top: 0.3rem;
-}
-
-.block {
-  margin: 0 0 1.6rem;
-}
-/* Text over the volcano. On phones each block sits on the shared .surface (padding
-   here, the panel itself from style.css). On wide screens the text is a left column
-   with the mountain in the empty right half, so a scrim that fades out to the right
-   does the same job without boxing the page: it holds 4.5:1 against the brightest
-   lava across the whole text width (Companies.test.js checks the numbers). */
-@media (max-width: 760px) {
-  .block {
-    padding: 1rem 1.1rem;
-    border-radius: 3px;
-  }
-}
-@media (min-width: 761px) {
-  /* padding, not margin, between blocks: the scrim then runs unbroken down the company
-     instead of leaving bright stripes across the mountain between blocks */
-  .block.surface {
-    margin: 0;
-    padding: 0.8rem 0;
-    border: 0;
-    backdrop-filter: none;
-    background: linear-gradient(90deg, rgba(5, 10, 8, 0.8) 0%, rgba(5, 10, 8, 0.7) 62%, transparent 100%);
-  }
-}
-.block-h {
-  font-family: var(--font-mono);
-  text-transform: uppercase;
-  letter-spacing: 0.16em;
-  font-size: 0.74rem;
-  color: var(--color-gold);
-  margin-bottom: 0.6rem;
-  padding-left: 0.9rem;
-  border-left: 2px solid var(--color-ember);
-}
-.block-p {
-  color: #c3d0c6;
-  line-height: 1.65;
-  margin-bottom: 0.7rem;
-  max-width: 62ch;
-}
-.block-list {
-  list-style: none;
-  padding: 0;
-  margin: 0;
-  max-width: 62ch;
-}
-.block-list li {
-  position: relative;
-  padding-left: 1.3rem;
-  margin-bottom: 0.5rem;
-  color: #c3d0c6;
-  line-height: 1.55;
-}
-.block-list li::before {
-  content: '';
-  position: absolute;
-  left: 0;
-  top: 0.55em;
-  width: 7px;
-  height: 7px;
-  transform: rotate(45deg);
-  background: var(--color-ember);
-}
-
-/* Cards size to their bios: each takes a share of its row proportional to its
-   text length (--bio, see bioLength), never narrower than --member-min. Rows
-   wrap on their own, so phones get a single column with no media query.
-   Groups of 4+ use a wider minimum so they land 2x2 instead of 3 + 1 orphan. */
-.notables {
-  --member-min: 17rem;
-  display: flex;
-  flex-wrap: wrap;
-  align-items: flex-start;
-  gap: 0.9rem;
-  margin-top: 0.4rem;
-}
-.notables:not([data-count='1']):not([data-count='2']):not([data-count='3']) {
-  --member-min: 22rem;
-}
-.member {
-  flex: var(--bio, 300) 1 0;
-  min-width: min(var(--member-min), 100%);
-  display: flex;
-  flex-direction: column;
-  gap: 0.6rem;
-  padding: 1.15rem 1.25rem;
-  border-radius: 4px;
-}
-.member-head {
-  display: flex;
-  align-items: center;
-  gap: 0.75rem;
-}
-.avatar {
-  flex: none;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 2.4rem;
-  height: 2.4rem;
-  border-radius: 50%;
-  font-family: var(--font-display);
-  font-weight: 700;
-  font-size: 0.9rem;
-  color: #1a0d06;
-  background: linear-gradient(180deg, #ffb066, #ff6a2b);
-}
-.member-name {
-  font-weight: 600;
-  color: var(--color-bone);
-  font-size: 0.95rem;
-  line-height: 1.3;
-}
-.member-blurb {
-  color: var(--color-smoke);
-  font-size: 0.9rem;
-  line-height: 1.6;
-  max-width: 65ch;
-}
 .c-empty {
   color: var(--color-smoke);
   padding: 2rem 0;
@@ -343,11 +279,6 @@ function initials(name) {
 @media (max-width: 600px) {
   .companies {
     padding-top: 3rem;
-  }
-  .sigil {
-    width: 2.6rem;
-    height: 2.6rem;
-    font-size: 1.1rem;
   }
 }
 </style>
