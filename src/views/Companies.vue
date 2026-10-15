@@ -232,7 +232,8 @@ function backToIndex() {
   border-radius: 999px;
   font-size: 0.8rem;
   color: var(--color-smoke);
-  background: transparent;
+  /* the chips sit low enough now (High Command above them) to cross the lava glow; a dark backing keeps the text readable */
+  background: rgba(5, 10, 8, 0.6);
   font-family: inherit;
   cursor: pointer;
   transition: border-color 0.15s ease, color 0.15s ease;

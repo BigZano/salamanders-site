@@ -1,7 +1,7 @@
 # Companies and Roster merge — design
 
-Status: draft for Bret's review. 2026-10-14. Branch `feat/companies-roster-merge`
-(from `origin/main` at `21c2563`). Nothing under `src/` or `server/` has changed yet.
+Status: approved. 2026-10-14. PR 1 (the server endpoint) is merged as #5. PR 2 (the page) is built on branch
+`feat/companies-roster-page` and waits for review and merge.
 
 Fold the members-only `/roster` page into the public `/companies` page. Each
 company gets a collapsed **Ranks** bar under its header. Signed-out visitors see
@@ -76,8 +76,8 @@ lacks the Legion role gets the public view; High Command has no story text.
 ```
 PageHeader   eyebrow The Chapter · Companies & Sections · lede · search
 [members]    status line · [Find me] [Expand all] ...... [Infirmary*]
-chip row     HC · 1st ... 7th · Dreadnoughts · Apothecarion · Librarius · Armoury · Reclusiam · [Muster]
 HIGH COMMAND panel (banner: hero + court)
+chip row     HC · 1st ... 7th · Dreadnoughts · Apothecarion · Librarius · Armoury · Reclusiam · [Muster]
 for each company:
   header     sigil · title · subtitle           ↑ Index
   RANKS bar  ▸ Ranks · head chips · count · chevron

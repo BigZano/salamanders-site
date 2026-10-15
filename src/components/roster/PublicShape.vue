@@ -50,10 +50,10 @@ const styleOf = (item) => ({ '--h': item.heat.h, '--hp': item.heat.hp, '--hn': i
 .rs-shape-heads {
   margin-bottom: 0.7rem;
 }
+/* columns, not a grid: the ranks read down each column in ladder order, then on to the next */
 .rs-shape-rows {
-  display: grid;
-  gap: 0.2rem 2.4rem;
-  grid-template-columns: repeat(auto-fill, minmax(15rem, 1fr));
+  columns: 3 14rem;
+  column-gap: 2.4rem;
   margin: 0;
   padding: 0;
   list-style: none;
@@ -63,6 +63,7 @@ const styleOf = (item) => ({ '--h': item.heat.h, '--hp': item.heat.hp, '--hn': i
   align-items: baseline;
   gap: 0.6rem;
   padding: 0.3rem 0;
+  break-inside: avoid;
 }
 /* a lit diamond in the rank's place on the heat ramp, the ladder's colour without its spine */
 .rs-shape-node {
