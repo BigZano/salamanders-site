@@ -2,8 +2,11 @@
  * GET /roster and GET /roster/infirmary. The caller's identity and roles are
  * checked live against Discord on every request (discordRoles.js), and every
  * uncertain path fails closed. A caller who is refused never reaches the
- * roster cache, so nobody can trigger a Discord refresh without being a
- * Legion member. Responses are never cached.
+ * roster cache here. The public route (rosterPublicHandler.js) reads the same
+ * cache without signing in; the cache runs one sweep at a time, at most one
+ * per TTL (per retry interval after a failed load), however many callers ask,
+ * so that adds no Discord load beyond what the members' page already causes.
+ * Responses are never cached.
  */
 import { Upstream } from './discordRoles.js'
 import { commandTier } from './rosterCore.js'

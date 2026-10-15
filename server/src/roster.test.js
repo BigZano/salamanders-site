@@ -146,6 +146,20 @@ describe('createRoster', () => {
     expect(scoutNames(await roster.current())).toEqual(['Alpha'])
   })
 
+  it('replaces the roster object wholesale on a refresh and never edits the one it handed out', async () => {
+    const d = discord([scout(A, 'Alpha')], [scout(A, 'Alpha'), scout(B, 'Beta')])
+    const { roster, c } = make(d)
+    const before = (await roster.current()).roster
+    const frozen = structuredClone(before)
+    c.t += 300_000
+    await roster.current()
+    await tick()
+    const after = (await roster.current()).roster
+    expect(after).not.toBe(before)
+    expect(scoutNames({ roster: after })).toEqual(['Alpha', 'Beta'])
+    expect(before).toEqual(frozen)
+  })
+
   it('keeps the last good roster when a refresh fails, and retries after retryMs', async () => {
     const d = discord([scout(A, 'Alpha')], { status: 500, body: {} }, [scout(A, 'Alpha'), scout(B, 'Beta')])
     const { roster, c } = make(d, { retryMs: 60_000 })

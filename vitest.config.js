@@ -15,6 +15,8 @@ const GATED = [
   'server/src/rosterCore.js',
   'server/src/roster.js',
   'server/src/rosterHandler.js',
+  'server/src/rosterPublic.js',
+  'server/src/rosterPublicHandler.js',
 ]
 
 export default defineConfig({

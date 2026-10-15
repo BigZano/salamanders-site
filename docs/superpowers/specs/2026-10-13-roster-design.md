@@ -68,6 +68,11 @@ Sign-in verification reuses `createDiscordRoles` (`identify`, `rolesOf`) and
 - `/roster` includes `viewer.infirmary: boolean` so the page knows whether to
   offer the Infirmary tab. The server re-checks on `/roster/infirmary`; the
   flag controls only what the UI offers.
+- `GET /roster/public` (added 2026-10-14, see
+  `2026-10-14-companies-roster-merge-design.md`): the one route here that needs no
+  sign-in. It serves a small allowlisted projection of the same snapshot: heads and
+  High Command by name, every other rank as a count, and no ids, avatars, role ids,
+  Unassigned, Servitors or Infirmary. The full roster above stays Legion-only.
 - Members without the Legion role are never on the main roster, whatever other roles
   they hold (the Infirmary list is separate). Known data issue: some Battle-Brother holders lack the Legion
   role. They are excluded by this rule until the role is granted.
