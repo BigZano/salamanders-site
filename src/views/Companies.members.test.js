@@ -131,6 +131,36 @@ describe('Companies: the order of battle for a Legion member', () => {
   })
 })
 
+describe('Companies: holding places while the roster arrives', () => {
+  it('holds the toolbar’s place for a signed-in member, above High Command, then swaps in the real one', async () => {
+    const w = mount(Companies, { attachTo: document.body })
+    mounted.push(w)
+    expect(w.findAll('.rs-tools-loading')).toHaveLength(1)
+    expect(w.find('.rs-status').exists()).toBe(false)
+    const before = (a, b) => Boolean(a.element.compareDocumentPosition(b.element) & Node.DOCUMENT_POSITION_FOLLOWING)
+    expect(before(w.find('.rs-tools-loading'), w.find('.rs-hc-loading'))).toBe(true)
+    await settle(w)
+    expect(w.findAll('.rs-tools-loading')).toHaveLength(0)
+    expect(w.find('.rs-status').exists()).toBe(true)
+  })
+
+  it('leaves nothing behind when the account turns out not to be in the Legion', async () => {
+    api.getRoster.mockRejectedValue(apiError(403, 'The roster is open to the XVIIIth Legion.'))
+    const w = await render({ member: false })
+    expect(w.find('.rs-tools-loading').exists()).toBe(false)
+    expect(w.find('.rs-hc-loading').exists()).toBe(false)
+    expect(w.find('.rs-status').exists()).toBe(false)
+  })
+
+  it('holds no toolbar place for a visitor who has not signed in', async () => {
+    auth = signedOut()
+    const w = mount(Companies, { attachTo: document.body })
+    mounted.push(w)
+    expect(w.find('.rs-tools-loading').exists()).toBe(false)
+    await settle(w, { member: false })
+  })
+})
+
 describe('Companies: the Infirmary', () => {
   it('shows the button to command only', async () => {
     expect((await render()).find('button.rs-infirmary-toggle').exists()).toBe(true)

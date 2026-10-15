@@ -148,6 +148,7 @@ describe('Companies with the roster: everyone else', () => {
     expect(w.findAll('.rs-branch')).toHaveLength(0)
     expect(w.find('.rs-high-command').exists()).toBe(false)
     expect(w.find('.rs-ranks-loading').exists()).toBe(false)
+    expect(w.find('.rs-hc-loading').exists()).toBe(false) // no roster, so no place held for it either
     expect(w.find('.c-note').exists()).toBe(false)
     expect(error).not.toHaveBeenCalled()
     error.mockRestore()
@@ -161,6 +162,26 @@ describe('Companies with the roster: everyone else', () => {
     await settle(w)
     expect(w.findAll('.rs-ranks-loading')).toHaveLength(0)
     expect(w.findAll('.rs-branch')).toHaveLength(12)
+  })
+
+  it('holds High Command’s place too, above the chips, so nothing below it jumps when it arrives', async () => {
+    const w = mount(Companies)
+    mounted.push(w)
+    expect(w.findAll('.rs-hc-loading')).toHaveLength(1)
+    expect(w.find('.rs-high-command').exists()).toBe(false)
+    expect(follows(w.find('.rs-hc-loading'), w.find('nav.c-index'))).toBe(true)
+    await settle(w)
+    await vi.waitFor(() => expect(w.find('.rs-high-command').exists()).toBe(true))
+    expect(w.findAll('.rs-hc-loading')).toHaveLength(0)
+    expect(w.findAll('.rs-high-command')).toHaveLength(1)
+  })
+
+  it('does not hold a place for High Command while a search is narrowing the page', async () => {
+    const w = mount(Companies)
+    mounted.push(w)
+    await w.find('.c-search').setValue('forge')
+    expect(w.find('.rs-hc-loading').exists()).toBe(false)
+    await settle(w)
   })
 })
 

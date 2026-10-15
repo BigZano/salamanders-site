@@ -2,6 +2,9 @@
 // Holds a Ranks bar's place, at about the height of a collapsed one, while the
 // roster code and data arrive, so the story under it does not jump when the bar
 // appears. Decorative: nothing to read, so it is hidden from assistive tech.
+// It stands in for the bar (and for its props) as an async component's loading
+// state, so it takes nothing from the caller.
+defineOptions({ inheritAttrs: false })
 </script>
 
 <template>

@@ -3,7 +3,9 @@ import { ref, computed, defineAsyncComponent, onMounted, provide, useTemplateRef
 import companies from '../data/companies.json'
 import PageHeader from '../components/PageHeader.vue'
 import CompanyArticle from '../components/company/CompanyArticle.vue'
+import HighCommandPlaceholder from '../components/company/HighCommandPlaceholder.vue'
 import RanksPlaceholder from '../components/company/RanksPlaceholder.vue'
+import ToolsPlaceholder from '../components/company/ToolsPlaceholder.vue'
 import { useAuth } from '../stores/auth'
 import { HIGH_COMMAND_ENTRY, MUSTER_ENTRY } from '../lib/companyKeys'
 import { ROSTER_VIEWER } from '../lib/rosterContext'
@@ -22,8 +24,16 @@ const CompanyRanks = defineAsyncComponent({
   loadingComponent: RanksPlaceholder,
   delay: 0,
 })
-const RosterBanner = defineAsyncComponent(() => import('../components/roster/RosterBanner.vue'))
-const RosterStatus = defineAsyncComponent(() => import('../components/roster/RosterStatus.vue'))
+const RosterBanner = defineAsyncComponent({
+  loader: () => import('../components/roster/RosterBanner.vue'),
+  loadingComponent: HighCommandPlaceholder,
+  delay: 0,
+})
+const RosterStatus = defineAsyncComponent({
+  loader: () => import('../components/roster/RosterStatus.vue'),
+  loadingComponent: ToolsPlaceholder,
+  delay: 0,
+})
 const RosterInfirmary = defineAsyncComponent(() => import('../components/roster/RosterInfirmary.vue'))
 const MusterSection = defineAsyncComponent(() => import('../components/company/MusterSection.vue'))
 
@@ -118,8 +128,12 @@ function backToIndex() {
       @toggle-infirmary="toggleInfirmary"
       @jump="jumpToBranch"
     />
+    <!-- signed in, so the toolbar is probably coming: hold its place -->
+    <ToolsPlaceholder v-else-if="loading && auth.member && !infirmaryOpen" />
 
     <RosterBanner v-if="showHighCommand && !infirmaryOpen" id="high-command" class="c-hc" :banner="view.banner" />
+    <!-- until the roster says whether anybody holds High Command, hold the panel's place -->
+    <HighCommandPlaceholder v-else-if="loading && !q && !infirmaryOpen" class="c-hc" />
 
     <!-- Company index -->
     <nav id="company-index" class="c-index" aria-label="Jump to company" tabindex="-1">
@@ -208,7 +222,7 @@ function backToIndex() {
   color: var(--color-averland);
 }
 .c-hc {
-  margin: 0 0 2rem; /* the panel sits above the chips, scrolled to like a company */
+  margin: 2rem 0; /* the same for the panel and for the placeholder that holds its place; scrolled to like a company */
   scroll-margin-top: 5rem;
 }
 
