@@ -1,0 +1,38 @@
+{
+  "patch": "15.0",
+  "date": "2026-10-01",
+  "classes": {
+    "Tactical": {
+      "grid": [
+        {
+          "level": 6,
+          "name": "Improved Efficiency",
+          "description": "Auspex Scan recharges 25% faster",
+          "sources": ["Patch Notes 15.0 (Focus)", "Neonsect Tactical guide", "sealed.build game data for Hotfix 15.1 (third party)"]
+        }
+      ],
+      "prestige": [
+        {
+          "replaces": "Exigency Charge",
+          "name": "Passive Chambering",
+          "description": "Any unequipped Ranged Weapon reloads automatically after 10 seconds",
+          "sources": ["Patch Notes 15.0 (Focus)", "Neonsect Tactical guide", "sealed.build game data for Hotfix 15.1 (third party)"]
+        }
+      ],
+      "starting": {
+        "text": "Bolt Weapons now penetrate 1 additional enemy and Bolter Weapons get +20% Non Head Shot Damage",
+        "sources": ["Patch Notes 15.0 (Focus)", "Neonsect Tactical guide"]
+      }
+    },
+    "Heavy": {
+      "prestige": [
+        {
+          "replaces": "Restorative Capacity",
+          "name": "Honed Precision",
+          "description": "Equipped Weapon's Maximum Spread decreases by 25% when firing without aiming.",
+          "sources": ["sealed.build game data for Hotfix 15.1 (third party): lists Honed Precision (Prestige 2) and no Restorative Capacity"]
+        }
+      ]
+    }
+  }
+}

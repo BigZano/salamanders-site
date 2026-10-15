@@ -1,5 +1,5 @@
 {
-  "fetched": "2026-09-27T23:27:42.567Z",
+  "fetched": "2026-10-14T23:14:41.557Z",
   "weapons": {
     "Auto Bolt Rifle": {
       "perks": [
@@ -21,7 +21,7 @@
         {
           "name": "Fast Reload",
           "quality": "Master-Crafted",
-          "description": "Reload all Weapons 10% faster"
+          "description": "This Weapon reloads 10% faster"
         },
         {
           "name": "Perpetual Penetration",
@@ -36,7 +36,7 @@
         {
           "name": "Elite Hunter",
           "quality": "Artificer",
-          "description": "After killing a Majoris-level or higher enemy with a Melee Weapon, Headshots deal 50% more Damage for 10 seconds"
+          "description": "After killing a Majoris-level or higher enemy with a Melee Weapon, Headshots deal 25% more Damage for 10 seconds"
         },
         {
           "name": "Divine Might",
@@ -51,17 +51,17 @@
         {
           "name": "Rapid Health",
           "quality": "Relic",
-          "description": "When your Health is below 30%, killing 7 enemies in rapid succession restores Health by 10%. Cooldown is 0 seconds."
+          "description": "When your Health is below 30%, killing 7 enemies in rapid succession restores Health by 10%"
         },
         {
           "name": "Recoupment",
           "quality": "Relic",
-          "description": "Killing a Majoris-level or higher enemy with a headshot with this weapon restores 1 Armour Segment. Cooldown is 15 seconds"
+          "description": "Killing a Majoris-level or higher enemy with a Headshot with this Weapon restores 1 Armour Segment. Cooldown is 15 seconds."
         },
         {
           "name": "Rampage",
           "quality": "Relic",
-          "description": "After killing 7 enemies in rapid succession, you deal 25% more Damage for 10 seconds. Cooldown is 15 seconds."
+          "description": "After killing 7 enemies in rapid succession, deal 25% more Damage for 10 seconds. Cooldown is 15 seconds."
         },
         {
           "name": "Increased Capacity",
@@ -69,7 +69,7 @@
           "description": "The maximum Ammo Reserve of this Weapon increases by 20%"
         }
       ],
-      "budget": 7,
+      "budget": 8,
       "intro": [
         "Fully automatic, close-range rifle",
         "Bolters are a category of weapons that use an initial propellant charge to fire a rocket-propelled projectile. The most common ammunition type is the Standard Bolt, being a lightly armor penetrating delayed explosive .75cal/19mm projectile. Upon embedding itself in the target it will detonate, blowing its target to pieces and potentially causing collateral to close-proximity targets."
@@ -317,6 +317,40 @@
             "Magazine Capacity": "45",
             "Ammo Reserve": "270"
           }
+        },
+        {
+          "quality": "Heroic",
+          "name": "Iron Hands",
+          "gauges": {
+            "Firepower": {
+              "value": 8,
+              "raw": "8"
+            },
+            "Accuracy": {
+              "value": 5,
+              "raw": "5"
+            },
+            "Rate of Fire": {
+              "value": 9,
+              "raw": "9"
+            },
+            "Reloading Speed": {
+              "value": 5,
+              "raw": "5"
+            },
+            "Piercing": {
+              "value": 2,
+              "raw": "2"
+            },
+            "Range": {
+              "value": 5,
+              "raw": "5"
+            }
+          },
+          "figures": {
+            "Magazine Capacity": "50",
+            "Ammo Reserve": "300"
+          }
         }
       ]
     },
@@ -335,17 +369,17 @@
         {
           "name": "Adamant Hunter",
           "quality": "Master-Crafted",
-          "description": "When your Health is below 30%, Headshots deal 25% more damage"
+          "description": "When your Health is below 30%, Headshots deal 25% more Damage"
         },
         {
           "name": "Fast Reload",
           "quality": "Master-Crafted",
-          "description": "Reload all Weapons 10% faster"
+          "description": "This Weapon reloads 10% faster"
         },
         {
           "name": "Magazine Restoration",
           "quality": "Master-Crafted",
-          "description": "When your Health drops below 30%, your Ammo Reserve is restored by a full Magazine. Cannot exceed maximum Ammo capacity. Cooldown is 30 seconds."
+          "description": "When your Health drops below 30%, your Ammo Reserve is restored by a full magazine. Cannot exceed maximum Ammo capacity. Cooldown is 30 seconds."
         },
         {
           "name": "Perpetual Precision",
@@ -365,7 +399,7 @@
         {
           "name": "Recoupment",
           "quality": "Artificer",
-          "description": "Killing a Majoris-level or higher enemy with a headshot with this weapon restores 1 Armour Segment. Cooldown is 15 seconds"
+          "description": "Killing a Majoris-level or higher enemy with a Headshot with this Weapon restores 1 Armour Segment. Cooldown is 15 seconds."
         },
         {
           "name": "Adamantine Grip",
@@ -375,7 +409,7 @@
         {
           "name": "Able Precision",
           "quality": "Artificer",
-          "description": "After using a Class Ability, Maximum Spread decreases by 25% for 5 seconds"
+          "description": "After using a Class Ability, Maximum Spread decreases by 25% for 10 seconds"
         },
         {
           "name": "Great Might",
@@ -400,7 +434,7 @@
         {
           "name": "Rapid Health",
           "quality": "Relic",
-          "description": "When your Health is below 30%, killing 7 enemies in rapid succession restores Health by 10%. Cooldown is 0 seconds."
+          "description": "When your Health is below 30%, killing 7 enemies in rapid succession restores Health by 10%"
         },
         {
           "name": "Head Hunter",
@@ -415,7 +449,7 @@
         {
           "name": "Rampage",
           "quality": "Relic",
-          "description": "After killing 7 enemies in rapid succession, you deal 25% more Damage for 10 seconds. Cooldown is 15 seconds."
+          "description": "After killing 7 enemies in rapid succession, deal 25% more Damage for 10 seconds. Cooldown is 15 seconds."
         },
         {
           "name": "Extended Magazine",
@@ -874,17 +908,17 @@
         {
           "name": "Adamant Hunter",
           "quality": "Master-Crafted",
-          "description": "When your Health is below 30%, Headshots deal 25% more damage"
+          "description": "When your Health is below 30%, Headshots deal 25% more Damage"
         },
         {
           "name": "Fast Reload",
           "quality": "Master-Crafted",
-          "description": "Reload all Weapons 10% faster"
+          "description": "This Weapon reloads 10% faster"
         },
         {
           "name": "Magazine Restoration",
           "quality": "Master-Crafted",
-          "description": "When your Health drops below 30%, your Ammo Reserve is restored by a full Magazine. Cannot exceed maximum Ammo capacity. Cooldown is 30 seconds."
+          "description": "When your Health drops below 30%, your Ammo Reserve is restored by a full magazine. Cannot exceed maximum Ammo capacity. Cooldown is 30 seconds."
         },
         {
           "name": "Cleaving Fire",
@@ -894,7 +928,7 @@
         {
           "name": "Tactical Precision",
           "quality": "Artificer",
-          "description": "Headshots deal 30% more Damage. Ranged Damage decreases by 10%"
+          "description": "Headshots deal 20% more Damage. Non-Headshot Damage decreases by 10%."
         },
         {
           "name": "Able Reload",
@@ -909,12 +943,12 @@
         {
           "name": "Recoupment",
           "quality": "Artificer",
-          "description": "Killing a Majoris-level or higher enemy with a headshot with this weapon restores 1 Armour Segment. Cooldown is 15 seconds"
+          "description": "Killing a Majoris-level or higher enemy with a Headshot with this Weapon restores 1 Armour Segment. Cooldown is 15 seconds."
         },
         {
           "name": "Able Precision",
           "quality": "Artificer",
-          "description": "After using a Class Ability, Maximum Spread decreases by 25% for 5 seconds"
+          "description": "After using a Class Ability, Maximum Spread decreases by 25% for 10 seconds"
         },
         {
           "name": "Great Might",
@@ -939,7 +973,7 @@
         {
           "name": "Rapid Health",
           "quality": "Relic",
-          "description": "When your Health is below 30%, killing 7 enemies in rapid succession restores Health by 10%. Cooldown is 0 seconds."
+          "description": "When your Health is below 30%, killing 7 enemies in rapid succession restores Health by 10%"
         },
         {
           "name": "Perpetual Penetration",
@@ -954,7 +988,7 @@
         {
           "name": "Rampage",
           "quality": "Relic",
-          "description": "After killing 7 enemies in rapid succession, you deal 25% more Damage for 10 seconds. Cooldown is 15 seconds."
+          "description": "After killing 7 enemies in rapid succession, deal 25% more Damage for 10 seconds. Cooldown is 15 seconds."
         },
         {
           "name": "Extended Magazine",
@@ -964,7 +998,7 @@
         {
           "name": "Remote Threat",
           "quality": "Relic",
-          "description": "Enemies at a a distance of more than 25 metres take 20% more Damage"
+          "description": "Enemies at a distance of more than 25 metres take 20% more Damage"
         },
         {
           "name": "Honed Precision",
@@ -1403,7 +1437,7 @@
         {
           "name": "Unwavering Resolve",
           "quality": "Standard",
-          "description": "After reloading while having Low Ammo, damage increases by 25% more Damage for 5 seconds"
+          "description": "After reloading while having Low Ammo, Damage increases by 25% for 5 seconds"
         },
         {
           "name": "Long Shot",
@@ -1413,7 +1447,7 @@
         {
           "name": "Adamant Hunter",
           "quality": "Master-Crafted",
-          "description": "When your Health is below 30%, Headshots deal 25% more damage"
+          "description": "When your Health is below 30%, Headshots deal 25% more Damage"
         },
         {
           "name": "Head Hunter",
@@ -1458,12 +1492,12 @@
         {
           "name": "Fast Reload",
           "quality": "Relic",
-          "description": "Reload all Weapons 10% faster"
+          "description": "This Weapon reloads 10% faster"
         },
         {
           "name": "Recoupment",
           "quality": "Relic",
-          "description": "Killing a Majoris-level or higher enemy with a headshot with this weapon restores 1 Armour Segment. Cooldown is 15 seconds"
+          "description": "Killing a Majoris-level or higher enemy with a Headshot with this Weapon restores 1 Armour Segment. Cooldown is 15 seconds."
         },
         {
           "name": "Reloaded Restoration",
@@ -1478,12 +1512,12 @@
         {
           "name": "Remote Threat",
           "quality": "Relic",
-          "description": "Enemies at a a distance of more than 25 metres take 20% more Damage"
+          "description": "Enemies at a distance of more than 25 metres take 20% more Damage"
         },
         {
           "name": "Reconnaissance by Fire",
           "quality": "Heroic",
-          "description": "Landing 4 successful body shots in short succession creates a small Auspex Scan area. Cooldown is 8 seconds."
+          "description": "Landing 3 successful body shots in short succession creates a small Auspex Scan area. Cooldown is 8 seconds."
         }
       ],
       "budget": 9,
@@ -1820,7 +1854,7 @@
         {
           "name": "Rapid Health",
           "quality": "Master-Crafted",
-          "description": "When your Health is below 30%, killing 7 enemies in rapid succession restores Health by 10%. Cooldown is 0 seconds."
+          "description": "When your Health is below 30%, killing 7 enemies in rapid succession restores Health by 10%"
         },
         {
           "name": "Honed Precision",
@@ -1860,7 +1894,7 @@
         {
           "name": "Unwavering Resolve",
           "quality": "Artificer",
-          "description": "After reloading while having Low Ammo, damage increases by 25% more Damage for 5 seconds"
+          "description": "After reloading while having Low Ammo, Damage increases by 25% for 5 seconds"
         },
         {
           "name": "Extended Magazine",
@@ -1880,12 +1914,12 @@
         {
           "name": "Gun Strike Reload",
           "quality": "Relic",
-          "description": "After a Gun Strike, the equipped Weapon instantly reloads"
+          "description": "After a Gun Strike, this Weapon instantly reloads"
         },
         {
           "name": "Adamant Hunter",
           "quality": "Relic",
-          "description": "When your Health is below 30%, Headshots deal 25% more damage"
+          "description": "When your Health is below 30%, Headshots deal 25% more Damage"
         },
         {
           "name": "Perpetual Precision",
@@ -1895,12 +1929,12 @@
         {
           "name": "Recoupment",
           "quality": "Relic",
-          "description": "Killing a Majoris-level or higher enemy with a headshot with this weapon restores 1 Armour Segment. Cooldown is 15 seconds"
+          "description": "Killing a Majoris-level or higher enemy with a Headshot with this Weapon restores 1 Armour Segment. Cooldown is 15 seconds."
         },
         {
           "name": "Magazine Restoration",
           "quality": "Relic",
-          "description": "When your Health drops below 30%, your Ammo Reserve is restored by a full Magazine. Cannot exceed maximum Ammo capacity. Cooldown is 30 seconds."
+          "description": "When your Health drops below 30%, your Ammo Reserve is restored by a full magazine. Cannot exceed maximum Ammo capacity. Cooldown is 30 seconds."
         },
         {
           "name": "Adamantine Grip",
@@ -1966,40 +2000,6 @@
           "figures": {
             "Magazine Capacity": "30",
             "Ammo Reserve": "240 (PvE); 180(PvP)"
-          }
-        },
-        {
-          "quality": "Standard",
-          "name": "Marksman Bolt Carbine (PVP)",
-          "gauges": {
-            "Firepower": {
-              "value": 2.5,
-              "raw": "2+"
-            },
-            "Accuracy": {
-              "value": 5,
-              "raw": "5"
-            },
-            "Rate of Fire": {
-              "value": 4.5,
-              "raw": "4+"
-            },
-            "Reloading Speed": {
-              "value": 4,
-              "raw": "4"
-            },
-            "Piercing": {
-              "value": 3,
-              "raw": "3"
-            },
-            "Range": {
-              "value": 10,
-              "raw": "10"
-            }
-          },
-          "figures": {
-            "Magazine Capacity": "20",
-            "Ammo Reserve": "120"
           }
         },
         {
@@ -2398,7 +2398,7 @@
         {
           "name": "Fast Reload",
           "quality": "Master-Crafted",
-          "description": "Reload all Weapons 10% faster"
+          "description": "This Weapon reloads 10% faster"
         },
         {
           "name": "Reloaded Restoration",
@@ -2448,7 +2448,7 @@
         {
           "name": "Rapid Health",
           "quality": "Relic",
-          "description": "When your Health is below 30%, killing 7 enemies in rapid succession restores Health by 10%. Cooldown is 0 seconds."
+          "description": "When your Health is below 30%, killing 7 enemies in rapid succession restores Health by 10%"
         },
         {
           "name": "Perpetual Penetration",
@@ -2458,12 +2458,12 @@
         {
           "name": "Fast Reload",
           "quality": "Relic",
-          "description": "Reload all Weapons 10% faster"
+          "description": "This Weapon reloads 10% faster"
         },
         {
           "name": "Rampage",
           "quality": "Relic",
-          "description": "After killing 7 enemies in rapid succession, you deal 25% more Damage for 10 seconds. Cooldown is 15 seconds."
+          "description": "After killing 7 enemies in rapid succession, deal 25% more Damage for 10 seconds. Cooldown is 15 seconds."
         },
         {
           "name": "Reloading Immunity",
@@ -2854,7 +2854,7 @@
         {
           "name": "Fast Reload",
           "quality": "Master-Crafted",
-          "description": "Reload all Weapons 10% faster"
+          "description": "This Weapon reloads 10% faster"
         },
         {
           "name": "Retaliation",
@@ -2904,7 +2904,7 @@
         {
           "name": "Rapid Health",
           "quality": "Relic",
-          "description": "When your Health is below 30%, killing 7 enemies in rapid succession restores Health by 10%. Cooldown is 0 seconds."
+          "description": "When your Health is below 30%, killing 7 enemies in rapid succession restores Health by 10%"
         },
         {
           "name": "Fast Regeneration",
@@ -2919,7 +2919,7 @@
         {
           "name": "Magazine Restoration",
           "quality": "Relic",
-          "description": "When your Health drops below 30%, your Ammo Reserve is restored by a full Magazine. Cannot exceed maximum Ammo capacity. Cooldown is 30 seconds."
+          "description": "When your Health drops below 30%, your Ammo Reserve is restored by a full magazine. Cannot exceed maximum Ammo capacity. Cooldown is 30 seconds."
         },
         {
           "name": "Increased Capacity",
@@ -3300,7 +3300,7 @@
         {
           "name": "Remote Threat",
           "quality": "Standard",
-          "description": "Enemies at a a distance of more than 25 metres take 20% more Damage"
+          "description": "Enemies at a distance of more than 25 metres take 20% more Damage"
         },
         {
           "name": "Divine Might",
@@ -3330,7 +3330,7 @@
         {
           "name": "Unwavering Resolve",
           "quality": "Artificer",
-          "description": "After reloading while having Low Ammo, damage increases by 25% more Damage for 5 seconds"
+          "description": "After reloading while having Low Ammo, Damage increases by 25% for 5 seconds"
         },
         {
           "name": "Head Hunter",
@@ -3340,7 +3340,7 @@
         {
           "name": "Fast Reload",
           "quality": "Artificer",
-          "description": "Reload all Weapons 10% faster"
+          "description": "This Weapon reloads 10% faster"
         },
         {
           "name": "Increased Capacity",
@@ -3355,7 +3355,7 @@
         {
           "name": "Strong Start",
           "quality": "Relic",
-          "description": "First round in a magazine deals 25% more damage"
+          "description": "First round in a Magazine deals 25% more Damage"
         },
         {
           "name": "Cleaving Fire",
@@ -3365,12 +3365,12 @@
         {
           "name": "Recoupment",
           "quality": "Relic",
-          "description": "Killing a Majoris-level or higher enemy with a headshot with this weapon restores 1 Armour Segment. Cooldown is 15 seconds"
+          "description": "Killing a Majoris-level or higher enemy with a Headshot with this Weapon restores 1 Armour Segment. Cooldown is 15 seconds."
         },
         {
           "name": "Strong Finish",
           "quality": "Relic",
-          "description": "Last round in a magazine deals 50% more damage"
+          "description": "Last round in a Magazine deals 50% more Damage"
         },
         {
           "name": "Reloaded Restoration",
@@ -3756,22 +3756,22 @@
         {
           "name": "Rapid Cooling",
           "quality": "Master-Crafted",
-          "description": "After killing 7 enemies in rapid succession, Weapons do not heat for 10 seconds. Cooldown is 15 seconds."
+          "description": "After killing 7 enemies in rapid succession, this Weapon does not heat for 10 seconds. Cooldown is 15 seconds."
         },
         {
           "name": "Fast Venting",
           "quality": "Master-Crafted",
-          "description": "Weapon cool 15% faster"
+          "description": "Weapons cool 15% faster"
         },
         {
           "name": "Rampage",
           "quality": "Master-Crafted",
-          "description": "After killing 7 enemies in rapid succession, you deal 25% more Damage for 10 seconds. Cooldown is 15 seconds."
+          "description": "After killing 7 enemies in rapid succession, deal 25% more Damage for 10 seconds. Cooldown is 15 seconds."
         },
         {
           "name": "Efficient Charge",
           "quality": "Master-Crafted",
-          "description": "Charged Shots from Plasma Weapons use 2 less energy"
+          "description": "Charged Shots from this Plasma Weapon use 2 less energy"
         },
         {
           "name": "Common Efficiency",
@@ -3781,7 +3781,7 @@
         {
           "name": "Plasma Collection",
           "quality": "Artificer",
-          "description": "Energy reserve of Plasma Weapons increases by 20%"
+          "description": "This Weapon's energy reserve increases by 20%"
         },
         {
           "name": "Common Speed",
@@ -3811,7 +3811,7 @@
         {
           "name": "Balanced Cooling",
           "quality": "Artificer",
-          "description": "Weapon cool 20% faster. Charged Shots generate 10% more Heat"
+          "description": "This Weapon cools 15% faster. Charged Shots generate 10% more Heat."
         },
         {
           "name": "Honed Precision",
@@ -3826,7 +3826,7 @@
         {
           "name": "Fast Venting",
           "quality": "Relic",
-          "description": "Weapon cool 15% faster"
+          "description": "Weapons cool 15% faster"
         },
         {
           "name": "Common Cooling",
@@ -3851,7 +3851,7 @@
         {
           "name": "Efficient Charge",
           "quality": "Relic",
-          "description": "Charged Shots from Plasma Weapons use 2 less energy"
+          "description": "Charged Shots from this Plasma Weapon use 2 less energy"
         }
       ],
       "budget": 11,
@@ -3891,7 +3891,7 @@
             }
           },
           "figures": {
-            "Magazine Capacity": "130 (PvE); 70 (PvP)"
+            "Magazine Capacity": "130 (PvE); 130 (PvP)"
           }
         },
         {
@@ -4201,7 +4201,7 @@
         {
           "name": "Magazine Restoration",
           "quality": "Master-Crafted",
-          "description": "When your Health drops below 30%, your Ammo Reserve is restored by a full Magazine. Cannot exceed maximum Ammo capacity. Cooldown is 30 seconds."
+          "description": "When your Health drops below 30%, your Ammo Reserve is restored by a full magazine. Cannot exceed maximum Ammo capacity. Cooldown is 30 seconds."
         },
         {
           "name": "Great Might",
@@ -4211,7 +4211,7 @@
         {
           "name": "Rapid Health",
           "quality": "Master-Crafted",
-          "description": "When your Health is below 30%, killing 7 enemies in rapid succession restores Health by 10%. Cooldown is 0 seconds."
+          "description": "When your Health is below 30%, killing 7 enemies in rapid succession restores Health by 10%"
         },
         {
           "name": "Trick Shot",
@@ -4236,12 +4236,12 @@
         {
           "name": "Fast Reload",
           "quality": "Artificer",
-          "description": "Reload all Weapons 10% faster"
+          "description": "This Weapon reloads 10% faster"
         },
         {
           "name": "Fast Reload",
           "quality": "Artificer",
-          "description": "Reload all Weapons 10% faster"
+          "description": "This Weapon reloads 10% faster"
         },
         {
           "name": "Reloading Immunity",
@@ -4311,8 +4311,8 @@
             }
           },
           "figures": {
-            "Magazine Capacity": "5",
-            "Ammo Reserve": "15 (PvE); 32 (PvP)"
+            "Magazine Capacity": "6",
+            "Ammo Reserve": "12 (PvE); 32 (PvP)"
           }
         },
         {
@@ -4341,8 +4341,8 @@
             }
           },
           "figures": {
-            "Magazine Capacity": "5",
-            "Ammo Reserve": "15"
+            "Magazine Capacity": "6",
+            "Ammo Reserve": "12"
           }
         },
         {
@@ -4371,8 +4371,8 @@
             }
           },
           "figures": {
-            "Magazine Capacity": "6",
-            "Ammo Reserve": "18"
+            "Magazine Capacity": "8",
+            "Ammo Reserve": "16"
           }
         },
         {
@@ -4401,8 +4401,8 @@
             }
           },
           "figures": {
-            "Magazine Capacity": "5",
-            "Ammo Reserve": "15"
+            "Magazine Capacity": "6",
+            "Ammo Reserve": "12"
           }
         },
         {
@@ -4431,8 +4431,8 @@
             }
           },
           "figures": {
-            "Magazine Capacity": "7",
-            "Ammo Reserve": "21"
+            "Magazine Capacity": "9",
+            "Ammo Reserve": "19"
           }
         },
         {
@@ -4461,8 +4461,8 @@
             }
           },
           "figures": {
-            "Magazine Capacity": "5",
-            "Ammo Reserve": "15"
+            "Magazine Capacity": "6",
+            "Ammo Reserve": "12"
           }
         },
         {
@@ -4491,8 +4491,8 @@
             }
           },
           "figures": {
-            "Magazine Capacity": "8",
-            "Ammo Reserve": "24"
+            "Magazine Capacity": "10",
+            "Ammo Reserve": "22"
           }
         },
         {
@@ -4521,8 +4521,8 @@
             }
           },
           "figures": {
-            "Magazine Capacity": "5",
-            "Ammo Reserve": "15"
+            "Magazine Capacity": "6",
+            "Ammo Reserve": "12"
           }
         },
         {
@@ -4552,7 +4552,7 @@
           },
           "figures": {
             "Magazine Capacity": "5",
-            "Ammo Reserve": "15"
+            "Ammo Reserve": "10"
           }
         }
       ]
@@ -4632,7 +4632,7 @@
         {
           "name": "Recoupment",
           "quality": "Relic",
-          "description": "Killing a Majoris-level or higher enemy with a headshot with this weapon restores 1 Armour Segment. Cooldown is 15 seconds"
+          "description": "Killing a Majoris-level or higher enemy with a Headshot with this Weapon restores 1 Armour Segment. Cooldown is 15 seconds."
         },
         {
           "name": "Brutal Rampage",
@@ -4687,7 +4687,7 @@
             }
           },
           "figures": {
-            "Magazine Capacity": "12 (PvE); 20 (PvP)"
+            "Magazine Capacity": "12 (PvE); 12 (PvP)"
           }
         },
         {
@@ -4929,7 +4929,7 @@
         {
           "name": "Improved Fast Venting",
           "quality": "Standard",
-          "description": "Weapon cool 20% faster"
+          "description": "Weapons cool 20% faster"
         },
         {
           "name": "Perpetual Cooling",
@@ -4939,7 +4939,7 @@
         {
           "name": "Eternal Flame",
           "quality": "Master-Crafted",
-          "description": "Burning time increases by 20%"
+          "description": "Burning time increases by 25%"
         },
         {
           "name": "Potent Flame",
@@ -4969,7 +4969,7 @@
         {
           "name": "Rapid Health",
           "quality": "Artificer",
-          "description": "When your Health is below 30%, killing 7 enemies in rapid succession restores Health by 10%. Cooldown is 0 seconds."
+          "description": "When your Health is below 30%, killing 7 enemies in rapid succession restores Health by 10%"
         },
         {
           "name": "Flash Burn",
@@ -5034,7 +5034,7 @@
         },
         {
           "quality": "Master-Crafted",
-          "name": "Master-Crafted — Alpha",
+          "name": "Master-Crafted - Alpha",
           "gauges": {
             "Firepower": {
               "value": 2,
@@ -5059,7 +5059,7 @@
         },
         {
           "quality": "Master-Crafted",
-          "name": "Master-Crafted — Beta",
+          "name": "Master-Crafted - Beta",
           "gauges": {
             "Firepower": {
               "value": 2,
@@ -5189,7 +5189,7 @@
         {
           "name": "Fast Venting",
           "quality": "Standard",
-          "description": "Weapon cool 15% faster"
+          "description": "Weapons cool 15% faster"
         },
         {
           "name": "Perpetual Cooling",
@@ -5244,12 +5244,12 @@
         {
           "name": "Adamant Hunter",
           "quality": "Artificer",
-          "description": "When your Health is below 30%, Headshots deal 25% more damage"
+          "description": "When your Health is below 30%, Headshots deal 25% more Damage"
         },
         {
           "name": "Heavy Precision",
           "quality": "Artificer",
-          "description": "While in Heavy Stance, Maximum Spread decrease by 10%"
+          "description": "While in Heavy Stance, Maximum Spread decreases by 10%"
         },
         {
           "name": "Honed Precision",
@@ -5269,7 +5269,7 @@
         {
           "name": "Fast Venting",
           "quality": "Relic",
-          "description": "Weapon cool 15% faster"
+          "description": "Weapons cool 15% faster"
         },
         {
           "name": "Great Might",
@@ -5343,7 +5343,7 @@
             }
           },
           "figures": {
-            "Magazine Capacity": "450 (PvE); 300 (PvP)"
+            "Magazine Capacity": "450 (PvE); 450 (PvP)"
           }
         },
         {
@@ -5721,12 +5721,12 @@
         {
           "name": "Fast Venting",
           "quality": "Standard",
-          "description": "Weapon cool 15% faster"
+          "description": "Weapons cool 15% faster"
         },
         {
           "name": "Rapid Cooling",
           "quality": "Master-Crafted",
-          "description": "After killing 7 enemies in rapid succession, Weapons do not heat for 10 seconds. Cooldown is 15 seconds."
+          "description": "After killing 7 enemies in rapid succession, this Weapon does not heat for 10 seconds. Cooldown is 15 seconds."
         },
         {
           "name": "Heavy Velocity",
@@ -5736,7 +5736,7 @@
         {
           "name": "Supercharged Shot",
           "quality": "Master-Crafted",
-          "description": "Damage from Charged Shot increases by 10%"
+          "description": "Damage from a Charged Shot increases by 10%"
         },
         {
           "name": "Contingency Plan",
@@ -5746,12 +5746,12 @@
         {
           "name": "Plasma Collection",
           "quality": "Master-Crafted",
-          "description": "Energy reserve of Plasma Weapons increases by 20%"
+          "description": "This Weapon's energy reserve increases by 20%"
         },
         {
           "name": "Efficient Charge",
           "quality": "Master-Crafted",
-          "description": "Charged Shots from Plasma Weapons use 2 less energy"
+          "description": "Charged Shots from this Plasma Weapon use 2 less energy"
         },
         {
           "name": "Adamant Velocity",
@@ -5761,7 +5761,7 @@
         {
           "name": "Supercharged Shot",
           "quality": "Artificer",
-          "description": "Damage from Charged Shot increases by 10%"
+          "description": "Damage from a Charged Shot increases by 10%"
         },
         {
           "name": "Heavy Immunity",
@@ -5796,7 +5796,7 @@
         {
           "name": "Supercharged Shot",
           "quality": "Relic",
-          "description": "Damage from Charged Shot increases by 10%"
+          "description": "Damage from a Charged Shot increases by 10%"
         },
         {
           "name": "Brutal Rampage",
@@ -5806,12 +5806,12 @@
         {
           "name": "Fast Venting",
           "quality": "Relic",
-          "description": "Weapon cool 15% faster"
+          "description": "Weapons cool 15% faster"
         },
         {
           "name": "Plasma Collection",
           "quality": "Relic",
-          "description": "Energy reserve of Plasma Weapons increases by 20%"
+          "description": "This Weapon's energy reserve increases by 20%"
         },
         {
           "name": "Plasma Hail",
@@ -5856,7 +5856,7 @@
             }
           },
           "figures": {
-            "Magazine Capacity": "40 (PvE); 60 (PvP)"
+            "Magazine Capacity": "40 (PvE); 40 (PvP)"
           }
         },
         {
@@ -6166,7 +6166,7 @@
         {
           "name": "Elite Restoration",
           "quality": "Master-Crafted",
-          "description": "Killing a Majoris-level or higher enemy restores 10% of your maximum Ammo Reserve. Cannot Exceed maximum Ammo capacity. Cooldown is 30 seconds"
+          "description": "Killing a Majoris-level or higher enemy restores 10% of your maximum Ammo Reserve. Cannot exceed maximum Ammo capacity. Cooldown is 30 seconds."
         },
         {
           "name": "Heavy Fire",
@@ -6196,7 +6196,7 @@
         {
           "name": "Executioner's Fire",
           "quality": "Artificer",
-          "description": "After a Finisher, Fire Rate increases by 25% for 10 seconds"
+          "description": "After a Finisher, Fire Rate increases by 25% for 5 seconds"
         },
         {
           "name": "Heavy Might",
@@ -6211,7 +6211,7 @@
         {
           "name": "Executioner's Range",
           "quality": "Artificer",
-          "description": "After a Finisher, Effective Range increases by 3 metres for 10 seconds"
+          "description": "After a Finisher, Effective Range increases by 3 metres for 5 seconds"
         },
         {
           "name": "Trick Shot",
@@ -6226,7 +6226,7 @@
         {
           "name": "Death Strike",
           "quality": "Relic",
-          "description": "After killing a Majoris-level or higher enemy with a Melee Weapon, you deal 25% more damage for 10 seconds"
+          "description": "After killing a Majoris-level or higher enemy in melee combat, you deal 25% more Damage for 10 seconds"
         },
         {
           "name": "Increased Capacity",
@@ -6241,7 +6241,7 @@
         {
           "name": "Elite Health",
           "quality": "Relic",
-          "description": "When your Health is below 30%, killing a Majoris-level or higher enemy with Melee Damage restores Health by 5%"
+          "description": "When your Health is below 30%, killing a Majoris-level or higher enemy with Melee Damage restores Health by 10%"
         },
         {
           "name": "Discipline",
@@ -6251,7 +6251,7 @@
         {
           "name": "Expedient Barrage",
           "quality": "Relic",
-          "description": "Fire rate increases by 33% when firing without aiming"
+          "description": "Fire Rate increases by 33% when firing without aiming"
         }
       ],
       "budget": 10,
@@ -6287,7 +6287,7 @@
             }
           },
           "figures": {
-            "Magazine Capacity": "20 (PvE); 40 (PvP)"
+            "Magazine Capacity": "16 (PvE); 16 (PvP)"
           }
         },
         {
@@ -6312,7 +6312,7 @@
             }
           },
           "figures": {
-            "Magazine Capacity": "20"
+            "Magazine Capacity": "16"
           }
         },
         {
@@ -6337,7 +6337,7 @@
             }
           },
           "figures": {
-            "Magazine Capacity": "23"
+            "Magazine Capacity": "19"
           }
         },
         {
@@ -6362,7 +6362,7 @@
             }
           },
           "figures": {
-            "Magazine Capacity": "20"
+            "Magazine Capacity": "16"
           }
         },
         {
@@ -6387,7 +6387,7 @@
             }
           },
           "figures": {
-            "Magazine Capacity": "20"
+            "Magazine Capacity": "16"
           }
         },
         {
@@ -6412,7 +6412,7 @@
             }
           },
           "figures": {
-            "Magazine Capacity": "26"
+            "Magazine Capacity": "22"
           }
         },
         {
@@ -6437,7 +6437,7 @@
             }
           },
           "figures": {
-            "Magazine Capacity": "20"
+            "Magazine Capacity": "16"
           }
         },
         {
@@ -6462,7 +6462,7 @@
             }
           },
           "figures": {
-            "Magazine Capacity": "20"
+            "Magazine Capacity": "16"
           }
         },
         {
@@ -6487,7 +6487,7 @@
             }
           },
           "figures": {
-            "Magazine Capacity": "30"
+            "Magazine Capacity": "26"
           }
         },
         {
@@ -6512,7 +6512,7 @@
             }
           },
           "figures": {
-            "Magazine Capacity": "20"
+            "Magazine Capacity": "16"
           }
         }
       ]
@@ -6522,7 +6522,7 @@
         {
           "name": "Improved Fast Venting",
           "quality": "Standard",
-          "description": "Weapon cool 20% faster"
+          "description": "Weapons cool 20% faster"
         },
         {
           "name": "Perpetual Cooling",
@@ -6532,7 +6532,7 @@
         {
           "name": "Eternal Flame",
           "quality": "Master-Crafted",
-          "description": "Burning time increases by 20%"
+          "description": "Burning time increases by 25%"
         },
         {
           "name": "Increased Capacity",
@@ -6562,7 +6562,7 @@
         {
           "name": "Rapid Health",
           "quality": "Artificer",
-          "description": "When your Health is below 30%, killing 7 enemies in rapid succession restores Health by 10%. Cooldown is 0 seconds."
+          "description": "When your Health is below 30%, killing 7 enemies in rapid succession restores Health by 10%"
         },
         {
           "name": "Divine Might",
@@ -6627,7 +6627,7 @@
         },
         {
           "quality": "Master-Crafted",
-          "name": "Master-Crafted — Alpha",
+          "name": "Master-Crafted - Alpha",
           "gauges": {
             "Firepower": {
               "value": 3,
@@ -6652,7 +6652,7 @@
         },
         {
           "quality": "Master-Crafted",
-          "name": "Master-Crafted — Beta",
+          "name": "Master-Crafted - Beta",
           "gauges": {
             "Firepower": {
               "value": 3,
@@ -6797,7 +6797,7 @@
         {
           "name": "Gun Strike Reload",
           "quality": "Master-Crafted",
-          "description": "After a Gun Strike, the equipped Weapon instantly reloads"
+          "description": "After a Gun Strike, this Weapon instantly reloads"
         },
         {
           "name": "Retaliation",
@@ -6847,7 +6847,7 @@
         {
           "name": "Rapid Health",
           "quality": "Relic",
-          "description": "When your Health is below 30%, killing 7 enemies in rapid succession restores Health by 10%. Cooldown is 0 seconds."
+          "description": "When your Health is below 30%, killing 7 enemies in rapid succession restores Health by 10%"
         },
         {
           "name": "Extended Magazine",
@@ -7204,12 +7204,12 @@
         {
           "name": "Rapid Health",
           "quality": "Master-Crafted",
-          "description": "When your Health is below 30%, killing 7 enemies in rapid succession restores Health by 10%. Cooldown is 0 seconds."
+          "description": "When your Health is below 30%, killing 7 enemies in rapid succession restores Health by 10%"
         },
         {
           "name": "Remote Threat",
           "quality": "Master-Crafted",
-          "description": "Enemies at a a distance of more than 25 metres take 20% more Damage"
+          "description": "Enemies at a distance of more than 25 metres take 20% more Damage"
         },
         {
           "name": "Perpetual Penetration",
@@ -7239,12 +7239,12 @@
         {
           "name": "Strong Finish",
           "quality": "Artificer",
-          "description": "Last round in a magazine deals 50% more damage"
+          "description": "Last round in a Magazine deals 50% more Damage"
         },
         {
           "name": "Death Strike",
           "quality": "Artificer",
-          "description": "After killing a Majoris-level or higher enemy with a Melee Weapon, you deal 25% more damage for 10 seconds"
+          "description": "After killing a Majoris-level or higher enemy in melee combat, you deal 25% more Damage for 10 seconds"
         },
         {
           "name": "Great Might",
@@ -7254,7 +7254,7 @@
         {
           "name": "Strong Start",
           "quality": "Artificer",
-          "description": "First round in a magazine deals 25% more damage"
+          "description": "First round in a Magazine deals 25% more Damage"
         },
         {
           "name": "Head Hunter",
@@ -7264,7 +7264,7 @@
         {
           "name": "Gun Strike Reload",
           "quality": "Relic",
-          "description": "After a Gun Strike, the equipped Weapon instantly reloads"
+          "description": "After a Gun Strike, this Weapon instantly reloads"
         },
         {
           "name": "Head Hunter",
@@ -7689,12 +7689,12 @@
         {
           "name": "Fast Venting",
           "quality": "Standard",
-          "description": "Weapon cool 15% faster"
+          "description": "Weapons cool 15% faster"
         },
         {
           "name": "Rapid Cooling",
           "quality": "Master-Crafted",
-          "description": "After killing 7 enemies in rapid succession, Weapons do not heat for 10 seconds. Cooldown is 15 seconds."
+          "description": "After killing 7 enemies in rapid succession, this Weapon does not heat for 10 seconds. Cooldown is 15 seconds."
         },
         {
           "name": "Blast Radius",
@@ -7704,12 +7704,12 @@
         {
           "name": "Rampage",
           "quality": "Master-Crafted",
-          "description": "After killing 7 enemies in rapid succession, you deal 25% more Damage for 10 seconds. Cooldown is 15 seconds."
+          "description": "After killing 7 enemies in rapid succession, deal 25% more Damage for 10 seconds. Cooldown is 15 seconds."
         },
         {
           "name": "Supercharged Shot",
           "quality": "Master-Crafted",
-          "description": "Damage from Charged Shot increases by 10%"
+          "description": "Damage from a Charged Shot increases by 10%"
         },
         {
           "name": "Blast Radius",
@@ -7729,12 +7729,12 @@
         {
           "name": "Plasma Collection",
           "quality": "Artificer",
-          "description": "Energy reserve of Plasma Weapons increases by 20%"
+          "description": "This Weapon's energy reserve increases by 20%"
         },
         {
           "name": "Efficient Charge",
           "quality": "Artificer",
-          "description": "Charged Shots from Plasma Weapons use 2 less energy"
+          "description": "Charged Shots from this Plasma Weapon use 2 less energy"
         },
         {
           "name": "Perfect Radius",
@@ -7754,7 +7754,7 @@
         {
           "name": "Fast Venting",
           "quality": "Relic",
-          "description": "Weapon cool 15% faster"
+          "description": "Weapons cool 15% faster"
         },
         {
           "name": "Overcharged Plasma Coils",
@@ -8071,10 +8071,10 @@
         {
           "name": "Fast Reload",
           "quality": "Artificer",
-          "description": "Reload all Weapons 10% faster"
+          "description": "This Weapon reloads 10% faster"
         },
         {
-          "name": "Motivated Melee",
+          "name": "Know No Fear",
           "quality": "Artificer",
           "description": "If your Armour is fully depleted, Reload Speed increases by 20%"
         },
@@ -8096,7 +8096,7 @@
         {
           "name": "Rapid Health",
           "quality": "Relic",
-          "description": "When your Health is below 30%, killing 7 enemies in rapid succession restores Health by 10%. Cooldown is 0 seconds."
+          "description": "When your Health is below 30%, killing 7 enemies in rapid succession restores Health by 10%"
         },
         {
           "name": "Extra Shot",
@@ -8152,7 +8152,7 @@
         },
         {
           "quality": "Master-Crafted",
-          "name": "Master-Crafted — Alpha",
+          "name": "Master-Crafted - Alpha",
           "gauges": {
             "Firepower": {
               "value": 8.5,
@@ -8182,7 +8182,7 @@
         },
         {
           "quality": "Master-Crafted",
-          "name": "Master-Crafted — Beta",
+          "name": "Master-Crafted - Beta",
           "gauges": {
             "Firepower": {
               "value": 8.5,
@@ -8347,7 +8347,7 @@
         {
           "name": "Gun Strike Reload",
           "quality": "Master-Crafted",
-          "description": "After a Gun Strike, the equipped Weapon instantly reloads"
+          "description": "After a Gun Strike, this Weapon instantly reloads"
         },
         {
           "name": "Great Might",
@@ -8357,7 +8357,7 @@
         {
           "name": "Combustive Momentum",
           "quality": "Master-Crafted",
-          "description": "After a Gun Strike, rate of thermal Damage increases by 30% for 6 seconds"
+          "description": "After a Gun Strike, heating speed increases by 30% for 6 seconds"
         },
         {
           "name": "Increased Capacity",
@@ -8377,12 +8377,12 @@
         {
           "name": "Accelerated Combustion",
           "quality": "Artificer",
-          "description": "Rate of thermal Damage increases by 20%"
+          "description": "Heating speed increases by 20%"
         },
         {
           "name": "Volkite Discharge",
           "quality": "Relic",
-          "description": "After killing a Majoris-level or higher enemy with Melee Weapon, Damage of volkite discharge increases by 30% for 10 seconds"
+          "description": "After killing a Majoris-level or higher enemy with a Melee Weapon, Damage of volkite discharge increases by 30% for 10 seconds"
         },
         {
           "name": "Volkite Blitz",
@@ -8392,12 +8392,12 @@
         {
           "name": "Violent Deflagration",
           "quality": "Relic",
-          "description": "After killing a Majoris-level or higher enemy with Melee Weapon, rate of thermal Damage increases by 30% for 2 seconds"
+          "description": "After killing a Majoris-level or higher enemy with a Melee Weapon, heating speed increases by 30% for 2 seconds"
         },
         {
           "name": "Distributed Deflagration",
           "quality": "Relic",
-          "description": "Volkite Discharge, in additional to dealing normal Damage, also deals 25% thermal Damage"
+          "description": "Along with the Volkite explosion, 25% of the heat is also transferred to surrounding enemies."
         }
       ],
       "budget": 7,
@@ -8676,7 +8676,7 @@
         {
           "name": "Adamant Hunter",
           "quality": "Master-Crafted",
-          "description": "When your Health is below 30%, Headshots deal 25% more damage"
+          "description": "When your Health is below 30%, Headshots deal 25% more Damage"
         },
         {
           "name": "Cleaving Fire",
@@ -8686,7 +8686,7 @@
         {
           "name": "Remote Threat",
           "quality": "Artificer",
-          "description": "Enemies at a a distance of more than 25 metres take 20% more Damage"
+          "description": "Enemies at a distance of more than 25 metres take 20% more Damage"
         },
         {
           "name": "Perpetual Precision",
@@ -8701,7 +8701,7 @@
         {
           "name": "Tactical Precision",
           "quality": "Artificer",
-          "description": "Headshots deal 30% more Damage. Ranged Damage decreases by 10%"
+          "description": "Headshots deal 20% more Damage. Non-Headshot Damage decreases by 10%."
         },
         {
           "name": "Victorious Restoration",
@@ -8716,7 +8716,7 @@
         {
           "name": "Gun Strike Reload",
           "quality": "Relic",
-          "description": "After a Gun Strike, the equipped Weapon instantly reloads"
+          "description": "After a Gun Strike, this Weapon instantly reloads"
         },
         {
           "name": "Elite Hunter",
@@ -9014,7 +9014,7 @@
         {
           "name": "Combined Onslaught",
           "quality": "Artificer",
-          "description": "Light Combo Attack with this weapon deals 10% more Melee Damage"
+          "description": "Light Combo Attacks with this Weapon deal 10% more Melee Damage"
         },
         {
           "name": "Hard Target",
@@ -9029,7 +9029,7 @@
         {
           "name": "Heavy Onslaught",
           "quality": "Artificer",
-          "description": "Heavy Attack with this weapon deals 15% more Melee Damage"
+          "description": "Heavy Attacks with this Weapon deal 15% more Melee Damage"
         },
         {
           "name": "Minoris Slayer",
@@ -9039,7 +9039,7 @@
         {
           "name": "Full Throttle",
           "quality": "Artificer",
-          "description": "Switches Punch with Full Throttle. Hold the attack button to prepare the attack. Damage increases by 100% per 1 second while preparing."
+          "description": "Switches Punch with Full Throttle. Hold the attack button to prepare the attack. Damage increases by 100% per 1.5 second while preparing."
         },
         {
           "name": "Majoris Slayer",
@@ -9064,7 +9064,7 @@
         {
           "name": "Fistfight",
           "quality": "Heroic",
-          "description": "You can perform an additional heavy attack after a Quick punch. Also, a Front kick is replaced with a Quick punch. All heavy attacks deal 15% more damage"
+          "description": "You can perform an additional Heavy Attack after a Quick Punch. Also, a Front Kick is replaced with a Quick Punch. All Heavy Attacks deal 15% more Damage."
         },
         {
           "name": "Fury of Chogoris",
@@ -9098,7 +9098,8 @@
               "raw": "4"
             }
           },
-          "figures": {}
+          "figures": {},
+          "defence": "Balanced"
         },
         {
           "quality": "Master-Crafted",
@@ -9117,7 +9118,8 @@
               "raw": "10"
             }
           },
-          "figures": {}
+          "figures": {},
+          "defence": "Balanced"
         },
         {
           "quality": "Master-Crafted",
@@ -9136,7 +9138,8 @@
               "raw": "4"
             }
           },
-          "figures": {}
+          "figures": {},
+          "defence": "Block"
         },
         {
           "quality": "Artificer",
@@ -9155,7 +9158,8 @@
               "raw": "10"
             }
           },
-          "figures": {}
+          "figures": {},
+          "defence": "Balanced"
         },
         {
           "quality": "Artificer",
@@ -9174,7 +9178,8 @@
               "raw": "1"
             }
           },
-          "figures": {}
+          "figures": {},
+          "defence": "Fencing"
         },
         {
           "quality": "Artificer",
@@ -9193,7 +9198,8 @@
               "raw": "4"
             }
           },
-          "figures": {}
+          "figures": {},
+          "defence": "Block"
         },
         {
           "quality": "Relic",
@@ -9212,7 +9218,8 @@
               "raw": "10"
             }
           },
-          "figures": {}
+          "figures": {},
+          "defence": "Balanced"
         },
         {
           "quality": "Relic",
@@ -9231,7 +9238,8 @@
               "raw": "1"
             }
           },
-          "figures": {}
+          "figures": {},
+          "defence": "Fencing"
         },
         {
           "quality": "Relic",
@@ -9250,7 +9258,8 @@
               "raw": "4"
             }
           },
-          "figures": {}
+          "figures": {},
+          "defence": "Block"
         },
         {
           "quality": "Heroic",
@@ -9269,7 +9278,8 @@
               "raw": "10"
             }
           },
-          "figures": {}
+          "figures": {},
+          "defence": "Balanced"
         },
         {
           "quality": "Heroic",
@@ -9288,7 +9298,8 @@
               "raw": "4"
             }
           },
-          "figures": {}
+          "figures": {},
+          "defence": "Block"
         }
       ]
     },
@@ -9322,22 +9333,22 @@
         {
           "name": "Shadow Stab",
           "quality": "Artificer",
-          "description": "Replace Heavy Swing with Shadow Stab. Hold the Attack button to charge it. Damage increases by 100% per 1 second of charging."
+          "description": "Replace Heavy Swing with Shadow Stab. Hold the Attack button to charge it. Damage increases by 200% per 1 second of charging."
         },
         {
           "name": "Combined Onslaught",
           "quality": "Artificer",
-          "description": "Light Combo Attack with this weapon deals 10% more Melee Damage"
+          "description": "Light Combo Attacks with this Weapon deal 10% more Melee Damage"
         },
         {
-          "name": "Tide Of Battle",
+          "name": "Tide of Battle",
           "quality": "Artificer",
           "description": "Power Wave forward distance increases from 4 to 8 metres for Whirlwind Slash"
         },
         {
           "name": "Heavy Onslaught",
           "quality": "Artificer",
-          "description": "Heavy Attack with this weapon deals 15% more Melee Damage"
+          "description": "Heavy Attacks with this Weapon deal 15% more Melee Damage"
         },
         {
           "name": "Reeling Blow",
@@ -9372,7 +9383,7 @@
         {
           "name": "Agile Strike",
           "quality": "Heroic",
-          "description": "After a Perfect Dodge, the next melee strike deals 120% more Damage. Can be stacked up to 3 times."
+          "description": "After a Perfect Dodge, the next Melee Attack deals 120% more Damage. Can be stacked up to 3 times."
         },
         {
           "name": "Knuckles",
@@ -9406,7 +9417,8 @@
               "raw": "2"
             }
           },
-          "figures": {}
+          "figures": {},
+          "defence": "Balanced"
         },
         {
           "quality": "Master-Crafted",
@@ -9425,7 +9437,8 @@
               "raw": "6"
             }
           },
-          "figures": {}
+          "figures": {},
+          "defence": "Balanced"
         },
         {
           "quality": "Master-Crafted",
@@ -9444,7 +9457,8 @@
               "raw": "1"
             }
           },
-          "figures": {}
+          "figures": {},
+          "defence": "Fencing"
         },
         {
           "quality": "Artificer",
@@ -9463,7 +9477,8 @@
               "raw": "2"
             }
           },
-          "figures": {}
+          "figures": {},
+          "defence": "Block"
         },
         {
           "quality": "Artificer",
@@ -9482,7 +9497,8 @@
               "raw": "1"
             }
           },
-          "figures": {}
+          "figures": {},
+          "defence": "Fencing"
         },
         {
           "quality": "Relic",
@@ -9501,7 +9517,8 @@
               "raw": "6"
             }
           },
-          "figures": {}
+          "figures": {},
+          "defence": "Balanced"
         },
         {
           "quality": "Relic",
@@ -9520,7 +9537,8 @@
               "raw": "1"
             }
           },
-          "figures": {}
+          "figures": {},
+          "defence": "Fencing"
         },
         {
           "quality": "Relic",
@@ -9539,7 +9557,8 @@
               "raw": "2"
             }
           },
-          "figures": {}
+          "figures": {},
+          "defence": "Block"
         },
         {
           "quality": "Heroic",
@@ -9558,7 +9577,8 @@
               "raw": "2"
             }
           },
-          "figures": {}
+          "figures": {},
+          "defence": "Balanced"
         },
         {
           "quality": "Heroic",
@@ -9577,7 +9597,8 @@
               "raw": "1"
             }
           },
-          "figures": {}
+          "figures": {},
+          "defence": "Fencing"
         }
       ]
     },
@@ -9619,9 +9640,9 @@
           "description": "When your Health is below 30%, you take 50% less Health Damage while preparing Heavy Attacks"
         },
         {
-          "name": "Tide Of Battle",
+          "name": "Tide of Battle",
           "quality": "Artificer",
-          "description": "Power Wave forward distance increases by 100% to 8 metres. Applies to the following attacks: Thrust Jab, Backfist, Hammer Hook, Backfist 2, Thrust Jab 2."
+          "description": "Power Wave forward distance increases from 4 to 8 metres. Applies to the following attacks: Thrust Jab, Backfist, Hammer Hook, Backfist 2, Thrust Jab 2."
         },
         {
           "name": "Combo",
@@ -9641,7 +9662,7 @@
         {
           "name": "Concussive Impact",
           "quality": "Artificer",
-          "description": "Backfist 2 and Thrust Jab 2 area-of-effect radius increases by 50%"
+          "description": "Heavy Attack area-of-effect radius increases by 50%"
         },
         {
           "name": "Ground Shake",
@@ -9671,7 +9692,7 @@
         {
           "name": "Follow-Up Shot",
           "quality": "Heroic",
-          "description": "Performing a Finisher marks a nearby Majoris-level or higher enemy for a Gun Strike. Light Attack Damage is increased by 100%, but Charged Attack Damage is decreased by 50%"
+          "description": "Performing a Finisher marks a nearby Majoris-level or higher enemy for a Gun Strike. Light Attack Damage increases by 200%, but Charged Attack Damage decreases by 50%."
         },
         {
           "name": "Combi-Weapon",
@@ -9705,7 +9726,8 @@
               "raw": "4+"
             }
           },
-          "figures": {}
+          "figures": {},
+          "defence": "Balanced"
         },
         {
           "quality": "Master-Crafted",
@@ -9724,7 +9746,8 @@
               "raw": "12+"
             }
           },
-          "figures": {}
+          "figures": {},
+          "defence": "Balanced"
         },
         {
           "quality": "Master-Crafted",
@@ -9743,7 +9766,8 @@
               "raw": "4+"
             }
           },
-          "figures": {}
+          "figures": {},
+          "defence": "Block"
         },
         {
           "quality": "Artificer",
@@ -9762,7 +9786,8 @@
               "raw": "12+"
             }
           },
-          "figures": {}
+          "figures": {},
+          "defence": "Balanced"
         },
         {
           "quality": "Artificer",
@@ -9781,7 +9806,8 @@
               "raw": "2"
             }
           },
-          "figures": {}
+          "figures": {},
+          "defence": "Fencing"
         },
         {
           "quality": "Artificer",
@@ -9800,7 +9826,8 @@
               "raw": "4+"
             }
           },
-          "figures": {}
+          "figures": {},
+          "defence": "Block"
         },
         {
           "quality": "Relic",
@@ -9819,7 +9846,8 @@
               "raw": "12+"
             }
           },
-          "figures": {}
+          "figures": {},
+          "defence": "Balanced"
         },
         {
           "quality": "Relic",
@@ -9838,7 +9866,8 @@
               "raw": "2"
             }
           },
-          "figures": {}
+          "figures": {},
+          "defence": "Fencing"
         },
         {
           "quality": "Relic",
@@ -9857,7 +9886,8 @@
               "raw": "4+"
             }
           },
-          "figures": {}
+          "figures": {},
+          "defence": "Block"
         },
         {
           "quality": "Heroic",
@@ -9876,7 +9906,8 @@
               "raw": "2"
             }
           },
-          "figures": {}
+          "figures": {},
+          "defence": "Fencing"
         },
         {
           "quality": "Heroic",
@@ -9895,7 +9926,8 @@
               "raw": "13"
             }
           },
-          "figures": {}
+          "figures": {},
+          "defence": "Balanced"
         }
       ]
     },
@@ -9914,7 +9946,7 @@
         {
           "name": "Master of Offence",
           "quality": "Master-Crafted",
-          "description": "After switching sword-combo Style, you deal 20% more Melee Damage for 5 seconds. Cooldown is 10 seconds."
+          "description": "After switching sword-combat Style, you deal 20% more Melee Damage for 5 seconds. Cooldown is 10 seconds."
         },
         {
           "name": "Perpetual Strength",
@@ -9929,7 +9961,7 @@
         {
           "name": "Master of Defence",
           "quality": "Master-Crafted",
-          "description": "After switching sword-combo Style, you take 20% less Ranged Damage for 5 seconds. Cooldown is 10 seconds."
+          "description": "After switching sword-combat Style, you take 20% less Ranged Damage for 5 seconds. Cooldown is 10 seconds."
         },
         {
           "name": "Tranquility",
@@ -9954,7 +9986,7 @@
         {
           "name": "Melee Onslaught",
           "quality": "Artificer",
-          "description": "This Weapon deals 10% more Melee Damage."
+          "description": "This Weapon deals 10% more Melee Damage"
         },
         {
           "name": "Hard Target",
@@ -10043,7 +10075,8 @@
               "raw": "4"
             }
           },
-          "figures": {}
+          "figures": {},
+          "defence": "Balanced"
         },
         {
           "quality": "Master-Crafted",
@@ -10062,7 +10095,8 @@
               "raw": "12"
             }
           },
-          "figures": {}
+          "figures": {},
+          "defence": "Balanced"
         },
         {
           "quality": "Master-Crafted",
@@ -10081,7 +10115,8 @@
               "raw": "4"
             }
           },
-          "figures": {}
+          "figures": {},
+          "defence": "Block"
         },
         {
           "quality": "Master-Crafted",
@@ -10100,7 +10135,8 @@
               "raw": "2"
             }
           },
-          "figures": {}
+          "figures": {},
+          "defence": "Fencing"
         },
         {
           "quality": "Artificer",
@@ -10119,7 +10155,8 @@
               "raw": "12"
             }
           },
-          "figures": {}
+          "figures": {},
+          "defence": "Balanced"
         },
         {
           "quality": "Artificer",
@@ -10138,7 +10175,8 @@
               "raw": "4"
             }
           },
-          "figures": {}
+          "figures": {},
+          "defence": "Block"
         },
         {
           "quality": "Artificer",
@@ -10157,7 +10195,8 @@
               "raw": "2"
             }
           },
-          "figures": {}
+          "figures": {},
+          "defence": "Fencing"
         },
         {
           "quality": "Relic",
@@ -10176,7 +10215,8 @@
               "raw": "12"
             }
           },
-          "figures": {}
+          "figures": {},
+          "defence": "Balanced"
         },
         {
           "quality": "Relic",
@@ -10195,7 +10235,8 @@
               "raw": "2"
             }
           },
-          "figures": {}
+          "figures": {},
+          "defence": "Fencing"
         },
         {
           "quality": "Relic",
@@ -10214,7 +10255,8 @@
               "raw": "4"
             }
           },
-          "figures": {}
+          "figures": {},
+          "defence": "Block"
         },
         {
           "quality": "Relic",
@@ -10233,7 +10275,8 @@
               "raw": "12"
             }
           },
-          "figures": {}
+          "figures": {},
+          "defence": "Balanced"
         },
         {
           "quality": "Heroic",
@@ -10252,7 +10295,8 @@
               "raw": "16"
             }
           },
-          "figures": {}
+          "figures": {},
+          "defence": "Balanced"
         },
         {
           "quality": "Heroic",
@@ -10271,7 +10315,8 @@
               "raw": "4"
             }
           },
-          "figures": {}
+          "figures": {},
+          "defence": "Fencing"
         }
       ]
     },
@@ -10288,7 +10333,7 @@
           "description": "Melee Damage increases by 5%"
         },
         {
-          "name": "Calm Before The Storm",
+          "name": "Calm Before the Storm",
           "quality": "Master-Crafted",
           "description": "When preparing Aftershock, you take 10% less Ranged Damage"
         },
@@ -10320,7 +10365,7 @@
         {
           "name": "Reclamation",
           "quality": "Artificer",
-          "description": "Aftershock and Ground Slam restores 100% more Contested Health"
+          "description": "Aftershock and Ground Slam restore 100% more Contested Health"
         },
         {
           "name": "Offense Initiated",
@@ -10350,12 +10395,12 @@
         {
           "name": "After Aftershock",
           "quality": "Artificer",
-          "description": "After hitting an enemy with Aftershock, you deal 10% more Melee Damage for 10 seconds."
+          "description": "After hitting an enemy with Aftershock, you deal 10% more Melee Damage for 10 seconds"
         },
         {
           "name": "Patience Rewarded",
           "quality": "Relic",
-          "description": "Aftershock hit restores 1 Armour Segment"
+          "description": "When your Health is below 30%, a fully prepared Aftershock hit restores 1 Armour Segment"
         },
         {
           "name": "Majoris Slayer",
@@ -10370,7 +10415,7 @@
         {
           "name": "Aftershock Improved",
           "quality": "Relic",
-          "description": "Aftershock gains additional spin"
+          "description": "Aftershock gains additional smash"
         },
         {
           "name": "Minoris Slayer",
@@ -10419,7 +10464,8 @@
               "raw": "6"
             }
           },
-          "figures": {}
+          "figures": {},
+          "defence": "Balanced"
         },
         {
           "quality": "Master-Crafted",
@@ -10438,7 +10484,8 @@
               "raw": "12"
             }
           },
-          "figures": {}
+          "figures": {},
+          "defence": "Balanced"
         },
         {
           "quality": "Master-Crafted",
@@ -10457,7 +10504,8 @@
               "raw": "2"
             }
           },
-          "figures": {}
+          "figures": {},
+          "defence": "Fencing"
         },
         {
           "quality": "Master-Crafted",
@@ -10476,7 +10524,8 @@
               "raw": "6"
             }
           },
-          "figures": {}
+          "figures": {},
+          "defence": "Block"
         },
         {
           "quality": "Artificer",
@@ -10495,7 +10544,8 @@
               "raw": "12"
             }
           },
-          "figures": {}
+          "figures": {},
+          "defence": "Balanced"
         },
         {
           "quality": "Artificer",
@@ -10514,7 +10564,8 @@
               "raw": "2"
             }
           },
-          "figures": {}
+          "figures": {},
+          "defence": "Fencing"
         },
         {
           "quality": "Artificer",
@@ -10533,7 +10584,8 @@
               "raw": "6"
             }
           },
-          "figures": {}
+          "figures": {},
+          "defence": "Block"
         },
         {
           "quality": "Artificer",
@@ -10552,7 +10604,8 @@
               "raw": "10"
             }
           },
-          "figures": {}
+          "figures": {},
+          "defence": "Balanced"
         },
         {
           "quality": "Relic",
@@ -10571,7 +10624,8 @@
               "raw": "12"
             }
           },
-          "figures": {}
+          "figures": {},
+          "defence": "Balanced"
         },
         {
           "quality": "Relic",
@@ -10590,7 +10644,8 @@
               "raw": "2"
             }
           },
-          "figures": {}
+          "figures": {},
+          "defence": "Fencing"
         },
         {
           "quality": "Relic",
@@ -10609,7 +10664,8 @@
               "raw": "6"
             }
           },
-          "figures": {}
+          "figures": {},
+          "defence": "Block"
         },
         {
           "quality": "Heroic",
@@ -10628,7 +10684,8 @@
               "raw": "6"
             }
           },
-          "figures": {}
+          "figures": {},
+          "defence": "Fencing"
         },
         {
           "quality": "Heroic",
@@ -10647,7 +10704,319 @@
               "raw": "7"
             }
           },
-          "figures": {}
+          "figures": {},
+          "defence": "Block"
+        }
+      ]
+    },
+    "One-Handed Thunder Hammer": {
+      "perks": [
+        {
+          "name": "Perpetual Strength",
+          "quality": "Standard",
+          "description": "Melee Damage increases by 5%"
+        },
+        {
+          "name": "Perpetual Speed",
+          "quality": "Standard",
+          "description": "Melee Attack Speed increases by 5%"
+        },
+        {
+          "name": "Sustained Charge",
+          "quality": "Master-Crafted",
+          "description": "Increases the time before a Power Charge is lost without dealing damage from 5 to 10 seconds"
+        },
+        {
+          "name": "Perpetual Strength",
+          "quality": "Master-Crafted",
+          "description": "Melee Damage increases by 5%"
+        },
+        {
+          "name": "Charge Overflow",
+          "quality": "Master-Crafted",
+          "description": "Reaching the Maximum Power Charge stack increases Damage by 10% for 20 seconds"
+        },
+        {
+          "name": "Hard Target",
+          "quality": "Master-Crafted",
+          "description": "While performing a Light Combo, you take 15% less Ranged Damage"
+        },
+        {
+          "name": "Perpetual Speed",
+          "quality": "Master-Crafted",
+          "description": "Melee Attack Speed increases by 5%"
+        },
+        {
+          "name": "Energetic Nimbus",
+          "quality": "Master-Crafted",
+          "description": "Incoming ranged damage is reduced by 15% while having a Power Charge stack of 1"
+        },
+        {
+          "name": "Adamant Stance",
+          "quality": "Artificer",
+          "description": "While in Accumulation Stance you don't lose control when taking Heavy Hits and cannot be knocked back"
+        },
+        {
+          "name": "Perpetual Strength",
+          "quality": "Artificer",
+          "description": "Melee Damage increases by 5%"
+        },
+        {
+          "name": "Expanded Impact",
+          "quality": "Artificer",
+          "description": "Area-of-effect radius of Ground Slam is increased by 50%"
+        },
+        {
+          "name": "Hyperenergetic Loop",
+          "quality": "Artificer",
+          "description": "Energy Loop gains 2 Charges instead of 1"
+        },
+        {
+          "name": "Rapid Recharge",
+          "quality": "Artificer",
+          "description": "Killing 5 foes in quick succession with the Light Combo restores 1 Power Charges. Cooldown is 15 seconds"
+        },
+        {
+          "name": "Perfect Reprisal",
+          "quality": "Artificer",
+          "description": "After a Perfect Parry, Perfect Block, or Perfect Dodge, The next Light Attack deals 25% more damage for 7 seconds"
+        },
+        {
+          "name": "Preparedness",
+          "quality": "Artificer",
+          "description": "Killing Majoris-level or higher enemies reduces the cooldown of your class ability by 3%"
+        },
+        {
+          "name": "Deflective Charge",
+          "quality": "Artificer",
+          "description": "Perfect Parry, Perfect Block, and Perfect Dodge instantly generate 1 Power Charges. Cooldown is 20 seconds"
+        },
+        {
+          "name": "Capacity Increase",
+          "quality": "Relic",
+          "description": "Maximum number of Power Charges increases to 4"
+        },
+        {
+          "name": "Reverberating Slam",
+          "quality": "Relic",
+          "description": "Charged Impact hits the ground twice"
+        },
+        {
+          "name": "Brutal Force",
+          "quality": "Relic",
+          "description": "Killing a Majoris-level or higher enemy restores 1 Armour Segment if Health is lower than 30%"
+        },
+        {
+          "name": "Echoing Swing",
+          "quality": "Relic",
+          "description": "Underhand Swing Attacks spawn shockwaves"
+        }
+      ],
+      "budget": 10,
+      "intro": [],
+      "meta": {
+        "slot": "Melee"
+      },
+      "versions": [
+        {
+          "quality": "Standard",
+          "name": "Standard-Issue",
+          "gauges": {
+            "Strength": {
+              "value": 5,
+              "raw": "5"
+            },
+            "Speed": {
+              "value": 4,
+              "raw": "4"
+            },
+            "Cleaving Potential": {
+              "value": 5,
+              "raw": "5"
+            }
+          },
+          "figures": {},
+          "defence": "Balanced"
+        },
+        {
+          "quality": "Master-Crafted",
+          "name": "Master-Crafted - Alpha",
+          "gauges": {
+            "Strength": {
+              "value": 7,
+              "raw": "7"
+            },
+            "Speed": {
+              "value": 4,
+              "raw": "4"
+            },
+            "Cleaving Potential": {
+              "value": 11,
+              "raw": "11"
+            }
+          },
+          "figures": {},
+          "defence": "Balanced"
+        },
+        {
+          "quality": "Master-Crafted",
+          "name": "Master-Crafted - Beta",
+          "gauges": {
+            "Strength": {
+              "value": 6,
+              "raw": "6"
+            },
+            "Speed": {
+              "value": 8,
+              "raw": "8"
+            },
+            "Cleaving Potential": {
+              "value": 3,
+              "raw": "3"
+            }
+          },
+          "figures": {},
+          "defence": "Fencing"
+        },
+        {
+          "quality": "Artificer",
+          "name": "Salvation of Bakka - Alpha",
+          "gauges": {
+            "Strength": {
+              "value": 10,
+              "raw": "10"
+            },
+            "Speed": {
+              "value": 5,
+              "raw": "5"
+            },
+            "Cleaving Potential": {
+              "value": 11,
+              "raw": "11"
+            }
+          },
+          "figures": {},
+          "defence": "Balanced"
+        },
+        {
+          "quality": "Artificer",
+          "name": "Salvation of Bakka - Beta",
+          "gauges": {
+            "Strength": {
+              "value": 7,
+              "raw": "7"
+            },
+            "Speed": {
+              "value": 8,
+              "raw": "8"
+            },
+            "Cleaving Potential": {
+              "value": 3,
+              "raw": "3"
+            }
+          },
+          "figures": {},
+          "defence": "Fencing"
+        },
+        {
+          "quality": "Artificer",
+          "name": "Salvation of Bakka - Gamma",
+          "gauges": {
+            "Strength": {
+              "value": 10,
+              "raw": "10"
+            },
+            "Speed": {
+              "value": 3,
+              "raw": "3"
+            },
+            "Cleaving Potential": {
+              "value": 5,
+              "raw": "5"
+            }
+          },
+          "figures": {},
+          "defence": "Block"
+        },
+        {
+          "quality": "Relic",
+          "name": "Ophelian Liberation - Alpha",
+          "gauges": {
+            "Strength": {
+              "value": 16,
+              "raw": "16"
+            },
+            "Speed": {
+              "value": 6,
+              "raw": "6"
+            },
+            "Cleaving Potential": {
+              "value": 11,
+              "raw": "11"
+            }
+          },
+          "figures": {},
+          "defence": "Balanced"
+        },
+        {
+          "quality": "Relic",
+          "name": "Ophelian Liberation - Beta",
+          "gauges": {
+            "Strength": {
+              "value": 13,
+              "raw": "13"
+            },
+            "Speed": {
+              "value": 8,
+              "raw": "8"
+            },
+            "Cleaving Potential": {
+              "value": 3,
+              "raw": "3"
+            }
+          },
+          "figures": {},
+          "defence": "Fencing"
+        },
+        {
+          "quality": "Relic",
+          "name": "Ophelian Liberation - Gamma",
+          "gauges": {
+            "Strength": {
+              "value": 15,
+              "raw": "15"
+            },
+            "Speed": {
+              "value": 3,
+              "raw": "3"
+            },
+            "Cleaving Potential": {
+              "value": 5,
+              "raw": "5"
+            }
+          },
+          "figures": {},
+          "defence": "Block"
+        },
+        {
+          "quality": "Heroic",
+          "name": "Power Maul",
+          "gauges": {
+            "Strength": {
+              "value": 15,
+              "raw": "15"
+            },
+            "Speed": {
+              "value": 6,
+              "raw": "6"
+            },
+            "Cleaving Potential": {
+              "value": 13,
+              "raw": "13"
+            }
+          },
+          "figures": {},
+          "defence": "Balanced"
         }
       ]
     },
@@ -10696,7 +11065,7 @@
         {
           "name": "Riposte",
           "quality": "Master-Crafted",
-          "description": "Overhead Strike after performing Power Backstep deals double damage"
+          "description": "Overhead Strike Damage after performing a Power Backstep is doubled"
         },
         {
           "name": "Power Strike",
@@ -10731,22 +11100,22 @@
         {
           "name": "Restoration",
           "quality": "Relic",
-          "description": "Killing 7 enemies in rapid succession restores 1 Armour Segments. Cooldown is 15 seconds."
+          "description": "Killing 7 enemies in rapid succession restores 1 Armour Segment. Cooldown is 15 seconds."
         },
         {
           "name": "Slash Momentum",
           "quality": "Relic",
-          "description": "Each consecutive Whirl Slash increases its Damage by 3% (up to 30%) for 1 seconds"
+          "description": "Each consecutive Whirl Slash increases its Damage by 3% (up to 30%) for 3 seconds"
         },
         {
           "name": "Rebound",
           "quality": "Relic",
-          "description": "Speed Style attacks restore 100% more Contested Health"
+          "description": "Light Attacks restore 100% more Contested Health"
         },
         {
           "name": "Discharge",
           "quality": "Relic",
-          "description": "Overhead Strike deals Damage around the target. Cooldown is 15 seconds."
+          "description": "Overhead Strike deals additional area Damage around the target. Cooldown is 15 seconds."
         },
         {
           "name": "Sanguine Edge",
@@ -10754,7 +11123,7 @@
           "description": "Power Backstep can still be performed with the next Heavy Attack, even if you move out of Power Stance"
         }
       ],
-      "budget": 10,
+      "budget": 11,
       "intro": [
         "Fast power Weapon with infinitely chained attacks",
         "The Power Axe ingame sports some of the most fluid combat loop out of all melee weapons. Unlike most melee weapons, it does not have a damaging heavy attack, instead relying on its light attacks for its single target damage. Still, users will find its heavy attack's cleave and hitbox more than generous for handing minoris enemies. Thanks to its combo loops, however, one always has an answer for maximizing damage against either a horde or a single high value target. Uniquely, the Power Axe's sprint attack does more damage than other weapons'."
@@ -10780,7 +11149,8 @@
               "raw": "5"
             }
           },
-          "figures": {}
+          "figures": {},
+          "defence": "Balanced"
         },
         {
           "quality": "Master-Crafted",
@@ -10799,7 +11169,8 @@
               "raw": "9"
             }
           },
-          "figures": {}
+          "figures": {},
+          "defence": "Balanced"
         },
         {
           "quality": "Master-Crafted",
@@ -10818,7 +11189,8 @@
               "raw": "2"
             }
           },
-          "figures": {}
+          "figures": {},
+          "defence": "Fencing"
         },
         {
           "quality": "Artificer",
@@ -10837,7 +11209,8 @@
               "raw": "9"
             }
           },
-          "figures": {}
+          "figures": {},
+          "defence": "Balanced"
         },
         {
           "quality": "Artificer",
@@ -10856,7 +11229,8 @@
               "raw": "2"
             }
           },
-          "figures": {}
+          "figures": {},
+          "defence": "Fencing"
         },
         {
           "quality": "Artificer",
@@ -10875,7 +11249,8 @@
               "raw": "5"
             }
           },
-          "figures": {}
+          "figures": {},
+          "defence": "Block"
         },
         {
           "quality": "Relic",
@@ -10894,7 +11269,8 @@
               "raw": "9"
             }
           },
-          "figures": {}
+          "figures": {},
+          "defence": "Balanced"
         },
         {
           "quality": "Relic",
@@ -10913,7 +11289,8 @@
               "raw": "2"
             }
           },
-          "figures": {}
+          "figures": {},
+          "defence": "Fencing"
         },
         {
           "quality": "Relic",
@@ -10932,7 +11309,8 @@
               "raw": "5"
             }
           },
-          "figures": {}
+          "figures": {},
+          "defence": "Block"
         },
         {
           "quality": "Heroic",
@@ -10951,7 +11329,28 @@
               "raw": "17"
             }
           },
-          "figures": {}
+          "figures": {},
+          "defence": "Block"
+        },
+        {
+          "quality": "Heroic",
+          "name": "Frost Axe",
+          "gauges": {
+            "Strength": {
+              "value": 16,
+              "raw": "16"
+            },
+            "Speed": {
+              "value": 8,
+              "raw": "8"
+            },
+            "Cleaving Potential": {
+              "value": 17,
+              "raw": "17"
+            }
+          },
+          "figures": {},
+          "defence": "Balanced"
         }
       ]
     },
@@ -11015,10 +11414,10 @@
         {
           "name": "Rampage",
           "quality": "Artificer",
-          "description": "If Omnissian Rush hits 5 or more foes, the Damage of all Melee Attacks is increased by 20for 10 seconds"
+          "description": "If Omnissian Rush hits 5 or more times, Melee Attack Damage increases by 20% for 10 seconds"
         },
         {
-          "name": "Supercharged Follow-up",
+          "name": "Supercharged Follow-Up",
           "quality": "Artificer",
           "description": "After Power Discharge, the next Light Attack is a powerful Sweeping Whirl."
         },
@@ -11058,7 +11457,7 @@
           "description": "Power Discharge can hit twice. Keep holding to release a second shockwave."
         },
         {
-          "name": "Word Of The Omnissiah",
+          "name": "Word of the Omnissiah",
           "quality": "Heroic",
           "description": "The attack after Omnissian Rush deals increased damage based on the duration of the rush."
         }
@@ -11089,11 +11488,12 @@
               "raw": "4"
             }
           },
-          "figures": {}
+          "figures": {},
+          "defence": "Balanced"
         },
         {
           "quality": "Master-Crafted",
-          "name": "Master-Crafted — Alpha",
+          "name": "Master-Crafted - Alpha",
           "gauges": {
             "Strength": {
               "value": 9,
@@ -11108,11 +11508,12 @@
               "raw": "9"
             }
           },
-          "figures": {}
+          "figures": {},
+          "defence": "Balanced"
         },
         {
           "quality": "Master-Crafted",
-          "name": "Master-Crafted — Beta",
+          "name": "Master-Crafted - Beta",
           "gauges": {
             "Strength": {
               "value": 6,
@@ -11127,7 +11528,8 @@
               "raw": "3"
             }
           },
-          "figures": {}
+          "figures": {},
+          "defence": "Fencing"
         },
         {
           "quality": "Artificer",
@@ -11146,11 +11548,12 @@
               "raw": "11"
             }
           },
-          "figures": {}
+          "figures": {},
+          "defence": "Balanced"
         },
         {
           "quality": "Artificer",
-          "name": "Salvation of Bakka — Alpha",
+          "name": "Salvation of Bakka - Alpha",
           "gauges": {
             "Strength": {
               "value": 10,
@@ -11165,11 +11568,12 @@
               "raw": "3"
             }
           },
-          "figures": {}
+          "figures": {},
+          "defence": "Fencing"
         },
         {
           "quality": "Artificer",
-          "name": "Salvation of Bakka — Beta",
+          "name": "Salvation of Bakka - Beta",
           "gauges": {
             "Strength": {
               "value": 13,
@@ -11184,11 +11588,12 @@
               "raw": "5"
             }
           },
-          "figures": {}
+          "figures": {},
+          "defence": "Block"
         },
         {
           "quality": "Relic",
-          "name": "Ophelian Liberation — Alpha",
+          "name": "Ophelian Liberation - Alpha",
           "gauges": {
             "Strength": {
               "value": 19,
@@ -11203,11 +11608,12 @@
               "raw": "13"
             }
           },
-          "figures": {}
+          "figures": {},
+          "defence": "Balanced"
         },
         {
           "quality": "Relic",
-          "name": "Ophelian Liberation — Beta",
+          "name": "Ophelian Liberation - Beta",
           "gauges": {
             "Strength": {
               "value": 13,
@@ -11222,7 +11628,8 @@
               "raw": "3"
             }
           },
-          "figures": {}
+          "figures": {},
+          "defence": "Fencing"
         },
         {
           "quality": "Relic",
@@ -11241,7 +11648,8 @@
               "raw": "5"
             }
           },
-          "figures": {}
+          "figures": {},
+          "defence": "Block"
         },
         {
           "quality": "Relic",
@@ -11260,7 +11668,8 @@
               "raw": "1"
             }
           },
-          "figures": {}
+          "figures": {},
+          "defence": "Fencing"
         }
       ]
     }

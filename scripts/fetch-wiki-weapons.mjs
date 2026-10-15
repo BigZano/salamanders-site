@@ -7,121 +7,75 @@
  * aren't in the bake yet.
  *
  *   bun run wiki:weapons
+ *   bun run wiki:weapons -- --keep-perks
+ *
+ * --keep-perks keeps the perk lists, budgets and version stats already in the
+ * bake for weapons that are in it, and takes only the fresh meta, intro, new
+ * versions and defence types. The wiki has drifted from the patch notes in
+ * places; this lets a re-bake pick up new weapons and defence types without
+ * adopting every uncorroborated perk or stat edit. What it held back is
+ * printed as a drift report.
  */
-import { writeFile } from 'node:fs/promises'
-import {
-  fetchPage,
-  tableAfter,
-  tableRecords,
-  rowsOf,
-  clean,
-  normalizeQuality,
-  sleep,
-} from './lib/wiki.mjs'
+import { readFile, writeFile } from 'node:fs/promises'
+import { fetchPage, sleep } from './lib/wiki.mjs'
+import { buildTree, mergeTrees } from './lib/weapon-parse.mjs'
+import { listDrift } from './lib/drift.mjs'
 import weapons from '../src/data/weapons.json' with { type: 'json' }
 
 const OUT = new URL('../src/data/weapon-trees.json', import.meta.url)
+const KEEP_PERKS = process.argv.includes('--keep-perks')
 
-/** The "Perk List" table: quality is rowspanned across its perks. */
-function parsePerks(doc) {
-  const rows = rowsOf(tableAfter(doc, 'Perk List'))
-  const out = []
-  let quality = ''
-  for (const cells of rows) {
-    const rowQuality = normalizeQuality(cells[0])
-    if (rowQuality) quality = rowQuality
-
-    let name, description
-    if (rowQuality && cells.length >= 3) {
-      ;[, name, description] = cells
-    } else {
-      name = cells[cells.length - 2]
-      description = cells[cells.length - 1]
-    }
-    if (!name || !description || name === description || name.length > 100) continue
-    out.push({ name, quality: quality || 'Unknown', description })
+async function readPrevious() {
+  try {
+    return JSON.parse(await readFile(OUT, 'utf8')).weapons || {}
+  } catch {
+    return {}
   }
-  return out
 }
 
-/** Perk-point budget is the number of upgrade rows in the stats table. */
-function parseBudget(doc) {
-  const table = tableAfter(doc, 'In-game shown stats') || tableAfter(doc, 'Versions')
-  if (!table) return 10
-  const rows = table
-    .querySelectorAll('tr')
-    .filter((tr) => tr.querySelectorAll('td').length >= 2).length
-  return Math.max(1, Math.min(30, rows || 10))
-}
+const perkItems = (tree) => tree.perks.map((p) => ({ key: `${p.quality}|${p.name}`, text: p.description }))
 
-// Ranged pages rate Firepower/Accuracy/…; melee pages rate Strength/Speed/
-// Cleaving Potential/Defence. Rather than hardcode either list, treat every
-// column that isn't an identity or an absolute figure as a 0-10 gauge.
-const IDENTITY = ['Quality', 'Version', 'Version Name']
-const FIGURES = ['Magazine Capacity', 'Ammo Reserve']
+const statsOf = (v) => JSON.stringify({ g: Object.fromEntries(Object.entries(v.gauges).map(([k, x]) => [k, x.raw])), f: v.figures })
 
-/** "4+" reads as a half-step above 4 on the in-game bars. */
-function ratingValue(raw) {
-  const m = clean(raw).match(/^(\d+(?:\.\d+)?)\s*(\+)?/)
-  if (!m) return null
-  return Number(m[1]) + (m[2] ? 0.5 : 0)
-}
+/** What --keep-perks held back: perk edits per weapon, then version stat edits. */
+function reportHeld(previous, fresh) {
+  const total = { wording: 0, numeric: 0, added: 0, removed: 0, stats: 0 }
+  for (const [name, f] of Object.entries(fresh)) {
+    const p = previous[name]
+    if (!p?.perks?.length) continue
+    const d = listDrift(perkItems(p), perkItems(f))
+    const n = {
+      wording: d.changed.filter((c) => c.kind === 'wording').length,
+      numeric: d.changed.filter((c) => c.kind === 'numeric').length,
+      added: d.added.length,
+      removed: d.removed.length,
+    }
+    for (const k of Object.keys(n)) total[k] += n[k]
+    if (Object.values(n).some(Boolean)) {
+      console.log(`  held ${name}: ${n.wording} wording, ${n.numeric} numeric, ${n.added} added, ${n.removed} removed`)
+      for (const c of d.changed.filter((c) => c.kind === 'numeric')) console.log(`      ${c.key}: "${c.old}" -> "${c.new}"`)
+    }
+  }
+  console.log(`\nHeld in total: ${total.wording} wording, ${total.numeric} numeric, ${total.added} added, ${total.removed} removed`)
 
-/** Per-version stat lines from the "In-game shown stats" table. */
-function parseVersions(doc) {
-  const recs = tableRecords(tableAfter(doc, 'In-game shown stats'))
-  return recs
-    .map((r) => {
-      const name = r['Version Name'] || r.Version || ''
-      if (!name) return null
-
-      const gauges = {}
-      const figures = {}
-      for (const [key, raw] of Object.entries(r)) {
-        if (!key || !raw || IDENTITY.includes(key)) continue
-        if (FIGURES.includes(key)) {
-          figures[key] = raw
-          continue
-        }
-        const value = ratingValue(raw)
-        if (value !== null) gauges[key] = { value, raw }
+  for (const [name, f] of Object.entries(fresh)) {
+    const before = new Map((previous[name]?.versions || []).map((v) => [v.name, v]))
+    const listed = new Map()
+    for (const v of f.versions) listed.set(v.name, (listed.get(v.name) || 0) + 1)
+    for (const [version, n] of listed) {
+      if (n > 1) console.log(`  held duplicate ${name} / ${version}: the wiki lists it ${n} times, the baked version is kept`)
+    }
+    for (const v of f.versions) {
+      const was = before.get(v.name)
+      if (listed.get(v.name) === 1 && was && statsOf(was) !== statsOf(v)) {
+        total.stats++
+        console.log(`  held stats ${name} / ${v.name}: ${statsOf(was)} -> ${statsOf(v)}`)
       }
-
-      return { quality: normalizeQuality(r.Quality) || r.Quality || '', name, gauges, figures }
-    })
-    .filter(Boolean)
-}
-
-/** Slot / category / damage type / usable classes, from the infobox. */
-function parseMeta(doc) {
-  const out = {}
-  for (const d of doc.querySelectorAll('.portable-infobox .pi-data, aside .pi-data')) {
-    const label = clean(d.querySelector('.pi-data-label')?.text)
-    const value = clean(d.querySelector('.pi-data-value')?.text)
-    if (!label || !value) continue
-    if (/^slot$/i.test(label)) out.slot = value
-    else if (/^category$/i.test(label)) out.category = value
-    // The infobox concatenates damage types with no separator, e.g.
-    // "Bullet(Bolter)Explosive(Grenade)" — split them back apart.
-    else if (/damage type/i.test(label)) {
-      out.damageType = value
-        .replace(/\)(?=[A-Z])/g, ') · ')
-        .replace(/([a-z])(?=[A-Z])/g, '$1 · ')
     }
+    const now = new Set(f.versions.map((v) => v.name))
+    for (const v of before.values()) if (!now.has(v.name)) console.log(`  held version ${name} / ${v.name}: dropped on the wiki, kept`)
   }
-  return out
-}
-
-/** Lead paragraphs, which on these pages sit above the first section heading. */
-function parseIntro(doc) {
-  const out = []
-  for (const p of doc.querySelectorAll('p')) {
-    // Pages label the lead "Description: …"; the label isn't worth shipping.
-    const t = clean(p.text).replace(/^Description:\s*/i, '')
-    if (t) out.push(t)
-    if (out.length >= 2) break
-  }
-  return out
+  console.log(`Held version stat edits: ${total.stats}`)
 }
 
 async function run() {
@@ -132,18 +86,13 @@ async function run() {
   for (const name of names) {
     try {
       const doc = await fetchPage(name)
-      const perks = parsePerks(doc)
-      if (!perks.length) throw new Error('no readable perk table')
-      const versions = parseVersions(doc)
-      trees[name] = {
-        perks,
-        budget: parseBudget(doc),
-        intro: parseIntro(doc),
-        meta: parseMeta(doc),
-        versions,
-      }
+      trees[name] = buildTree(doc)
+      const t = trees[name]
+      const versionNames = t.versions.map((v) => v.name)
+      const repeated = [...new Set(versionNames.filter((n, i) => versionNames.indexOf(n) !== i))]
+      if (repeated.length) console.warn(`  ! ${name}: the wiki lists ${repeated.join(', ')} more than once; the last row is kept`)
       console.log(
-        `  ${name}: ${perks.length} perks, budget ${trees[name].budget}, ${versions.length} versions`,
+        `  ${name}: ${t.perks.length} perks${t.perksPending ? ' (pending)' : ''}, budget ${t.budget}, ${t.versions.length} versions`,
       )
     } catch (err) {
       failed.push(`${name} (${err.message})`)
@@ -152,12 +101,16 @@ async function run() {
     await sleep(250) // be polite to Fandom
   }
 
+  const previous = await readPrevious()
+  if (KEEP_PERKS) reportHeld(previous, trees)
+  const merged = mergeTrees(previous, trees, { keepPerks: KEEP_PERKS })
+
   await writeFile(
     OUT,
-    JSON.stringify({ fetched: new Date().toISOString(), weapons: trees }, null, 2),
+    JSON.stringify({ fetched: new Date().toISOString(), weapons: merged }, null, 2),
   )
   console.log(
-    `\nWrote ${Object.keys(trees).length}/${names.length} weapon trees to ${OUT.pathname}`,
+    `\nWrote ${Object.keys(merged).length} weapon trees (${Object.keys(trees).length}/${names.length} fetched) to ${OUT.pathname}`,
   )
   if (failed.length) console.log(`Not baked (live fetch will cover these): ${failed.join(', ')}`)
 }

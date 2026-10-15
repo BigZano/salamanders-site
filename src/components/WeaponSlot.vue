@@ -2,7 +2,7 @@
 import { ref, computed, watch } from 'vue'
 import { usePlanner } from '../stores/planner'
 import { WIKI } from '../lib/wiki'
-import { resolveWeapon } from '../lib/weapons'
+import { resolveWeapon, weaponLabel } from '../lib/weapons'
 import WeaponTree from './WeaponTree.vue'
 
 /**
@@ -64,7 +64,7 @@ const wikiUrl = computed(() => WIKI + encodeURIComponent(weapon.value))
         <option value="">
           {{ options.length ? 'None selected' : `No ${label.toLowerCase()} for this class` }}
         </option>
-        <option v-for="w in options" :key="w" :value="w">{{ w }}</option>
+        <option v-for="w in options" :key="w" :value="w">{{ weaponLabel(w) }}</option>
       </select>
 
       <span v-if="weapon" class="slot-pts" :class="{ spent: spent > 0 }">
@@ -85,6 +85,10 @@ const wikiUrl = computed(() => WIKI + encodeURIComponent(weapon.value))
       <div v-else-if="status === 'error'" class="slot-msg slot-msg-error">
         <p>No perk tree for {{ weapon }} yet — the wiki page has no readable perk table.</p>
         <a class="slot-wiki" :href="wikiUrl" target="_blank" rel="noopener">Open wiki ↗</a>
+      </div>
+
+      <div v-else-if="status === 'ready' && data?.perksPending" class="slot-msg slot-pending">
+        <p>Perk tree not published yet for {{ weaponLabel(weapon) }}. The wiki has its stats but not its perk list.</p>
       </div>
 
       <WeaponTree v-else-if="status === 'ready' && data" :weapon="weapon" :data="data" />

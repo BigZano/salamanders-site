@@ -8,6 +8,7 @@ import * as buildsApi from '../lib/buildsApi'
 import { createLongPress } from '../lib/longPress'
 import WeaponSlot from '../components/WeaponSlot.vue'
 import PerkEditPanel from '../components/PerkEditPanel.vue'
+import StaleNotice from '../components/StaleNotice.vue'
 
 const planner = usePlanner()
 const auth = useAuth()
@@ -212,6 +213,8 @@ onBeforeUnmount(() => {
         {{ name }}
       </button>
     </div>
+
+    <StaleNotice :notices="planner.activeStaleNotices" @dismiss="planner.dismissStaleNotices()" />
 
     <!-- Class hero -->
     <div class="hero-card">

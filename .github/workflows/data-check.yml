@@ -63,4 +63,7 @@ jobs:
             ```
 
             Review the diff before merging — a bad wiki edit lands here too.
+            Corrections we know the wiki gets wrong live in src/data/patch-overrides.json and
+            are re-applied on every run; the job log warns when one has gone stale. This PR
+            does not run the tests: run `bun run test` on the PR branch before merging.
             Merging deploys automatically.
