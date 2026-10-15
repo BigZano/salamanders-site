@@ -19,12 +19,19 @@ describe('useNavLinks', () => {
     expect(labels(useNavLinks())).toEqual(['Home', 'Perk Builder', 'Armoury', 'Builds', 'Companies'])
   })
 
-  it('also gives a member Accolades, Ranks, Reports and Roster, in order', () => {
+  it('also gives a member Accolades, Ranks and Reports, in order', () => {
     state.auth.member = { isMember: true }
     const links = useNavLinks()
-    expect(labels(links)).toEqual(['Home', 'Perk Builder', 'Armoury', 'Builds', 'Companies', 'Accolades', 'Ranks', 'Reports', 'Roster'])
-    expect(links.value.find((l) => l.label === 'Roster')).toEqual({ to: '/roster', label: 'Roster', section: true })
+    expect(labels(links)).toEqual(['Home', 'Perk Builder', 'Armoury', 'Builds', 'Companies', 'Accolades', 'Ranks', 'Reports'])
+    expect(links.value.find((l) => l.label === 'Reports')).toEqual({ to: '/reports', label: 'Reports', section: true })
     expect(links.value.find((l) => l.label === 'Home').section).toBeUndefined()
+  })
+
+  it('has no Roster link for anyone: the roster lives on Companies now', () => {
+    for (const member of [null, { isMember: false }, { isMember: true }]) {
+      state.auth.member = member
+      expect(useNavLinks().value.some((l) => l.to === '/roster' || l.label === 'Roster')).toBe(false)
+    }
   })
 
   it('adds Version History for a historyViewer', () => {
@@ -43,10 +50,10 @@ describe('useNavLinks', () => {
 
   it('follows sign-in and sign-out', () => {
     const links = useNavLinks()
-    expect(labels(links)).not.toContain('Roster')
+    expect(labels(links)).not.toContain('Reports')
     state.auth.member = { isMember: true }
-    expect(labels(links)).toContain('Roster')
+    expect(labels(links)).toContain('Reports')
     state.auth.member = null
-    expect(labels(links)).not.toContain('Roster')
+    expect(labels(links)).not.toContain('Reports')
   })
 })

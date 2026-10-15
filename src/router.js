@@ -1,6 +1,7 @@
 import { createRouter, createWebHistory } from 'vue-router'
 import Landing from './views/Landing.vue'
 import { scrubCallbackHash } from './lib/discordAuth'
+import { legacyRosterTarget } from './lib/companyKeys'
 
 // Must run before createWebHashHistory() below reads location.hash — see
 // discordAuth.js for why this can't just happen in main.js.
@@ -50,12 +51,8 @@ const routes = [
     component: () => import('./views/History.vue'),
     meta: { title: 'Version History' },
   },
-  {
-    path: '/roster',
-    name: 'roster',
-    component: () => import('./views/Roster.vue'),
-    meta: { title: 'Roster' },
-  },
+  // The roster moved onto /companies; old links (and bookmarks, with their #branch-key) still land.
+  { path: '/roster', redirect: legacyRosterTarget },
   ...[
     { key: 'accolades', title: 'Accolades' },
     { key: 'ranks', title: 'Ranks' },
