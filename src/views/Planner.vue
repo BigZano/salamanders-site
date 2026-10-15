@@ -6,6 +6,7 @@ import { useAuth } from '../stores/auth'
 import { usePerkCorrections } from '../stores/perkCorrections'
 import * as buildsApi from '../lib/buildsApi'
 import { createLongPress } from '../lib/longPress'
+import { perkStateKey } from '../lib/perkStateKey'
 import WeaponSlot from '../components/WeaponSlot.vue'
 import PerkEditPanel from '../components/PerkEditPanel.vue'
 import StaleNotice from '../components/StaleNotice.vue'
@@ -125,8 +126,8 @@ async function submitSave() {
 
 // Weapon perks picked for the weapon currently in a given slot.
 function weaponPerkCount(slotKey) {
-  const w = planner.activeWeapons[slotKey]
-  return w ? planner.weaponUsed(w) : 0
+  const key = perkStateKey(slotKey, planner.activeWeapons[slotKey])
+  return key ? planner.weaponUsed(key) : 0
 }
 
 const isSelected = (perk) => planner.selected[perk.col] === perk.name

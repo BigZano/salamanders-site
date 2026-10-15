@@ -287,3 +287,41 @@ describe('WeaponTree duplicate names within a tier', () => {
     expect(w.find('.pe').exists()).toBe(true)
   })
 })
+
+describe('WeaponTree stateKey', () => {
+  const tree = (props = {}) => mount(WeaponTree, { props: { weapon: 'Test', data, ...props } })
+  const points = (w) => w.find('.wtree-pts').text()
+
+  it('keeps picks, budget and reset apart from the same weapon without a stateKey', async () => {
+    const planner = usePlanner()
+    const primary = tree()
+    const secondary = tree({ stateKey: 'Test (Secondary)' })
+
+    await primary.findAll('.wnode')[0].trigger('click')
+    expect(points(primary)).toBe('1 / 5 points')
+    expect(points(secondary)).toBe('0 / 5 points')
+
+    await secondary.findAll('.wnode')[1].trigger('click')
+    expect(Object.keys(planner.weaponPerks.Test)).toHaveLength(1)
+    expect(Object.keys(planner.weaponPerks['Test (Secondary)'])).toHaveLength(1)
+
+    const budget = secondary.find('.wtree-budget input')
+    budget.element.value = '2'
+    await budget.trigger('change')
+    expect(points(secondary)).toBe('1 / 2 points')
+    expect(points(primary)).toBe('1 / 5 points')
+
+    await secondary.find('.wtree-reset').trigger('click')
+    expect(points(secondary)).toBe('0 / 2 points')
+    expect(points(primary)).toBe('1 / 5 points')
+  })
+
+  it('shows a correction to the weapon in both copies', async () => {
+    const s = usePerkCorrections()
+    s.doc = { version: 'v', classes: {}, weapons: { Test: [{ id: 1, op: 'edit', quality: 'Standard', perkName: 'B', description: 'fixed', createdAt: '2026-09-27T12:00:00.000Z' }] } }
+    for (const w of [tree(), tree({ stateKey: 'Test (Secondary)' })]) {
+      await w.findAll('.wnode')[1].trigger('mouseenter')
+      expect(w.find('.wdetail-desc').text()).toBe('fixed')
+    }
+  })
+})
