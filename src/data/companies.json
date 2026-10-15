@@ -37,12 +37,6 @@
             "Firedrake Sergeant To'ad",
             "A trusted right hand who balances command with camaraderie. Along with Cooler, he was one of the first members of First Company to pass the trials and be accepted.",
             "Preferring to fight from a distance, To'ad will often be seen sporting his preferred Hellblaster to dispatch threats."
-          ],
-          [
-            "Firedrake Champion Kaladier",
-            "A shining example of the teaching of the Promethean Creed, Kaladier tirelessly works to push himself and his brothers in First Company to new heights.",
-            "Always eager to see others succeed alongside himself, he has frequently been among the first to volunteer to assist other companies.",
-            "Clad in his Intercessor loadout, he will rotate his weaponry from heavy bolter to Hellblaster depending on his team's strike needs."
           ]
         ]
       }
@@ -78,10 +72,10 @@
             "Upon his interment, he was placed in one of the Legion's most precious relics — a Saturnine Dreadnought rediscovered by Vulkan himself."
           ],
           [
-            "Veteran Sergeant Dra'ak",
-            "A veteran of countless battles and former Company Ancient. He combines extensive service with dedication to his brothers and a particular enthusiasm for bolters and bombs.",
-            "Ever present with the Intercessor loadout, he delivers death to the enemies of the Imperium of Man with ruthless efficiency.",
-            "Another bright spot in the coals, Dra'ak is known for going out of his way to help new recruits integrate into the community and company."
+            "Lieutenant Kaladier",
+            "A shining example of the teaching of the Promethean Creed, Kaladier tirelessly works to push himself and his brothers in First Company to new heights.",
+            "Always eager to see others succeed alongside himself, he has frequently been among the first to volunteer to assist other companies.",
+            "Clad in his Intercessor loadout, he will rotate his weaponry from heavy bolter to Hellblaster depending on his team's strike needs."
           ]
         ]
       }
@@ -289,8 +283,7 @@
       {
         "h": "About",
         "p": [
-          "Wounded past the saving of flesh, the Legion's oldest heroes are entombed in the sarcophagi of Dreadnoughts and wake to fight again in its hour of need.",
-          "Their full story is still being written."
+          "Wounded past the saving of flesh, the Legion's oldest heroes are entombed in the sarcophagi of Dreadnoughts and wake to fight again in its hour of need."
         ]
       }
     ]

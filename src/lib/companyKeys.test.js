@@ -24,13 +24,25 @@ describe('companies.json branch keys', () => {
     expect(companies).toHaveLength(fixture.roster.branches.length)
   })
 
-  it('puts the Venerable Dreadnoughts directly after the 7th Company, with a placeholder story', () => {
+  it('puts the Venerable Dreadnoughts directly after the 7th Company', () => {
     const ids = companies.map((c) => c.id)
     expect(ids[ids.indexOf('seventh') + 1]).toBe('dreadnoughts')
     const d = companies.find((c) => c.id === 'dreadnoughts')
     expect(d).toMatchObject({ sigil: 'VD', branch: 'venerable-dreadnoughts', title: 'The Venerable Dreadnoughts' })
-    expect(d.sections).toHaveLength(1)
-    expect(d.sections[0].p).toHaveLength(2)
+  })
+
+  // What the page needs from an entry's story, not how long it is: the article renders each section's
+  // heading and paragraphs, so a story with none, or with a blank one, would render an empty block.
+  it('gives every company a story the page can render', () => {
+    for (const c of companies) {
+      expect(c.sections.length, c.id).toBeGreaterThan(0)
+      for (const s of c.sections) {
+        expect(typeof s.h === 'string' && s.h.trim() !== '', `${c.id}: a section heading`).toBe(true)
+        const text = [...(s.p ?? []), ...(s.list ?? [])]
+        expect(text.length + (s.notables?.length ?? 0), `${c.id}: ${s.h} has content`).toBeGreaterThan(0)
+        expect(text.every((t) => typeof t === 'string' && t.trim() !== ''), `${c.id}: ${s.h} has a blank line`).toBe(true)
+      }
+    }
   })
 })
 
