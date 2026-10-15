@@ -7,3 +7,5 @@ import { request } from './buildsApi'
 
 export const getRoster = (token) => request('/roster', { token, cache: 'no-store' })
 export const getInfirmary = (token) => request('/roster/infirmary', { token, cache: 'no-store' })
+// The public projection (leaders by name, ranks as counts): no sign-in, and the browser may cache it for the minute the server allows.
+export const getPublicRoster = () => request('/roster/public')
