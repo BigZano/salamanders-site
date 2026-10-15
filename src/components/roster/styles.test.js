@@ -5,7 +5,14 @@ import { compileStyle } from '@vue/compiler-sfc'
 // Unit tests do not process component CSS, so a bad stylesheet passes every
 // behaviour test and only shows up on screen. These read the SFC styles directly.
 const dir = new URL('./', import.meta.url)
-const files = [...readdirSync(dir).filter((f) => f.endsWith('.vue')).map((f) => [f, new URL(f, dir)]), ['Roster.vue', new URL('../../views/Roster.vue', import.meta.url)]]
+// the roster pieces here, and the page and company pieces elsewhere that carry roster styles too
+const outside = [
+  ['Companies.vue', '../../views/Companies.vue'],
+  ['CompanyArticle.vue', '../company/CompanyArticle.vue'],
+  ['MusterSection.vue', '../company/MusterSection.vue'],
+  ['RanksPlaceholder.vue', '../company/RanksPlaceholder.vue'],
+].map(([name, path]) => [name, new URL(path, import.meta.url)])
+const files = [...readdirSync(dir).filter((f) => f.endsWith('.vue')).map((f) => [f, new URL(f, dir)]), ...outside]
 const styleBlocks = (source) => [...source.matchAll(/<style([^>]*)>([\s\S]*?)<\/style>/g)].map((m) => ({ scoped: /\bscoped\b/.test(m[1]), css: m[2] }))
 
 describe('roster styles', () => {

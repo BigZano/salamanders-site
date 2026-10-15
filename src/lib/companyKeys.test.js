@@ -4,6 +4,7 @@ import fixture from '../data/roster.fixture.json'
 import {
   HIGH_COMMAND_ENTRY,
   HIGH_COMMAND_ID,
+  MUSTER_ENTRY,
   MUSTER_ID,
   articleIdOfBranch,
   branchKeyOfArticle,
@@ -62,6 +63,7 @@ describe('articleIdOfBranch and branchKeyOfArticle', () => {
     expect(MUSTER_ID).toBe('muster')
     expect(HIGH_COMMAND_ENTRY).toMatchObject({ id: 'high-command', sigil: 'HC', title: 'High Command' })
     expect(HIGH_COMMAND_ENTRY.keywords).toContain('chapter master')
+    expect(MUSTER_ENTRY).toMatchObject({ id: 'muster', title: 'Muster' })
   })
 })
 

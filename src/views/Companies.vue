@@ -1,31 +1,62 @@
 <script setup>
-import { ref, computed, defineAsyncComponent, onMounted, provide } from 'vue'
+import { ref, computed, defineAsyncComponent, onMounted, provide, useTemplateRef, watch } from 'vue'
 import companies from '../data/companies.json'
 import PageHeader from '../components/PageHeader.vue'
 import CompanyArticle from '../components/company/CompanyArticle.vue'
 import RanksPlaceholder from '../components/company/RanksPlaceholder.vue'
 import { useAuth } from '../stores/auth'
-import { HIGH_COMMAND_ENTRY } from '../lib/companyKeys'
+import { HIGH_COMMAND_ENTRY, MUSTER_ENTRY } from '../lib/companyKeys'
 import { ROSTER_VIEWER } from '../lib/rosterContext'
+import { SCENES } from '../lib/rosterScenes'
 import { useCompanyRoster } from '../lib/useCompanyRoster'
 import { useOpenBranches } from '../lib/useOpenBranches'
+import { useRosterActions } from '../lib/useRosterActions'
 
 // The page is the story; the roster is the layer on top. A composition surface:
-// which roster to show is useCompanyRoster's job, how a bar looks is CompanyRanks'.
-// The roster code (bars, ladders, their styles) loads after the story has painted,
-// and a placeholder holds each bar's place meanwhile.
+// which roster to show is useCompanyRoster's job, what Find me and the rest do is
+// useRosterActions', how a bar looks is CompanyRanks'. The roster code (bars, ladders,
+// the member tools, their styles) loads after the story has painted, and only what the
+// visitor needs: a placeholder holds each bar's place meanwhile.
 const CompanyRanks = defineAsyncComponent({
   loader: () => import('../components/company/CompanyRanks.vue'),
   loadingComponent: RanksPlaceholder,
   delay: 0,
 })
 const RosterBanner = defineAsyncComponent(() => import('../components/roster/RosterBanner.vue'))
+const RosterStatus = defineAsyncComponent(() => import('../components/roster/RosterStatus.vue'))
+const RosterInfirmary = defineAsyncComponent(() => import('../components/roster/RosterInfirmary.vue'))
+const MusterSection = defineAsyncComponent(() => import('../components/company/MusterSection.vue'))
 
 const auth = useAuth()
 const open = useOpenBranches()
-const { mode, loading, view, note, start } = useCompanyRoster({ infirmaryOpen: ref(false) })
-provide(ROSTER_VIEWER, computed(() => auth.member?.id ?? null))
-onMounted(start)
+const root = useTemplateRef('root')
+const infirmaryOpen = ref(false)
+const { mode, loading, view, store, note, updated, stale, start } = useCompanyRoster({ infirmaryOpen })
+const viewerId = computed(() => auth.member?.id ?? null)
+provide(ROSTER_VIEWER, viewerId)
+const { findMessage, openableKeys, allOpen, toggleAll, toggleInfirmary, jumpToBranch, findMe, scrollToArticle, applyHash } = useRosterActions({
+  root,
+  view,
+  open,
+  infirmaryOpen,
+  viewerId,
+  loadInfirmary: () => store.loadInfirmary(auth.token),
+})
+// Dev only, with the fixture on: links that flip the page between its scenes.
+const devScenes = import.meta.env.DEV && import.meta.env.VITE_ROSTER_FIXTURE ? SCENES : null
+
+onMounted(() => {
+  start()
+  applyHash()
+})
+// /companies#third opens that company's bar once, the first time data arrives.
+watch(view, (now, before) => {
+  if (now && !before) applyHash()
+})
+// Losing the member roster (signing out, a refused token) leaves nothing for the Infirmary to show.
+watch(mode, (m) => {
+  if (m !== 'full') infirmaryOpen.value = false
+})
 
 const query = ref('')
 
@@ -34,14 +65,10 @@ const q = computed(() => query.value.trim().toLowerCase())
 const filtered = computed(() => (q.value ? companies.filter((c) => matches(c, q.value)) : companies))
 // High Command is the first entry when somebody holds it and the search allows it
 const showHighCommand = computed(() => Boolean(view.value?.banner.hero) && (!q.value || matches(HIGH_COMMAND_ENTRY, q.value)))
-const chips = computed(() => [...(showHighCommand.value ? [HIGH_COMMAND_ENTRY] : []), ...filtered.value])
+// The Muster is the last, for a Legion member with something in it, and not while searching companies
+const showMuster = computed(() => mode.value === 'full' && !q.value && Boolean(view.value?.unassigned || view.value?.servitors.length))
+const chips = computed(() => [...(showHighCommand.value ? [HIGH_COMMAND_ENTRY] : []), ...filtered.value, ...(showMuster.value ? [MUSTER_ENTRY] : [])])
 const branchByKey = computed(() => new Map((view.value?.branches ?? []).map((b) => [b.key, b])))
-
-// Scroll to a company. Plain scrollIntoView, not href="#id": the chip is a button, and
-// the scroll stays smooth (or not) the way the page's CSS says, reduced motion included.
-function jumpTo(id) {
-  document.getElementById(id)?.scrollIntoView()
-}
 
 // "↑ Index" on a company: back to the chip row, with focus there so the next Tab is a chip.
 function backToIndex() {
@@ -52,7 +79,7 @@ function backToIndex() {
 </script>
 
 <template>
-  <section class="companies">
+  <section ref="root" class="companies">
     <PageHeader
       class="c-head"
       eyebrow="The Chapter"
@@ -68,9 +95,31 @@ function backToIndex() {
       />
     </PageHeader>
 
-    <p v-if="note" class="c-note" role="status">{{ note }}</p>
+    <nav v-if="devScenes" class="rs-dev-scenes" aria-label="Fixture scenes (dev only)">
+      <a v-for="scene in devScenes" :key="scene" :href="`?scene=${scene}`">{{ scene }}</a>
+    </nav>
 
-    <RosterBanner v-if="showHighCommand" id="high-command" class="c-hc" :banner="view.banner" />
+    <p v-if="note" class="c-note" role="status">{{ note }}</p>
+    <p v-if="store.status === 'error' && store.roster" class="c-note" role="alert">The roster could not be refreshed. Showing the last copy.</p>
+
+    <!-- A Legion member's tools: who is on the roll, Find me, Expand all, the Infirmary -->
+    <RosterStatus
+      v-if="mode === 'full' && view"
+      :summary="view.summary"
+      :updated="updated"
+      :stale="stale"
+      :openable="openableKeys.length > 0"
+      :all-open="allOpen"
+      :can-infirmary="store.roster.viewer.infirmary"
+      :infirmary-open="infirmaryOpen"
+      :message="findMessage"
+      @find="findMe"
+      @toggle-all="toggleAll"
+      @toggle-infirmary="toggleInfirmary"
+      @jump="jumpToBranch"
+    />
+
+    <RosterBanner v-if="showHighCommand && !infirmaryOpen" id="high-command" class="c-hc" :banner="view.banner" />
 
     <!-- Company index -->
     <nav id="company-index" class="c-index" aria-label="Jump to company" tabindex="-1">
@@ -79,7 +128,7 @@ function backToIndex() {
         :key="c.id"
         type="button"
         class="c-chip"
-        @click="jumpTo(c.id)"
+        @click="scrollToArticle(c.id)"
       >
         <span class="c-chip-sigil">{{ c.sigil }}</span>
         <span>{{ c.title.replace(/ — .*/, '') }}</span>
@@ -88,19 +137,31 @@ function backToIndex() {
 
     <p v-if="!chips.length" class="c-empty">No companies match “{{ query }}”.</p>
 
-    <!-- Companies -->
-    <CompanyArticle v-for="c in filtered" :key="c.id" :company="c" @index="backToIndex">
-      <template #ranks>
-        <CompanyRanks
-          :branch="branchByKey.get(c.branch) ?? null"
-          :mode="mode"
-          :loading="loading"
-          :open="open.isOpen(c.branch)"
-          @toggle="open.toggle(c.branch)"
-          @sign-in="auth.signIn()"
-        />
-      </template>
-    </CompanyArticle>
+    <!-- The Infirmary replaces the order of battle while it is open -->
+    <RosterInfirmary v-if="infirmaryOpen && mode === 'full'" :status="store.infirmaryStatus" :infirmary="store.infirmary" />
+    <template v-else>
+      <!-- Companies -->
+      <CompanyArticle v-for="c in filtered" :key="c.id" :company="c" @index="backToIndex">
+        <template #ranks>
+          <CompanyRanks
+            :branch="branchByKey.get(c.branch) ?? null"
+            :mode="mode"
+            :loading="loading"
+            :open="open.isOpen(c.branch)"
+            @toggle="open.toggle(c.branch)"
+            @sign-in="auth.signIn()"
+          />
+        </template>
+      </CompanyArticle>
+
+      <MusterSection
+        v-if="showMuster"
+        :unassigned="view.unassigned"
+        :servitors="view.servitors"
+        :open="open.isOpen('unassigned')"
+        @toggle="open.toggle('unassigned')"
+      />
+    </template>
   </section>
 </template>
 
@@ -126,6 +187,18 @@ function backToIndex() {
 }
 .c-search::placeholder {
   color: #5f6f66;
+}
+.rs-dev-scenes {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem 0.9rem;
+  margin: 0 0 1rem;
+  font-family: var(--font-mono);
+  font-size: 0.72rem;
+  color: var(--color-smoke);
+}
+.rs-dev-scenes a:hover {
+  color: var(--color-drake);
 }
 
 .c-note {

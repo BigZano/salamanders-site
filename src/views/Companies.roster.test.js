@@ -72,8 +72,9 @@ describe('Companies with the roster: a Legion member', () => {
     expect(hc.text()).toContain('Lord of Drakes')
     expect(follows(hc, w.find('nav.c-index'))).toBe(true)
     const chips = w.findAll('.c-chip')
-    expect(chips).toHaveLength(companies.length + 1)
+    expect(chips).toHaveLength(companies.length + 2) // every company, High Command first, and the Muster last for a member
     expect(chips[0].text()).toContain('High Command')
+    expect(chips.at(-1).text()).toContain('Muster')
   })
 
   it('fills each bar from the full roster: names, avatars-ready chips and the ladder body', async () => {

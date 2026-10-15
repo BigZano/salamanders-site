@@ -19,6 +19,9 @@ export const HIGH_COMMAND_ENTRY = {
   keywords: 'high command lord of drakes chapter master pyre guard lord chaplain leadership',
 }
 
+/** The Muster (Unassigned and Servitors, for Legion members) as a chip; it has no story either. */
+export const MUSTER_ENTRY = { id: MUSTER_ID, sigil: '?', title: 'Muster', subtitle: '', keywords: '' }
+
 const articleByBranch = new Map([...companies.map((c) => [c.branch, c.id]), [HIGH_COMMAND_ID, HIGH_COMMAND_ID], ['unassigned', MUSTER_ID]])
 const branchByArticle = new Map([...companies.map((c) => [c.id, c.branch]), [HIGH_COMMAND_ID, HIGH_COMMAND_ID], [MUSTER_ID, 'unassigned']])
 
