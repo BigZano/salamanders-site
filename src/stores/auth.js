@@ -14,7 +14,10 @@ export const useAuth = defineStore('auth', {
   }),
   getters: {
     signedIn: (s) => !!s.member,
-    token: () => discordAuth.getAccessToken(),
+    // A getter caches. The storage read inside it is not reactive, so on its own this returned the first
+    // token it was asked for for the life of the page, and after signOut() still the old one. Depending on
+    // `member` (which signOut() clears) makes it recompute then, and give null.
+    token: (s) => (s.member ? discordAuth.getAccessToken() : null),
   },
   actions: {
     signIn() {

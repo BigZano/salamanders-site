@@ -25,6 +25,40 @@ describe('auth.signIn keeps the archive message anchor, whichever button started
   })
 })
 
+// The store's `token` is a getter, and a getter caches. If nothing reactive is inside it, the first
+// value it returns is the last: after signOut() it kept handing back the old, still valid token,
+// and anything that re-asked ("a refresh after sign-out") came back signed in.
+describe('auth.token', () => {
+  const KEY = 'salamanders-discord-member'
+  const stored = (extra = {}) =>
+    localStorage.setItem(KEY, JSON.stringify({ id: '200000000000000001', username: 'tester', isMember: true, checkedAt: Date.now(), accessToken: 'old-token', expiresAt: Date.now() + 3_600_000, ...extra }))
+  beforeEach(() => localStorage.clear())
+
+  it('is the stored token while signed in', () => {
+    stored()
+    setActivePinia(createPinia()) // a page load: the store reads the storage when it is created
+    expect(useAuth().token).toBe('old-token')
+  })
+
+  it('is gone as soon as the member signs out, even though it was read while signed in', () => {
+    stored()
+    setActivePinia(createPinia())
+    const auth = useAuth()
+    expect(auth.token).toBe('old-token') // read once, so the getter has cached it
+    auth.signOut()
+    expect(auth.member).toBeNull()
+    expect(auth.token).toBeNull()
+  })
+
+  it('is null when nobody is signed in, and for a token that has expired', () => {
+    setActivePinia(createPinia())
+    expect(useAuth().token).toBeNull()
+    stored({ expiresAt: Date.now() - 1000 })
+    setActivePinia(createPinia())
+    expect(useAuth().token).toBeNull()
+  })
+})
+
 describe('auth.signOut', () => {
   it('drops the roster and Infirmary list from memory', () => {
     const roster = useRoster()
