@@ -1,12 +1,17 @@
 // @vitest-environment jsdom
-import { describe, it, expect } from 'vitest'
+import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { mount } from '@vue/test-utils'
+import { createPinia, setActivePinia } from 'pinia'
 import companies from '../data/companies.json'
 import { TEXT, contrast, over } from '../test-utils/contrast'
+// The page also shows the roster (Companies.roster.test.js); these tests are about the story, so no roster is available.
+vi.mock('../stores/auth', () => ({ useAuth: () => ({ token: null, member: null, signedIn: false, signIn: vi.fn() }) }))
+vi.mock('../lib/rosterApi', () => ({ getRoster: vi.fn(), getInfirmary: vi.fn(), getPublicRoster: vi.fn(() => Promise.reject(new Error('no roster here'))) }))
 import Companies from './Companies.vue'
 // the story's styles, including the scrim rule, live with the article
 import source from '../components/company/CompanyArticle.vue?raw'
 
+beforeEach(() => setActivePinia(createPinia()))
 const render = () => mount(Companies)
 
 describe('Companies', () => {

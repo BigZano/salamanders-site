@@ -1,18 +1,41 @@
 <script setup>
-import { ref, computed } from 'vue'
+import { ref, computed, defineAsyncComponent, onMounted, provide } from 'vue'
 import companies from '../data/companies.json'
 import PageHeader from '../components/PageHeader.vue'
 import CompanyArticle from '../components/company/CompanyArticle.vue'
+import RanksPlaceholder from '../components/company/RanksPlaceholder.vue'
+import { useAuth } from '../stores/auth'
+import { HIGH_COMMAND_ENTRY } from '../lib/companyKeys'
+import { ROSTER_VIEWER } from '../lib/rosterContext'
+import { useCompanyRoster } from '../lib/useCompanyRoster'
+import { useOpenBranches } from '../lib/useOpenBranches'
+
+// The page is the story; the roster is the layer on top. A composition surface:
+// which roster to show is useCompanyRoster's job, how a bar looks is CompanyRanks'.
+// The roster code (bars, ladders, their styles) loads after the story has painted,
+// and a placeholder holds each bar's place meanwhile.
+const CompanyRanks = defineAsyncComponent({
+  loader: () => import('../components/company/CompanyRanks.vue'),
+  loadingComponent: RanksPlaceholder,
+  delay: 0,
+})
+const RosterBanner = defineAsyncComponent(() => import('../components/roster/RosterBanner.vue'))
+
+const auth = useAuth()
+const open = useOpenBranches()
+const { mode, loading, view, note, start } = useCompanyRoster({ infirmaryOpen: ref(false) })
+provide(ROSTER_VIEWER, computed(() => auth.member?.id ?? null))
+onMounted(start)
 
 const query = ref('')
 
-const filtered = computed(() => {
-  const q = query.value.trim().toLowerCase()
-  if (!q) return companies
-  return companies.filter((c) =>
-    (c.title + ' ' + c.subtitle + ' ' + (c.keywords || '')).toLowerCase().includes(q),
-  )
-})
+const matches = (c, q) => (c.title + ' ' + c.subtitle + ' ' + (c.keywords || '')).toLowerCase().includes(q)
+const q = computed(() => query.value.trim().toLowerCase())
+const filtered = computed(() => (q.value ? companies.filter((c) => matches(c, q.value)) : companies))
+// High Command is the first entry when somebody holds it and the search allows it
+const showHighCommand = computed(() => Boolean(view.value?.banner.hero) && (!q.value || matches(HIGH_COMMAND_ENTRY, q.value)))
+const chips = computed(() => [...(showHighCommand.value ? [HIGH_COMMAND_ENTRY] : []), ...filtered.value])
+const branchByKey = computed(() => new Map((view.value?.branches ?? []).map((b) => [b.key, b])))
 
 // Scroll to a company. Plain scrollIntoView, not href="#id": the chip is a button, and
 // the scroll stays smooth (or not) the way the page's CSS says, reduced motion included.
@@ -45,10 +68,14 @@ function backToIndex() {
       />
     </PageHeader>
 
+    <p v-if="note" class="c-note" role="status">{{ note }}</p>
+
+    <RosterBanner v-if="showHighCommand" id="high-command" class="c-hc" :banner="view.banner" />
+
     <!-- Company index -->
     <nav id="company-index" class="c-index" aria-label="Jump to company" tabindex="-1">
       <button
-        v-for="c in filtered"
+        v-for="c in chips"
         :key="c.id"
         type="button"
         class="c-chip"
@@ -59,10 +86,21 @@ function backToIndex() {
       </button>
     </nav>
 
-    <p v-if="!filtered.length" class="c-empty">No companies match “{{ query }}”.</p>
+    <p v-if="!chips.length" class="c-empty">No companies match “{{ query }}”.</p>
 
     <!-- Companies -->
-    <CompanyArticle v-for="c in filtered" :key="c.id" :company="c" @index="backToIndex" />
+    <CompanyArticle v-for="c in filtered" :key="c.id" :company="c" @index="backToIndex">
+      <template #ranks>
+        <CompanyRanks
+          :branch="branchByKey.get(c.branch) ?? null"
+          :mode="mode"
+          :loading="loading"
+          :open="open.isOpen(c.branch)"
+          @toggle="open.toggle(c.branch)"
+          @sign-in="auth.signIn()"
+        />
+      </template>
+    </CompanyArticle>
   </section>
 </template>
 
@@ -88,6 +126,17 @@ function backToIndex() {
 }
 .c-search::placeholder {
   color: #5f6f66;
+}
+
+.c-note {
+  margin: 0 0 1.4rem;
+  font-family: var(--font-mono);
+  font-size: 0.78rem;
+  color: var(--color-averland);
+}
+.c-hc {
+  margin: 0 0 2rem; /* the panel sits above the chips, scrolled to like a company */
+  scroll-margin-top: 5rem;
 }
 
 .c-index {

@@ -85,6 +85,10 @@ function initials(name) {
 .company-ranks {
   margin-bottom: 1.6rem;
 }
+/* no roster to show (or none for this company): no empty gap either */
+.company-ranks:empty {
+  display: none;
+}
 .sigil {
   flex: none;
   display: inline-flex;
