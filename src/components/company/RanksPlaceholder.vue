@@ -9,8 +9,14 @@
 </template>
 
 <style scoped>
+/* Measured on the fixture: a collapsed bar is 74-80px on a wide screen, and 100-146px on a phone, where the head wraps. */
 .rs-ranks-loading {
   min-height: 5rem;
   border-radius: 3px;
+}
+@media (max-width: 760px) {
+  .rs-ranks-loading {
+    min-height: 6.5rem;
+  }
 }
 </style>

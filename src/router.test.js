@@ -29,3 +29,23 @@ describe('the retired /roster route', () => {
     expect(router.getRoutes().some((r) => r.name === 'roster')).toBe(false)
   })
 })
+
+describe('scroll behaviour', () => {
+  const scroll = (to, from) => router.options.scrollBehavior(to, from)
+
+  it('leaves a /companies#… landing to the page, which scrolls once its story is there', () => {
+    // a jump to the top here, after the page's own scroll to #third, would undo it
+    expect(scroll({ path: '/companies', hash: '#third' }, { path: '/' })).toBe(false)
+    expect(scroll({ path: '/companies', hash: '#muster' }, { path: '/builds' })).toBe(false)
+  })
+
+  it('still goes to the top of /companies without a fragment, and of every other page', () => {
+    expect(scroll({ path: '/companies', hash: '' }, { path: '/' })).toEqual({ top: 0 })
+    expect(scroll({ path: '/builds', hash: '' }, { path: '/' })).toEqual({ top: 0 })
+  })
+
+  it('keeps the archive threads as they were: another page with a hash goes to the top, a same-page hash change is left alone', () => {
+    expect(scroll({ path: '/accolades/200000000000000001', hash: '#m-5' }, { path: '/' })).toEqual({ top: 0 })
+    expect(scroll({ path: '/accolades/200000000000000001', hash: '#m-6' }, { path: '/accolades/200000000000000001' })).toBe(false)
+  })
+})

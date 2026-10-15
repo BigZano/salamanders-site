@@ -344,11 +344,19 @@ describe('Companies: Find me, Expand all, status links and deep links', () => {
     expect(scrolled.some((el) => el.id === 'dreadnoughts')).toBe(true)
   })
 
-  it('a /companies#muster link opens Unassigned', async () => {
+  it('a /companies#muster link opens Unassigned and scrolls to the Muster, which loads after the story', async () => {
     window.history.replaceState(null, '', '/companies#muster')
     const w = await render()
     await vi.waitFor(() => expect(isOpen(w, 'unassigned')).toBe(true))
     expect(openCount(w)).toBe(1)
+    await vi.waitFor(() => expect(scrolled.some((el) => el.id === 'muster')).toBe(true))
+  })
+
+  it('a /companies#high-command link scrolls to High Command once it has arrived, and opens nothing', async () => {
+    window.history.replaceState(null, '', '/companies#high-command')
+    const w = await render()
+    await vi.waitFor(() => expect(scrolled.some((el) => el.id === 'high-command')).toBe(true))
+    expect(openCount(w)).toBe(0)
   })
 
   it.each([

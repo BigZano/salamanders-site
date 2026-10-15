@@ -80,6 +80,15 @@ export function useRosterActions({ root, view, open, infirmaryOpen, viewerId, lo
 
   const scrollNow = (id, options) => document.getElementById(id)?.scrollIntoView(options)
 
+  // High Command, the Muster and the bars are loaded in chunks of their own, after the story, so the
+  // target may not exist yet when the roster arrives: wait for it (two seconds at most), then scroll.
+  // Timers, not animation frames: a tab opened in the background never gets frames, and this is only
+  // waiting for an element to exist.
+  async function scrollWhenPresent(id) {
+    for (let tries = 0; tries < 40 && !document.getElementById(id); tries++) await new Promise((r) => setTimeout(r, 50))
+    scrollNow(id, { behavior: 'instant' })
+  }
+
   // A chip: scroll to the company (or High Command, or Muster). Synchronous unless the Infirmary is open.
   function scrollToArticle(id) {
     if (infirmaryOpen.value) return showOrder().then(() => scrollNow(id))
@@ -108,7 +117,7 @@ export function useRosterActions({ root, view, open, infirmaryOpen, viewerId, lo
       await nextTick()
       await openNow(() => open.openKey(key))
     }
-    scrollNow(id, { behavior: 'instant' })
+    await scrollWhenPresent(id)
   }
 
   return { findMessage, openableKeys, allOpen, toggleAll, toggleInfirmary, jumpToBranch, findMe, scrollToArticle, applyHash }

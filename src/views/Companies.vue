@@ -31,7 +31,7 @@ const auth = useAuth()
 const open = useOpenBranches()
 const root = useTemplateRef('root')
 const infirmaryOpen = ref(false)
-const { mode, loading, view, store, note, updated, stale, start } = useCompanyRoster({ infirmaryOpen })
+const { mode, loading, view, store, note, updated, stale, start, loadInfirmary } = useCompanyRoster({ infirmaryOpen })
 const viewerId = computed(() => auth.member?.id ?? null)
 provide(ROSTER_VIEWER, viewerId)
 const { findMessage, openableKeys, allOpen, toggleAll, toggleInfirmary, jumpToBranch, findMe, scrollToArticle, applyHash } = useRosterActions({
@@ -40,7 +40,7 @@ const { findMessage, openableKeys, allOpen, toggleAll, toggleInfirmary, jumpToBr
   open,
   infirmaryOpen,
   viewerId,
-  loadInfirmary: () => store.loadInfirmary(auth.token),
+  loadInfirmary,
 })
 // Dev only, with the fixture on: links that flip the page between its scenes.
 const devScenes = import.meta.env.DEV && import.meta.env.VITE_ROSTER_FIXTURE ? SCENES : null
