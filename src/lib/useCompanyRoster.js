@@ -14,7 +14,9 @@ const UNAVAILABLE = 'The live roster is unavailable. Showing the public view.'
  * nothing on screen, gets the public view (public store), fetched once and never
  * polled. A refusal (signed out, 401, 403) stops the polling: there is nothing
  * to retry, and the page is public now, so it must not ask every minute. A server
- * hiccup keeps polling, so the full view takes over when the server is back.
+ * hiccup keeps polling, so the full view takes over when the server is back. A refusal
+ * on a later poll drops the full roster; the places are held (`loading`) until the
+ * public view is in, so the page does not blank in between.
  *
  * `infirmaryOpen` is a ref the page owns; the Infirmary list is refreshed with
  * the roster while it is true. The page calls start() once mounted. The polling
@@ -48,7 +50,10 @@ export function useCompanyRoster({ infirmaryOpen }) {
     await loadMember()
     if (!store.roster) {
       if (store.status !== 'error') polling.stop() // refused: nothing to retry
-      if (!pub.snapshot) await pub.load()
+      if (!pub.snapshot) {
+        decided.value = false // a later refusal just dropped the full roster: hold the places again until the public view is in
+        await pub.load()
+      }
     }
     decided.value = true
   }

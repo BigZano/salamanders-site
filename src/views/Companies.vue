@@ -13,6 +13,7 @@ import { SCENES } from '../lib/rosterScenes'
 import { useCompanyRoster } from '../lib/useCompanyRoster'
 import { useOpenBranches } from '../lib/useOpenBranches'
 import { useRosterActions } from '../lib/useRosterActions'
+import '../components/roster/roster.css' // the hook reference for tests and e2e; holds no rules
 
 // The page is the story; the roster is the layer on top. A composition surface:
 // which roster to show is useCompanyRoster's job, what Find me and the rest do is
@@ -128,8 +129,8 @@ function backToIndex() {
       @toggle-infirmary="toggleInfirmary"
       @jump="jumpToBranch"
     />
-    <!-- signed in, so the toolbar is probably coming: hold its place -->
-    <ToolsPlaceholder v-else-if="loading && auth.member && !infirmaryOpen" />
+    <!-- on the Legion list, so the toolbar is probably coming: hold its place -->
+    <ToolsPlaceholder v-else-if="loading && auth.member?.isMember && !infirmaryOpen" />
 
     <RosterBanner v-if="showHighCommand && !infirmaryOpen" id="high-command" class="c-hc" :banner="view.banner" />
     <!-- until the roster says whether anybody holds High Command, hold the panel's place -->

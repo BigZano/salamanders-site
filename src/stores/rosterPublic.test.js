@@ -36,6 +36,21 @@ describe('rosterPublic store', () => {
     expect(s).toMatchObject({ status: 'idle', snapshot: null, view: null })
   })
 
+  it.each([
+    ['an empty object', {}],
+    ['null', null],
+    ['a string', 'oops'],
+    ['branches missing', { fetchedAt: 'x', stale: false, highCommand: [] }],
+    ['highCommand missing', { fetchedAt: 'x', stale: false, branches: [] }],
+    ['branches null', { fetchedAt: 'x', stale: false, highCommand: [], branches: null }],
+    ['a branch without a head', { fetchedAt: 'x', stale: false, highCommand: [], branches: [{ key: 'company-3', kind: 'company', label: '3rd', aside: 0, rows: [] }] }],
+  ])('a 200 the page cannot read (%s) is an error, never a snapshot', async (_, payload) => {
+    api.getPublicRoster.mockResolvedValue(payload)
+    const s = useRosterPublic()
+    await s.load()
+    expect(s).toMatchObject({ status: 'error', snapshot: null, view: null })
+  })
+
   it('goes loading, then ready with the snapshot and its view', async () => {
     const d = deferred()
     api.getPublicRoster.mockReturnValue(d.promise)

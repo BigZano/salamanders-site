@@ -13,10 +13,7 @@ const running = new WeakMap()
  * member roster has its own store (roster.js); the page picks between them.
  */
 export const useRosterPublic = defineStore('rosterPublic', {
-  state: () => ({ status: 'idle', snapshot: null }),
-  getters: {
-    view: (state) => (state.snapshot ? buildPublicView(state.snapshot) : null),
-  },
+  state: () => ({ status: 'idle', snapshot: null, view: null }),
   actions: {
     load() {
       if (running.has(this)) return running.get(this)
@@ -38,10 +35,13 @@ export const useRosterPublic = defineStore('rosterPublic', {
         } else {
           data = await api.getPublicRoster()
         }
+        // Built here, inside the try, so a 200 the page cannot read is an error and not a throw while it renders.
+        this.view = markRaw(buildPublicView(data))
         this.snapshot = markRaw(data)
         this.status = 'ready'
       } catch {
         this.snapshot = null
+        this.view = null
         this.status = 'error'
       }
     },

@@ -204,3 +204,20 @@ describe('Companies with the roster: search', () => {
     expect(w.find('.rs-high-command').exists()).toBe(false)
   })
 })
+
+describe('Companies with a public roster it cannot read', () => {
+  it.each([
+    ['no branches', { fetchedAt: 'x', stale: false, highCommand: [] }],
+    ['null branches', { fetchedAt: 'x', stale: false, highCommand: [], branches: null }],
+    ['a branch without a head', { fetchedAt: 'x', stale: false, highCommand: [], branches: [{ key: 'company-3', kind: 'company', label: 'x', aside: 0, rows: [] }] }],
+  ])('keeps every story, shows no bars and throws nothing for %s', async (_, payload) => {
+    api.getPublicRoster.mockResolvedValue(payload)
+    const errors = []
+    const w = mount(Companies, { global: { config: { errorHandler: (e) => errors.push(e) } } })
+    mounted.push(w)
+    await settle(w)
+    for (const c of companies) expect(w.find(`article#${c.id}`).exists(), c.id).toBe(true)
+    expect(w.findAll('.rs-branch')).toHaveLength(0)
+    expect(errors).toEqual([])
+  })
+})

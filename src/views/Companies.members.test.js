@@ -26,7 +26,7 @@ import Companies from './Companies.vue'
 const PUBLIC = { fetchedAt: fixture.roster.fetchedAt, stale: false, ...publicRoster(fixture.roster) }
 const view = buildRosterView(fixture.roster)
 const apiError = (status, message) => Object.assign(new Error(message), { status })
-const legion = (id = '200000000000000001') => reactive({ token: 'tok', member: { id }, signedIn: true, signIn: vi.fn() })
+const legion = (id = '200000000000000001') => reactive({ token: 'tok', member: { id, isMember: true }, signedIn: true, signIn: vi.fn() })
 const signedOut = () => reactive({ token: null, member: null, signedIn: false, signIn: vi.fn() })
 
 const mounted = []
@@ -150,6 +150,15 @@ describe('Companies: holding places while the roster arrives', () => {
     expect(w.find('.rs-tools-loading').exists()).toBe(false)
     expect(w.find('.rs-hc-loading').exists()).toBe(false)
     expect(w.find('.rs-status').exists()).toBe(false)
+  })
+
+  it('holds no toolbar place for a signed-in account the Legion list does not know', async () => {
+    auth = reactive({ token: 'tok', member: { id: '200000000000000009', isMember: false }, signedIn: true, signIn: vi.fn() })
+    api.getRoster.mockRejectedValue(apiError(403, 'The roster is open to the XVIIIth Legion.'))
+    const w = mount(Companies, { attachTo: document.body })
+    mounted.push(w)
+    expect(w.find('.rs-tools-loading').exists()).toBe(false)
+    await settle(w, { member: false })
   })
 
   it('holds no toolbar place for a visitor who has not signed in', async () => {

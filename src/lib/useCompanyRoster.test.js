@@ -162,6 +162,36 @@ describe('useCompanyRoster: polling', () => {
     expect(api.getRoster).toHaveBeenCalledTimes(2)
   })
 
+  it('holds the places, not a blank page, while the public view loads after the token goes bad on a poll', async () => {
+    vi.useFakeTimers()
+    const { roster } = host()
+    roster.start()
+    await vi.advanceTimersByTimeAsync(0)
+    expect(roster.mode.value).toBe('full')
+    let release
+    api.getPublicRoster.mockReturnValue(new Promise((resolve) => (release = resolve)))
+    api.getRoster.mockRejectedValue(apiError(401, 'Sign in with Discord.'))
+    await vi.advanceTimersByTimeAsync(MINUTE)
+    expect(roster.mode.value).toBe('none')
+    expect(roster.loading.value).toBe(true)
+    release(PUBLIC)
+    await vi.advanceTimersByTimeAsync(0)
+    expect(roster.mode.value).toBe('public')
+    expect(roster.loading.value).toBe(false)
+  })
+
+  it('stops holding the places when the public view fails too, as for a visitor whose first load failed', async () => {
+    vi.useFakeTimers()
+    const { roster } = host()
+    roster.start()
+    await vi.advanceTimersByTimeAsync(0)
+    api.getPublicRoster.mockRejectedValue(apiError(503, 'down'))
+    api.getRoster.mockRejectedValue(apiError(403, 'The roster is open to the XVIIIth Legion.'))
+    await vi.advanceTimersByTimeAsync(MINUTE)
+    expect(roster.mode.value).toBe('none')
+    expect(roster.loading.value).toBe(false)
+  })
+
   it('fetches the Infirmary too while it is open', async () => {
     const infirmaryOpen = ref(true)
     const { roster } = host({ infirmaryOpen })

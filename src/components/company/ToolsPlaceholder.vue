@@ -1,7 +1,7 @@
 <script setup>
 // Holds the members' toolbar's place (the status line and the Find me, Expand all
-// and Infirmary buttons) while the roster arrives, for a visitor who is signed in
-// and so probably about to get it. Without it the toolbar pops in above everything
+// and Infirmary buttons) while the roster arrives, for a visitor the Legion list
+// knows (auth.member.isMember) and so probably about to get it. Without it the toolbar pops in above everything
 // and shoves the page down. Decorative, and it takes nothing from the caller.
 defineOptions({ inheritAttrs: false })
 </script>

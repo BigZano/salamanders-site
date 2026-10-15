@@ -8,7 +8,7 @@ test('a visitor sees each company head and the ranks as counts, never the ladder
   const third = page.locator('[data-branch="company-3"]')
   await expect(third.locator('.rs-head')).toContainText('E2E Captain')
   await expect(page.locator('.rs-branch')).toHaveCount(12)
-  await expect(page.locator('.rs-high-command')).toBeVisible()
+  await expect(page.locator('.rs-high-command')).toContainText('E2E Lord')
 
   await third.locator('button.rs-bar-btn').click()
   await expect(third.locator('.rs-shape-row').first()).toBeVisible()
