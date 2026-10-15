@@ -4,6 +4,8 @@ import { flushPromises, mount } from '@vue/test-utils'
 import { reactive } from 'vue'
 import { createPinia, setActivePinia } from 'pinia'
 import fixture from '../data/roster.fixture.json'
+import { buildRosterView } from '../lib/rosterView'
+import { sceneOf } from '../lib/rosterScenes'
 
 let auth
 vi.mock('../stores/auth', () => ({ useAuth: () => auth }))
@@ -184,5 +186,165 @@ describe('Roster.vue', () => {
       const ids = w.findAll('li.rs-member').map((li) => li.attributes('data-id'))
       expect(ids.every((id) => /^\d{17,20}$/.test(id))).toBe(true)
     })
+  })
+})
+
+describe('Roster.vue: the design pass', () => {
+  const view = buildRosterView(fixture.roster)
+  const company3 = fixture.roster.branches.find((b) => b.key === 'company-3')
+  const brother = company3.rows.find((r) => r.rank.key === 'battle-brother').members[0].id
+  const inBranches = new Set(fixture.roster.branches.flatMap((b) => [...b.head.members, ...b.aside, ...b.rows.flatMap((r) => r.members)].map((m) => m.id)))
+  const bannerOnly = fixture.roster.highCommand.flatMap((r) => r.members).find((m) => !inBranches.has(m.id)).id
+  let scrolled
+  beforeEach(() => {
+    scrolled = []
+    Element.prototype.scrollIntoView = vi.fn(function () { scrolled.push(this) })
+    window.scrollBy = vi.fn()
+    window.history.replaceState(null, '', '/roster')
+  })
+  const asViewer = (id) => { auth = { token: 'tok', signedIn: true, signIn: vi.fn(), member: { id } } }
+  const isOpen = (w, key) => w.find(`[data-jump="${key}"]`).attributes('data-open') !== undefined
+  const openCount = (w) => w.findAll('[data-open]').length
+
+  it("Find me opens the viewer's branch and centres their chip", async () => {
+    asViewer(brother)
+    const w = await render()
+    await w.find('.rs-find').trigger('click')
+    await flushPromises()
+    expect(isOpen(w, 'company-3')).toBe(true)
+    expect(w.find('[role="status"]').text()).toBe('')
+    expect(scrolled.some((el) => el.dataset?.id === brother)).toBe(true)
+    expect(w.find(`li[data-id="${brother}"]`).classes()).toContain('rs-me')
+  })
+
+  it('Find me with an id that is not on the roll says so, and opens nothing', async () => {
+    asViewer('1')
+    const w = await render()
+    await w.find('.rs-find').trigger('click')
+    await flushPromises()
+    expect(w.find('[role="status"]').text()).toBe('You are not on the roll. Check your Legion and rank roles in Discord.')
+    expect(openCount(w)).toBe(0)
+  })
+
+  it('Find me for a High Command-only member scrolls the dais and opens nothing', async () => {
+    asViewer(bannerOnly)
+    const w = await render()
+    await w.find('.rs-find').trigger('click')
+    await flushPromises()
+    expect(scrolled.some((el) => el.classList.contains('rs-high-command'))).toBe(true)
+    expect(openCount(w)).toBe(0)
+    expect(w.find('[role="status"]').text()).toBe('')
+  })
+
+  it('Expand all opens every openable branch and Unassigned, and Collapse all closes them', async () => {
+    const w = await render()
+    await w.find('.rs-expand-all').trigger('click')
+    await flushPromises()
+    expect(openCount(w)).toBe(view.openableKeys.length)
+    expect(w.find('.rs-expand-all').text()).toBe('Collapse all')
+    await w.find('.rs-expand-all').trigger('click')
+    await flushPromises()
+    expect(openCount(w)).toBe(0)
+    expect(w.find('.rs-expand-all').text()).toBe('Expand all')
+  })
+
+  it('a status link opens its branch', async () => {
+    const w = await render()
+    const vacant = w.findAll('.rs-status button').find((b) => b.text().includes('vacant post'))
+    await vacant.trigger('click')
+    await flushPromises()
+    expect(isOpen(w, 'company-6')).toBe(true)
+  })
+
+  it('a #company-3 hash opens that branch after load', async () => {
+    window.history.replaceState(null, '', '/roster#company-3')
+    const w = await render()
+    await flushPromises()
+    expect(isOpen(w, 'company-3')).toBe(true)
+    expect(openCount(w)).toBe(1)
+  })
+
+  it.each([
+    ['the sign-in fragment', '#access_token=abc&expires_in=3600'],
+    ['an unknown key', '#nope'],
+    ['a branch with nothing to open', '#venerable-dreadnoughts'],
+  ])('ignores %s in the URL', async (_, hash) => {
+    window.history.replaceState(null, '', '/roster' + hash)
+    const w = await render()
+    await flushPromises()
+    expect(openCount(w)).toBe(0)
+    expect(w.findAll('.rs-branch')).toHaveLength(12)
+  })
+
+  it('keeps branches open when a new snapshot arrives', async () => {
+    const w = await render()
+    await w.find('[data-branch="company-3"] button').trigger('click')
+    expect(isOpen(w, 'company-3')).toBe(true)
+    api.getRoster.mockResolvedValue({ ...fixture.roster, fetchedAt: 'later' })
+    await useRoster().load('tok')
+    await flushPromises()
+    expect(isOpen(w, 'company-3')).toBe(true)
+  })
+
+  it('shrugs off a branch that stops being openable while open', async () => {
+    const w = await render()
+    await w.find('[data-branch="company-1"] button').trigger('click')
+    const trimmed = { ...fixture.roster, fetchedAt: 'trim', branches: fixture.roster.branches.map((b) => (b.key === 'company-1' ? { ...b, aside: [], rows: [] } : b)) }
+    api.getRoster.mockResolvedValue(trimmed)
+    await useRoster().load('tok')
+    await flushPromises()
+    expect(w.find('[data-branch="company-1"] button').exists()).toBe(false)
+    expect(isOpen(w, 'company-1')).toBe(false)
+    await w.find('.rs-expand-all').trigger('click')
+    await flushPromises()
+    expect(openCount(w)).toBe(buildRosterView(trimmed).openableKeys.length)
+  })
+
+  it('renders an empty roster: no dais, nobody on the roll, nothing to open', async () => {
+    api.getRoster.mockResolvedValue(sceneOf(fixture, 'empty').roster)
+    const w = await render()
+    expect(w.find('.rs-high-command').exists()).toBe(false)
+    expect(w.find('.rs-status').text()).toContain('0 on the roll')
+    expect(w.findAll('.rs-branch')).toHaveLength(12)
+    expect(w.findAll('.rs-branch button')).toHaveLength(0)
+    expect(w.find('.rs-expand-all').exists()).toBe(false)
+  })
+
+  it('stops listening for the tab coming back when it unmounts', async () => {
+    const remove = vi.spyOn(document, 'removeEventListener')
+    const w = await render()
+    w.unmount()
+    expect(remove).toHaveBeenCalledWith('visibilitychange', expect.any(Function))
+    remove.mockRestore()
+  })
+  it('does not start another request while one is still pending', async () => {
+    vi.useFakeTimers()
+    try {
+      api.getRoster.mockReturnValue(new Promise(() => {}))
+      const w = mount(Roster)
+      mounted.push(w)
+      await vi.advanceTimersByTimeAsync(180_000)
+      expect(api.getRoster).toHaveBeenCalledTimes(1)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it.each([
+    ['prefers reduced motion', true, 'auto'],
+    ['welcomes motion', false, 'smooth'],
+  ])('when the visitor %s, Find me scrolls the matching way', async (_, reduced, behavior) => {
+    window.matchMedia = vi.fn(() => ({ matches: reduced }))
+    try {
+      asViewer(brother)
+      const w = await render()
+      await w.find('.rs-find').trigger('click')
+      await flushPromises()
+      const used = Element.prototype.scrollIntoView.mock.calls.map(([options]) => options.behavior)
+      expect(used.length).toBeGreaterThan(0)
+      expect(used.every((b) => b === behavior)).toBe(true)
+    } finally {
+      delete window.matchMedia
+    }
   })
 })

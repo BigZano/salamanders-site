@@ -57,3 +57,29 @@ test('a member who leaves the guild drops off the roster at the next refresh', a
     )
     .toBe(0)
 })
+
+// The design pass (docs/superpowers/specs/2026-10-13-roster-design-pass-design.md).
+// test-captain-token is member 100000000000000020, Captain of the 3rd Company in the Discord mock.
+test("Find me opens the viewer's own branch", async ({ page }) => {
+  await signIn(page, 'test-captain-token')
+  await page.goto('/roster')
+  await page.getByRole('button', { name: 'Find me' }).click()
+  await expect(page.locator('[data-branch="company-3"]')).toHaveAttribute('data-open', '')
+  await expect(page.locator('.rs-me')).toBeVisible()
+})
+
+test('Expand all opens every branch that has ranks, and Collapse all closes them', async ({ page }) => {
+  await signIn(page, 'test-member-token')
+  await page.goto('/roster')
+  await expect(page.locator('[data-open]')).toHaveCount(0)
+  await page.getByRole('button', { name: 'Expand all' }).click()
+  await expect(page.locator('[data-branch="company-3"]')).toHaveAttribute('data-open', '')
+  await page.getByRole('button', { name: 'Collapse all' }).click()
+  await expect(page.locator('[data-open]')).toHaveCount(0)
+})
+
+test('a #company-3 link opens that branch', async ({ page }) => {
+  await signIn(page, 'test-member-token')
+  await page.goto('/roster#company-3')
+  await expect(page.locator('[data-branch="company-3"]')).toHaveAttribute('data-open', '')
+})

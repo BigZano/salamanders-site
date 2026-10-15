@@ -2,6 +2,7 @@ import { defineStore } from 'pinia'
 import { markRaw } from 'vue'
 import * as api from '../lib/rosterApi'
 import { loadFixture } from '../lib/rosterFixture'
+import { buildRosterView } from '../lib/rosterView'
 
 // One counter per kind of load: a response only lands if no later call (or
 // reset) has started since, so a slow answer can never overwrite a newer one.
@@ -14,6 +15,10 @@ const messageOf = (err) => err?.message || 'Could not reach the roster server.'
 export const useRoster = defineStore('roster', {
   // Server responses are wholesale-replaced snapshots, never edited in place.
   state: () => ({ status: 'idle', roster: null, infirmaryStatus: 'idle', infirmary: null, message: '' }),
+  getters: {
+    // Built once per snapshot: the cache holds until `roster` is replaced (see the dedupe in load).
+    view: (state) => (state.roster ? buildRosterView(state.roster) : null),
+  },
   actions: {
     async load(token) {
       const mine = ++rosterSeq
@@ -35,7 +40,13 @@ export const useRoster = defineStore('roster', {
       try {
         const data = fixture ? fixture.roster : await api.getRoster(token)
         if (mine !== rosterSeq) return
-        this.roster = markRaw(data)
+        // The server refreshes every few minutes but the page polls every minute, so most
+        // answers repeat the snapshot already on screen. Keep that object: replacing it
+        // would rebuild the view and re-render the whole page for nothing. The viewer flags
+        // are worked out per request, so they count as part of the snapshot.
+        const cur = this.roster
+        const same = cur && cur.fetchedAt === data.fetchedAt && cur.stale === data.stale && cur.viewer?.infirmary === data.viewer?.infirmary
+        if (!same) this.roster = markRaw(data)
         this.status = 'ready'
         this.message = ''
       } catch (err) {

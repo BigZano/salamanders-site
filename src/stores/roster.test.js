@@ -9,7 +9,15 @@ const FX = vi.hoisted(() => ({
 }))
 vi.mock('../data/roster.fixture.json', () => ({ default: FX }))
 vi.mock('../lib/rosterApi', () => ({ getRoster: vi.fn(), getInfirmary: vi.fn() }))
+// Count how often the view model is built; the real function still runs.
+const real = vi.hoisted(() => ({ build: null }))
+vi.mock('../lib/rosterView', async (importOriginal) => {
+  const actual = await importOriginal()
+  real.build = actual.buildRosterView
+  return { ...actual, buildRosterView: vi.fn((r) => real.build(r)) }
+})
 import * as api from '../lib/rosterApi'
+import { buildRosterView } from '../lib/rosterView'
 import { useRoster } from './roster'
 
 const ROSTER = { fetchedAt: 'x', stale: false, viewer: { infirmary: true }, highCommand: [], branches: [], unassigned: { rows: [] }, servitors: [] }
@@ -281,5 +289,74 @@ describe('roster store: dev fixture', () => {
     vi.stubEnv('VITE_ROSTER_FIXTURE', 'empty')
     await s.load(null)
     expect(s.roster.highCommand).toEqual([])
+  })
+})
+
+describe('roster store: snapshots and the view model', () => {
+  beforeEach(() => {
+    buildRosterView.mockImplementation((r) => real.build(r))
+  })
+  const again = (over = {}) => ({ ...ROSTER, ...over })
+
+  it('has no view until a roster arrives', () => {
+    expect(useRoster().view).toBeNull()
+  })
+
+  it('builds the view from the roster', async () => {
+    api.getRoster.mockResolvedValue(ROSTER)
+    const s = useRoster()
+    await s.load('tok')
+    expect(s.view).toMatchObject({ banner: { hero: null }, branches: [], unassigned: null })
+  })
+
+  it('an identical snapshot assigns nothing and rebuilds nothing', async () => {
+    api.getRoster.mockResolvedValueOnce(again()).mockResolvedValueOnce(again())
+    const s = useRoster()
+    await s.load('tok')
+    const first = s.roster
+    void s.view
+    await s.load('tok')
+    void s.view
+    expect(s.roster).toBe(first)
+    expect(buildRosterView).toHaveBeenCalledTimes(1)
+  })
+
+  it('a new fetchedAt replaces the snapshot and rebuilds the view', async () => {
+    api.getRoster.mockResolvedValueOnce(again()).mockResolvedValueOnce(again({ fetchedAt: 'y' }))
+    const s = useRoster()
+    await s.load('tok')
+    void s.view
+    await s.load('tok')
+    void s.view
+    expect(s.roster.fetchedAt).toBe('y')
+    expect(buildRosterView).toHaveBeenCalledTimes(2)
+  })
+
+  it('a change in stale replaces the snapshot', async () => {
+    api.getRoster.mockResolvedValueOnce(again()).mockResolvedValueOnce(again({ stale: true }))
+    const s = useRoster()
+    await s.load('tok')
+    await s.load('tok')
+    expect(s.roster.stale).toBe(true)
+  })
+
+  it('a change in viewer.infirmary replaces the snapshot (viewer flags are per request)', async () => {
+    api.getRoster.mockResolvedValueOnce(again()).mockResolvedValueOnce(again({ viewer: { infirmary: false } }))
+    const s = useRoster()
+    await s.load('tok')
+    await s.load('tok')
+    expect(s.roster.viewer.infirmary).toBe(false)
+  })
+
+  it('still clears an error banner when an identical snapshot comes back', async () => {
+    api.getRoster.mockResolvedValueOnce(again()).mockRejectedValueOnce(apiError(503, 'down')).mockResolvedValueOnce(again())
+    const s = useRoster()
+    await s.load('tok')
+    const first = s.roster
+    await s.load('tok')
+    expect(s.status).toBe('error')
+    await s.load('tok')
+    expect(s).toMatchObject({ status: 'ready', message: '' })
+    expect(s.roster).toBe(first)
   })
 })
