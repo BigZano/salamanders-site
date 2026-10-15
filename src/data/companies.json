@@ -1,6 +1,7 @@
 [
   {
     "id": "first",
+    "branch": "company-1",
     "sigil": "I",
     "title": "1st Company — The Firedrakes",
     "subtitle": "Vulkan's chosen veterans and the Legion's senior operational standard.",
@@ -49,6 +50,7 @@
   },
   {
     "id": "second",
+    "branch": "company-2",
     "sigil": "II",
     "title": "2nd Company — The Defenders of Nocturne",
     "subtitle": "Guardians of the Chapter homeworld, kin, and vulnerable Imperial populations.",
@@ -87,6 +89,7 @@
   },
   {
     "id": "third",
+    "branch": "company-3",
     "sigil": "III",
     "title": "3rd Company — The Pyroclasts",
     "subtitle": "Foremost flame specialists and the Chapter’s answer to entrenched enemies.",
@@ -125,6 +128,7 @@
   },
   {
     "id": "fourth",
+    "branch": "company-4",
     "sigil": "IV",
     "title": "4th Company — The Branded",
     "subtitle": "Faith, zeal, close combat, and the living edge of the Reclusiam.",
@@ -162,6 +166,7 @@
   },
   {
     "id": "fifth",
+    "branch": "company-5",
     "sigil": "V",
     "title": "5th Company — The Dark Krakens",
     "subtitle": "Abyssal hunters defined by challenge, controlled aggression, and immaculate warplate.",
@@ -198,6 +203,7 @@
   },
   {
     "id": "sixth",
+    "branch": "company-6",
     "sigil": "VI",
     "title": "6th Company — Covenant of Fire",
     "subtitle": "A devout Chapter shaped by hardship, scholarship, and endurance.",
@@ -235,6 +241,7 @@
   },
   {
     "id": "seventh",
+    "branch": "company-7",
     "sigil": "VII",
     "title": "7th Scout Company — The Sons of Nocturne",
     "subtitle": "Reconnaissance, patience, leadership, and the forging of new battle-brothers.",
@@ -272,7 +279,25 @@
     ]
   },
   {
+    "id": "dreadnoughts",
+    "branch": "venerable-dreadnoughts",
+    "sigil": "VD",
+    "title": "The Venerable Dreadnoughts",
+    "subtitle": "Entombed veterans of the Legion's oldest wars",
+    "keywords": "venerable dreadnoughts dreadnought sarcophagus entombed ancient",
+    "sections": [
+      {
+        "h": "About",
+        "p": [
+          "Wounded past the saving of flesh, the Legion's oldest heroes are entombed in the sarcophagi of Dreadnoughts and wake to fight again in its hour of need.",
+          "Their full story is still being written."
+        ]
+      }
+    ]
+  },
+  {
     "id": "apothecarion",
+    "branch": "apothecarion",
     "sigil": "A",
     "title": "The Apothecarion of Nocturne",
     "subtitle": "Guardians of gene-seed, healers of the fallen, and keepers of the flame of life.",
@@ -314,6 +339,7 @@
   },
   {
     "id": "librarius",
+    "branch": "librarius",
     "sigil": "L",
     "title": "The Librarius",
     "subtitle": "Psychic guardians, scholars, and living conflagrations of the Chapter.",
@@ -378,6 +404,7 @@
   },
   {
     "id": "armoury",
+    "branch": "forge",
     "sigil": "M",
     "title": "The Armoury",
     "subtitle": "Techmarines, forge masters, and keepers of the Chapter’s engines of war.",
@@ -418,6 +445,7 @@
   },
   {
     "id": "reclusiam",
+    "branch": "reclusiam",
     "sigil": "R",
     "title": "The Reclusiam — Keepers of Faith",
     "subtitle": "The vigilant eyes, guiding hands, and unwavering judgment of the Chapter.",
