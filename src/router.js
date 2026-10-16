@@ -53,6 +53,12 @@ const routes = [
   },
   // The roster moved onto /companies; old links (and bookmarks, with their #branch-key) still land.
   { path: '/roster', redirect: legacyRosterTarget },
+  {
+    path: '/accolades/legacy',
+    name: 'legacy-accolades',
+    component: () => import('./views/LegacyAccolades.vue'),
+    meta: { title: 'Legacy Accolades', ashOver: true },
+  },
   ...[
     { key: 'accolades', title: 'Accolades' },
     { key: 'ranks', title: 'Ranks' },

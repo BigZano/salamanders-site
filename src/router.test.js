@@ -49,3 +49,12 @@ describe('scroll behaviour', () => {
     expect(scroll({ path: '/accolades/200000000000000001', hash: '#m-6' }, { path: '/accolades/200000000000000001' })).toBe(false)
   })
 })
+
+describe('the Legacy Accolades route', () => {
+  it('is its own page, and the thread route still takes thread ids', () => {
+    expect(router.resolve('/accolades/legacy').name).toBe('legacy-accolades')
+    expect(router.resolve('/accolades/legacy').meta).toMatchObject({ title: 'Legacy Accolades', ashOver: true })
+    expect(router.resolve('/accolades').name).toBe('accolades')
+    expect(router.resolve('/accolades/200000000000000001').name).toBe('accolades')
+  })
+})
