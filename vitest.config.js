@@ -8,6 +8,7 @@ const GATED = [
   'src/lib/archive/markdown.js',
   'src/lib/archive/audit.js',
   'src/lib/archive/prune.js',
+  'src/lib/archive/legacy.js',
   'server/src/archiveKey.js',
   'src/lib/longPress.js',
   'src/lib/perkStateKey.js',
