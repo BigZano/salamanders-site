@@ -31,7 +31,8 @@ export async function scanDir(dir, { sentinels = [] } = {}) {
     }
     const hits = SIGS.filter((s) => text.includes(s)).length
     if (hits >= 2) findings.push(`${rel}: Discord export JSON signatures (${hits})`)
-    for (const s of sentinels) if (text.includes(s)) findings.push(`${rel}: contains archive content sentinel`)
+    // `text` is latin1, so a non-ASCII sentinel is matched as the UTF-8 bytes a build writes it as.
+    for (const s of sentinels) if (text.includes(s) || text.includes(Buffer.from(s, 'utf8').toString('latin1'))) findings.push(`${rel}: contains archive content sentinel`)
   }
   return findings
 }

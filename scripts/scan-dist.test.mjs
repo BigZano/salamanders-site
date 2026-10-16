@@ -33,6 +33,10 @@ describe('scanDir', () => {
     await writeFile(join(d, rel), body, 'latin1')
     expect((await scanDir(d)).length).toBeGreaterThan(0)
   })
+  it('flags a sentinel with non-ASCII characters, which the bundle holds as UTF-8 bytes', async () => {
+    await writeFile(join(d, 'assets', 'index.js'), 'x="Zoë — Fixture’s"') // written as UTF-8, as a real build is
+    expect(await scanDir(d, { sentinels: ['Zoë — Fixture’s'] })).toHaveLength(1)
+  })
   it('flags local sentinels (content strings from the real export)', async () => {
     await writeFile(join(d, 'assets', 'index.js'), `x="${SENTINEL}-accolades"`)
     expect(await scanDir(d, { sentinels: [`${SENTINEL}-accolades`] })).toHaveLength(1)
