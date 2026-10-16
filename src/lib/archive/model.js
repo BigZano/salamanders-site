@@ -34,7 +34,8 @@ export function createArchive(index, registry = COLLECTIONS) {
     })
   }
   validateToc(collections)
-  return { collections, fixes: index.fixes ?? {}, linkIndex: buildLinkIndex([...collections.values()]) }
+  // `legacy` is the sealed Legacy Accolades payload (see legacy.js); a bundle sealed before it existed has none.
+  return { collections, fixes: index.fixes ?? {}, linkIndex: buildLinkIndex([...collections.values()]), legacy: index.legacy ?? null }
 }
 
 /** Every thread a ToC overlay names must exist, in the collection that names it. */

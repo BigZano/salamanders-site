@@ -2,11 +2,15 @@
 import { parse, walk } from './markdown'
 import { validateFixes } from './links'
 import { classifyHref, emojiFile, attachmentFile } from './model'
+import { auditLegacy } from './legacy'
 
 export function auditArchive(archive) {
-  const problems = validateFixes(archive.fixes, archive.linkIndex).map((detail) => ({
-    collectionKey: null, threadId: null, messageId: null, kind: 'bad-fix', detail,
-  }))
+  const problem = (kind) => (detail) => ({ collectionKey: null, threadId: null, messageId: null, kind, detail })
+  const problems = [
+    ...validateFixes(archive.fixes, archive.linkIndex).map(problem('bad-fix')),
+    // `!== null`, not truthiness: a present-but-unusable payload (0, '', false) must be reported, not skipped.
+    ...(archive.legacy !== null ? auditLegacy(archive.legacy).map(problem('bad-legacy')) : []),
+  ]
   const stats = { links: 0, route: 0, text: 0, external: 0 }
   for (const col of archive.collections.values()) {
     for (const [threadId, { messages }] of col.threads) {
