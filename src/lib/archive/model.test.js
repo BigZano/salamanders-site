@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest'
 import { createArchive, orderMessages, emojiFile, attachmentFile, threadTags, mentionLabel, classifyHref } from './model'
-import { makeIndex, IDS } from './testIndex'
+import { makeIndex, makeLegacy, IDS } from './testIndex'
 
 describe('createArchive', () => {
   it('builds both collections with ordered, filtered messages', () => {
@@ -83,4 +83,15 @@ describe('classifyHref', () => {
     expect(classifyHref('https://example.com/w', a)).toEqual({ kind: 'external', href: 'https://example.com/w' }))
   it.each(['javascript:alert(1)', 'data:text/html,x', '//evil.io', 'ftp://x'])('%s → text', (h) =>
     expect(classifyHref(h, a)).toEqual({ kind: 'text' }))
+})
+
+describe('createArchive and the legacy accolades', () => {
+  it('carries the sealed payload as given', () => {
+    expect(createArchive(makeIndex()).legacy).toEqual(makeLegacy())
+  })
+  it('has none for a bundle sealed before they existed', () => {
+    const i = makeIndex()
+    delete i.legacy
+    expect(createArchive(i).legacy).toBeNull()
+  })
 })

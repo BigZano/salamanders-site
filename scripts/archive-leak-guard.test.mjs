@@ -12,6 +12,10 @@ describe('checkPath', () => {
   it.each([
     'archive-export/accolades/data/forum.json',
     'archive-export/.env',
+    'archive-export/legacy-accolades.json',
+    'legacy-accolades.json', // a snapshot written with --out somewhere not ignored
+    'restore/legacy-accolades.json', // `unseal <dest>` into a folder of the operator's choosing
+    'tmp/Legacy-Accolades.backup.JSON',
     'public/archive/0123abcd.bin',
     'public/archive-e2e/x.bin',
     'e2e/.archive/lock.json',
@@ -29,6 +33,9 @@ describe('checkPath', () => {
     'src/lib/archive/crypto.js',
     'scripts/archive-leak-guard.mjs',
     'archive.lock.json',
+    'scripts/snapshot-legacy-accolades.mjs',
+    'src/lib/archive/legacy.js',
+    'docs/superpowers/specs/2026-10-16-legacy-accolades-design.md',
     'docs/superpowers/specs/2026-09-24-legion-archive-design.md',
     'public/favicon.svg',
     'src/data/discord-members.json',

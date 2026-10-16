@@ -6,6 +6,7 @@ import { deriveKeys, seal, open, opaqueName, keyFromBase64 } from '../../src/lib
 import { createArchive } from '../../src/lib/archive/model.js'
 import { auditArchive } from '../../src/lib/archive/audit.js'
 import { COLLECTIONS } from '../../src/lib/archive/registry.js'
+import { LEGACY_FILE, canonicalLegacy } from '../../src/lib/archive/legacy.js'
 
 const DATA_FILES = ['forum.json', 'index.json', 'links.json', 'resolve.json', 'assets.json']
 const sha = (b) => createHash('sha256').update(b).digest('hex')
@@ -45,6 +46,16 @@ export async function readExport(exportDir) {
     if (!meta[def.key]?.tocThreadId) throw new Error(`collections.json has no tocThreadId for ${def.key}`)
     index.collections[def.key] = { tocThreadId: meta[def.key].tocThreadId, ...(meta[def.key].toc ? { toc: meta[def.key].toc } : {}), files }
   }
+  const legacyText = await readFile(join(exportDir, LEGACY_FILE), 'utf8').catch((e) => {
+    if (e.code === 'ENOENT') return null // no file: a bundle without legacy accolades
+    throw e
+  })
+  if (legacyText !== null) {
+    const legacy = JSON.parse(legacyText)
+    // JSON `null` would read as "absent" downstream and quietly drop the page.
+    if (legacy === null) throw new Error(`${LEGACY_FILE} must not be null`)
+    index.legacy = legacy
+  }
   return { index, assets }
 }
 
@@ -57,8 +68,12 @@ async function prepareOut(outDir) {
   await mkdir(outDir, { recursive: true })
 }
 
-export async function sealExport({ exportDir, rawKey, outDir, now = new Date() }) {
+export async function sealExport({ exportDir, rawKey, outDir, now = new Date(), prevLock = null, dropLegacy = false }) {
   const { index, assets } = await readExport(exportDir)
+  // Once a published bundle carried the legacy accolades, sealing without them would silently drop the page.
+  if (prevLock?.legacy && !dropLegacy && !index.legacy) {
+    throw new Error(`the last published archive carried the legacy accolades, but ${LEGACY_FILE} is missing from ${exportDir}: restore it (unseal) or pass --drop-legacy`)
+  }
   const keys = await deriveKeys(rawKey)
   index.kid = keys.kid
   index.sealedAt = now.toISOString()
@@ -76,7 +91,7 @@ export async function sealExport({ exportDir, rawKey, outDir, now = new Date() }
   }
   await put('index', enc.encode(JSON.stringify(index)))
   for (const a of assets) await put(a.logicalPath, a.bytes)
-  return { format: 1, kid: keys.kid, files }
+  return { format: 1, kid: keys.kid, files, ...(index.legacy ? { legacy: true } : {}) }
 }
 
 export async function verifyDir(outDir, lock) {
@@ -105,6 +120,7 @@ export async function unsealDir({ dir, rawKey, destDir }) {
     Object.entries(index.collections).map(([k, c]) => [k, { tocThreadId: c.tocThreadId, ...(c.toc ? { toc: c.toc } : {}) }]),
   ), null, 2))])
   writes.push([join(destDir, 'link-fixes.json'), enc.encode(JSON.stringify(index.fixes, null, 2))])
+  if (index.legacy) writes.push([join(destDir, LEGACY_FILE), enc.encode(canonicalLegacy(index.legacy))])
   // Everything decrypted and authenticated before the first byte is written.
   for (const [p, bytes] of writes) {
     await mkdir(join(p, '..'), { recursive: true })

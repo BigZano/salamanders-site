@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest'
 import { createArchive } from './model'
 import { auditArchive } from './audit'
-import { makeIndex, IDS } from './testIndex'
+import { makeIndex, makeLegacy, IDS } from './testIndex'
 
 const kinds = (a) => auditArchive(createArchive(a)).problems.map((p) => p.kind)
 
@@ -76,5 +76,28 @@ describe('auditArchive', () => {
     th.messages[0].content = `<@&${IDS.ROLE}> <@${IDS.USER}>`
     idx.collections.ranks.files[f] = JSON.stringify(th)
     expect(kinds(idx)).toEqual(['unknown-role', 'unknown-user'])
+  })
+
+  describe('legacy accolades', () => {
+    it('are absent from an older bundle without a problem', () => {
+      const idx = makeIndex()
+      delete idx.legacy
+      expect(auditArchive(createArchive(idx)).problems).toEqual([])
+    })
+    it('a bad payload is a bad-legacy problem that sits on no thread', () => {
+      const idx = makeIndex()
+      idx.legacy.accolades[1].roleId = idx.legacy.accolades[0].roleId
+      expect(auditArchive(createArchive(idx)).problems).toEqual([
+        { collectionKey: null, threadId: null, messageId: null, kind: 'bad-legacy', detail: 'accolade 2: roleId appears twice' },
+      ])
+    })
+    it.each([0, '', false, [], 'x'].map((v) => [v]))('a present but unusable payload (%j) is reported, not skipped', (legacy) => {
+      const idx = makeIndex()
+      idx.legacy = legacy
+      expect(kinds(idx)).toEqual(['bad-legacy'])
+    })
+    it('the synthetic payload is itself valid', () => {
+      expect(auditArchive(createArchive({ ...makeIndex(), legacy: makeLegacy() })).problems).toEqual([])
+    })
   })
 })

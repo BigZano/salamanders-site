@@ -6,6 +6,7 @@ import { mkdir, writeFile } from 'node:fs/promises'
 import { createHash, randomBytes } from 'node:crypto'
 import { join } from 'node:path'
 import { makeIndex, IDS } from '../src/lib/archive/testIndex.js'
+import { LEGACY_FILE, canonicalLegacy } from '../src/lib/archive/legacy.js'
 
 export const SENTINEL = 'FIXTURE-PLAINTEXT-SENTINEL'
 // 1x1 PNG and 1x1 GIF, real image bytes so magic-byte scanners see them.
@@ -43,6 +44,9 @@ export async function writeFixture(dir) {
     ranks: { tocThreadId: index.collections.ranks.tocThreadId },
   }, null, 2))
   await writeFile(join(dir, 'link-fixes.json'), JSON.stringify(index.fixes, null, 2))
+  // The legacy accolades sit beside the collections; the sentinel rides in a blurb so every leak check covers them too.
+  index.legacy.accolades[0].blurb += ` ${SENTINEL}-legacy`
+  await writeFile(join(dir, LEGACY_FILE), canonicalLegacy(index.legacy))
   const key = randomBytes(32).toString('base64')
   await writeFile(join(dir, '.env'), `ARCHIVE_KEY=${key}\n`)
   return { key, ids: IDS }

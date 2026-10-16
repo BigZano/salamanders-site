@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach } from 'vitest'
-import { mkdtemp, mkdir, writeFile } from 'node:fs/promises'
+import { mkdtemp, mkdir, writeFile, unlink } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { scanDir, sentinelsFrom } from './scan-dist.mjs'
@@ -33,6 +33,10 @@ describe('scanDir', () => {
     await writeFile(join(d, rel), body, 'latin1')
     expect((await scanDir(d)).length).toBeGreaterThan(0)
   })
+  it('flags a sentinel with non-ASCII characters, which the bundle holds as UTF-8 bytes', async () => {
+    await writeFile(join(d, 'assets', 'index.js'), 'x="Zoë — Fixture’s"') // written as UTF-8, as a real build is
+    expect(await scanDir(d, { sentinels: ['Zoë — Fixture’s'] })).toHaveLength(1)
+  })
   it('flags local sentinels (content strings from the real export)', async () => {
     await writeFile(join(d, 'assets', 'index.js'), `x="${SENTINEL}-accolades"`)
     expect(await scanDir(d, { sentinels: [`${SENTINEL}-accolades`] })).toHaveLength(1)
@@ -50,5 +54,41 @@ describe('scanDir', () => {
     const s = await sentinelsFrom(exp, { publicText: 'const pages = ["Fixture Ranks"]' })
     expect(s).not.toContain('Fixture Ranks')
     expect(s).toContain('Fixture ToC')
+  })
+
+  describe('legacy accolades', () => {
+    const fresh = async () => {
+      const exp = await mkdtemp(join(tmpdir(), 'exp-'))
+      await writeFixture(exp)
+      return exp
+    }
+    it('sentinelsFrom samples blurbs, role names, holder ids and long-enough holder names', async () => {
+      const s = await sentinelsFrom(await fresh())
+      expect(s).toEqual(expect.arrayContaining(['Fixture Laurel', 'Alpha Holder', '820000000000000001', 'Fixture blurb two.']))
+    })
+    it('leaves out a holder name too short to be told from minified code, but still samples that holder’s id', async () => {
+      const s = await sentinelsFrom(await fresh())
+      expect(s).not.toContain('Ed')
+      expect(s).toContain('820000000000000003')
+    })
+    it('a holder name or id in a built bundle is a finding', async () => {
+      const sentinels = await sentinelsFrom(await fresh())
+      await writeFile(join(d, 'assets', 'index.js'), 'x="Alpha Holder"')
+      await writeFile(join(d, 'assets', 'other.js'), 'y=820000000000000002')
+      expect(await scanDir(d, { sentinels })).toHaveLength(2)
+    })
+    it('an export with no legacy file samples exactly what it did before', async () => {
+      const exp = await fresh()
+      await unlink(join(exp, 'legacy-accolades.json'))
+      const s = await sentinelsFrom(exp)
+      expect(s).not.toContain('Alpha Holder')
+      expect(s).toContain('Fixture ToC')
+    })
+    it('a legacy file that cannot be read is an error, not a silent skip', async () => {
+      const exp = await fresh()
+      await unlink(join(exp, 'legacy-accolades.json'))
+      await mkdir(join(exp, 'legacy-accolades.json'))
+      await expect(sentinelsFrom(exp)).rejects.toThrow()
+    })
   })
 })

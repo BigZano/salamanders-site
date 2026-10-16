@@ -6,6 +6,8 @@ export const IDS = {
   EXT_CHANNEL: '500000000000000001', DEAD_MSG: '100000000000000099',
   EMOJI: '300000000000000001', TAG_EMOJI: '300000000000000002', GIF_EMOJI: '300000000000000003',
   ROLE: '400000000000000001', USER: '600000000000000001', TAG: '700000000000000001',
+  LEGACY_ROLE_A: '810000000000000001', LEGACY_ROLE_B: '810000000000000002', LEGACY_ROLE_C: '810000000000000003',
+  LEGACY_USER_A: '820000000000000001', LEGACY_USER_B: '820000000000000002', LEGACY_USER_C: '820000000000000003',
   ATT_URL: 'https://cdn.discordapp.com/attachments/100000000000000001/800000000000000001/f.png?ex=1&is=2&hm=3&',
 }
 const G = IDS.GUILD
@@ -19,6 +21,24 @@ IDS.LINK_TO_RANKS = LINKS.toRanks
 
 const thread = (id, name, applied_tags, messages) => ({ thread: { id, name, applied_tags }, messages })
 const msg = (id, position, content, extra = {}) => ({ id, type: 0, position, content, attachments: [], ...extra })
+
+/** Synthetic legacy accolades: one member under two roles, holders deliberately unsorted, a role with none, a dark colour, two paragraphs. */
+export function makeLegacy() {
+  return {
+    snapshot: '2026-10-16T12:00:00.000Z',
+    accolades: [
+      {
+        roleId: IDS.LEGACY_ROLE_A, name: 'Fixture Laurel', color: '#d4a017', blurb: 'Fixture blurb one.',
+        holders: [{ id: IDS.LEGACY_USER_B, name: 'beta holder' }, { id: IDS.LEGACY_USER_A, name: 'Alpha Holder' }],
+      },
+      {
+        roleId: IDS.LEGACY_ROLE_B, name: 'Fixture Ember', color: null, blurb: 'Fixture blurb two.',
+        holders: [{ id: IDS.LEGACY_USER_A, name: 'Alpha Holder' }, { id: IDS.LEGACY_USER_C, name: 'Ed' }],
+      },
+      { roleId: IDS.LEGACY_ROLE_C, name: 'Fixture Ash', color: '#202020', blurb: 'Fixture blurb three.\n\nSecond paragraph.', holders: [] },
+    ],
+  }
+}
 
 export function makeIndex() {
   const aThreads = {
@@ -68,5 +88,6 @@ export function makeIndex() {
       [`${IDS.A_T2}/${IDS.DEAD_MSG}`]: { to: `${IDS.A_T2}/${IDS.A_T2_M}`, why: 'replacement' },
       [IDS.EXT_CHANNEL]: { text: true, why: 'outside archive' },
     },
+    legacy: makeLegacy(),
   }
 }

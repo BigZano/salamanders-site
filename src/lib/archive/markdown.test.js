@@ -242,7 +242,8 @@ describe('hostile input', () => {
     const t = performance.now()
     expect(() => parse(s)).not.toThrow()
     expect(performance.now() - t).toBeLessThan(budget)
-  })
+    // vitest's own 5 s default would otherwise cut the instrumented run short of the 20 s budget above.
+  }, 30_000)
 })
 
 describe('plainText', () => {

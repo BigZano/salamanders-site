@@ -15,6 +15,7 @@ const BLOCKED = [
   /(^|\/)e2e\/\.archive\//i,
   /(^|\/)public\/(accolades|rank-requirements)\//i,
   /(^|\/)src\/data\/(accolades|rank-requirements)\//i,
+  /(^|\/)legacy-accolades[^/]*\.json$/i, // holds member names, wherever --out or `unseal <dest>` puts it
 ]
 // JSON-key signatures of a raw Discord export, assembled so this file never
 // contains them literally.

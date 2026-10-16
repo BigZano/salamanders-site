@@ -1,11 +1,12 @@
 import { describe, it, expect, beforeEach } from 'vitest'
-import { mkdtemp, readFile, writeFile, readdir, rm, unlink, cp } from 'node:fs/promises'
+import { mkdtemp, mkdir, readFile, writeFile, readdir, rm, unlink, cp } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { createHash } from 'node:crypto'
 import { writeFixture, SENTINEL } from '../archive-fixture.mjs'
 import { readExport, sealExport, verifyDir, unsealDir, readEnvKey } from './archive-seal.mjs'
 import { keyFromBase64 } from '../../src/lib/archive/crypto.js'
+import { LEGACY_FILE, canonicalLegacy } from '../../src/lib/archive/legacy.js'
 
 let root, exp, out, key
 beforeEach(async () => {
@@ -114,5 +115,69 @@ describe('seal → verify → unseal', () => {
     expect(readEnvKey(`# c\nARCHIVE_KEY=${Buffer.from(key).toString('base64')}\n`)).toEqual(key)
     expect(() => readEnvKey('ARCHIVE_KEY=short')).toThrow()
     expect(() => readEnvKey('OTHER=1')).toThrow(/ARCHIVE_KEY/)
+  })
+})
+
+describe('legacy accolades', () => {
+  const legacyPath = () => join(exp, LEGACY_FILE)
+  const seal = (extra = {}) => sealExport({ exportDir: exp, rawKey: key, outDir: out, now: new Date(0), ...extra })
+
+  it('travels in the sealed index and flags the lock', async () => {
+    const onDisk = JSON.parse(await readFile(legacyPath(), 'utf8'))
+    expect((await readExport(exp)).index.legacy).toEqual(onDisk)
+    expect((await seal()).legacy).toBe(true)
+  })
+
+  it('an export without it seals as before and the lock says nothing about it', async () => {
+    await unlink(legacyPath())
+    expect((await readExport(exp)).index.legacy).toBeUndefined()
+    expect(Object.keys(await seal())).toEqual(['format', 'kid', 'files'])
+  })
+
+  it('is restored as canonical JSON even when the input was compact', async () => {
+    const compact = JSON.stringify(JSON.parse(await readFile(legacyPath(), 'utf8')))
+    await writeFile(legacyPath(), compact)
+    await seal()
+    const restored = join(root, 'restored')
+    await unsealDir({ dir: out, rawKey: key, destDir: restored })
+    const text = await readFile(join(restored, LEGACY_FILE), 'utf8')
+    expect(JSON.parse(text)).toEqual(JSON.parse(compact))
+    expect(text).toBe(canonicalLegacy(JSON.parse(compact)))
+  })
+
+  it('refuses to seal a bad payload, naming the problem, and writes nothing', async () => {
+    const l = JSON.parse(await readFile(legacyPath(), 'utf8'))
+    l.accolades[1].roleId = l.accolades[0].roleId
+    await writeFile(legacyPath(), canonicalLegacy(l))
+    await expect(seal()).rejects.toThrow(/bad-legacy.*roleId appears twice/)
+    await expect(readdir(out)).rejects.toThrow()
+  })
+
+  it('does not treat a file that is null, or cannot be read, as absent', async () => {
+    await writeFile(legacyPath(), 'null')
+    await expect(readExport(exp)).rejects.toThrow(/null/)
+    await unlink(legacyPath())
+    await mkdir(legacyPath())
+    await expect(readExport(exp)).rejects.toThrow()
+  })
+
+  describe('once a published bundle carried it', () => {
+    it('a seal without the file is refused, and nothing is written', async () => {
+      await unlink(legacyPath())
+      await expect(seal({ prevLock: { legacy: true } })).rejects.toThrow(/legacy/)
+      await expect(readdir(out)).rejects.toThrow()
+    })
+    it('--drop-legacy lets it go, and the new lock no longer claims it', async () => {
+      await unlink(legacyPath())
+      const lock = await seal({ prevLock: { legacy: true }, dropLegacy: true })
+      expect('legacy' in lock).toBe(false)
+    })
+    it.each([null, {}, { legacy: false }])('does not matter when the last lock was %j', async (prevLock) => {
+      await unlink(legacyPath())
+      await expect(seal({ prevLock })).resolves.toBeTruthy()
+    })
+    it('a seal that still has the file goes through', async () => {
+      expect((await seal({ prevLock: { legacy: true } })).legacy).toBe(true)
+    })
   })
 })

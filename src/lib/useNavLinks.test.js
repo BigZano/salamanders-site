@@ -22,7 +22,7 @@ describe('useNavLinks', () => {
   it('also gives a member Accolades, Ranks and Reports, in order', () => {
     state.auth.member = { isMember: true }
     const links = useNavLinks()
-    expect(labels(links)).toEqual(['Home', 'Perk Builder', 'Armoury', 'Builds', 'Companies', 'Accolades', 'Ranks', 'Reports'])
+    expect(labels(links)).toEqual(['Home', 'Perk Builder', 'Armoury', 'Builds', 'Companies', 'Accolades', 'Legacy Accolades', 'Ranks', 'Reports'])
     expect(links.value.find((l) => l.label === 'Reports')).toEqual({ to: '/reports', label: 'Reports', section: true })
     expect(links.value.find((l) => l.label === 'Home').section).toBeUndefined()
   })
@@ -55,5 +55,16 @@ describe('useNavLinks', () => {
     expect(labels(links)).toContain('Reports')
     state.auth.member = null
     expect(labels(links)).not.toContain('Reports')
+  })
+
+  it('puts Legacy Accolades right after Accolades for a member, and never shows it to anyone else', () => {
+    state.auth.member = { isMember: true }
+    const links = useNavLinks()
+    expect(links.value.find((l) => l.label === 'Legacy Accolades')).toEqual({ to: '/accolades/legacy', label: 'Legacy Accolades', section: true })
+    expect(labels(links).indexOf('Legacy Accolades')).toBe(labels(links).indexOf('Accolades') + 1)
+    for (const member of [null, { isMember: false }]) {
+      state.auth.member = member
+      expect(labels(useNavLinks())).not.toContain('Legacy Accolades')
+    }
   })
 })
