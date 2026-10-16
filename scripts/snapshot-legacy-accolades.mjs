@@ -3,11 +3,13 @@
  * the gitignored input of the Legacy Accolades page (see
  * docs/superpowers/specs/2026-10-16-legacy-accolades-design.md). Read-only against Discord.
  *
- *   DISCORD_BOT_TOKEN=... bun run legacy:snapshot -- --roles <id>,<id>,... [--prune] [--out <file>]
+ *   DISCORD_BOT_TOKEN=... node scripts/snapshot-legacy-accolades.mjs --roles <id>,<id>,... [--prune] [--fresh] [--out <file>]
  *
  * Merges into the file if it exists: blurbs and order are kept, holders only accumulate (--prune
  * drops anyone the new pull does not show), and a role already deleted in Discord keeps its stored
  * entry. A new role gets an empty blurb, which the seal audit rejects until it is written.
+ * Once archive.lock.json says the legacy accolades were published, a run with no snapshot file to add to is refused
+ * (restore it with `seal-archive unseal`), unless --fresh says starting over is meant.
  * Needs the bot's GUILD_MEMBERS intent, like scripts/fetch-discord-members.mjs.
  * Prints ids and counts only; the file itself holds names and must never be committed.
  */
@@ -16,13 +18,15 @@ import { parseArgs } from 'node:util'
 import { GUILD_ID } from '../src/lib/archive/registry.js'
 import { auditLegacy, canonicalLegacy } from '../src/lib/archive/legacy.js'
 import { createDiscord } from './lib/discord.mjs'
-import { buildSnapshot } from './lib/legacy-snapshot.mjs'
+import { buildSnapshot, checkStartingPoint } from './lib/legacy-snapshot.mjs'
 
 const { values } = parseArgs({
   options: {
     roles: { type: 'string' },
     out: { type: 'string', default: 'archive-export/legacy-accolades.json' },
     prune: { type: 'boolean', default: false },
+    fresh: { type: 'boolean', default: false },
+    lock: { type: 'string', default: 'archive.lock.json' },
   },
 })
 const token = process.env.DISCORD_BOT_TOKEN
@@ -31,7 +35,7 @@ if (!token) {
   process.exit(1)
 }
 if (!values.roles) {
-  console.error('usage: legacy:snapshot -- --roles <id>,<id>,... [--prune] [--out <file>]')
+  console.error('usage: snapshot-legacy-accolades --roles <id>,<id>,... [--prune] [--fresh] [--out <file>]')
   process.exit(2)
 }
 
@@ -40,6 +44,11 @@ async function run() {
     if (e.code === 'ENOENT') return null
     throw e
   })
+  const lock = await readFile(values.lock, 'utf8').then(JSON.parse, (e) => {
+    if (e.code === 'ENOENT') return null
+    throw e
+  })
+  checkStartingPoint({ existing, lock, fresh: values.fresh })
   const discord = createDiscord({ token, log: console.log })
   const roles = await discord.fetchRoles(GUILD_ID)
   const members = await discord.fetchAllMembers(GUILD_ID)

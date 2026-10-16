@@ -68,3 +68,17 @@ export function buildSnapshot({ existing = null, roles, members, roleIds, now, p
   const snapshot = pulled || !existing ? now.toISOString() : existing.snapshot
   return { legacy: { snapshot, accolades: [...entries.values()] }, report }
 }
+
+/**
+ * Starting a snapshot from nothing, after a bundle carrying the legacy accolades was published, would
+ * let the next seal replace everything published with whatever this run happens to see. Refuse unless asked.
+ */
+export function checkStartingPoint({ existing, lock, fresh = false }) {
+  if (existing === null && lock?.legacy && !fresh) {
+    throw new Error(
+      'archive.lock.json says the legacy accolades were already published, but there is no snapshot file to add to: ' +
+        'restore it with `seal-archive unseal`, or pass --fresh to start over',
+    )
+  }
+}
+

@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest'
 import fc from 'fast-check'
-import { buildSnapshot, colorHex } from './legacy-snapshot.mjs'
+import { buildSnapshot, checkStartingPoint, colorHex } from './legacy-snapshot.mjs'
 
 const R1 = '810000000000000001'
 const R2 = '810000000000000002'
@@ -163,5 +163,23 @@ describe('buildSnapshot, runs after the first', () => {
         expect(ids(true)).toEqual([...current].sort().map(U))
       }),
     )
+  })
+})
+
+describe('checkStartingPoint', () => {
+  const published = { legacy: true }
+  const something = { snapshot: '2026-10-16T12:00:00.000Z', accolades: [] }
+
+  it('refuses to start from nothing once the legacy accolades have been published', () => {
+    expect(() => checkStartingPoint({ existing: null, lock: published })).toThrow(/already published.*seal-archive unseal.*--fresh/s)
+  })
+  it('lets --fresh start over anyway', () => {
+    expect(() => checkStartingPoint({ existing: null, lock: published, fresh: true })).not.toThrow()
+  })
+  it('has nothing to say when there is a snapshot file to add to', () => {
+    expect(() => checkStartingPoint({ existing: something, lock: published })).not.toThrow()
+  })
+  it.each([null, undefined, {}, { legacy: false }].map((v) => [v]))('has nothing to say when the last lock was %j', (lock) => {
+    expect(() => checkStartingPoint({ existing: null, lock })).not.toThrow()
   })
 })
