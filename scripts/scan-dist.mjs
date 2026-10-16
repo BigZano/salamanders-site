@@ -5,6 +5,7 @@ import { execFileSync } from 'node:child_process'
 import { join, relative } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { COLLECTIONS, GUILD_ID } from '../src/lib/archive/registry.js'
+import { LEGACY_FILE } from '../src/lib/archive/legacy.js'
 
 const SIGS = ['guild' + '_id', 'mention' + '_roles', 'available' + '_tags', 'applied' + '_tags', 'permission' + '_overwrites']
   .flatMap((k) => ['"' + k + '":', '\\"' + k + '\\":'])
@@ -35,6 +36,15 @@ export async function scanDir(dir, { sentinels = [] } = {}) {
   return findings
 }
 
+async function readLegacy(exportDir) {
+  try {
+    return JSON.parse(await readFile(join(exportDir, LEGACY_FILE), 'utf8'))
+  } catch (e) {
+    if (e.code === 'ENOENT') return null
+    throw e
+  }
+}
+
 // publicText: text already published (tracked src/ + public/). Anything in it
 // can't be a leak — e.g. rank names the Companies page shows anyway.
 export async function sentinelsFrom(exportDir, { publicText = '' } = {}) {
@@ -46,6 +56,15 @@ export async function sentinelsFrom(exportDir, { publicText = '' } = {}) {
       for (const m of JSON.parse(await readFile(join(base, 'threads', f), 'utf8')).messages) out.add(m.id)
     }
     for (const a of Object.values(JSON.parse(await readFile(join(base, 'assets.json'), 'utf8')))) out.add(a.file)
+  }
+  for (const a of (await readLegacy(exportDir))?.accolades ?? []) {
+    out.add(a.blurb)
+    // A name shorter than six characters would match ordinary minified code; the holder's id stands in for it.
+    if (a.name.length >= 6) out.add(a.name)
+    for (const h of a.holders) {
+      out.add(h.id)
+      if (h.name.length >= 6) out.add(h.name)
+    }
   }
   out.delete(GUILD_ID)
   return [...out].filter((s) => !publicText.includes(s))

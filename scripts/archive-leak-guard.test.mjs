@@ -12,6 +12,7 @@ describe('checkPath', () => {
   it.each([
     'archive-export/accolades/data/forum.json',
     'archive-export/.env',
+    'archive-export/legacy-accolades.json',
     'public/archive/0123abcd.bin',
     'public/archive-e2e/x.bin',
     'e2e/.archive/lock.json',
