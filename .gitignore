@@ -40,6 +40,7 @@ public/accolades/
 public/rank-requirements/
 src/data/accolades/
 src/data/rank-requirements/
+legacy-accolades*.json
 error_reports/
 
 # Test tooling output
