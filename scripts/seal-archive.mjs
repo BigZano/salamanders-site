@@ -3,6 +3,7 @@
  *   keygen [--rotate]      write a new ARCHIVE_KEY to archive-export/.env
  *   audit                  list every archive problem (local terminal only — never paste output anywhere public)
  *   seal [--publish]       audit, seal into public/archive/, write archive.lock.json; --publish uploads a GitHub Release
+ *                          (a bundle that carried legacy accolades cannot be re-sealed without legacy-accolades.json unless --drop-legacy)
  *   fetch                  CI: download the lock's release into public/archive/ and verify it
  *   unseal [dest]          recover the export (default dest archive-export-restored/, gitignored) from the
  *                          sealed files in --out (default public/archive/; run `fetch` first to get a release)
@@ -30,6 +31,7 @@ const { positionals, values } = parseArgs({
     'env-file': { type: 'string' },
     publish: { type: 'boolean', default: false },
     rotate: { type: 'boolean', default: false },
+    'drop-legacy': { type: 'boolean', default: false },
   },
 })
 const cmd = positionals[0]
@@ -54,8 +56,8 @@ async function main() {
     return
   }
   if (cmd === 'seal') {
-    const lock = await sealExport({ exportDir: values.export, rawKey: await key(), outDir: values.out })
     const prev = (await exists(values.lock)) ? JSON.parse(await readFile(values.lock, 'utf8')) : null
+    const lock = await sealExport({ exportDir: values.export, rawKey: await key(), outDir: values.out, prevLock: prev, dropLegacy: values['drop-legacy'] })
     const n = prev?.release ? Number(prev.release.replace('archive-v', '')) + 1 : 1
     lock.release = values.publish ? `archive-v${n}` : prev?.release ?? null
     if (values.publish) {
@@ -67,7 +69,7 @@ async function main() {
       await rm(tmp, { recursive: true, force: true })
     }
     await writeFile(values.lock, JSON.stringify(lock, null, 2) + '\n')
-    console.log(`sealed ${Object.keys(lock.files).length} files, kid ${lock.kid}${values.publish ? `, published ${lock.release}` : ''}`)
+    console.log(`sealed ${Object.keys(lock.files).length} files, kid ${lock.kid}${lock.legacy ? ', with legacy accolades' : ''}${values.publish ? `, published ${lock.release}` : ''}`)
     return
   }
   if (cmd === 'fetch') {
