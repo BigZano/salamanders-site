@@ -11,10 +11,10 @@
  *   DISCORD_BOT_TOKEN=... bun run discord:members
  */
 import { writeFile } from 'node:fs/promises'
+import { createDiscord } from './lib/discord.mjs'
 
 const GUILD_ID = '1322056087792521269'
 const ROLE_ID = '1377787723976409211'
-const API = 'https://discord.com/api/v10'
 const OUT = new URL('../src/data/discord-members.json', import.meta.url)
 
 const token = process.env.DISCORD_BOT_TOKEN
@@ -23,51 +23,11 @@ if (!token) {
   process.exit(1)
 }
 
-function sleep(ms) {
-  return new Promise((r) => setTimeout(r, ms))
-}
-
-/** Fetch with Discord's rate-limit headers/429 body honored. */
-async function discordFetch(url) {
-  for (;;) {
-    const res = await fetch(url, { headers: { Authorization: `Bot ${token}` } })
-
-    if (res.status === 429) {
-      const { retry_after } = await res.json()
-      console.warn(`  rate limited, retrying in ${retry_after}s`)
-      await sleep(retry_after * 1000)
-      continue
-    }
-    if (!res.ok) {
-      throw new Error(`Discord API ${res.status} ${res.statusText}: ${await res.text()}`)
-    }
-
-    const body = await res.json()
-    if (res.headers.get('x-ratelimit-remaining') === '0') {
-      const resetAfter = Number(res.headers.get('x-ratelimit-reset-after') || 0)
-      if (resetAfter > 0) await sleep(resetAfter * 1000)
-    }
-    return body
-  }
-}
-
-/** Paginate /guilds/{id}/members (max 1000/page) until exhausted. */
-async function fetchAllMembers() {
-  const members = []
-  let after = '0'
-  for (;;) {
-    const page = await discordFetch(`${API}/guilds/${GUILD_ID}/members?limit=1000&after=${after}`)
-    members.push(...page)
-    console.log(`  fetched page: ${page.length} members (total ${members.length})`)
-    if (page.length < 1000) break
-    after = page[page.length - 1].user.id
-  }
-  return members
-}
+const { fetchAllMembers } = createDiscord({ token, log: console.log })
 
 async function run() {
   console.log(`Fetching members of guild ${GUILD_ID}...`)
-  const members = await fetchAllMembers()
+  const members = await fetchAllMembers(GUILD_ID)
 
   const memberIds = members
     .filter((m) => m.roles.includes(ROLE_ID))
