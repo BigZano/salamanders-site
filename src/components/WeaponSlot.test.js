@@ -14,7 +14,8 @@ beforeEach(() => {
   planner = usePlanner()
 })
 
-const slot = () => mount(WeaponSlot, { props: { slot: 'melee', label: 'Melee' }, global: { stubs: { WeaponTree: true } } })
+const slotOf = (name, label) => mount(WeaponSlot, { props: { slot: name, label }, global: { stubs: { WeaponTree: true } } })
+const slot = () => slotOf('melee', 'Melee')
 
 describe('WeaponSlot', () => {
   it('says the perk tree is not published yet for a weapon without one', async () => {
@@ -69,5 +70,44 @@ describe('WeaponSlot', () => {
     const values = slot().findAll('option').map((o) => o.element.value)
     expect(values).toContain('One-Handed Thunder Hammer')
     expect(values).not.toContain('Thunder Hammer')
+  })
+
+  it('offers Tactical the Bolt Rifle as a Secondary, and no other primary', () => {
+    planner.setClass('Tactical')
+    const values = slotOf('secondary', 'Secondary').findAll('option').map((o) => o.element.value)
+    expect(values).toEqual(['', 'Bolt Pistol', 'Heavy Bolt Pistol', 'Plasma Pistol', 'Bolt Rifle'])
+  })
+
+  it('does not offer the Bolt Rifle as a Secondary to a class that cannot take it', () => {
+    planner.setClass('Assault')
+    const values = slotOf('secondary', 'Secondary').findAll('option').map((o) => o.element.value)
+    expect(values).not.toContain('Bolt Rifle')
+  })
+
+  it('counts each slot’s own perks when the same weapon is in two slots', () => {
+    planner.setClass('Tactical')
+    planner.setWeapon('primary', 'Bolt Rifle')
+    planner.setWeapon('secondary', 'Bolt Rifle')
+    planner.toggleWeaponPerk('Bolt Rifle', 'a')
+    planner.toggleWeaponPerk('Bolt Rifle', 'b')
+    planner.toggleWeaponPerk('Bolt Rifle (Secondary)', 'x')
+
+    expect(slotOf('primary', 'Primary').find('.slot-pts').text()).toBe('2 perks')
+    expect(slotOf('secondary', 'Secondary').find('.slot-pts').text()).toBe('1 perk')
+  })
+
+  it('gives the open tree the slot’s own key', async () => {
+    planner.setClass('Tactical')
+    planner.setWeapon('primary', 'Bolt Rifle')
+    planner.setWeapon('secondary', 'Bolt Rifle')
+    const keyed = async (name, label) => {
+      const w = slotOf(name, label)
+      await w.find('.slot-toggle').trigger('click')
+      await flushPromises()
+      return w.findComponent(WeaponTree).props('stateKey')
+    }
+
+    expect(await keyed('primary', 'Primary')).toBe('Bolt Rifle')
+    expect(await keyed('secondary', 'Secondary')).toBe('Bolt Rifle (Secondary)')
   })
 })

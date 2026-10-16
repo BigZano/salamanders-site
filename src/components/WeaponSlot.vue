@@ -3,6 +3,7 @@ import { ref, computed, watch } from 'vue'
 import { usePlanner } from '../stores/planner'
 import { WIKI } from '../lib/wiki'
 import { resolveWeapon, weaponLabel } from '../lib/weapons'
+import { perkStateKey } from '../lib/perkStateKey'
 import WeaponTree from './WeaponTree.vue'
 
 /**
@@ -19,7 +20,8 @@ const planner = usePlanner()
 
 const options = computed(() => planner.meta.weapons[props.slot] || [])
 const weapon = computed(() => planner.activeWeapons[props.slot] || '')
-const spent = computed(() => (weapon.value ? planner.weaponUsed(weapon.value) : 0))
+const stateKey = computed(() => perkStateKey(props.slot, weapon.value))
+const spent = computed(() => (weapon.value ? planner.weaponUsed(stateKey.value) : 0))
 
 const open = ref(false)
 const status = ref('idle') // idle | loading | ready | error
@@ -91,7 +93,7 @@ const wikiUrl = computed(() => WIKI + encodeURIComponent(weapon.value))
         <p>Perk tree not published yet for {{ weaponLabel(weapon) }}. The wiki has its stats but not its perk list.</p>
       </div>
 
-      <WeaponTree v-else-if="status === 'ready' && data" :weapon="weapon" :data="data" />
+      <WeaponTree v-else-if="status === 'ready' && data" :weapon="weapon" :state-key="stateKey" :data="data" />
     </div>
   </div>
 </template>

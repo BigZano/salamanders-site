@@ -147,6 +147,18 @@ describe('validateBuildText: the build body', () => {
     expect(out).toMatch(msg)
   })
 
+  it('keeps the same weapon in two slots and a perk tree for each copy', () => {
+    const out = validateBuildText(
+      b({
+        className: 'Tactical',
+        weapons: { primary: 'Bolt Rifle', secondary: 'Bolt Rifle' },
+        weaponPerks: { 'Bolt Rifle': { a: true }, 'Bolt Rifle (Secondary)': { b: true } },
+      }),
+    )
+    expect(out.weapons).toEqual({ primary: 'Bolt Rifle', secondary: 'Bolt Rifle' })
+    expect(out.weaponPerks).toEqual({ 'Bolt Rifle': { a: true }, 'Bolt Rifle (Secondary)': { b: true } })
+  })
+
   it('drops non-string junk and sanitizes what it keeps', () => {
     const out = validateBuildText(
       b({

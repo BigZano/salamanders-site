@@ -8,10 +8,14 @@ import { perkSuggestions } from '../lib/weapons'
 
 const props = defineProps({
   weapon: { type: String, required: true },
+  // Where this tree's picks and budget live. Defaults to the weapon itself; a slot
+  // passes its own key when the same weapon sits in two slots (see lib/perkStateKey.js).
+  stateKey: { type: String, default: '' },
   data: { type: Object, required: true }, // { perks:[{name,quality,description}], budget }
 })
 const planner = usePlanner()
 const corrections = usePerkCorrections()
+const treeKey = computed(() => props.stateKey || props.weapon)
 const tree = computed(() => corrections.weaponTree(props.weapon, props.data))
 const suggestions = perkSuggestions()
 const adding = ref(null) // quality being added to
@@ -36,8 +40,8 @@ const tiers = computed(() =>
   ),
 )
 
-const budget = computed(() => planner.weaponBudgets[props.weapon] ?? props.data.budget ?? 10)
-const selected = computed(() => planner.weaponPerks[props.weapon] || {})
+const budget = computed(() => planner.weaponBudgets[treeKey.value] ?? props.data.budget ?? 10)
+const selected = computed(() => planner.weaponPerks[treeKey.value] || {})
 // Only picks of perks that still exist count: a removal correction orphans a
 // pick without deleting it, so reverting the correction restores it.
 const perkIds = computed(() => new Set(perks.value.map((p) => p.id)))
@@ -103,7 +107,7 @@ function unpin() {
   panelActive.value = false
 }
 function toggle(p) {
-  planner.toggleWeaponPerk(props.weapon, p.id, props.data.budget ?? 10, perkIds.value)
+  planner.toggleWeaponPerk(treeKey.value, p.id, props.data.budget ?? 10, perkIds.value)
   pin(p)
 }
 </script>
@@ -118,11 +122,11 @@ function toggle(p) {
           min="1"
           max="40"
           :value="budget"
-          @change="planner.setWeaponBudget(weapon, $event.target.value)"
+          @change="planner.setWeaponBudget(treeKey, $event.target.value)"
         />
       </label>
       <span class="wtree-pts" :class="{ full }">{{ used }} / {{ budget }} points</span>
-      <button class="wtree-reset" @click="planner.resetWeaponTree(weapon)">Reset tree</button>
+      <button class="wtree-reset" @click="planner.resetWeaponTree(treeKey)">Reset tree</button>
     </div>
 
     <div class="wtree-scroll">
