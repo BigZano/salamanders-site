@@ -26,7 +26,7 @@ function watchResponses(page) {
 test('role holder reads both collections and follows links between them', async ({ page }) => {
   const leaks = watchResponses(page)
   await signIn(page, 'test-member-token')
-  await page.locator('.nav-links').getByRole('link', { name: 'Accolades' }).click()
+  await page.locator('.nav-links').getByRole('link', { name: 'Accolades', exact: true }).click()
   await expect(page).toHaveURL(/\/accolades$/)
   await expect(page.locator('.arch-thread')).toContainText(`${SENTINEL}-accolades`)
   // Scoped to the content: the nav bar also has a "Ranks" link.
@@ -76,4 +76,35 @@ test('signing out while reading removes the content immediately', async ({ page 
   await page.locator('.nav-bar').getByRole('button', { name: 'Sign out' }).click()
   await expect(page.locator('.arch-thread')).toHaveCount(0)
   await expect(page.getByRole('button', { name: 'Sign in with Discord' })).toBeVisible()
+})
+
+test('role holder reads the Legacy Accolades page, and no response carries plaintext', async ({ page }) => {
+  const leaks = watchResponses(page)
+  await signIn(page, 'test-member-token')
+  await page.locator('.nav-links').getByRole('link', { name: 'Legacy Accolades' }).click()
+  await expect(page).toHaveURL(/\/accolades\/legacy$/)
+  const legacy = page.locator('.leg')
+  await expect(legacy).toContainText('Fixture Laurel')
+  await expect(legacy).toContainText('Alpha Holder')
+  await expect(legacy).toContainText(`${SENTINEL}-legacy`)
+  await expect(legacy.locator('.leg-count').last()).toHaveText('No holders on record')
+  expect(leaks).toEqual([])
+})
+
+test('legacy: a signed-in member without the role is refused and sees no holders', async ({ page }) => {
+  const leaks = watchResponses(page)
+  await signIn(page, 'test-norole-token')
+  await page.goto('/accolades/legacy')
+  await expect(page.getByRole('alert')).toContainText("doesn't currently hold the role")
+  await expect(page.locator('.leg')).toHaveCount(0)
+  expect(leaks).toEqual([])
+})
+
+test('legacy: signed out sees the prompt and nothing else', async ({ page }) => {
+  const leaks = watchResponses(page)
+  await page.goto('/accolades/legacy')
+  await expect(page.locator('.gate').getByRole('button', { name: 'Sign in with Discord' })).toBeVisible()
+  await expect(page.locator('.leg')).toHaveCount(0)
+  await expect(page.locator('body')).not.toContainText('Alpha Holder')
+  expect(leaks).toEqual([])
 })
