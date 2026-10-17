@@ -23,7 +23,6 @@ export function useNavLinks() {
       ? [
           ...BASE_LINKS,
           { to: '/accolades', label: 'Accolades', section: true },
-          { to: '/accolades/legacy', label: 'Legacy Accolades', section: true },
           { to: '/ranks', label: 'Ranks', section: true },
           { to: '/reports', label: 'Reports', section: true },
         ]

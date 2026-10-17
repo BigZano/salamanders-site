@@ -85,6 +85,14 @@ describe('LegacyAccolades', () => {
     expect(w.text()).toContain('<script>alert(1)</script>')
   })
 
+  it('offers the two pages of the Accolades tab, with Legacy Accolades as the current page', async () => {
+    const w = await mountPage()
+    const links = w.find('nav[aria-label="Accolades pages"]').findAll('a')
+    expect(links.map((a) => a.text())).toEqual(['Accolades', 'Legacy Accolades'])
+    expect(links.map((a) => a.attributes('href'))).toEqual(['/accolades', '/accolades/legacy'])
+    expect(links.map((a) => a.attributes('aria-current'))).toEqual([undefined, 'page'])
+  })
+
   it('links back to Accolades, and nowhere near Discord', async () => {
     const w = await mountPage()
     const hrefs = w.findAll('a').map((a) => a.attributes('href'))

@@ -37,7 +37,10 @@ describe.skipIf(!present)('real export renders (local only)', () => {
 
     const router = createRouter({
       history: createMemoryHistory(),
-      routes: [{ path: '/:c(accolades|ranks)/:threadId(\\d{17,20})?', component: ArchiveView }],
+      routes: [
+        { path: '/:c(accolades|ranks)/:threadId(\\d{17,20})?', component: ArchiveView },
+        { path: '/accolades/legacy', component: { render: () => null } },
+      ],
     })
     let threads = 0
     let routeLinks = 0
@@ -54,6 +57,11 @@ describe.skipIf(!present)('real export renders (local only)', () => {
           if (href.startsWith('/')) {
             routeLinks++
             const [path, hash] = href.split('#')
+            // The Accolades tab's second page is not a thread; the link only appears when the export carries it.
+            if (path === '/accolades/legacy') {
+              expect(archive.archive.legacy, `thread ${threadId} links to the legacy page`).not.toBeNull()
+              continue
+            }
             const [, key, target] = path.split('/')
             const targetCol = archive.archive.collections.get(key)
             // A bare /<collection> link (the header's way back) lands on its table of contents.

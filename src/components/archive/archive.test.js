@@ -21,6 +21,7 @@ function router() {
     history: createMemoryHistory(),
     routes: [
       { path: '/:c(accolades|ranks)/:threadId(\\d{17,20})?', component: ArchiveView, props: (r) => ({ collectionKey: r.params.c, threadId: r.params.threadId || null }) },
+      { path: '/accolades/legacy', component: { render: () => null } },
       { path: '/', component: { render: () => null } },
     ],
   })
@@ -68,6 +69,33 @@ describe('ArchiveView', () => {
     expect(w.text()).toContain('Fixture ToC')
     for (const a of w.findAll('a')) expect(a.attributes('href')).not.toMatch(/discord(app)?\.com|discord\.gg/i)
     expect(w.find('a[href="/ranks/200000000000000001#m-200000000000000011"]').exists()).toBe(true)
+  })
+  describe('the two pages of the Accolades tab', () => {
+    const switcher = (w) => w.find('nav[aria-label="Accolades pages"]')
+    it('the landing page offers Accolades and Legacy Accolades, with Accolades as the current page', async () => {
+      const { w } = await mountView('/accolades')
+      const links = switcher(w).findAll('a')
+      expect(links.map((a) => a.text())).toEqual(['Accolades', 'Legacy Accolades'])
+      expect(links.map((a) => a.attributes('href'))).toEqual(['/accolades', '/accolades/legacy'])
+      expect(links.map((a) => a.attributes('aria-current'))).toEqual(['page', undefined])
+    })
+    it('sits outside the thread, so the table of contents keeps only the links it was authored with', async () => {
+      const { w } = await mountView('/accolades')
+      expect(w.find('.arch-thread nav').exists()).toBe(false)
+    })
+    it.each([
+      ['an accolade thread, which keeps its own back link', `/accolades/${IDS.A_T2}`],
+      ['the Ranks landing page', '/ranks'],
+    ])('is not shown on %s', async (_, path) => {
+      const { w } = await mountView(path)
+      expect(switcher(w).exists()).toBe(false)
+    })
+    it('is not shown when the bundle predates the Legacy Accolades, so no link leads nowhere', async () => {
+      const index = makeIndex()
+      delete index.legacy
+      const { w } = await mountView('/accolades', { index })
+      expect(switcher(w).exists()).toBe(false)
+    })
   })
   it('table of contents shows only live links and the headings above them', async () => {
     const { w } = await mountView('/accolades')

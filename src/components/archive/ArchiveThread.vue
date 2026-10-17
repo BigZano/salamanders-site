@@ -11,6 +11,7 @@ import { unlistedThreads, insertEntries } from './toc'
 import ArchiveMarkdown from './ArchiveMarkdown'
 import ArchiveImage from './ArchiveImage.vue'
 import ArchivePlaque from './ArchivePlaque.vue'
+import AccoladesSwitch from './AccoladesSwitch.vue'
 
 const props = defineProps({ collectionKey: String, threadId: String })
 const archive = useArchive()
@@ -36,6 +37,9 @@ const messages = computed(() => {
   }
   return shown.filter(({ ast, attachments }) => ast.some((n) => n.type !== 'blank') || attachments.length)
 })
+
+// The Accolades tab has two pages; the landing page offers the other one when the bundle carries it.
+const showSwitch = computed(() => isToc.value && props.collectionKey === 'accolades' && Boolean(archive.archive.legacy))
 
 // Threads the ToC still doesn't reach, so every page stays reachable.
 const unlisted = computed(() => (isToc.value ? unlistedThreads(col.value, archive.archive, messages.value.map((x) => x.ast)) : []))
@@ -74,6 +78,7 @@ watch(() => [route.hash, props.threadId], scrollToHash)
 
 <template>
   <ArchivePlaque>
+    <AccoladesSwitch v-if="showSwitch" />
     <article ref="plate" :class="['arch-thread', { 'is-branding': branding, 'is-toc': isToc }]">
       <header class="arch-head">
         <p class="arch-eyebrow">

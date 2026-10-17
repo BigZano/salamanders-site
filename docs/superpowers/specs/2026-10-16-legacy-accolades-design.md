@@ -190,3 +190,12 @@ plaque; nothing else depends on the new field.
 ## Open items for the owner
 
 - Blurbs for all eight.
+
+## Amendment 2026-10-17: a page of the Accolades tab
+
+The members-only "Legacy Accolades" nav entry in the Page section is replaced. The Accolades tab has two sibling
+pages, Accolades and Legacy Accolades, joined by a small switcher (`AccoladesSwitch.vue`) at the top of each. It is
+shown on the Accolades landing page only when the sealed bundle carries the legacy data, and always on the legacy
+page. Individual accolade threads and the Ranks tab are unchanged. The route (`/accolades/legacy`), the data and
+the sealed release are untouched; the Accolades table of contents is still rendered as authored.
+

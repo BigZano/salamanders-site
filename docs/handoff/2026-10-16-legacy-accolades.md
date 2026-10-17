@@ -12,7 +12,10 @@ the plan that built it: `docs/superpowers/plans/2026-10-16-legacy-accolades.md`.
   maintainer's machine (gitignored, mode 0600). The release plus the archive key (`archive-export/.env`,
   also in the maintainer's password manager) is the backup: `bun scripts/seal-archive.mjs unseal`.
 - The page is `src/views/LegacyAccolades.vue`, inside `ArchiveGate` and `ArchivePlaque`, with holders as
-  `RosterMember` chips (initials badge and name; no avatars are stored). Nav entry in `src/lib/useNavLinks.js`.
+  `RosterMember` chips (initials badge and name; no avatars are stored). It is a page of the Accolades tab, not a tab
+  of its own: `src/components/archive/AccoladesSwitch.vue` (Accolades | Legacy Accolades) sits at the top of the Accolades
+  landing page, when the bundle carries the legacy data, and at the top of this page. Individual accolade threads keep
+  their own back link.
 - Pure logic, gated at 100% coverage and mutation: `src/lib/archive/legacy.js` (`legacyView` is the page's
   view model: `snapshotDate`, and per accolade `name`, `color`, `paragraphs`, `countLabel`, `holders`).
 
@@ -50,10 +53,11 @@ Keep the page in the family of the other archive pages (plaque, brass rule, Oswa
 - Role colours are used only when readable on the dark inlay (`readableColor`, 3:1 for large text); otherwise the
   heading stays bone. The colours come from the Discord roles and may be grey or absent.
 - A holder chip is the roster chip; its look is shared with the Companies page.
-- On `/accolades/legacy` both the Accolades and Legacy Accolades nav links show as active (prefix match).
+- The switcher is the only way between the two pages; the Accolades nav tab stays highlighted on both.
 
 Keep these hooks: unit and e2e tests use `.leg`, `.leg-name`, `.leg-blurb`, `.leg-count`, `.leg-holders`, `.rs-name`
-(`src/views/LegacyAccolades.test.js`, `e2e/tests/archive.spec.js`). Names, blurbs and role names must stay plain
+`nav[aria-label="Accolades pages"]` (`src/views/LegacyAccolades.test.js`, `src/components/archive/archive.test.js`,
+`e2e/tests/archive.spec.js`). Names, blurbs and role names must stay plain
 text (Vue interpolation, never `v-html`).
 
 ## Still to do

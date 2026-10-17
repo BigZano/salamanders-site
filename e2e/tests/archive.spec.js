@@ -81,13 +81,19 @@ test('signing out while reading removes the content immediately', async ({ page 
 test('role holder reads the Legacy Accolades page, and no response carries plaintext', async ({ page }) => {
   const leaks = watchResponses(page)
   await signIn(page, 'test-member-token')
-  await page.locator('.nav-links').getByRole('link', { name: 'Legacy Accolades' }).click()
+  const nav = page.locator('.nav-links')
+  await expect(nav.getByRole('link', { name: 'Legacy Accolades' })).toHaveCount(0) // a page of the Accolades tab, not a tab of its own
+  await nav.getByRole('link', { name: 'Accolades', exact: true }).click()
+  const pages = page.getByRole('navigation', { name: 'Accolades pages' })
+  await pages.getByRole('link', { name: 'Legacy Accolades' }).click()
   await expect(page).toHaveURL(/\/accolades\/legacy$/)
   const legacy = page.locator('.leg')
   await expect(legacy).toContainText('Fixture Laurel')
   await expect(legacy).toContainText('Alpha Holder')
   await expect(legacy).toContainText(`${SENTINEL}-legacy`)
   await expect(legacy.locator('.leg-count').last()).toHaveText('No holders on record')
+  await pages.getByRole('link', { name: 'Accolades', exact: true }).click() // and back to its sibling
+  await expect(page).toHaveURL(/\/accolades$/)
   expect(leaks).toEqual([])
 })
 

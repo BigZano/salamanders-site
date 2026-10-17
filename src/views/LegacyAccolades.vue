@@ -5,6 +5,7 @@ import { legacyView } from '../lib/archive/legacy'
 import ArchiveGate from '../components/archive/ArchiveGate.vue'
 import ArchivePlaque from '../components/archive/ArchivePlaque.vue'
 import RosterMember from '../components/roster/RosterMember.vue'
+import AccoladesSwitch from '../components/archive/AccoladesSwitch.vue'
 
 // The gate renders this only once the archive is unsealed. `legacy` is null for a bundle sealed before
 // this page existed; sign-out resets the store, hence the optional chain.
@@ -15,9 +16,10 @@ const view = computed(() => (archive.archive?.legacy ? legacyView(archive.archiv
 <template>
   <ArchiveGate>
     <ArchivePlaque v-if="view">
+      <AccoladesSwitch />
       <article class="leg">
         <header>
-          <p class="leg-eyebrow"><RouterLink to="/accolades" class="leg-back">Accolades</RouterLink></p>
+          <p class="leg-eyebrow">Legion Archive · Accolades</p>
           <h1 class="leg-title">Legacy Accolades</h1>
           <p class="leg-note">Roles retired from the Discord server. Holders as recorded on {{ view.snapshotDate }}.</p>
           <div class="leg-rule" aria-hidden="true" />
@@ -48,9 +50,6 @@ const view = computed(() => (archive.archive?.legacy ? legacyView(archive.archiv
 .leg { color: #d9ded8; line-height: 1.6; }
 .leg-eyebrow { font-family: var(--font-mono); font-size: 0.7rem; letter-spacing: 0.28em; text-transform: uppercase; color: var(--color-smoke); margin: 0 0 0.9rem; }
 .leg-missing .leg-eyebrow { color: var(--color-averland); }
-.leg-back { color: var(--color-smoke); transition: color 0.2s; }
-.leg-back::before { content: '\2190\00a0\00a0'; }
-.leg-back:hover { color: var(--color-averland); }
 .leg-title {
   font-family: var(--font-display); font-weight: 700; text-transform: uppercase; letter-spacing: 0.06em; line-height: 1.05;
   font-size: clamp(1.8rem, 4.5vw, 2.7rem); margin: 0; color: var(--color-averland);
