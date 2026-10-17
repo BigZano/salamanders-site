@@ -20,7 +20,8 @@
     "test:coverage": "vitest run --coverage",
     "test:mutation": "stryker run",
     "archive": "bun scripts/seal-archive.mjs",
-    "archive:dev": "bun scripts/archive-dev-server.mjs"
+    "archive:dev": "bun scripts/archive-dev-server.mjs",
+    "archive:dev:fixture": "bun scripts/archive-dev-fixture.mjs"
   },
   "dependencies": {
     "@fontsource-variable/oswald": "^5.2.8",
