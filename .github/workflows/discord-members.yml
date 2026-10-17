@@ -34,6 +34,11 @@ jobs:
           DISCORD_BOT_TOKEN: ${{ secrets.DISCORD_ROLE_VERIFIER }}
 
       - name: Commit if changed
+        env:
+          # `bun install` installs husky here, so `git push` would run the repo's pre-push gate (suite plus a
+          # ~7 minute mutation run) for what is only a data file. That stretched this job's window until a
+          # person's push to main landed first and this one was rejected. Skip the gate for this data-only commit.
+          HUSKY: '0'
         run: |
           if [ -z "$(git status --porcelain -- src/data/discord-members.json)" ]; then
             echo "No membership changes."
@@ -43,4 +48,8 @@ jobs:
           git config user.email 'github-actions[bot]@users.noreply.github.com'
           git add src/data/discord-members.json
           git commit -m 'data: sync Discord member-role list'
-          git push
+          # main may have moved since checkout: rebase onto it, and try once more if it moves again.
+          for attempt in 1 2; do
+            git pull --rebase origin main && git push && exit 0
+          done
+          exit 1
