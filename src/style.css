@@ -192,16 +192,20 @@
       box-shadow 0.25s ease,
       filter 0.2s ease;
   }
-  .btn-ember:hover {
-    transform: translateY(-1px);
-    filter: brightness(1.06);
-    box-shadow:
-      0 0 0 1px rgba(0, 0, 0, 0.3),
-      0 12px 40px -8px rgba(224, 67, 29, 0.85),
-      inset 0 1px 0 rgba(255, 255, 255, 0.45);
+  /* Hover only where a pointer can really hover: a touch screen fakes one on the first tap and keeps it. */
+  @media (hover: hover) and (pointer: fine) {
+    .btn-ember:hover {
+      transform: translateY(-1px);
+      filter: brightness(1.06);
+      box-shadow:
+        0 0 0 1px rgba(0, 0, 0, 0.3),
+        0 12px 40px -8px rgba(224, 67, 29, 0.85),
+        inset 0 1px 0 rgba(255, 255, 255, 0.45);
+    }
   }
+  /* Pressed: feedback on touch-down for every input type (this rule follows the hover one, so it wins). */
   .btn-ember:active {
-    transform: translateY(0);
+    transform: scale(0.97);
   }
 
   /* Secondary drake-outline button */
@@ -217,12 +221,18 @@
     background: rgba(89, 214, 108, 0.06);
     border: 1px solid rgba(89, 214, 108, 0.4);
     transition:
+      transform 0.15s ease,
       background 0.2s ease,
       border-color 0.2s ease;
   }
-  .btn-drake:hover {
-    background: rgba(89, 214, 108, 0.12);
-    border-color: rgba(89, 214, 108, 0.7);
+  @media (hover: hover) and (pointer: fine) {
+    .btn-drake:hover {
+      background: rgba(89, 214, 108, 0.12);
+      border-color: rgba(89, 214, 108, 0.7);
+    }
+  }
+  .btn-drake:active {
+    transform: scale(0.97);
   }
 }
 

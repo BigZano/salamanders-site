@@ -6,6 +6,24 @@ const css = readFileSync(new URL('./style.css', import.meta.url), 'utf8')
 const html = readFileSync(new URL('../index.html', import.meta.url), 'utf8')
 // The declarations of the `body { … }` rule (not body::before).
 const bodyRule = () => css.match(/\n\s*body\s*\{([^}]*)\}/)?.[1] ?? ''
+const HOVER_MEDIA = '@media (hover: hover) and (pointer: fine) {'
+// style.css with every hover-media block cut out (brace-matched), to see what is left outside it.
+const withoutHoverMedia = (source) => {
+  let out = source
+  for (let at = out.indexOf(HOVER_MEDIA); at !== -1; at = out.indexOf(HOVER_MEDIA)) {
+    let depth = 0
+    let end = at + HOVER_MEDIA.length - 1
+    for (let i = end; i < out.length; i++) {
+      if (out[i] === '{') depth++
+      else if (out[i] === '}' && --depth === 0) {
+        end = i
+        break
+      }
+    }
+    out = out.slice(0, at) + out.slice(end + 1)
+  }
+  return out
+}
 
 describe('style.css', () => {
   it('defines the roster tokens', () => {
@@ -81,6 +99,35 @@ describe('mobile baseline', () => {
       const src = readFileSync(new URL(`./views/${view}.vue`, import.meta.url), 'utf8')
       const toast = src.match(/\.toast\s*\{([^}]*)\}/)?.[1] ?? ''
       expect(toast, view).toContain('bottom: calc(1.4rem + env(safe-area-inset-bottom, 0px))')
+    }
+  })
+
+  it('applies hover styles only where hover exists', () => {
+    // A touch screen fakes a hover on the first tap and leaves it there; outside this query it would stick.
+    expect(withoutHoverMedia(css)).not.toContain(':hover')
+  })
+
+  it('keeps the shared hover styles for devices that hover', () => {
+    // Guards the test above from passing because the hover styles were deleted rather than gated.
+    const block = css.slice(css.indexOf(HOVER_MEDIA))
+    expect(css).toContain(HOVER_MEDIA)
+    expect(block).toContain('.btn-ember:hover')
+    expect(block).toContain('.btn-drake:hover')
+  })
+
+  it('gives the shared buttons a press state', () => {
+    for (const cls of ['btn-ember', 'btn-drake']) {
+      const rule = css.match(new RegExp(`\\.${cls}:active\\s*\\{([^}]*)\\}`))
+      expect(rule, cls).not.toBeNull()
+      expect(rule[1], cls).toContain('transform: scale(0.97)')
+    }
+  })
+
+  it('animates the press on both shared buttons', () => {
+    // Without a transform transition the press snaps instead of easing.
+    for (const cls of ['btn-ember', 'btn-drake']) {
+      const rule = css.match(new RegExp(`\\.${cls}\\s*\\{([^}]*)\\}`))
+      expect(rule[1], cls).toContain('transform 0.15s ease')
     }
   })
 
