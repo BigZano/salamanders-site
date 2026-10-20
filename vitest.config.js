@@ -13,6 +13,7 @@ const GATED = [
   'server/src/archiveKey.js',
   'src/lib/longPress.js',
   'src/lib/perkStateKey.js',
+  'src/lib/deathwatch/areas.js',
   'server/src/displayNames.js',
   'server/src/rosterMember.js',
   'server/src/rosterCore.js',
