@@ -36,7 +36,7 @@ function go(event) {
   align-items: center;
   justify-content: center;
   min-height: 56px;
-  margin-top: 1.4rem;
+  margin: 1.4rem 0 1rem;
   padding: 0.9rem 1rem;
   border: 1px solid var(--color-ash-2);
   border-radius: 3px;

@@ -146,6 +146,11 @@ export const ROUTE_PROFILE_DEFAULTS = {
   // stays modest so the panels over it read cleanly.
   '/roster': { bearing: 0.5, scale: 0.5, variance: 0.8, density: 0.55 },
 
+  // Watch Fortress Ebonhold, the hub and every page under /deathwatch: tables and lists over a dark backdrop,
+  // so a low horizon and a modest glow, with the plume and ash still rising behind it. A key ending in "/*"
+  // covers a whole section (see profileKeyFor). Starting values: tune them with ?tune=1.
+  '/deathwatch/*': { bearing: 0.45, scale: 0.5, variance: 0.7, density: 0.5 },
+
   // Anything unrouted — the 404. Somewhere you haven't been before.
   '*': { bearing: 0.3, scale: 0.85, variance: 1, density: 0.85 },
 }
@@ -159,8 +164,22 @@ export const routeProfiles = reactive(clone(ROUTE_PROFILE_DEFAULTS))
 /** The hero's profile, and the fallback for a route with nothing declared. */
 export const NEUTRAL_PROFILE = { bearing: 0, scale: 1, variance: 1, density: 1 }
 
+/**
+ * The key in routeProfiles that governs `path`: the path's own entry, else the entry for its whole section
+ * ("/deathwatch/*" covers "/deathwatch" and every page below it, but not "/deathwatchful"), else the catch-all.
+ * Own keys only, so a path like "constructor" can never pick up a property of Object.
+ */
+export function profileKeyFor(path) {
+  if (typeof path === 'string') {
+    if (Object.hasOwn(routeProfiles, path)) return path
+    const section = path.match(/^\/[^/]+/)?.[0]
+    if (section && Object.hasOwn(routeProfiles, `${section}/*`)) return `${section}/*`
+  }
+  return '*'
+}
+
 export function profileFor(path) {
-  return routeProfiles[path] || routeProfiles['*'] || NEUTRAL_PROFILE
+  return routeProfiles[profileKeyFor(path)] || routeProfiles['*'] || NEUTRAL_PROFILE
 }
 
 export function resetTuning() {
