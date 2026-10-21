@@ -17,6 +17,9 @@ export const useDeathwatch = defineStore('deathwatch', {
   actions: {
     async load(token) {
       const mine = ++seq
+      // Straight away, before anything is awaited: this store outlives the gate, so an earlier visit's clearance
+      // (even a commander's) must not be what the first render of a return visit sees.
+      this.$patch({ status: 'checking', commander: false })
       const fixture = await loadFixture()
       if (mine !== seq) return
       if (fixture) {
@@ -28,7 +31,6 @@ export const useDeathwatch = defineStore('deathwatch', {
         this.$patch({ status: 'signin', commander: false })
         return
       }
-      this.$patch({ status: 'checking', commander: false })
       try {
         const me = await getMe(token)
         if (mine !== seq) return

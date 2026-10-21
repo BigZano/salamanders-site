@@ -31,6 +31,14 @@ describe('deathwatch store', () => {
     expect(useDeathwatch()).toMatchObject({ status: 'idle', commander: false })
   })
 
+  it('does not keep an earlier clearance while it checks again, not even for an instant', () => {
+    const s = useDeathwatch()
+    s.$patch({ status: 'allowed', commander: true })
+    getMe.mockReturnValue(deferred().promise)
+    s.load('tok') // not awaited: the state straight after the call is what a render would see
+    expect(s).toMatchObject({ status: 'checking', commander: false })
+  })
+
   it('sends someone with no token to sign in, without asking the server', async () => {
     const s = useDeathwatch()
     for (const token of [null, undefined, '']) {

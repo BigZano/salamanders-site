@@ -14,6 +14,7 @@ import { getMe } from '../../lib/deathwatch/api'
 import { loadFixture } from '../../lib/deathwatch/fixture'
 import { beginSignIn } from '../../lib/discordAuth'
 import { useAuth } from '../../stores/auth'
+import { useDeathwatch } from '../../stores/deathwatch'
 import DeathwatchGate from './DeathwatchGate.vue'
 
 const MEMBER_KEY = 'salamanders-discord-member'
@@ -43,9 +44,11 @@ const Probe = defineComponent({
   },
 })
 
-async function mountGate() {
+// `before` runs once the stores exist and before the gate mounts: it sets up what an earlier visit left behind.
+async function mountGate({ before } = {}) {
   const pinia = createPinia()
   setActivePinia(pinia)
+  before?.()
   const router = createRouter({ history: createMemoryHistory(), routes: [{ path: '/:rest(.*)*', component: { template: '<div />' } }] })
   router.push(PAGE)
   await router.isReady()
@@ -144,6 +147,33 @@ describe('DeathwatchGate: allowed and denied', () => {
     await settle(w)
     expect(w.find('.page').exists()).toBe(false)
     expect(w.text()).toContain('Clearance required.')
+  })
+})
+
+describe('DeathwatchGate: a clearance left over from an earlier visit', () => {
+  // The Deathwatch store outlives the gate: you can leave /deathwatch cleared, let the token lapse or lose the
+  // role, and come back. The old clearance must not mount the page, even for the instant before the re-check.
+  const leftOver = () => useDeathwatch().$patch({ status: 'allowed', commander: true })
+
+  it('does not mount the page while it checks again, with no token', async () => {
+    const w = await mountGate({ before: leftOver })
+    expect(slotMounted).not.toHaveBeenCalled()
+    expect(w.find('.page').exists()).toBe(false)
+    expect(w.text()).toContain('Clearance required.')
+  })
+
+  it('does not mount the page while it checks again, and drops the old commander', async () => {
+    storeMember()
+    const d = deferred()
+    getMe.mockReturnValue(d.promise)
+    const w = await mountGate({ before: leftOver })
+    expect(slotMounted).not.toHaveBeenCalled()
+    expect(useDeathwatch().commander).toBe(false)
+
+    d.resolve({ access: false, watchCommander: false })
+    await settle(w)
+    expect(w.find('.page').exists()).toBe(false)
+    expect(w.text()).toContain('Your clearance is not on record.')
   })
 })
 
