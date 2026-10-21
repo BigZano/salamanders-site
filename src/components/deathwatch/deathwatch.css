@@ -25,6 +25,12 @@
   color: var(--dw-ink);
 }
 
+/* The page behind an open bottom sheet does not scroll (the sheet is a native modal dialog). Here, not in the
+   sheet's own scoped styles, because a scoped rule cannot select the body. It matches only while a sheet is open. */
+body:has(.dw-sheet[open]) {
+  overflow: hidden;
+}
+
 /* The decorative layer behind the area. Translucent on purpose: the site's volcano and its sparks and ash are
    drawn behind every page, and an opaque backdrop would hide them. A painted image replaces this gradient later. */
 .dw-backdrop {

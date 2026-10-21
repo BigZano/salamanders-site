@@ -2,14 +2,18 @@
 // One area of the fortress (Event Tracker, Armouring Hall, Chronicles of Valor, Manage): its list of views and
 // the view that is open. The views themselves are rebuilt in later chunks; each shows a placeholder until then.
 // The address is already canonical by the time this renders: the router's guard (redirect.js) sees to that.
-import { computed } from 'vue'
+import { computed, ref } from 'vue'
 import { useRoute } from 'vue-router'
 import { AREAS, resolveArea } from '../../lib/deathwatch/areas'
 import { useDeathwatch } from '../../stores/deathwatch'
+import DeathwatchAreaBar from '../../components/deathwatch/DeathwatchAreaBar.vue'
 import DeathwatchNav from '../../components/deathwatch/DeathwatchNav.vue'
+import DeathwatchNavSheet from '../../components/deathwatch/DeathwatchNavSheet.vue'
 
 const route = useRoute()
 const store = useDeathwatch()
+// Whether the list of views is open in the bottom sheet (a phone: from 900px wide it is the sidebar instead).
+const sheetOpen = ref(false)
 
 const page = computed(() => resolveArea(route.params))
 const area = computed(() => AREAS[page.value.area])
@@ -22,6 +26,12 @@ const restricted = computed(() => page.value.area === 'manage' && !store.command
   <section v-if="page" class="dw-area">
     <p v-if="restricted" class="dw-area-restricted surface" role="status">Restricted to the Watch Commander.</p>
     <template v-else>
+      <!-- A phone: the banner says where you are and opens the list of views from the foot of the screen. -->
+      <DeathwatchAreaBar class="dw-area-bar" :area-label="area.label" :tab-label="tabLabel" :open="sheetOpen" @open="sheetOpen = true" />
+      <DeathwatchNavSheet v-model="sheetOpen" :aria-label="`${area.label} views`">
+        <DeathwatchNav :area="page.area" :current="page.tab" @navigate="sheetOpen = false" />
+      </DeathwatchNavSheet>
+      <!-- A wide screen: the same list, always open beside the page. -->
       <aside class="dw-area-side">
         <DeathwatchNav :area="page.area" :current="page.tab" />
       </aside>
@@ -45,9 +55,19 @@ const restricted = computed(() => page.value.area === 'manage' && !store.command
   margin: 0 auto;
   padding: 2rem 1rem 3rem;
 }
+/* One list of views, two ways to reach it: the bar and sheet below 900px, the sidebar from 900px. */
+.dw-area-side {
+  display: none;
+}
 @media (min-width: 900px) {
   .dw-area {
     grid-template-columns: 14rem 1fr;
+  }
+  .dw-area-bar {
+    display: none;
+  }
+  .dw-area-side {
+    display: block;
   }
 }
 .dw-area-title {

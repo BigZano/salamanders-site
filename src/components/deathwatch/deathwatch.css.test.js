@@ -42,6 +42,10 @@ describe('deathwatch.css', () => {
     expect(contrast(rgb(token('accent-ink')), rgb(token('accent')))).toBeGreaterThanOrEqual(4.5)
   })
 
+  it('stops the page scrolling behind an open bottom sheet, and only then', () => {
+    expect(css).toMatch(/body:has\(\.dw-sheet\[open\]\)\s*\{[^}]*overflow:\s*hidden/)
+  })
+
   it('lets the volcano show through the backdrop', () => {
     // An opaque backdrop would hide the site's fire (and the sparks); it must stay translucent.
     const rule = css.match(/\.dw-backdrop\s*\{([^}]*)\}/)?.[1] ?? ''
