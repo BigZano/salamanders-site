@@ -44,11 +44,11 @@ bun run test       # the whole test suite
 bun run build      # a production build
 ```
 
-- *Arrives with the shell pull request:* `VITE_DEATHWATCH_FIXTURE=1 bun run dev` serves invented data, and
-  `?scene=allowed`, `commander`, `denied`, `signin`, `checking` and `unavailable` show each state of the gate.
-  Sign-in and the real server are not needed.
-- *Arrives with the mobile baseline pull request:* `bun run dev:lan` serves the site on your network so you can
-  open it on your phone. Most of the community is on phones, so check there too.
+- `VITE_DEATHWATCH_FIXTURE=1 bun run dev` serves invented data, and `?scene=allowed`, `commander`, `denied`,
+  `signin`, `checking` and `unavailable` show each state of the gate. Sign-in and the real server are not needed.
+  `docs/handoff/2026-10-20-deathwatch-shell.md` (on `feat/deathwatch`) says what the area has so far.
+- `bun run dev:lan` serves the site on your network so you can open it on your phone. Most of the community is
+  on phones, so check there too.
 
 ## Opening a pull request
 
