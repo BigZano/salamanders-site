@@ -1,0 +1,38 @@
+/* Watch Fortress Ebonhold: the scoped, dark-only sub-theme of the Deathwatch area.
+ *
+ * Every token lives on .dw (the wrapper DeathwatchShell renders), never on :root, so nothing here can reach
+ * another page. The values are the old Watch Fortress site's dark palette, kept as they were: black-green
+ * ground, a bright green accent a shade off the site's drake green, gold for honours, silver for the Deathwatch.
+ * Body text keeps the site's own fonts; only titles use --dw-font-title (Cinzel, self-hosted via fontsource).
+ * tests: DeathwatchShell.test.js pins the values and the contrast of every text colour on the surface. */
+.dw {
+  --dw-bg: #060906;
+  --dw-surface: #0b110c;
+  --dw-surface-2: #111a12;
+  --dw-ink: #e2ecdc;
+  --dw-muted: #83978a;
+  --dw-line: #1a2b1c;
+  --dw-line-2: #2a4a2d;
+  --dw-accent: #7fd35c;
+  --dw-accent-ink: #041004;
+  --dw-silver: #c3ccd5;
+  --dw-gold: #e0b43c;
+  --dw-down: #e5736a;
+  --dw-up: #5fcf8b;
+  --dw-font-title: 'Cinzel Variable', 'Cinzel', Georgia, serif;
+
+  position: relative;
+  color: var(--dw-ink);
+}
+
+/* The decorative layer behind the area. Translucent on purpose: the site's volcano and its sparks and ash are
+   drawn behind every page, and an opaque backdrop would hide them. A painted image replaces this gradient later. */
+.dw-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: -1;
+  pointer-events: none;
+  background:
+    radial-gradient(120% 60% at 50% 0%, rgba(127, 211, 92, 0.07), transparent 60%),
+    linear-gradient(180deg, rgba(6, 9, 6, 0.72), rgba(6, 9, 6, 0.86));
+}
