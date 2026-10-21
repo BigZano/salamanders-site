@@ -58,3 +58,41 @@ describe('the Legacy Accolades route', () => {
     expect(router.resolve('/accolades/200000000000000001').name).toBe('accolades')
   })
 })
+
+describe('the Deathwatch routes', () => {
+  it('has a hub and an area page under one parent, which carries the title and the ash over the plaque', () => {
+    expect(router.resolve('/deathwatch').name).toBe('deathwatch')
+    expect(router.resolve('/deathwatch').meta).toMatchObject({ title: 'Watch Fortress Ebonhold', ashOver: true })
+    expect(router.resolve('/deathwatch/eventtracker/players').name).toBe('deathwatch-area')
+    expect(router.resolve('/deathwatch/eventtracker/players').meta).toMatchObject({ title: 'Watch Fortress Ebonhold', ashOver: true })
+  })
+
+  it.each([
+    ['/deathwatch', '/deathwatch'],
+    ['/deathwatch/eventtracker/players', '/deathwatch/eventtracker/players'],
+    ['/deathwatch/eventtracker', '/deathwatch/eventtracker/standings'],
+    ['/deathwatch/eventtracker/', '/deathwatch/eventtracker/standings'],
+    ['/deathwatch/eventtracker/nonsense', '/deathwatch/eventtracker/standings'],
+    ['/deathwatch/armouringhall', '/deathwatch/armouringhall/standard'],
+    ['/deathwatch/armouringhall/standard/battlebrother', '/deathwatch/armouringhall/standard/battlebrother'],
+    ['/deathwatch/armouringhall/standard/A%20B', '/deathwatch/armouringhall/standard'],
+    ['/deathwatch/chronicles', '/deathwatch/chronicles/hall-of-champions'],
+    ['/deathwatch/manage', '/deathwatch/manage/enter-mission'],
+  ])('takes %s to %s', async (from, to) => {
+    await router.push(from)
+    expect(router.currentRoute.value.fullPath).toBe(to)
+  })
+
+  it('keeps the query and the hash when it canonicalizes, so a ?scene= fixture survives', async () => {
+    await router.push('/deathwatch/eventtracker?scene=denied#top')
+    expect(router.currentRoute.value.fullPath).toBe('/deathwatch/eventtracker/standings?scene=denied#top')
+  })
+
+  it('answers an unknown area, or one in another case, with the not-found page at the address typed', async () => {
+    for (const path of ['/deathwatch/nope', '/deathwatch/EventTracker/players', '/deathwatch/__proto__', '/deathwatch/constructor/x', '/deathwatch/nope/A%20B']) {
+      await router.push(path)
+      expect(router.currentRoute.value.name, path).toBe('not-found')
+      expect(router.currentRoute.value.fullPath, path).toBe(path)
+    }
+  })
+})
