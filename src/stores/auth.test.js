@@ -67,3 +67,29 @@ describe('auth.signOut', () => {
     expect(roster).toMatchObject({ status: 'idle', roster: null, infirmary: null, infirmaryStatus: 'idle' })
   })
 })
+
+describe('auth.signIn passes where to come back to', () => {
+  it('forwards returnTo to the sign-in redirect', async () => {
+    const { beginSignIn } = await import('../lib/discordAuth')
+    beginSignIn.mockClear()
+    useAuth().signIn({ returnTo: '/deathwatch' })
+    expect(beginSignIn).toHaveBeenCalledWith({ returnTo: '/deathwatch' })
+  })
+
+  it('still works with no options', async () => {
+    const { beginSignIn } = await import('../lib/discordAuth')
+    beginSignIn.mockClear()
+    useAuth().signIn()
+    expect(beginSignIn).toHaveBeenCalledWith(undefined)
+  })
+})
+
+describe('auth.signOut clears the Deathwatch clearance', () => {
+  it('returns the Deathwatch store to idle, not a commander', async () => {
+    const { useDeathwatch } = await import('./deathwatch')
+    const dw = useDeathwatch()
+    dw.$patch({ status: 'allowed', commander: true })
+    useAuth().signOut()
+    expect(dw).toMatchObject({ status: 'idle', commander: false })
+  })
+})

@@ -2,6 +2,7 @@
 import { ref, computed, defineAsyncComponent, onMounted, provide, useTemplateRef, watch } from 'vue'
 import companies from '../data/companies.json'
 import PageHeader from '../components/PageHeader.vue'
+import DeathwatchBanner from '../components/company/DeathwatchBanner.vue'
 import CompanyArticle from '../components/company/CompanyArticle.vue'
 import HighCommandPlaceholder from '../components/company/HighCommandPlaceholder.vue'
 import RanksPlaceholder from '../components/company/RanksPlaceholder.vue'
@@ -105,6 +106,8 @@ function backToIndex() {
         aria-label="Search companies"
       />
     </PageHeader>
+
+    <DeathwatchBanner />
 
     <nav v-if="devScenes" class="rs-dev-scenes" aria-label="Fixture scenes (dev only)">
       <a v-for="scene in devScenes" :key="scene" :href="`?scene=${scene}`">{{ scene }}</a>

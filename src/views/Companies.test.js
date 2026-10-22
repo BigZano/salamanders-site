@@ -15,6 +15,14 @@ beforeEach(() => setActivePinia(createPinia()))
 const render = () => mount(Companies)
 
 describe('Companies', () => {
+  it('shows the REDACTED Deathwatch banner, once, straight under the header', () => {
+    const w = render()
+    const banners = w.findAll('a.dw-banner')
+    expect(banners).toHaveLength(1)
+    expect(banners[0].attributes('href')).toBe('/deathwatch')
+    expect(w.find('header.page-head').element.nextElementSibling).toBe(banners[0].element)
+  })
+
   it('uses the shared page header', () => {
     const w = render()
     const header = w.find('header.page-head')

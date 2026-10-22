@@ -1,0 +1,289 @@
+/* Watch Fortress Ebonhold: the scoped, dark-only sub-theme of the Deathwatch area.
+ *
+ * Every token lives on .dw (the wrapper DeathwatchShell renders), never on :root, so nothing here can reach
+ * another page. The values are the original Watch Fortress site's: a black-green ground, a bright green accent
+ * a shade off the site's drake green, gold for honours, silver for the Deathwatch. The look is its "cogitator":
+ * green phosphor on black, chamfered frames drawn with a 9-slice SVG border-image so the corners keep their
+ * shape at any size, a grain and faint scanlines, and tall squared type (Teko for plaques and buttons, Barlow
+ * Condensed for labels, Cinzel for titles, Barlow for reading). All fonts are self-hosted (fontsource).
+ * tests: deathwatch.css.test.js pins the values, the contrast of every text colour, and the backdrops. */
+.dw {
+  --dw-bg: #060906;
+  --dw-surface: #0b110c;
+  --dw-surface-2: #111a12;
+  --dw-ink: #e2ecdc;
+  --dw-muted: #83978a;
+  --dw-line: #1a2b1c;
+  --dw-line-2: #2a4a2d;
+  --dw-accent: #7fd35c;
+  --dw-accent-ink: #041004;
+  --dw-silver: #c3ccd5;
+  --dw-gold: #e0b43c;
+  --dw-down: #e5736a;
+  --dw-up: #5fcf8b;
+  --dw-font-title: 'Cinzel Variable', 'Cinzel', Georgia, serif;
+  --dw-font-hud: 'Teko Variable', 'Teko', 'Barlow Condensed', 'Arial Narrow', sans-serif;
+  --dw-font-body: 'Barlow', system-ui, -apple-system, 'Segoe UI', sans-serif;
+  --dw-font-cond: 'Barlow Condensed', 'Arial Narrow', sans-serif;
+  --dw-frame:url("data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' width='96' height='96' viewBox='0 0 96 96' fill='none'><path d='M14 1H82L95 14V82L82 95H14L1 82V14Z' stroke='%237fd35c' stroke-width='2'/><path d='M17 6.5H79L89.5 17V79L79 89.5H17L6.5 79V17Z' stroke='%237fd35c' stroke-opacity='.3'/><path d='M1 26v10M95 26v10M1 60v10M95 60v10' stroke='%23a6ee86' stroke-width='3'/><g fill='%23a6ee86'><circle cx='22' cy='3.6' r='1.1'/><circle cx='27' cy='3.6' r='1.1'/><circle cx='32' cy='3.6' r='1.1'/><circle cx='64' cy='92.4' r='1.1'/><circle cx='69' cy='92.4' r='1.1'/><circle cx='74' cy='92.4' r='1.1'/></g></svg>");
+  --dw-frame-s:url("data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' width='40' height='40' viewBox='0 0 40 40' fill='none'><path d='M8 1H32L39 8V32L32 39H8L1 32V8Z' stroke='%237fd35c' stroke-width='1.6'/><path d='M1 15v10M39 15v10' stroke='%23a6ee86' stroke-width='2.4'/></svg>");
+  --dw-grain:url("data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' width='180' height='180'><filter id='n'><feTurbulence type='fractalNoise' baseFrequency='.85' numOctaves='2' stitchTiles='stitch'/><feColorMatrix values='0 0 0 0 .55  0 0 0 0 .8  0 0 0 0 .5  0 0 0 .11 0'/></filter><rect width='100%' height='100%' filter='url(%23n)'/></svg>");
+  --dw-scan:repeating-linear-gradient(0deg,rgb(127 211 92/.022) 0 1px,transparent 1px 3px);
+  /* How strongly the painted backdrop shows: each area sets its own (the hall painting is darker, so stronger). */
+  --dw-wm: 0.3;
+
+  position: relative;
+  color: var(--dw-ink);
+  font-family: var(--dw-font-body);
+}
+
+/* The page behind an open bottom sheet does not scroll (the sheet is a native modal dialog). Here, not in the
+   sheet's own scoped styles, because a scoped rule cannot select the body. It matches only while a sheet is open. */
+body:has(.dw-sheet[open]) {
+  overflow: hidden;
+}
+
+/* The decorative layer behind the area. Translucent on purpose: the site's volcano and its sparks and ash are
+   drawn behind every page, and an opaque backdrop would hide them. The painted image of the area sits on top
+   of the gradient at a low opacity (below), so the page is the dark ground first and the painting second:
+   text always sits on a panel, never on the painting. */
+.dw-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: -1;
+  overflow: hidden;
+  pointer-events: none;
+  background:
+    radial-gradient(120% 60% at 50% 0%, rgba(127, 211, 92, 0.07), transparent 60%),
+    linear-gradient(180deg, rgba(6, 9, 6, 0.72), rgba(6, 9, 6, 0.86));
+}
+.dw-backdrop::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background: center / cover no-repeat;
+  opacity: var(--dw-wm);
+  animation:
+    dw-drift 40s ease-in-out infinite alternate,
+    dw-flicker 5s ease-in-out infinite;
+}
+.dw[data-area='hub'] {
+  --dw-wm: 0.5;
+}
+.dw[data-area='hub'] .dw-backdrop::after {
+  background-image: url('./img/bg-hub.jpg');
+}
+.dw[data-area='eventtracker'] .dw-backdrop::after {
+  background-image: url('./img/bg-tracker.webp');
+}
+.dw[data-area='armouringhall'] {
+  --dw-wm: 0.55;
+}
+.dw[data-area='armouringhall'] .dw-backdrop::after {
+  background-image: url('./img/bg-armouring.jpg');
+}
+.dw[data-area='chronicles'] {
+  --dw-wm: 0.6;
+}
+.dw[data-area='chronicles'] .dw-backdrop::after {
+  background-image: url('./img/bg-chronicles.webp');
+}
+.dw[data-area='manage'] {
+  --dw-wm: 0.5;
+}
+.dw[data-area='manage'] .dw-backdrop::after {
+  background-image: url('./img/bg-manage.jpg');
+}
+/* A slow push-in, and a faint firelight flicker. Both are transform or opacity only, so they run on the GPU. */
+@keyframes dw-drift {
+  from {
+    transform: scale(1.02);
+  }
+  to {
+    transform: scale(1.1) translate(-1%, -1.5%);
+  }
+}
+@keyframes dw-flicker {
+  0%,
+  100% {
+    opacity: var(--dw-wm);
+  }
+  22% {
+    opacity: calc(var(--dw-wm) * 1.18);
+  }
+  38% {
+    opacity: calc(var(--dw-wm) * 0.9);
+  }
+  61% {
+    opacity: calc(var(--dw-wm) * 1.12);
+  }
+  79% {
+    opacity: calc(var(--dw-wm) * 0.96);
+  }
+}
+/* A placeholder bar where a view's content will be: a slow pulse of opacity, so it reads as "not here yet". */
+.dw-sk-bar {
+  display: block;
+  height: 0.9em;
+  border-radius: 1px;
+  background: color-mix(in oklab, var(--dw-accent) 22%, var(--dw-line-2));
+  animation: dw-pulse 1.8s ease-in-out infinite;
+}
+@keyframes dw-pulse {
+  0%,
+  100% {
+    opacity: 0.35;
+  }
+  50% {
+    opacity: 0.7;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .dw-backdrop::after {
+    animation: none;
+  }
+  .dw-sk-bar {
+    animation: none;
+  }
+}
+
+/* The big framed panel (the page's sheet). It is cut along the frame's chamfer so no square corner of the dark
+   fill sticks out past the bevel; the glowing strips on its top and bottom edge are the frame's "tab". */
+.dw-panel {
+  position: relative;
+  border: 1px solid transparent;
+  border-image: var(--dw-frame) 30 / 30px stretch;
+  background-image:
+    var(--dw-scan), var(--dw-grain),
+    radial-gradient(ellipse at 50% 0%, color-mix(in oklab, var(--dw-accent) 8%, transparent), transparent 60%),
+    linear-gradient(180deg, rgb(8 13 8 / 0.95), rgb(3 6 3 / 0.97));
+  box-shadow: inset 0 0 70px color-mix(in oklab, var(--dw-accent) 5%, transparent);
+  clip-path: polygon(
+    14px 0,
+    calc(100% - 14px) 0,
+    100% 14px,
+    100% calc(100% - 14px),
+    calc(100% - 14px) 100%,
+    14px 100%,
+    0 calc(100% - 14px),
+    0 14px
+  );
+}
+.dw-panel::before,
+.dw-panel::after {
+  content: '';
+  position: absolute;
+  inset-inline: 30%;
+  height: 4px;
+  background: var(--dw-accent);
+  filter: drop-shadow(0 0 6px var(--dw-accent));
+  pointer-events: none;
+}
+.dw-panel::before {
+  top: 0;
+  clip-path: polygon(5px 0, calc(100% - 5px) 0, 100% 100%, 0 100%);
+}
+.dw-panel::after {
+  bottom: 0;
+  clip-path: polygon(0 0, 100% 0, calc(100% - 5px) 100%, 5px 100%);
+}
+
+/* A section heading: a little cogitator plaque, green phosphor on black. */
+.dw-plaque {
+  display: block;
+  margin: 34px 0 12px;
+  padding: 10px 22px 6px;
+  font: 500 clamp(24px, 2.7vw, 32px) / 1 var(--dw-font-hud);
+  letter-spacing: 0.07em;
+  text-transform: uppercase;
+  color: var(--dw-accent);
+  text-shadow:
+    0 0 10px color-mix(in oklab, var(--dw-accent) 65%, transparent),
+    0 0 2px color-mix(in oklab, var(--dw-accent) 80%, transparent);
+  border: 1px solid transparent;
+  border-image: var(--dw-frame-s) 12 / 12px stretch;
+  background: var(--dw-scan), var(--dw-grain), linear-gradient(180deg, rgb(4 8 4 / 0.92), rgb(8 14 8 / 0.85));
+  background-clip: padding-box;
+}
+
+/* The body of a view: its blocks one under another. A grid, so no margin collapses between them. */
+.dw-page {
+  display: grid;
+  gap: 1rem;
+}
+.dw-page > .dw-plaque {
+  margin: 1.2rem 0 0;
+}
+.dw-subhead {
+  margin: 0.4rem 0 0;
+  font: 500 1.4rem / 1 var(--dw-font-hud);
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--dw-silver);
+}
+
+/* Text for assistive technology only: a heading the original had no visible version of. */
+.dw-sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  padding: 0;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+
+/* A button: dark glass with glowing green type and clipped corners. It squeezes when pressed, and only
+   brightens under a pointer that can hover. At least 44px tall. */
+.dw-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 44px;
+  padding: 12px 22px 9px;
+  border: 0;
+  border-radius: 0;
+  font: 500 18px / 1 var(--dw-font-hud);
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--dw-accent);
+  text-shadow: 0 0 8px color-mix(in oklab, var(--dw-accent) 70%, transparent);
+  background: linear-gradient(
+    180deg,
+    color-mix(in oklab, var(--dw-accent) 22%, transparent),
+    color-mix(in oklab, var(--dw-accent) 8%, transparent)
+  );
+  box-shadow: inset 0 0 14px color-mix(in oklab, var(--dw-accent) 18%, transparent);
+  clip-path: polygon(9px 0, 100% 0, 100% calc(100% - 9px), calc(100% - 9px) 100%, 0 100%, 0 9px);
+  cursor: pointer;
+  transition:
+    transform 0.15s var(--ease-forge, ease),
+    background-color 0.2s ease;
+}
+.dw-btn:active {
+  transform: scale(0.97);
+}
+/* The corners are clipped, which also clips an outline drawn outside the box: draw the ring inside it. */
+.dw-btn:focus-visible {
+  outline: 2px solid var(--dw-accent);
+  outline-offset: -6px;
+}
+@media (hover: hover) and (pointer: fine) {
+  .dw-btn:hover {
+    background: color-mix(in oklab, var(--dw-accent) 32%, transparent);
+    box-shadow: inset 0 0 20px color-mix(in oklab, var(--dw-accent) 35%, transparent);
+  }
+}
+
+/* The fan-site disclaimer at the foot of every page. On a dense strip of its own so it stays readable
+   over the painting. */
+.dw-legal {
+  max-width: 64rem;
+  margin: 1.5rem auto 0;
+  padding: 0.75rem 1rem;
+  font: 400 12px / 1.5 var(--dw-font-body);
+  text-align: center;
+  color: var(--dw-muted);
+  background: color-mix(in oklab, var(--dw-surface) 88%, transparent);
+}

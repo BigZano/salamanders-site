@@ -2,6 +2,7 @@ import { createRouter, createWebHistory } from 'vue-router'
 import Landing from './views/Landing.vue'
 import { scrubCallbackHash } from './lib/discordAuth'
 import { legacyRosterTarget } from './lib/companyKeys'
+import { deathwatchRedirect } from './lib/deathwatch/redirect'
 
 // Must run before createWebHashHistory() below reads location.hash — see
 // discordAuth.js for why this can't just happen in main.js.
@@ -59,6 +60,22 @@ const routes = [
     component: () => import('./views/LegacyAccolades.vue'),
     meta: { title: 'Legacy Accolades', ashOver: true },
   },
+  // Watch Fortress Ebonhold: the Deathwatch community's area. The layout puts the theme and the access gate
+  // around every page under it, so nothing below needs to check access itself. The area pages' addresses
+  // are kept canonical by deathwatchRedirect, the router.beforeEach guard registered below.
+  {
+    path: '/deathwatch',
+    component: () => import('./views/deathwatch/DeathwatchLayout.vue'),
+    meta: { title: 'Watch Fortress Ebonhold', ashOver: true },
+    children: [
+      { path: '', name: 'deathwatch', component: () => import('./views/deathwatch/DeathwatchHub.vue') },
+      {
+        path: ':area/:tab?/:sub?',
+        name: 'deathwatch-area',
+        component: () => import('./views/deathwatch/DeathwatchArea.vue'),
+      },
+    ],
+  },
   ...[
     { key: 'accolades', title: 'Accolades' },
     { key: 'ranks', title: 'Ranks' },
@@ -96,6 +113,9 @@ export const router = createRouter({
     return { top: 0 }
   },
 })
+
+// One address for every Deathwatch page, on entry and on a change of tab alike (see redirect.js).
+router.beforeEach(deathwatchRedirect)
 
 router.afterEach((to) => {
   const t = to.meta?.title
