@@ -68,6 +68,10 @@ describe('DeathwatchHub', () => {
     expect(w.find('ul.dw-hub-cards').find('a.dw-card-home').exists()).toBe(false)
   })
 
+  it('carries the fan-site disclaimer', () => {
+    expect(mountHub().text()).toContain('A fan-run page for Warhammer 40,000: Space Marine 2.')
+  })
+
   it('shows the Manage button to the Watch Commander only', () => {
     expect(mountHub({ commander: false }).find('a.dw-manage').exists()).toBe(false)
     const manage = mountHub({ commander: true }).find('a.dw-manage')

@@ -7,6 +7,7 @@ import { computed } from 'vue'
 import { AREAS, resolveArea } from '../../lib/deathwatch/areas'
 import { iconFor } from '../../lib/deathwatch/icons'
 import { useDeathwatch } from '../../stores/deathwatch'
+import DeathwatchLegal from '../../components/deathwatch/DeathwatchLegal.vue'
 import crest from '../../components/deathwatch/img/crest-large.webp'
 import clan from '../../components/deathwatch/img/clan.png'
 import trackerArt from '../../components/deathwatch/img/card-tracker.webp'
@@ -55,6 +56,7 @@ const manageTo = resolveArea({ area: 'manage' }).canonical
       </svg>
       Manage
     </RouterLink>
+    <DeathwatchLegal />
   </section>
 </template>
 

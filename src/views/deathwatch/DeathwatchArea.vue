@@ -10,6 +10,7 @@ import { AREAS, resolveArea } from '../../lib/deathwatch/areas'
 import { pageLoader } from '../../lib/deathwatch/pages'
 import { useDeathwatch } from '../../stores/deathwatch'
 import crest from '../../components/deathwatch/img/crest.webp'
+import DeathwatchLegal from '../../components/deathwatch/DeathwatchLegal.vue'
 import DeathwatchAreaBar from '../../components/deathwatch/DeathwatchAreaBar.vue'
 import DeathwatchNav from '../../components/deathwatch/DeathwatchNav.vue'
 import DeathwatchNavSheet from '../../components/deathwatch/DeathwatchNavSheet.vue'
@@ -61,6 +62,7 @@ const view = computed(() => {
         <div class="dw-area-sheet dw-panel">
           <component :is="view" :key="`${page.area}/${page.tab}`" />
         </div>
+        <DeathwatchLegal />
       </div>
     </template>
   </section>

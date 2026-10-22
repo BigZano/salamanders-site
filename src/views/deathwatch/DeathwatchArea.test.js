@@ -78,6 +78,13 @@ describe('DeathwatchArea', () => {
     expect(rail.find('nav [aria-current="page"]').text()).toBe('Standings')
   })
 
+  it('carries the fan-site disclaimer under the sheet, on every area', async () => {
+    for (const path of ['/deathwatch/eventtracker/standings', '/deathwatch/armouringhall/standard', '/deathwatch/chronicles/in-memoriam']) {
+      const { w } = await mountAt(path)
+      expect(w.find('.dw-area-main .dw-legal').text(), path).toContain('Not affiliated with or endorsed by Games Workshop')
+    }
+  })
+
   it('shows a status line, and keeps the list of views, when the view cannot be loaded', async () => {
     override.loader = () => Promise.reject(new Error('chunk failed'))
     vi.spyOn(console, 'error').mockImplementation(() => {}) // Vue logs a failed lazy view; that is expected here
