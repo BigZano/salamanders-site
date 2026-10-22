@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { readFileSync } from 'node:fs'
+import { existsSync, readFileSync } from 'node:fs'
 import { contrast } from '../../test-utils/contrast'
 
 const css = readFileSync(new URL('./deathwatch.css', import.meta.url), 'utf8')
@@ -44,6 +44,50 @@ describe('deathwatch.css', () => {
 
   it('stops the page scrolling behind an open bottom sheet, and only then', () => {
     expect(css).toMatch(/body:has\(\.dw-sheet\[open\]\)\s*\{[^}]*overflow:\s*hidden/)
+  })
+
+  it('defines the HUD fonts and the frame textures the original used', () => {
+    expect(token('font-hud')).toMatch(/^'Teko Variable'/)
+    expect(token('font-body')).toMatch(/^'Barlow'/)
+    expect(token('font-cond')).toMatch(/^'Barlow Condensed'/)
+    for (const name of ['frame', 'frame-s', 'grain', 'scan']) expect(token(name), name).toBeTruthy()
+    // the green of the frame is the accent, URL-encoded
+    expect(token('frame')).toContain('stroke=\'%237fd35c\'')
+  })
+
+  it('has the panel, plaque, button and legal classes', () => {
+    for (const cls of ['dw-panel', 'dw-plaque', 'dw-btn', 'dw-legal']) {
+      expect(css, cls).toMatch(new RegExp(`\\.${cls}\\s*\\{`))
+    }
+    // the panel and the plaque are drawn with the 9-slice frames, never a plain border
+    expect(css.match(/\.dw-panel\s*\{([^}]*)\}/)?.[1]).toContain('border-image: var(--dw-frame)')
+    expect(css.match(/\.dw-plaque\s*\{([^}]*)\}/)?.[1]).toContain('border-image: var(--dw-frame-s)')
+  })
+
+  it('paints a backdrop for the hub and each area, from images that exist', () => {
+    const files = {
+      hub: 'bg-hub.jpg',
+      eventtracker: 'bg-tracker.webp',
+      armouringhall: 'bg-armouring.jpg',
+      chronicles: 'bg-chronicles.webp',
+      manage: 'bg-manage.jpg',
+    }
+    for (const [area, file] of Object.entries(files)) {
+      const rule = css.match(new RegExp(`\\.dw\\[data-area='${area}'\\]\\s+\\.dw-backdrop::after\\s*\\{([^}]*)\\}`))?.[1] ?? ''
+      expect(rule, area).toContain(`url('./img/${file}')`)
+      expect(existsSync(new URL(`./img/${file}`, import.meta.url)), file).toBe(true)
+    }
+  })
+
+  it('drifts and flickers the backdrop with transform and opacity only, and not at all under reduced motion', () => {
+    for (const name of ['dw-drift', 'dw-flicker']) {
+      const body = css.match(new RegExp(`@keyframes ${name}\\s*\\{([\\s\\S]*?\\n\\})`))?.[1] ?? ''
+      expect(body, name).not.toBe('')
+      const props = [...body.matchAll(/([a-z-]+)\s*:/g)].map((m) => m[1])
+      for (const p of props) expect(['transform', 'opacity'], `${name} ${p}`).toContain(p)
+    }
+    const reduced = css.match(/@media \(prefers-reduced-motion: reduce\)\s*\{([\s\S]*?\n\})/)?.[1] ?? ''
+    expect(reduced).toMatch(/\.dw-backdrop::after\s*\{[^}]*animation:\s*none/)
   })
 
   it('lets the volcano show through the backdrop', () => {

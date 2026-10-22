@@ -16,6 +16,7 @@ export default {
     'src/lib/perkStateKey.js',
     'src/lib/deathwatch/areas.js',
     'src/lib/deathwatch/sheetDrag.js',
+    'src/lib/deathwatch/icons.js',
     'server/src/displayNames.js',
     'server/src/rosterMember.js',
     'server/src/rosterCore.js',
