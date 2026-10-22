@@ -380,7 +380,7 @@ async function remove(b) {
 
 .toast {
   position: fixed;
-  bottom: 1.4rem;
+  bottom: calc(1.4rem + env(safe-area-inset-bottom, 0px));
   left: 50%;
   transform: translateX(-50%);
   z-index: 80;
