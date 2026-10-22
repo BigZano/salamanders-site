@@ -121,3 +121,42 @@ create table if not exists privilege_revocations (
 -- At most one open revocation per member.
 create unique index if not exists privilege_revocations_open_idx
   on privilege_revocations (discord_id) where lifted_at is null;
+
+-- Deathwatch area (see docs/superpowers/specs/2026-10-20-deathwatch-design.md).
+-- The API deletes only deathwatch_docs rows (op 'delete'); the history keeps what they held.
+create table if not exists deathwatch_docs (
+  col         text not null check (col in ('teams', 'cfg', 'archive')),
+  id          text not null check (id ~ '^[A-Za-z0-9_-]{1,64}$'),
+  doc         jsonb not null check (jsonb_typeof(doc) = 'object'),
+  updated_at  timestamptz not null default now(),
+  updated_by  text not null,
+  primary key (col, id)
+);
+
+create table if not exists deathwatch_doc_history (
+  id                bigserial primary key,
+  col               text not null,
+  doc_id            text not null,
+  op                text not null check (op in ('set', 'delete')),
+  doc               jsonb not null, -- as written; for a delete, the document that was removed
+  actor_discord_id  text not null,
+  created_at        timestamptz not null default now()
+);
+
+create index if not exists deathwatch_doc_history_doc_idx on deathwatch_doc_history (col, doc_id, id desc);
+
+create table if not exists deathwatch_grants (
+  discord_id  text primary key check (discord_id ~ '^\d{17,20}$'),
+  granted_by  text not null,
+  granted_at  timestamptz not null default now(),
+  revoked_at  timestamptz,
+  revoked_by  text
+);
+
+create table if not exists deathwatch_grant_events (
+  id                bigserial primary key,
+  discord_id        text not null,
+  actor_discord_id  text not null,
+  action            text not null check (action in ('granted', 'revoked')),
+  created_at        timestamptz not null default now()
+);
