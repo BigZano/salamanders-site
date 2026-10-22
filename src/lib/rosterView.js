@@ -95,7 +95,7 @@ function branchOf(b) {
   }
 }
 
-/** → the RosterView the roster page renders. See docs/superpowers/plans/2026-10-13-roster-design-pass.md, Task 4. */
+/** → the RosterView the roster page renders. See docs/superpowers/specs/2026-10-13-roster-design-pass-design.md. */
 export function buildRosterView(roster) {
   const ids = new Set()
   const index = new Map()

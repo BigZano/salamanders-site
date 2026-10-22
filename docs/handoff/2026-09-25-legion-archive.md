@@ -11,7 +11,6 @@ Discord forum exports, readable only by members of the XVIIIth Legion role.
 
 - Spec: `docs/superpowers/specs/2026-09-24-legion-archive-design.md`
   (including the "Display pruning" and "Membership source" amendments).
-- Plan: `docs/superpowers/plans/2026-09-24-legion-archive.md`.
 - Live: deploy `cf41617` onwards; release `archive-v1` holds the encrypted files.
 
 How it fits together:

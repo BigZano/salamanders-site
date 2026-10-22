@@ -23,7 +23,6 @@ secrets and no member names.
   `token` getter, and the High Command placeholder and deep-link scroll.
 
 Design: `docs/superpowers/specs/2026-10-14-companies-roster-merge-design.md`.
-Plan: `docs/superpowers/plans/2026-10-14-companies-roster-merge.md`.
 
 ## History points
 

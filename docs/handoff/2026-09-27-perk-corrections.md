@@ -9,8 +9,7 @@ no secrets.
 
 Branch `feat/perk-corrections`. Design:
 `docs/superpowers/specs/2026-09-27-perk-corrections-design.md` (including the
-input-sanitization amendment). Plan:
-`docs/superpowers/plans/2026-09-27-perk-corrections.md`.
+input-sanitization amendment).
 
 - Techmarine, Mechadendrite Expert, Master of the Forge, Legion Hierarchy and
   Administrators correct weapon and class perks from the live site. Edits go

@@ -43,6 +43,9 @@ src/data/rank-requirements/
 legacy-accolades*.json
 error_reports/
 
+# Maintainer's scratch plans and notes; kept on disk, not in the repo
+docs/ideas/
+
 # Test tooling output
 coverage/
 .stryker-tmp/

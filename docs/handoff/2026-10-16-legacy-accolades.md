@@ -2,8 +2,7 @@
 
 One Legion-only page, `/accolades/legacy`, listing the retired Discord accolade roles with a short blurb
 and the members who held each. The repo is public: this note holds no names, blurbs or role ids.
-Design and mechanism: `docs/superpowers/specs/2026-10-16-legacy-accolades-design.md`;
-the plan that built it: `docs/superpowers/plans/2026-10-16-legacy-accolades.md`.
+Design and mechanism: `docs/superpowers/specs/2026-10-16-legacy-accolades-design.md`.
 
 ## What exists
 
