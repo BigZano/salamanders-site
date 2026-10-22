@@ -72,13 +72,28 @@ const view = computed(() => {
 .dw-area {
   display: grid;
   grid-template-columns: minmax(0, 1fr);
+  align-content: start;
   gap: 1rem;
+  min-height: calc(100dvh - 4rem);
   max-width: 78rem;
   margin: 0 auto;
   padding: 1.25rem 1rem 3rem;
 }
+/* A phone: the head is a flat, dense strip (no frame), like the original's crest bar, so the view starts sooner. */
 .dw-area-side {
-  padding: 0.9rem 1.1rem;
+  margin-inline: -1rem;
+  padding: 0.6rem 1rem;
+  border: 0;
+  border-image: none;
+  border-bottom: 1px solid var(--dw-line);
+  background: color-mix(in oklab, var(--dw-surface) 88%, transparent);
+  box-shadow: none;
+  clip-path: none;
+  backdrop-filter: blur(14px) saturate(1.3);
+}
+.dw-area-side::before,
+.dw-area-side::after {
+  display: none;
 }
 .dw-area-head {
   display: flex;
@@ -145,7 +160,20 @@ const view = computed(() => {
     display: flex;
     flex-direction: column;
     gap: 1.6rem;
+    margin-inline: 0;
     padding: 1.6rem 1.25rem 1.25rem;
+    border: 1px solid transparent;
+    border-image: var(--dw-frame) 30 / 30px stretch;
+    background-image:
+      var(--dw-scan), var(--dw-grain),
+      linear-gradient(180deg, rgb(8 13 8 / 0.9), rgb(3 6 3 / 0.94));
+    background-color: transparent;
+    backdrop-filter: none;
+    clip-path: polygon(14px 0, calc(100% - 14px) 0, 100% 14px, 100% calc(100% - 14px), calc(100% - 14px) 100%, 14px 100%, 0 calc(100% - 14px), 0 14px);
+  }
+  .dw-area-side::before,
+  .dw-area-side::after {
+    display: block;
   }
   .dw-area-head {
     flex-direction: column;
@@ -160,7 +188,8 @@ const view = computed(() => {
     font-size: 0.8rem;
   }
   .dw-area-title {
-    font-size: 2rem;
+    font-size: 1.75rem;
+    letter-spacing: 0.03em;
   }
   .dw-area-navwrap {
     display: block;

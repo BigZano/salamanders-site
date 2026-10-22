@@ -64,10 +64,12 @@ const manageTo = resolveArea({ area: 'manage' }).canonical
 .dw-hub {
   display: grid;
   justify-items: center;
-  gap: 1.1rem;
+  align-content: center;
+  gap: clamp(0.5rem, 1.6dvh, 1.1rem);
+  min-height: calc(100dvh - 4rem);
   max-width: 52rem;
   margin: 0 auto;
-  padding: 2rem 1rem 3rem;
+  padding: 1.5rem 1rem 2rem;
 }
 .dw-hub-head {
   display: grid;
@@ -78,7 +80,7 @@ const manageTo = resolveArea({ area: 'manage' }).canonical
   background: radial-gradient(ellipse at center, rgb(6 9 6 / 0.7), transparent 72%);
 }
 .dw-hub-crest {
-  width: clamp(110px, 26vw, 160px);
+  width: clamp(70px, 12.5dvh, 160px);
   height: auto;
   filter: drop-shadow(0 10px 30px rgb(0 0 0 / 0.6)) drop-shadow(0 0 14px rgb(255 120 30 / 0.35));
 }
@@ -92,7 +94,7 @@ const manageTo = resolveArea({ area: 'manage' }).canonical
 .dw-hub-title {
   margin: 0;
   font-family: var(--dw-font-title);
-  font-size: clamp(2rem, 7vw, 3.6rem);
+  font-size: clamp(1.9rem, min(6vw, 7dvh), 4.2rem);
   font-weight: 700;
   line-height: 1.02;
   letter-spacing: 0.04em;
@@ -135,6 +137,8 @@ const manageTo = resolveArea({ area: 'manage' }).canonical
   min-height: 44px;
   overflow: hidden;
   border: 1px solid var(--dw-line-2);
+  border-radius: 12px;
+  text-align: center;
   background: color-mix(in oklab, var(--dw-surface) 92%, transparent);
   transition:
     transform 0.15s var(--ease-forge),
@@ -143,8 +147,7 @@ const manageTo = resolveArea({ area: 'manage' }).canonical
 .dw-card-art {
   display: block;
   width: 100%;
-  aspect-ratio: 16 / 9;
-  max-height: 11rem;
+  height: clamp(90px, 15dvh, 175px);
   object-fit: cover;
 }
 .dw-card-title {
@@ -163,6 +166,7 @@ const manageTo = resolveArea({ area: 'manage' }).canonical
 }
 /* The card back to the Salamanders: full width under the three, a row with the clan's icon. */
 .dw-card-home {
+  text-align: left;
   flex-direction: row;
   align-items: center;
   gap: 1rem;
