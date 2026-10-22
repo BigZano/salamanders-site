@@ -79,6 +79,15 @@ describe('deathwatch.css', () => {
     }
   })
 
+  it('pulses the skeleton bars with opacity only, and not at all under reduced motion', () => {
+    expect(css.match(/\.dw-sk-bar\s*\{([^}]*)\}/)?.[1]).toContain('animation: dw-pulse')
+    const body = css.match(/@keyframes dw-pulse\s*\{([\s\S]*?\n\})/)?.[1] ?? ''
+    expect(body).not.toBe('')
+    for (const p of [...body.matchAll(/([a-z-]+)\s*:/g)].map((m) => m[1])) expect(p).toBe('opacity')
+    const reduced = css.match(/@media \(prefers-reduced-motion: reduce\)\s*\{([\s\S]*?\n\})/)?.[1] ?? ''
+    expect(reduced).toMatch(/\.dw-sk-bar\s*\{[^}]*animation:\s*none/)
+  })
+
   it('drifts and flickers the backdrop with transform and opacity only, and not at all under reduced motion', () => {
     for (const name of ['dw-drift', 'dw-flicker']) {
       const body = css.match(new RegExp(`@keyframes ${name}\\s*\\{([\\s\\S]*?\\n\\})`))?.[1] ?? ''
