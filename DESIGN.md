@@ -127,10 +127,14 @@ ash border), and controls answer a touch with a visible squeeze. Nothing is soft
 ### The Deathwatch area (a scoped sub-theme)
 
 **Creative North Star for this area: "The War Room"** (the War-Room Ledger). The Deathwatch's Watch Fortress
-Ebonhold is the Salamanders' own, so it keeps the site's dark and its fire, but it presents itself as the artifact
-does: a black-green command room of ledgers, standings and records, in a serif display (Cinzel) over a translucent
-backdrop, with only a light fire motif (the volcano's sparks showing through). Its tokens are the `dw-*` colours
-above, set on one wrapper (`.dw`) and never on `:root`. It is dark only too.
+Ebonhold is the Salamanders' own, so it keeps the site's dark and its fire, but it presents itself as the original
+site (the Oct 18 build, the artifact) does: a black-green command room of ledgers, standings and records. Its look
+is that site's "cogitator": green phosphor on black, chamfered double-line frames drawn with a 9-slice SVG
+border-image (so the corners keep their shape at any size), a grain and faint scanlines, section headings as small
+glowing plaques, and a painted backdrop for each area (the hub, Event Tracker, Armouring Hall, Chronicles, Manage)
+that drifts and flickers slowly under a translucent dark gradient, so the site's volcano and sparks still show
+through. Text always sits on a dense framed panel, never on the painting. Its tokens are the `dw-*` colours above,
+set on one wrapper (`.dw`) and never on `:root`. It is dark only too.
 
 ## Colors
 
@@ -174,7 +178,9 @@ text at 4.5:1 against the brightest lava.
 **Display Font:** Oswald Variable (with Bahnschrift, DIN Condensed, Arial Narrow)
 **Body Font:** the system sans (system-ui, Segoe UI, Roboto)
 **Label/Mono Font:** Cascadia Code (with ui-monospace, Consolas)
-**Deathwatch titles:** Cinzel Variable (with Georgia), self-hosted and loaded only with the Deathwatch routes.
+**Deathwatch type** (self-hosted through fontsource, loaded only with the Deathwatch routes): Cinzel Variable for
+titles, Teko Variable for plaques, buttons and the area bar's view name (tall, squared, uppercase), Barlow Condensed
+for labels and the navigation (uppercase, spaced), Barlow for reading.
 
 **Character:** a forged, condensed title face over plain reading text, with spaced-out mono for the technical
 labels, like stamped plates on armour. Fonts are self-hosted: no third-party font requests.
@@ -243,7 +249,17 @@ pills (999px); the Deathwatch bottom sheet rounds only its top corners (14px). B
 ### Deathwatch signature components
 - **Area bar and bottom sheet:** the banner at the head of an area says where you are and opens the list of views
   in a native modal sheet from the foot of the screen, where a thumb reaches it. It drags and flicks away.
-- **Gate card and hub cards:** dw-surface panels with a dw-line-2 border, Cinzel titles, an accent in dw-accent.
+- **The frame (`.dw-panel`), plaque (`.dw-plaque`) and button (`.dw-btn`):** the cogitator look above. The page's
+  sheet is a framed panel with a glowing strip on its top and bottom edge; every section heading is a plaque; a
+  button is dark glass with glowing green Teko type and clipped corners, squeezing when pressed.
+- **The area rail:** the crest, the eyebrow "Watch Fortress Ebonhold", the area's name in Cinzel, and the list of
+  views with the original's icons, in its own frame (a flat dense strip on a phone, where the bar and sheet carry
+  the list). The view's page sits in the framed sheet beside it.
+- **View skeletons (`.dw-sk-bar`, `Sk*`):** until a view is rebuilt it is its real headings and labels over
+  shimmer bars (an opacity pulse, off under reduced motion), one file per view under `pages/<area>/<tab>.vue`.
+- **Hub cards:** the original's destination menu: a painted picture on top, the area's name in Cinzel, centred,
+  with 12px corners (the one place this sub-theme rounds), and the card back to the Salamanders beneath.
+- **Gate card:** a dw-surface panel with a dw-line-2 border, a Cinzel title, an accent in dw-accent.
 - **REDACTED strip:** a black striped bar with spaced mono text, on `/companies`, the way into the area.
 
 ## Do's and Don'ts

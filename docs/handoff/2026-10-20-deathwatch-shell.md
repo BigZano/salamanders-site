@@ -55,3 +55,26 @@ ways) to see that the tests notice. In Chrome at a 375px-wide frame, with real p
 drag, gave with friction upwards, sprang back from a slow drag and a cancelled touch, ignored a second finger,
 closed on a flick, on a click on the scrim and on a real Escape, and released the page scroll. **Not checked:** touch
 hardware, the iOS edge swipe, safe areas and the Discord app hand-off. That is the list above.
+
+## Parity pass (2026-10-22): the original's look, every view a skeleton
+
+The shell now looks like the original site (the Oct 18 build): its painted backdrop for each area, the crest rail
+and the cogitator frame, plaque headings, the painted destination menu, the fan-site disclaimer on every page, and
+Teko, Barlow, Barlow Condensed and Cinzel (self-hosted). Details: DESIGN.md, "The Deathwatch area".
+
+**Every view is a skeleton file, and a port replaces one file.** The 20 views live in
+`src/views/deathwatch/pages/<area>/<tab>.vue` (the slugs in `src/lib/deathwatch/areas.js`); `pages.js` finds them,
+lazily, so replacing a file changes nothing else, and two people can port two views without touching each other.
+A skeleton is the original's real headings and column labels over the `Sk*` shimmer primitives
+(`src/components/deathwatch/skeleton/`); `pages/pages.test.js` pins what each may say. When a view is rebuilt,
+replace its file and its entry in that test (the test then says what the real view contains).
+
+**Not done yet** (each is its own piece of work): the animated door and the card-swell that open and leave the menu
+(the hub is the static menu), the Armouring Hall's heraldry sprites and blackletter title, the original's bottom
+tab bar (the area bar and sheet stay), the Legion password gate (Discord replaces it), real content and data for any
+view, and the image pipeline (the painted images are the original's files as they came, about 1.3 MB, in
+`src/components/deathwatch/img/`; widths and AVIF/WebP come with the image chunk).
+
+**Phone checks to add to the list above:** the painted backdrop and its slow drift stay smooth while scrolling a long
+table; the flat head strip does not jump when the sheet opens; the tables with many columns scroll sideways inside
+their own wrapper and never widen the page (checked at 360px in Chrome: no horizontal scroll).
