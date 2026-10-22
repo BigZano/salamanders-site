@@ -46,6 +46,10 @@
 
   html {
     scroll-behavior: smooth;
+    /* A phone paints a grey flash over anything tappable; every control has its own :active state instead. */
+    -webkit-tap-highlight-color: transparent;
+    /* No font inflation when a phone turns to landscape. */
+    -webkit-text-size-adjust: 100%;
   }
 
   body {
@@ -58,6 +62,11 @@
     -webkit-font-smoothing: antialiased;
     -moz-osx-font-smoothing: grayscale;
     text-rendering: optimizeLegibility;
+    /* viewport-fit=cover lets the page paint under the notch and the home indicator; these pad the content
+       back out of them (all 0 on a screen without either). Fixed full-bleed layers are unaffected. */
+    padding-left: env(safe-area-inset-left, 0px);
+    padding-right: env(safe-area-inset-right, 0px);
+    padding-bottom: env(safe-area-inset-bottom, 0px);
   }
 
   /* Ambient forge gradient behind everything — symmetric, so no side reads
@@ -72,6 +81,13 @@
       radial-gradient(120% 80% at 50% 118%, rgba(224, 67, 29, 0.13), transparent 60%),
       radial-gradient(100% 70% at 50% -12%, rgba(89, 214, 108, 0.05), transparent 62%),
       linear-gradient(180deg, var(--color-obsidian), var(--color-pitch));
+  }
+
+  /* Tell the browser a control never double-tap-zooms, so a tap fires at once instead of waiting for a second one. */
+  button,
+  a,
+  [role='button'] {
+    touch-action: manipulation;
   }
 
   ::selection {
@@ -176,16 +192,20 @@
       box-shadow 0.25s ease,
       filter 0.2s ease;
   }
-  .btn-ember:hover {
-    transform: translateY(-1px);
-    filter: brightness(1.06);
-    box-shadow:
-      0 0 0 1px rgba(0, 0, 0, 0.3),
-      0 12px 40px -8px rgba(224, 67, 29, 0.85),
-      inset 0 1px 0 rgba(255, 255, 255, 0.45);
+  /* Hover only where a pointer can really hover: a touch screen fakes one on the first tap and keeps it. */
+  @media (hover: hover) and (pointer: fine) {
+    .btn-ember:hover {
+      transform: translateY(-1px);
+      filter: brightness(1.06);
+      box-shadow:
+        0 0 0 1px rgba(0, 0, 0, 0.3),
+        0 12px 40px -8px rgba(224, 67, 29, 0.85),
+        inset 0 1px 0 rgba(255, 255, 255, 0.45);
+    }
   }
+  /* Pressed: feedback on touch-down for every input type (this rule follows the hover one, so it wins). */
   .btn-ember:active {
-    transform: translateY(0);
+    transform: scale(0.97);
   }
 
   /* Secondary drake-outline button */
@@ -201,12 +221,18 @@
     background: rgba(89, 214, 108, 0.06);
     border: 1px solid rgba(89, 214, 108, 0.4);
     transition:
+      transform 0.15s ease,
       background 0.2s ease,
       border-color 0.2s ease;
   }
-  .btn-drake:hover {
-    background: rgba(89, 214, 108, 0.12);
-    border-color: rgba(89, 214, 108, 0.7);
+  @media (hover: hover) and (pointer: fine) {
+    .btn-drake:hover {
+      background: rgba(89, 214, 108, 0.12);
+      border-color: rgba(89, 214, 108, 0.7);
+    }
+  }
+  .btn-drake:active {
+    transform: scale(0.97);
   }
 }
 
@@ -216,5 +242,19 @@
   }
   .text-drakeglow {
     text-shadow: 0 0 22px rgba(89, 214, 108, 0.4);
+  }
+}
+
+/* ------------------------------------------------------------------ *
+ * Touch screens
+ * iOS zooms the page when a field under 16px takes focus and never zooms back out. This block is unlayered
+ * and uses !important on purpose: scoped component styles (class selectors, unlayered) would otherwise
+ * outrank the base layer and leave their smaller sizes in place. Desktop keeps its own sizes.
+ * ------------------------------------------------------------------ */
+@media (pointer: coarse) {
+  input:not([type='checkbox']):not([type='radio']),
+  textarea,
+  select {
+    font-size: 16px !important;
   }
 }
