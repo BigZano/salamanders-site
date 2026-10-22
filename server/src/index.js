@@ -16,6 +16,7 @@ import { createBakeLoader, DEFAULT_BAKE_BASE_URL } from './bake.js'
 import { rowToBuild, publicBuild } from './buildRow.js'
 import { createBuildModeration } from './buildModeration.js'
 import { validateBuildText } from './buildText.js'
+import { applyCors } from './cors.js'
 import { createDiscordRoles } from './discordRoles.js'
 import { createDisplayNames } from './displayNames.js'
 import { createHistoryStore } from './historyStore.js'
@@ -95,10 +96,7 @@ const perks = createPerksHandler({
 const moderation = createBuildModeration({ roles, privileges, store: history, notify })
 
 function cors(res) {
-  res.headers.set('Access-Control-Allow-Origin', ALLOWED_ORIGIN)
-  res.headers.set('Access-Control-Allow-Methods', 'GET, POST, DELETE, OPTIONS')
-  res.headers.set('Access-Control-Allow-Headers', 'Content-Type, Authorization')
-  return res
+  return applyCors(res, ALLOWED_ORIGIN)
 }
 
 function json(body, status = 200) {
