@@ -23,6 +23,11 @@ const GATED = [
   'server/src/rosterHandler.js',
   'server/src/rosterPublic.js',
   'server/src/rosterPublicHandler.js',
+  'server/src/cors.js',
+  'server/src/deathwatchEtag.js',
+  'server/src/deathwatchValidate.js',
+  'server/src/deathwatchAccess.js',
+  'server/src/deathwatchHandler.js',
 ]
 
 export default defineConfig({
