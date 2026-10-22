@@ -123,6 +123,9 @@ describe('routing and the common failures', () => {
       ['GET', '/deathwatch/nope'],
       ['POST', '/deathwatch/me'],
       ['GET', '/deathwatch/doc'],
+      ['POST', '/deathwatch/data'],
+      ['GET', `/deathwatch/grants/${OTHER}`],
+      ['POST', `/deathwatch/grants/${OTHER}`],
       ['PUT', '/deathwatch/grants'],
       ['DELETE', '/deathwatch/grants'],
       ['DELETE', '/deathwatch/grants/'],
@@ -272,7 +275,8 @@ describe('POST /deathwatch/doc', () => {
   it('is for the Commander only', async () => {
     const { call, store } = setup()
     for (const who of ['watcher', 'plain', 'legion']) {
-      expect((await call(who, 'POST', '/deathwatch/doc', DOC)).status).toBe(403)
+      const res = await call(who, 'POST', '/deathwatch/doc', DOC)
+      expect([res.status, res.body]).toEqual([403, { error: 'Only the Watch Commander can do that.' }])
     }
     expect(store.writeDoc).not.toHaveBeenCalled()
   })
@@ -283,17 +287,18 @@ describe('POST /deathwatch/doc', () => {
     for (const type of ['text/plain', 'application/x-www-form-urlencoded', 'application/jsonp', 'application/vnd.api+json']) {
       expect([type, (await post({ 'Content-Type': type })).status]).toEqual([type, 415])
     }
-    expect((await call('commander', 'POST', '/deathwatch/doc')).status).toBe(415) // no body, no content type
-    for (const type of ['application/json', 'Application/JSON', 'application/json; charset=utf-8']) {
+    const none = await call('commander', 'POST', '/deathwatch/doc') // no body, no content type
+    expect([none.status, none.body]).toEqual([415, { error: 'Send JSON (Content-Type: application/json).' }])
+    for (const type of ['application/json', 'Application/JSON', 'application/json; charset=utf-8', 'application/json ; charset=utf-8']) {
       expect([type, (await post({ 'Content-Type': type })).status]).toEqual([type, 200])
     }
-    expect(store.writeDoc).toHaveBeenCalledTimes(3)
+    expect(store.writeDoc).toHaveBeenCalledTimes(4)
   })
 
   it('refuses a body over the limit, counted in bytes, and accepts one exactly at it', async () => {
     const { call, store } = setup()
     const big = await call('commander', 'POST', '/deathwatch/doc', undefined, { raw: 'x'.repeat(MAX_BODY_BYTES + 1) })
-    expect(big.status).toBe(413)
+    expect([big.status, big.body]).toEqual([413, { error: 'The request is too large (2 MB at most).' }])
     const euros = '€'.repeat(Math.floor(MAX_BODY_BYTES / 3) + 1)
     expect(euros.length).toBeLessThan(MAX_BODY_BYTES)
     expect((await call('commander', 'POST', '/deathwatch/doc', undefined, { raw: euros })).status).toBe(413)
@@ -304,8 +309,10 @@ describe('POST /deathwatch/doc', () => {
 
   it('refuses malformed JSON and invalid fields with a message', async () => {
     const { call, store } = setup()
-    expect((await call('commander', 'POST', '/deathwatch/doc', undefined, { raw: '{nope' })).status).toBe(400)
-    expect((await call('commander', 'POST', '/deathwatch/doc', undefined, { raw: 'null' })).status).toBe(400)
+    for (const raw of ['{nope', 'null']) {
+      const res = await call('commander', 'POST', '/deathwatch/doc', undefined, { raw })
+      expect([raw, res.status, res.body]).toEqual([raw, 400, { error: 'Malformed request.' }])
+    }
     const bad = [
       { col: 'users' },
       { id: 'a b' },
@@ -382,10 +389,14 @@ describe('grants', () => {
   it('refuses a grant that is malformed, mistyped or not from the Commander', async () => {
     const { call, store } = setup()
     for (const discordId of ['12', 'abc', undefined]) {
-      expect((await call('commander', 'POST', '/deathwatch/grants', { discordId })).status).toBe(400)
+      const res = await call('commander', 'POST', '/deathwatch/grants', { discordId })
+      expect([res.status, res.body]).toEqual([400, { error: 'Enter a Discord user id (17 to 20 digits).' }])
     }
-    expect((await call('commander', 'POST', '/deathwatch/grants', undefined, { raw: '{nope' })).status).toBe(400)
-    expect((await call('commander', 'POST', '/deathwatch/grants', undefined, { raw: JSON.stringify({ discordId: OTHER }), headers: { 'Content-Type': 'text/plain' } })).status).toBe(415)
+    const bad = await call('commander', 'POST', '/deathwatch/grants', undefined, { raw: '{nope' })
+    expect([bad.status, bad.body]).toEqual([400, { error: 'Malformed request.' }])
+    const text = await call('commander', 'POST', '/deathwatch/grants', undefined, { raw: JSON.stringify({ discordId: OTHER }), headers: { 'Content-Type': 'text/plain' } })
+    expect(text.status).toBe(415)
+    expect(text.body.error).toBe('Send JSON (Content-Type: application/json).')
     expect((await call('watcher', 'POST', '/deathwatch/grants', { discordId: OTHER })).status).toBe(403)
     expect(store.grant).not.toHaveBeenCalled()
   })
@@ -403,13 +414,15 @@ describe('grants', () => {
     await call('commander', 'POST', '/deathwatch/grants', { discordId: OTHER })
     const res = await call('commander', 'DELETE', `/deathwatch/grants/${OTHER}`)
     expect([res.status, res.body]).toEqual([200, { discordId: OTHER }])
-    expect((await call('commander', 'DELETE', `/deathwatch/grants/${OTHER}`)).status).toBe(404)
+    const gone = await call('commander', 'DELETE', `/deathwatch/grants/${OTHER}`)
+    expect([gone.status, gone.body]).toEqual([404, { error: 'No active grant for that user.' }])
     expect(store.events.at(-1)).toEqual({ id: OTHER, actor: USERS.commander.id, action: 'revoked' })
   })
 
   it('refuses to revoke with a bad id or without being the Commander', async () => {
     const { call, store } = setup()
-    expect((await call('commander', 'DELETE', '/deathwatch/grants/abc')).status).toBe(400)
+    const bad = await call('commander', 'DELETE', '/deathwatch/grants/abc')
+    expect([bad.status, bad.body]).toEqual([400, { error: 'That is not a Discord user id.' }])
     expect((await call('watcher', 'DELETE', `/deathwatch/grants/${OTHER}`)).status).toBe(403)
     expect(store.revoke).not.toHaveBeenCalled()
   })

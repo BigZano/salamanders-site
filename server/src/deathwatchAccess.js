@@ -32,6 +32,7 @@ export function createDeathwatchAccess({
   async function lookup(request) {
     const user = await roles.identify(request)
     if (!user) return null
+    // Stryker disable next-line ArrayDeclaration: a stray element is never a role id, so it grants nothing
     const held = (await roles.rolesOf(user.id)) ?? []
     const watchCommander = held.includes(commanderRoleId)
     const access = watchCommander || held.includes(deathwatchRoleId) || (await store.isGranted(user.id))

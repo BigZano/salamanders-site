@@ -20,17 +20,23 @@ function send(status, text, headers = {}) {
 }
 const reply = (status, body) => send(status, JSON.stringify(body))
 
-/** → { body } parsed from a JSON request, or { status, error } for the reply to give instead. */
+/**
+ * → { body } parsed from a JSON request, or { status, error } for the reply to give instead.
+ * Text that is not JSON leaves `body` undefined, which parseDocWrite and parseGrantBody refuse as malformed.
+ */
 async function readJson(request) {
+  // Stryker disable next-line StringLiteral: a missing header and any other default are both not application/json
   const type = (request.headers.get('Content-Type') || '').split(';')[0].trim().toLowerCase()
   if (type !== 'application/json') return { status: 415, error: 'Send JSON (Content-Type: application/json).' }
   const text = await request.text()
   if (new TextEncoder().encode(text).length > MAX_BODY_BYTES) return { status: 413, error: 'The request is too large (2 MB at most).' }
+  let body
   try {
-    return { body: JSON.parse(text) }
+    body = JSON.parse(text)
   } catch {
-    return { status: 400, error: 'Malformed request.' }
+    // left undefined
   }
+  return { body }
 }
 
 export function createDeathwatchHandler({ access, store }) {

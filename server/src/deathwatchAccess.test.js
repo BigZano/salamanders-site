@@ -58,7 +58,8 @@ describe('configured', () => {
   })
 
   it('is false when either id is missing or malformed', () => {
-    for (const bad of [undefined, '', 'abc', '1'.repeat(16), '1'.repeat(21), ` ${DW}`, 7]) {
+    // 12345678901234567 is a number whose text is 17 digits: only the string check refuses it.
+    for (const bad of [undefined, '', 'abc', '1'.repeat(16), '1'.repeat(21), ` ${DW}`, 7, 12345678901234567]) {
       expect(make(bad, WC)).toBe(false)
       expect(make(DW, bad)).toBe(false)
     }
