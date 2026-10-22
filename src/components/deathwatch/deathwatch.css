@@ -206,6 +206,34 @@ body:has(.dw-sheet[open]) {
   background-clip: padding-box;
 }
 
+/* The body of a view: its blocks one under another. A grid, so no margin collapses between them. */
+.dw-page {
+  display: grid;
+  gap: 1rem;
+}
+.dw-page > .dw-plaque {
+  margin: 1.2rem 0 0;
+}
+.dw-subhead {
+  margin: 0.4rem 0 0;
+  font: 500 1.4rem / 1 var(--dw-font-hud);
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--dw-silver);
+}
+
+/* Text for assistive technology only: a heading the original had no visible version of. */
+.dw-sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  padding: 0;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+
 /* A button: dark glass with glowing green type and clipped corners. It squeezes when pressed, and only
    brightens under a pointer that can hover. At least 44px tall. */
 .dw-btn {

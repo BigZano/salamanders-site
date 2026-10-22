@@ -1,6 +1,6 @@
 <script setup>
-// The banner at the head of an area on a phone: it says where you are (the area, and the view that is open)
-// and is the button that opens the list of views in the bottom sheet. A painted banner image goes behind it later.
+// The bar under the area's head on a phone: it says where you are (the area, and the view that is open) and is
+// the button that opens the list of views in the bottom sheet.
 defineProps({
   areaLabel: { type: String, required: true },
   tabLabel: { type: String, required: true },
@@ -29,16 +29,18 @@ defineEmits(['open'])
   gap: 1rem;
   width: 100%;
   min-height: 56px;
-  padding: 0.7rem 1rem;
-  border: 1px solid var(--dw-line-2);
-  border-radius: 3px;
-  background: linear-gradient(90deg, var(--dw-surface-2), var(--dw-surface));
+  padding: 0.7rem 1.1rem;
+  border: 0;
+  border-radius: 0;
+  background:
+    linear-gradient(180deg, color-mix(in oklab, var(--dw-accent) 16%, transparent), color-mix(in oklab, var(--dw-accent) 6%, transparent)),
+    var(--dw-surface);
+  box-shadow: inset 0 0 14px color-mix(in oklab, var(--dw-accent) 18%, transparent);
+  clip-path: polygon(9px 0, 100% 0, 100% calc(100% - 9px), calc(100% - 9px) 100%, 0 100%, 0 9px);
   color: var(--dw-ink);
   text-align: left;
   cursor: pointer;
-  transition:
-    transform 0.15s var(--ease-forge),
-    border-color 0.2s ease;
+  transition: transform 0.15s var(--ease-forge);
 }
 .dw-areabar-text {
   display: flex;
@@ -46,26 +48,21 @@ defineEmits(['open'])
   gap: 0.1rem;
 }
 .dw-areabar-area {
-  font-family: var(--dw-font-title);
-  font-size: 1.05rem;
-  font-weight: 700;
-  letter-spacing: 0.04em;
+  font: 600 0.75rem / 1.2 var(--dw-font-cond);
+  letter-spacing: 0.22em;
   text-transform: uppercase;
+  color: var(--dw-muted);
 }
 .dw-areabar-tab {
-  font-size: 0.8rem;
-  letter-spacing: 0.12em;
+  font: 500 1.5rem / 1 var(--dw-font-hud);
+  letter-spacing: 0.07em;
   text-transform: uppercase;
   color: var(--dw-accent);
+  text-shadow: 0 0 8px color-mix(in oklab, var(--dw-accent) 60%, transparent);
 }
 .dw-areabar-chevron {
   flex: none;
-  color: var(--dw-muted);
-}
-@media (hover: hover) and (pointer: fine) {
-  .dw-areabar:hover {
-    border-color: var(--dw-accent);
-  }
+  color: var(--dw-accent);
 }
 .dw-areabar:active {
   transform: scale(0.98);

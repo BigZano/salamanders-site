@@ -1,15 +1,20 @@
 <script setup>
-// The shape of a form before it exists: each field's real label over a placeholder box. Nothing here can be
-// typed into or pressed: a skeleton only shows where things will go.
-defineProps({
-  fields: { type: Array, required: true },
+// The shape of a form before it exists: each field's real label over a placeholder box (or, where the
+// original's labels are not fixed words, a `count` of unlabelled boxes). Nothing here can be typed into or
+// pressed: a skeleton only shows where things will go.
+import { computed } from 'vue'
+
+const props = defineProps({
+  fields: { type: Array, default: () => [] },
+  count: { type: Number, default: 0 },
 })
+const boxes = computed(() => (props.fields.length ? props.fields : Array(props.count).fill('')))
 </script>
 
 <template>
   <div class="sk-form">
-    <div v-for="(field, i) in fields" :key="i" class="sk-field">
-      <span class="sk-label">{{ field }}</span>
+    <div v-for="(field, i) in boxes" :key="i" class="sk-field">
+      <span v-if="field" class="sk-label">{{ field }}</span>
       <span class="sk-input" aria-hidden="true"><span class="dw-sk-bar" /></span>
     </div>
   </div>

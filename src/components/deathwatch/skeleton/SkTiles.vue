@@ -1,14 +1,19 @@
 <script setup>
-// Labelled stat tiles: the real label of each, and a placeholder bar where its value will be.
-defineProps({
-  labels: { type: Array, required: true },
+// Stat tiles: the real label of each, and a placeholder bar where its value will be. Where the original's
+// label is not a fixed word (it was a name or a date), give a `count` instead: the tiles then have no label.
+import { computed } from 'vue'
+
+const props = defineProps({
+  labels: { type: Array, default: () => [] },
+  count: { type: Number, default: 0 },
 })
+const tiles = computed(() => (props.labels.length ? props.labels : Array(props.count).fill('')))
 </script>
 
 <template>
   <div class="sk-tiles">
-    <div v-for="(label, i) in labels" :key="i" class="sk-tile">
-      <p class="sk-label">{{ label }}</p>
+    <div v-for="(label, i) in tiles" :key="i" class="sk-tile">
+      <p v-if="label" class="sk-label">{{ label }}</p>
       <span class="dw-sk-bar sk-value" aria-hidden="true" />
     </div>
   </div>

@@ -16,6 +16,24 @@ describe('DeathwatchNav', () => {
     expect(tabLinks.map((a) => a.attributes('href'))).toEqual(AREAS[area].tabs.map((t) => `/deathwatch/${area}/${t.slug}`))
   })
 
+  it('draws an icon on every link, from the original\'s set, hidden from assistive technology', () => {
+    const w = mountNav({ area: 'eventtracker', current: 'standings' })
+    const links = w.findAll('a')
+    expect(links).toHaveLength(AREAS.eventtracker.tabs.length + 1)
+    for (const a of links) {
+      const svg = a.get('svg')
+      expect(svg.attributes('aria-hidden')).toBe('true')
+      expect(svg.attributes('viewBox')).toBe('0 0 24 24')
+      expect(svg.findAll('path, circle, rect').length).toBeGreaterThan(0)
+    }
+    expect(links[0].get('path').attributes('d')).toBe('M3 21h18M6 21V11h4v10M10 21V5h4v16M14 21v-7h4v7')
+  })
+
+  it('draws the home icon on the way back', () => {
+    const w = mountNav({ area: 'manage', current: 'checks' })
+    expect(w.findAll('a').at(-1).get('path').attributes('d')).toBe('M3 11l9-8 9 8M5 9.5V21h5v-6h4v6h5V9.5')
+  })
+
   it('is a labelled navigation landmark for its area', () => {
     const w = mountNav({ area: 'eventtracker', current: 'standings' })
     expect(w.find('nav').attributes('aria-label')).toBe('Event Tracker sections')

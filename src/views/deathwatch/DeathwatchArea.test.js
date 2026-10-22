@@ -8,6 +8,21 @@ import { deathwatchRedirect } from '../../lib/deathwatch/redirect'
 import { useDeathwatch } from '../../stores/deathwatch'
 import DeathwatchArea from './DeathwatchArea.vue'
 
+// A view is loaded lazily by the registry (lib/deathwatch/pages.js). A test can make the registry fail, or find
+// nothing, for the address it opens; otherwise this is the real registry.
+const override = vi.hoisted(() => ({ loader: undefined }))
+vi.mock('../../lib/deathwatch/pages', async (importOriginal) => {
+  const real = await importOriginal()
+  return { pageLoader: (area, tab) => (override.loader === undefined ? real.pageLoader(area, tab) : override.loader) }
+})
+
+// Lets the lazily imported view arrive and render.
+async function settle() {
+  await flushPromises()
+  await vi.dynamicImportSettled()
+  await flushPromises()
+}
+
 // The area route as production declares it (router.js): the view as the component, and the same global guard.
 async function mountAt(path, { commander = false } = {}) {
   const pinia = createPinia()
@@ -24,7 +39,7 @@ async function mountAt(path, { commander = false } = {}) {
   router.push(path)
   await router.isReady()
   const w = mount({ render: () => h(RouterView) }, { global: { plugins: [pinia, router] } })
-  await flushPromises()
+  await settle()
   return { w, router }
 }
 
@@ -32,6 +47,7 @@ async function mountAt(path, { commander = false } = {}) {
 let reduced
 beforeEach(() => {
   reduced = false
+  override.loader = undefined
   HTMLDialogElement.prototype.showModal = vi.fn(function () {
     this.setAttribute('open', '')
   })
@@ -52,6 +68,30 @@ describe('DeathwatchArea', () => {
     expect(current.text()).toBe('Players')
   })
 
+  it('draws the view inside the framed panel, and the rail beside it', async () => {
+    const { w } = await mountAt('/deathwatch/eventtracker/standings')
+    expect(w.find('.dw-area-sheet.dw-panel h2.dw-plaque').text()).toBe('Standings')
+    const rail = w.find('aside.dw-area-side')
+    expect(rail.find('img.dw-area-crest').attributes('alt')).toBe('')
+    expect(rail.text()).toContain('Watch Fortress Ebonhold')
+    expect(rail.find('h1').text()).toBe('Event Tracker')
+    expect(rail.find('nav [aria-current="page"]').text()).toBe('Standings')
+  })
+
+  it('shows a status line, and keeps the list of views, when the view cannot be loaded', async () => {
+    override.loader = () => Promise.reject(new Error('chunk failed'))
+    vi.spyOn(console, 'error').mockImplementation(() => {}) // Vue logs a failed lazy view; that is expected here
+    const { w } = await mountAt('/deathwatch/eventtracker/players')
+    expect(w.find('.dw-area-sheet [role="alert"]').text()).toBe('This view could not be loaded. Try again.')
+    expect(w.find('aside nav [aria-current="page"]').text()).toBe('Players')
+  })
+
+  it('says the view is being rebuilt when the registry has none for the address', async () => {
+    override.loader = null
+    const { w } = await mountAt('/deathwatch/eventtracker/players')
+    expect(w.find('.dw-area-sheet [role="status"]').text()).toBe('This view is being rebuilt.')
+  })
+
   it('works for every area', async () => {
     for (const [path, area, tab] of [
       ['/deathwatch/armouringhall/specialist', 'Armouring Hall', 'Specialist'],
@@ -66,7 +106,7 @@ describe('DeathwatchArea', () => {
   it('keeps the address canonical when only the tab changes', async () => {
     const { w, router } = await mountAt('/deathwatch/eventtracker/players')
     await router.push('/deathwatch/eventtracker/bogus')
-    await flushPromises()
+    await settle()
     expect(router.currentRoute.value.fullPath).toBe('/deathwatch/eventtracker/standings')
     expect(w.find('h2').text()).toBe('Standings')
   })
@@ -74,7 +114,7 @@ describe('DeathwatchArea', () => {
   it('keeps the query when it canonicalizes', async () => {
     const { router } = await mountAt('/deathwatch/eventtracker/players')
     await router.push('/deathwatch/eventtracker/bogus?scene=denied')
-    await flushPromises()
+    await settle()
     expect(router.currentRoute.value.fullPath).toBe('/deathwatch/eventtracker/standings?scene=denied')
   })
 
@@ -105,7 +145,7 @@ describe('DeathwatchArea', () => {
     const { w } = await mountAt('/deathwatch/eventtracker/players')
     await w.find('button.dw-areabar').trigger('click')
     await w.find('dialog nav a').trigger('click')
-    await flushPromises()
+    await settle()
     expect(HTMLDialogElement.prototype.close).toHaveBeenCalledTimes(1)
     expect(w.find('button.dw-areabar').attributes('aria-expanded')).toBe('false')
   })
