@@ -1,6 +1,8 @@
 // @vitest-environment jsdom
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { h } from 'vue'
+import { readFileSync } from 'node:fs'
+import { fileURLToPath } from 'node:url'
 import { mount, flushPromises } from '@vue/test-utils'
 import { createPinia, setActivePinia } from 'pinia'
 import { createRouter, createMemoryHistory, RouterView } from 'vue-router'
@@ -78,11 +80,42 @@ describe('DeathwatchArea', () => {
     expect(rail.find('nav [aria-current="page"]').text()).toBe('Standings')
   })
 
-  it('carries the fan-site disclaimer under the sheet, on every area', async () => {
-    for (const path of ['/deathwatch/eventtracker/standings', '/deathwatch/armouringhall/standard', '/deathwatch/chronicles/in-memoriam']) {
-      const { w } = await mountAt(path)
-      expect(w.find('.dw-area-main .dw-legal').text(), path).toContain('Not affiliated with or endorsed by Games Workshop')
-    }
+  it('keeps the view mounted when only the query changes, so a view keeps what it holds', async () => {
+    const { w, router } = await mountAt('/deathwatch/eventtracker/standings')
+    const before = w.find('.dw-page').element
+    await router.push('/deathwatch/eventtracker/standings?scene=allowed')
+    await settle()
+    expect(w.find('.dw-page').element).toBe(before)
+  })
+
+  it('keeps the view mounted when only the Armouring Hall item changes', async () => {
+    const { w, router } = await mountAt('/deathwatch/armouringhall/standard/helm')
+    const before = w.find('.dw-page').element
+    await router.push('/deathwatch/armouringhall/standard/pauldrons')
+    await settle()
+    expect(w.find('.dw-page').element).toBe(before)
+  })
+
+  it('mounts a new view when the tab changes', async () => {
+    const { w, router } = await mountAt('/deathwatch/eventtracker/standings')
+    const before = w.find('.dw-page').element
+    await router.push('/deathwatch/eventtracker/players')
+    await settle()
+    expect(w.find('.dw-page').element).not.toBe(before)
+    expect(w.find('.dw-page h2').text()).toBe('Players')
+  })
+
+  it('caps the sticky rail to the screen and lets it scroll, so its last links are reachable on a short window', () => {
+    const src = readFileSync(fileURLToPath(import.meta.url).replace(/\.test\.js$/, '.vue'), 'utf8')
+    const rail = src.match(/@media \(min-width: 900px\)\s*\{[\s\S]*?\.dw-area-side\s*\{([^}]*)\}/)?.[1] ?? ''
+    expect(rail).toContain('position: sticky')
+    expect(rail).toMatch(/max-height:\s*calc\(100dvh/)
+    expect(rail).toContain('overflow-y: auto')
+  })
+
+  it('leaves the fan-site disclaimer to the layout, which shows it on every screen', async () => {
+    const { w } = await mountAt('/deathwatch/eventtracker/standings')
+    expect(w.find('.dw-legal').exists()).toBe(false)
   })
 
   it('shows a status line, and keeps the list of views, when the view cannot be loaded', async () => {

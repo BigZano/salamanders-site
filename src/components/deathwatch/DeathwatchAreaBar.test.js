@@ -1,6 +1,8 @@
 // @vitest-environment jsdom
 import { describe, it, expect } from 'vitest'
 import { mount } from '@vue/test-utils'
+import { readFileSync } from 'node:fs'
+import { fileURLToPath } from 'node:url'
 import DeathwatchAreaBar from './DeathwatchAreaBar.vue'
 
 const mountBar = (props = {}) => mount(DeathwatchAreaBar, { props: { areaLabel: 'Event Tracker', tabLabel: 'Players', open: false, ...props } })
@@ -27,6 +29,13 @@ describe('DeathwatchAreaBar', () => {
     const w = mountBar()
     await w.find('button').trigger('click')
     expect(w.emitted('open')).toHaveLength(1)
+  })
+
+  it('shows its keyboard focus ring inside its clipped corners (an outline outside them is cut off)', () => {
+    const src = readFileSync(fileURLToPath(import.meta.url).replace(/\.test\.js$/, '.vue'), 'utf8')
+    const rule = src.match(/\.dw-areabar:focus-visible\s*\{([^}]*)\}/)?.[1] ?? ''
+    expect(rule).toMatch(/outline:\s*2px solid var\(--dw-accent\)/)
+    expect(rule).toMatch(/outline-offset:\s*-6px/)
   })
 
   it('hides its chevron from assistive technology', () => {

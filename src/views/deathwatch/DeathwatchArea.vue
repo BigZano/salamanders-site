@@ -10,7 +10,6 @@ import { AREAS, resolveArea } from '../../lib/deathwatch/areas'
 import { pageLoader } from '../../lib/deathwatch/pages'
 import { useDeathwatch } from '../../stores/deathwatch'
 import crest from '../../components/deathwatch/img/crest.webp'
-import DeathwatchLegal from '../../components/deathwatch/DeathwatchLegal.vue'
 import DeathwatchAreaBar from '../../components/deathwatch/DeathwatchAreaBar.vue'
 import DeathwatchNav from '../../components/deathwatch/DeathwatchNav.vue'
 import DeathwatchNavSheet from '../../components/deathwatch/DeathwatchNavSheet.vue'
@@ -30,8 +29,12 @@ const tabLabel = computed(() => area.value.tabs.find((t) => t.slug === page.valu
 // While a view's chunk is on its way (after a short delay, so a fast one never flashes it), and if it fails.
 const Loading = { render: () => h('p', { class: 'dw-area-loading', role: 'status' }, 'Loading…') }
 const Failed = { render: () => h('p', { class: 'dw-area-error', role: 'alert' }, 'This view could not be loaded. Try again.') }
+// Keyed on a string: vue-router gives a fresh params object on every navigation (a query, an Armouring Hall item),
+// and a view must only be rebuilt when the area or the tab changes, so it keeps what it holds across the rest.
+const viewKey = computed(() => `${page.value.area}/${page.value.tab}`)
 const view = computed(() => {
-  const loader = pageLoader(page.value.area, page.value.tab)
+  const [areaSlug, tabSlug] = viewKey.value.split('/')
+  const loader = pageLoader(areaSlug, tabSlug)
   return loader ? defineAsyncComponent({ loader, loadingComponent: Loading, errorComponent: Failed, delay: 200 }) : SkNote
 })
 </script>
@@ -60,9 +63,8 @@ const view = computed(() => {
       </DeathwatchNavSheet>
       <div class="dw-area-main">
         <div class="dw-area-sheet dw-panel">
-          <component :is="view" :key="`${page.area}/${page.tab}`" />
+          <component :is="view" :key="viewKey" />
         </div>
-        <DeathwatchLegal />
       </div>
     </template>
   </section>
@@ -157,6 +159,9 @@ const view = computed(() => {
   .dw-area-side {
     position: sticky;
     top: 5rem;
+    /* Never taller than the screen: on a short window the last links stay reachable by scrolling the rail. */
+    max-height: calc(100dvh - 6rem);
+    overflow-y: auto;
     display: flex;
     flex-direction: column;
     gap: 1.6rem;

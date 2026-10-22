@@ -67,4 +67,9 @@ defineEmits(['open'])
 .dw-areabar:active {
   transform: scale(0.98);
 }
+/* Its corners are clipped, which also clips an outline drawn outside the box: draw the ring inside it. */
+.dw-areabar:focus-visible {
+  outline: 2px solid var(--dw-accent);
+  outline-offset: -6px;
+}
 </style>

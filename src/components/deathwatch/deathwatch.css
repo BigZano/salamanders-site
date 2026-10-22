@@ -264,6 +264,11 @@ body:has(.dw-sheet[open]) {
 .dw-btn:active {
   transform: scale(0.97);
 }
+/* The corners are clipped, which also clips an outline drawn outside the box: draw the ring inside it. */
+.dw-btn:focus-visible {
+  outline: 2px solid var(--dw-accent);
+  outline-offset: -6px;
+}
 @media (hover: hover) and (pointer: fine) {
   .dw-btn:hover {
     background: color-mix(in oklab, var(--dw-accent) 32%, transparent);

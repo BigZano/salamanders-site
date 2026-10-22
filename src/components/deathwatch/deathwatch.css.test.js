@@ -64,6 +64,12 @@ describe('deathwatch.css', () => {
     expect(css.match(/\.dw-plaque\s*\{([^}]*)\}/)?.[1]).toContain('border-image: var(--dw-frame-s)')
   })
 
+  it('shows the keyboard focus ring of a button inside its clipped corners (an outline outside them is cut off)', () => {
+    const rule = css.match(/\.dw-btn:focus-visible\s*\{([^}]*)\}/)?.[1] ?? ''
+    expect(rule).toMatch(/outline:\s*2px solid var\(--dw-accent\)/)
+    expect(rule).toMatch(/outline-offset:\s*-6px/)
+  })
+
   it('paints a backdrop for the hub and each area, from images that exist', () => {
     const files = {
       hub: 'bg-hub.jpg',
