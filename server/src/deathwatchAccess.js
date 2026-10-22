@@ -28,6 +28,9 @@ export function createDeathwatchAccess({
   // No defaults for the ids: until both are set the handler answers 503.
   const configured = isSnowflake(deathwatchRoleId) && isSnowflake(commanderRoleId)
   const cache = new Map() // sha256 of the Authorization header -> { verdict, until }
+  // Replaced by forget(). A lookup that began under an earlier epoch may be telling a story forget() has
+  // since made false (a grant revoked mid-lookup), so its verdict is returned but not remembered.
+  let epoch = {}
 
   async function lookup(request) {
     const user = await roles.identify(request)
@@ -51,10 +54,16 @@ export function createDeathwatchAccess({
     const key = createHash('sha256').update(header).digest('hex')
     const hit = cache.get(key)
     if (hit && now() < hit.until) return hit.verdict
+    const began = epoch
     const verdict = await lookup(request)
-    if (verdict) remember(key, verdict)
+    if (verdict && began === epoch) remember(key, verdict)
     return verdict
   }
 
-  return { configured, resolve, forget: () => cache.clear() }
+  function forget() {
+    cache.clear()
+    epoch = {}
+  }
+
+  return { configured, resolve, forget }
 }

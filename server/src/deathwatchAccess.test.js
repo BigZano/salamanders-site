@@ -218,6 +218,19 @@ describe('the verdict cache', () => {
     expect(roles.identify).toHaveBeenCalledTimes(2)
   })
 
+  it('does not remember a verdict that a forget() overtook while it was being looked up', async () => {
+    const { access, store, grants } = setup({ granted: [USERS.plain.id] })
+    let answer
+    store.isGranted.mockImplementationOnce(() => new Promise((resolve) => (answer = resolve)))
+    const inFlight = access.resolve(req('plain')) // a read that is about to be told "granted"
+    await vi.waitFor(() => expect(store.isGranted).toHaveBeenCalled())
+    grants.delete(USERS.plain.id) // the grant is revoked, and every cached verdict dropped,
+    access.forget() // while that lookup is still running
+    answer(true)
+    expect((await inFlight).access).toBe(true) // the caller who asked early still gets what was true then
+    expect((await access.resolve(req('plain'))).access).toBe(false) // but it was not kept for the next read
+  })
+
   it('is bounded: a full cache evicts its oldest entry', async () => {
     const { access, roles } = setup({ maxEntries: 2 })
     await access.resolve(req('watcher'))
