@@ -120,7 +120,7 @@ describe('DeathwatchArea', () => {
     expect(rail).toContain('overflow-y: auto')
   })
 
-  it('leaves the fan-site disclaimer to the layout, which shows it on every screen', async () => {
+  it('leaves the fan-site disclaimer to the site footer', async () => {
     const { w } = await mountAt('/deathwatch/eventtracker/standings')
     expect(w.find('.dw-legal').exists()).toBe(false)
   })

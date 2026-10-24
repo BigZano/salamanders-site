@@ -68,7 +68,7 @@ describe('DeathwatchHub', () => {
     expect(w.find('ul.dw-hub-cards').find('a.dw-card-home').exists()).toBe(false)
   })
 
-  it('leaves the fan-site disclaimer to the layout, which shows it on every screen', () => {
+  it('leaves the fan-site disclaimer to the site footer', () => {
     expect(mountHub().find('.dw-legal').exists()).toBe(false)
   })
 
