@@ -66,8 +66,9 @@ no longer read; moderator roles live in `src/privileges.js`.
 
 The Discord-role-gated Deathwatch area ("Watch Fortress Ebonhold"). Design:
 `docs/superpowers/specs/2026-10-20-deathwatch-design.md`. Access is the Watch
-Commander role, or the Deathwatch role, or a user id the Watch Commander has
-granted; Commander status comes only from the role, never from a grant. Roles
+Commander role, or a Deathwatch role, or a user id the Watch Commander has
+granted, or being the guild owner or an Administrator; Commander status comes
+only from the Commander role, never from a grant or from being an admin. Roles
 are asked of Discord live. Reads (`/me`, `/data`) reuse a verdict for 30 seconds;
 every write and grant change checks Discord afresh and drops the cached verdicts.
 Any Discord failure answers 503: the area fails closed.
