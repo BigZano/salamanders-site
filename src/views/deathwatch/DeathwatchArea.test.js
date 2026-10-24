@@ -199,11 +199,11 @@ describe('DeathwatchArea', () => {
 
   it('shows the Watch Command tab to Deathwatch Command only, and anyone else a notice in its place', async () => {
     const other = (await mountAt('/deathwatch/armouringhall/watch-command', { commander: false })).w
-    expect(other.find('.dw-area-sheet').text()).toBe('Reserved for the Deathwatch Command role.')
+    expect(other.find('.dw-area-sheet').text()).toBe('Reserved for the Deathwatch Command.')
     expect(other.find('nav').text()).not.toContain('Watch Command')
     expect(other.find('nav').text()).toContain('Specialist')
     const command = (await mountAt('/deathwatch/armouringhall/watch-command', { command: true })).w
-    expect(command.find('.dw-area-sheet').text()).not.toContain('Reserved for the Deathwatch Command role.')
+    expect(command.find('.dw-area-sheet').text()).not.toContain('Reserved for the Deathwatch Command.')
     expect(command.find('nav').text()).toContain('Watch Command')
   })
 

@@ -66,7 +66,7 @@ const view = computed(() => {
       </DeathwatchNavSheet>
       <div class="dw-area-main">
         <div class="dw-area-sheet dw-panel">
-          <p v-if="locked" class="dw-area-restricted" role="status">Reserved for the Deathwatch Command role.</p>
+          <p v-if="locked" class="dw-area-restricted" role="status">Reserved for the Deathwatch Command.</p>
           <component :is="view" v-else :key="viewKey" />
         </div>
       </div>
