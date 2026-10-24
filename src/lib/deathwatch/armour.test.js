@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { PAINT, SPECIALIST, STANDARD, UNIFORMS, WATCH_COMMAND, hotspot, itemSlug, noteParts, uniformFor } from './armour'
+import { AREAS } from './areas'
 
 describe('the uniforms', () => {
   it('has the old site’s uniforms on each tab, with the old addresses', () => {
@@ -49,5 +50,13 @@ describe('the helpers', () => {
     expect(noteParts('Left: the Deathwatch Pauldron.')).toEqual(['Left', 'the Deathwatch Pauldron.'])
     expect(noteParts('Both greave icon slots: follow')).toEqual(['Both greave icon slots', 'follow'])
     expect(noteParts('///CLASSIFIED///')).toBeNull()
+  })
+})
+
+describe('the Armouring Hall tabs', () => {
+  it('open on the first uniform of their list, as the address names it', () => {
+    for (const { slug, item } of AREAS.armouringhall.tabs.filter((t) => Object.hasOwn(UNIFORMS, t.slug))) {
+      expect(item, slug).toBe(itemSlug(UNIFORMS[slug][0]))
+    }
   })
 })

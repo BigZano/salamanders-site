@@ -40,7 +40,7 @@ describe('deathwatchRedirect', () => {
 
   it('drops a hostile sub-slug', () => {
     const r = deathwatchRedirect(to('/deathwatch/armouringhall/standard/A%20B', { area: 'armouringhall', tab: 'standard', sub: 'A B' }))
-    expect(r).toMatchObject({ path: '/deathwatch/armouringhall/standard', replace: true })
+    expect(r).toMatchObject({ path: '/deathwatch/armouringhall/standard/watchbrother', replace: true })
   })
 
   it('sends an unknown area to the not-found page, keeping the address the visitor typed', () => {

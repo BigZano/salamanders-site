@@ -21,11 +21,13 @@ export const AREAS = {
   armouringhall: {
     label: 'Armouring Hall',
     blurb: 'Specialist armour, standard uniform and heraldry',
+    // `item`: the uniform a tab opens on, so the address always names the one shown (armour.test.js keeps it
+    // in step with armour.js).
     tabs: [
-      tab('standard', 'Standard'),
-      tab('specialist', 'Specialist'),
+      { slug: 'standard', label: 'Standard', item: 'watchbrother' },
+      { slug: 'specialist', label: 'Specialist', item: 'apothecarion' },
       // Only Deathwatch Command (and the Watch Commander) see this tab (DeathwatchNav, DeathwatchArea).
-      { slug: 'watch-command', label: 'Watch Command', command: true },
+      { slug: 'watch-command', label: 'Watch Command', command: true, item: 'watchsergeant' },
       tab('restricted-wargear', 'Restricted Wargear'),
     ],
   },
@@ -60,14 +62,14 @@ const SUB = /^[a-z0-9]{1,40}$/
 /**
  * Resolves router params ({ area, tab, sub }) to the page they name, or null for an unknown area.
  * An unknown or missing tab falls back to the area's first; a sub-slug survives only on the Armouring
- * Hall and only if it is well formed. `canonical` is the one path for that page. Params come from the
+ * Hall and only if it is well formed, and a tab there with none gets the item it opens on. `canonical` is the one path for that page. Params come from the
  * URL, so nothing here trusts their type or indexes an object with them.
  */
 export function resolveArea(params) {
   const { area, tab: wanted, sub } = params ?? {}
   if (typeof area !== 'string' || !Object.hasOwn(AREAS, area)) return null
   const { tabs } = AREAS[area]
-  const slug = (tabs.find((t) => t.slug === wanted) ?? tabs[0]).slug
-  const item = area === 'armouringhall' && typeof sub === 'string' && SUB.test(sub) ? sub : ''
+  const { slug, item: first = '' } = tabs.find((t) => t.slug === wanted) ?? tabs[0]
+  const item = area === 'armouringhall' && typeof sub === 'string' && SUB.test(sub) ? sub : first
   return { area, tab: slug, sub: item, canonical: `/deathwatch/${area}/${slug}${item ? `/${item}` : ''}` }
 }

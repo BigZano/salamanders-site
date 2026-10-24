@@ -73,9 +73,9 @@ describe('the Deathwatch routes', () => {
     ['/deathwatch/eventtracker', '/deathwatch/eventtracker/standings'],
     ['/deathwatch/eventtracker/', '/deathwatch/eventtracker/standings'],
     ['/deathwatch/eventtracker/nonsense', '/deathwatch/eventtracker/standings'],
-    ['/deathwatch/armouringhall', '/deathwatch/armouringhall/standard'],
+    ['/deathwatch/armouringhall', '/deathwatch/armouringhall/standard/watchbrother'],
     ['/deathwatch/armouringhall/standard/battlebrother', '/deathwatch/armouringhall/standard/battlebrother'],
-    ['/deathwatch/armouringhall/standard/A%20B', '/deathwatch/armouringhall/standard'],
+    ['/deathwatch/armouringhall/standard/A%20B', '/deathwatch/armouringhall/standard/watchbrother'],
     ['/deathwatch/chronicles', '/deathwatch/chronicles/hall-of-champions'],
     ['/deathwatch/manage', '/deathwatch/manage/enter-mission'],
   ])('takes %s to %s', async (from, to) => {
