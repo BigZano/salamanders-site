@@ -18,6 +18,13 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      # The runner image ships Node 22.23.3, which predates the Brotli decoder fix (CVE-2026-111497,
+      # "Node2Shell"; patched in 22.23.4). A bare `22` would match that cached copy, so ask for a floor
+      # the cache can't satisfy and let setup-node download the current 22.x. The wiki and news
+      # scripts below fetch from third-party servers.
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '>=22.23.4 <23'
       - uses: oven-sh/setup-bun@v2
       - run: bun install --frozen-lockfile
 
