@@ -21,7 +21,7 @@ describe('AREAS', () => {
   })
 
   it("lists the other areas' tabs in order", () => {
-    expect(tabsOf('armouringhall')).toEqual(['standard', 'specialist', 'watch-command'])
+    expect(tabsOf('armouringhall')).toEqual(['standard', 'specialist', 'watch-command', 'restricted-wargear'])
     expect(tabsOf('chronicles')).toEqual([
       'hall-of-champions',
       'chamber-of-honor',
@@ -54,6 +54,7 @@ describe('AREAS', () => {
           { slug: 'standard', label: 'Standard' },
           { slug: 'specialist', label: 'Specialist' },
           { slug: 'watch-command', label: 'Watch Command' },
+          { slug: 'restricted-wargear', label: 'Restricted Wargear' },
         ],
       },
       chronicles: {

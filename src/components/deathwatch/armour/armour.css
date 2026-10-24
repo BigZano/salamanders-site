@@ -1,0 +1,108 @@
+/* The Armouring Hall's shared layout: on a phone the figure first and then the part cards; from 900px the parts in
+ * two columns either side of the figure, which stays in view. Paint swatches, part cards. Every rule sits under .dw.
+ * Imported by ArmourHead.vue, which every Armouring Hall page renders. */
+.dw .ah {
+  display: grid;
+  gap: 1.1rem;
+  min-width: 0;
+}
+/* Grid items may shrink below their content (the picker scrolls sideways itself), so a phone never scrolls the page. */
+.dw .ah > *,
+.dw .ah-grid > * {
+  min-width: 0;
+}
+.dw .ah-grid {
+  display: grid;
+  gap: 1rem;
+}
+.dw .ah-col {
+  display: grid;
+  align-content: start;
+  gap: 0.9rem;
+}
+@media (min-width: 900px) {
+  .dw .ah-grid {
+    grid-template-columns: 1fr minmax(240px, 0.9fr) 1fr;
+    align-items: start;
+  }
+  .dw .ah-col:not(.r) {
+    grid-column: 1;
+    grid-row: 1;
+  }
+  .dw .ah-col.r {
+    grid-column: 3;
+    grid-row: 1;
+  }
+  .dw .ah-fig {
+    grid-column: 2;
+    grid-row: 1;
+    position: sticky;
+    top: 1.5rem;
+  }
+  .dw .ah-col.r .ah-part h4 {
+    text-align: right;
+  }
+}
+.dw .ah-fig {
+  position: relative;
+  justify-self: center;
+  width: 100%;
+  max-width: 320px;
+  margin: 0;
+  isolation: isolate;
+}
+.dw .ah-fig img {
+  display: block;
+  width: 100%;
+  height: auto;
+  mask-image: radial-gradient(ellipse 88% 78% at 50% 50%, #000 58%, transparent 100%);
+}
+.dw .ah-part {
+  position: relative;
+  padding: 0.9rem 1rem 1rem;
+  border: 1px solid var(--dw-line-2);
+  background: var(--dw-grain), color-mix(in oklab, #0b130c 94%, transparent);
+}
+.dw .ah-part h4 {
+  margin: 0 0 0.75rem;
+  font: 500 1.4rem / 1 var(--dw-font-hud);
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--dw-accent);
+}
+.dw .ah-part > p {
+  margin: 0.5rem 0 0;
+  line-height: 1.5;
+}
+.dw .ah-sw {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(min(150px, 100%), 1fr));
+  gap: 8px;
+  margin-top: 0.75rem;
+}
+.dw .ah-sw span {
+  display: grid;
+  grid-template-columns: 24px 1fr;
+  column-gap: 10px;
+  align-items: center;
+  padding: 7px 10px;
+  font-weight: 600;
+  line-height: 1.25;
+  border: 1px solid var(--dw-line);
+  border-radius: 8px;
+  background: rgb(0 0 0 / 0.22);
+}
+.dw .ah-sw small {
+  font: 600 0.66rem var(--dw-font-cond);
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--dw-muted);
+}
+.dw .ah-sw i {
+  grid-row: 1 / 3;
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  background: radial-gradient(circle at 32% 30%, rgb(255 255 255 / 0.45), transparent 42%), var(--c);
+  box-shadow: inset 0 -2px 3px rgb(0 0 0 / 0.35), 0 0 0 1px var(--dw-line-2);
+}

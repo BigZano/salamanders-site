@@ -21,7 +21,12 @@ export const AREAS = {
   armouringhall: {
     label: 'Armouring Hall',
     blurb: 'Specialist armour, standard uniform and heraldry',
-    tabs: [tab('standard', 'Standard'), tab('specialist', 'Specialist'), tab('watch-command', 'Watch Command')],
+    tabs: [
+      tab('standard', 'Standard'),
+      tab('specialist', 'Specialist'),
+      tab('watch-command', 'Watch Command'),
+      tab('restricted-wargear', 'Restricted Wargear'),
+    ],
   },
   chronicles: {
     label: 'Chronicles of Valor',
