@@ -1,7 +1,7 @@
 /**
  * Stand-in for GET /deathwatch/data in fixture mode (see fixture.js): one running event and one archived tour,
- * so every Event Tracker view and the Manage pages have something to show without the server. Every name here is
- * invented. Built from a seed, so the numbers are the same on every load.
+ * so every Event Tracker view and the Manage pages have something to show without the server; ?scene=empty shows
+ * none at all. Every name here is invented. Built from a seed, so the numbers are the same on every load.
  */
 import { CLASSES, COMPANIES, WEIGHTS, archiveDoc } from './tracker'
 
@@ -35,7 +35,9 @@ function team(id, [n, ro], weeks, r) {
   return { id, n, co: COMPANIES[(id - 1) % COMPANIES.length], ro, ki: id === 4 ? [ro[2]] : [], kw: id === 4 ? { [ro[2]]: 2 } : {}, m }
 }
 
-export function fixtureData() {
+/** The data for a dev scene: nothing at all for `empty`, else the running event and its archive. */
+export function fixtureData(scene) {
+  if (scene === 'empty') return { teams: {}, cfg: {}, archive: {} }
   const r = rng(18)
   const live = Object.fromEntries(TEAMS.map((t, i) => [String(i + 1), team(i + 1, t, 3, r)]))
   const old = TEAMS.slice(0, 4).map((t, i) => team(i + 1, t, 4, r))

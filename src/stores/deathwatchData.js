@@ -3,35 +3,40 @@ import { getData, writeDoc } from '../lib/deathwatch/api'
 import { clone } from '../lib/deathwatch/tracker'
 
 // The Deathwatch area's documents (GET /deathwatch/data): teams (the live event), cfg (s: scoring weights,
-// tx: page texts) and archive (finished events). Held in memory only; sign-out drops them. Writes go to the server
-// one document at a time (Watch Commander only, and the server checks that itself) and land here once it has
-// accepted them. Statuses: idle, loading, ready, error.
-// shortcut: no polling; the data is fetched on the first Event Tracker or Manage view and again after a minute
-// on the next one. Add ETag polling (the server already sends one) if the views must follow a live event.
+// tx: page texts) and archive (finished events). Held in memory only; sign-out drops them. The views poll it
+// (useTracker.js): with the last ETag, so an unchanged event costs the server a 304 and no body. Writes go to the
+// server one document at a time (Watch Commander only, and the server checks that itself), land here at once,
+// and are followed by a refetch so the page shows what the server holds. Statuses: idle, loading, ready, error.
 
-const STALE_MS = 60_000
 let seq = 0
 
-// Fixture mode (VITE_DEATHWATCH_FIXTURE, dev only): invented data and in-memory writes, no server. The literal
-// condition lets the build drop the fixture, as in fixture.js.
+// Fixture mode (VITE_DEATHWATCH_FIXTURE, dev only): invented data and in-memory writes, no server; ?scene=empty
+// gives an area with no data at all. The literal condition lets the build drop the fixture, as in fixture.js.
 async function fixture() {
-  if (import.meta.env.DEV && import.meta.env.VITE_DEATHWATCH_FIXTURE) return (await import('../lib/deathwatch/fixtureData')).fixtureData()
+  if (import.meta.env.DEV && import.meta.env.VITE_DEATHWATCH_FIXTURE) {
+    const scene = new URLSearchParams(globalThis.location?.search ?? '').get('scene')
+    return (await import('../lib/deathwatch/fixtureData')).fixtureData(scene)
+  }
   return null
 }
 
 export const useDeathwatchData = defineStore('deathwatchData', {
-  state: () => ({ status: 'idle', error: '', teams: {}, cfg: {}, archive: {}, at: 0, local: false }),
+  state: () => ({ status: 'idle', error: '', teams: {}, cfg: {}, archive: {}, etag: '', local: false }),
   actions: {
-    /** Fetches everything, unless it is fresh already (force: always). */
-    async load(token, { force = false } = {}) {
-      if (!force && this.status === 'ready' && Date.now() - this.at < STALE_MS) return
+    /** Fetches everything, or nothing if the server says it is unchanged. A fixture loads once. */
+    async load(token) {
+      if (this.local) return
       const mine = ++seq
       if (this.status !== 'ready') this.status = 'loading'
       try {
         const fx = await fixture()
-        const d = fx ?? (await getData(token))
+        const got = fx ? { data: fx, etag: '' } : await getData(token, this.etag)
         if (mine !== seq) return
-        this.$patch({ status: 'ready', error: '', teams: d.teams ?? {}, cfg: d.cfg ?? {}, archive: d.archive ?? {}, at: Date.now(), local: !!fx })
+        if (got) {
+          const { teams = {}, cfg = {}, archive = {} } = got.data ?? {}
+          this.$patch({ teams, cfg, archive, etag: got.etag ?? '', local: !!fx })
+        }
+        this.$patch({ status: 'ready', error: '' })
       } catch (err) {
         if (mine !== seq) return
         // A refresh that fails keeps what is on screen; only a first load turns into an error.
@@ -46,6 +51,7 @@ export const useDeathwatchData = defineStore('deathwatchData', {
       if (doc === null) delete next[id]
       else next[id] = clone(doc)
       this[col] = next
+      if (!this.local) this.load(token) // not awaited: the change is already on screen
     },
 
     reset() {
