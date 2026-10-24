@@ -53,7 +53,7 @@ describe('AREAS', () => {
         tabs: [
           { slug: 'standard', label: 'Standard' },
           { slug: 'specialist', label: 'Specialist' },
-          { slug: 'watch-command', label: 'Watch Command' },
+          { slug: 'watch-command', label: 'Watch Command', commander: true },
           { slug: 'restricted-wargear', label: 'Restricted Wargear' },
         ],
       },

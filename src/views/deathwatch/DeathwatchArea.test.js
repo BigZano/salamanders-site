@@ -197,6 +197,16 @@ describe('DeathwatchArea', () => {
     expect(w.find('button.dw-areabar').attributes('aria-expanded')).toBe('false')
   })
 
+  it('shows the Watch Command tab to the Watch Commander only, and anyone else a notice in its place', async () => {
+    const other = (await mountAt('/deathwatch/armouringhall/watch-command', { commander: false })).w
+    expect(other.find('.dw-area-sheet').text()).toBe('Restricted to the Watch Commander.')
+    expect(other.find('nav').text()).not.toContain('Watch Command')
+    expect(other.find('nav').text()).toContain('Specialist')
+    const commander = (await mountAt('/deathwatch/armouringhall/watch-command', { commander: true })).w
+    expect(commander.find('.dw-area-sheet').text()).not.toContain('Restricted')
+    expect(commander.find('nav').text()).toContain('Watch Command')
+  })
+
   it('shows anyone else a notice in place of the Manage area, with no way into its views', async () => {
     const { w } = await mountAt('/deathwatch/manage/checks', { commander: false })
     expect(w.text()).toContain('Restricted to the Watch Commander.')

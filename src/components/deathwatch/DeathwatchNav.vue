@@ -11,16 +11,19 @@ const props = defineProps({
   area: { type: String, required: true },
   // The slug of the tab being shown.
   current: { type: String, required: true },
+  // Whether the viewer is the Watch Commander: a tab marked `commander` is listed only for them.
+  commander: { type: Boolean, default: false },
 })
 const emit = defineEmits(['navigate'])
 
 const info = computed(() => AREAS[props.area])
+const tabs = computed(() => info.value.tabs.filter((t) => props.commander || !t.commander))
 </script>
 
 <template>
   <nav class="dw-nav" :aria-label="`${info.label} sections`">
     <ul>
-      <li v-for="tab in info.tabs" :key="tab.slug">
+      <li v-for="tab in tabs" :key="tab.slug">
         <RouterLink
           class="dw-nav-link"
           :to="`/deathwatch/${area}/${tab.slug}`"
