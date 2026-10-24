@@ -1,6 +1,10 @@
 import { describe, it, expect } from 'vitest'
 import { AREAS } from './areas'
 import { pageLoader } from './pages'
+// The rebuilt views pull in the auth store, and with it the Legion Archive's modules. Load them here rather than
+// inside a test, where the lazy views would first import them: the mutation gate would then count the archive's
+// module-level code as covered by that test, and no longer as static.
+import './useTracker'
 
 // Every view is one file under src/views/deathwatch/pages/<area>/<tab>.vue, so a later port (or the Watch
 // Commander's pull request) can replace one view without touching anything shared. This finds them.

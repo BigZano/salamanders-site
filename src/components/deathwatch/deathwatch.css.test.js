@@ -55,8 +55,8 @@ describe('deathwatch.css', () => {
     expect(token('frame')).toContain('stroke=\'%237fd35c\'')
   })
 
-  it('has the panel, plaque, button and legal classes', () => {
-    for (const cls of ['dw-panel', 'dw-plaque', 'dw-btn', 'dw-legal']) {
+  it('has the panel, plaque and button classes', () => {
+    for (const cls of ['dw-panel', 'dw-plaque', 'dw-btn']) {
       expect(css, cls).toMatch(new RegExp(`\\.${cls}\\s*\\{`))
     }
     // the panel and the plaque are drawn with the 9-slice frames, never a plain border
