@@ -2,8 +2,8 @@ import { describe, it, expect } from 'vitest'
 import { SCENES, sceneOf } from './scenes'
 
 describe('SCENES', () => {
-  it('names the six gate states a designer can ask for', () => {
-    expect(SCENES).toEqual(['allowed', 'commander', 'denied', 'signin', 'checking', 'unavailable'])
+  it('names the six gate states and the two data scenes a designer can ask for', () => {
+    expect(SCENES).toEqual(['allowed', 'commander', 'denied', 'signin', 'checking', 'unavailable', 'empty', 'active-event'])
   })
 })
 
@@ -15,6 +15,8 @@ describe('sceneOf', () => {
     ['signin', 'signin', false],
     ['checking', 'checking', false],
     ['unavailable', 'unavailable', false],
+    ['empty', 'allowed', true],
+    ['active-event', 'allowed', true],
   ])('turns the %s scene into status %s (commander: %s)', (name, status, commander) => {
     expect(sceneOf(name)).toEqual({ _fixture: true, scene: name, status, commander })
   })
