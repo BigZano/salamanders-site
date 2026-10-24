@@ -42,7 +42,8 @@ services:
       DISCORD_BOT_TOKEN: unused-in-e2e
       ARCHIVE_ROLE_ID: '1377787723976409211'
       # Invented ids; the same two as in discord-mock/server.js.
-      DEATHWATCH_ROLE_ID: '200000000000000101'
+      # Two reader roles, comma-separated: the area opens for a holder of either.
+      DEATHWATCH_ROLE_ID: '200000000000000101,200000000000000103'
       WATCH_COMMANDER_ROLE_ID: '200000000000000102'
       ARCHIVE_MEMBERS_URL: http://discord-mock:4400/members.json
       ROSTER_TTL_MS: '2000'

@@ -1,7 +1,7 @@
 /**
  * Who may use the Deathwatch area, asked of Discord live (discordRoles.js) and
- * of the grants table. Access is the Watch Commander role, the Deathwatch role,
- * or an active grant; Watch Commander status comes only from the role, never
+ * of the grants table. Access is the Watch Commander role, any one of the
+ * Deathwatch roles, or an active grant; Watch Commander status comes only from the role, never
  * from a grant. Someone who is not in the guild holds no roles, and can still
  * have a grant. Any Discord failure throws Upstream: callers fail closed.
  *
@@ -16,6 +16,14 @@ import { createHash } from 'node:crypto'
 const SNOWFLAKE = /^\d{17,20}$/
 const isSnowflake = (v) => typeof v === 'string' && SNOWFLAKE.test(v)
 
+// The Deathwatch roles come as one comma-separated string (no spaces). A list with any bad item, or nothing, is
+// [] so that it opens nothing: half a list is never used.
+function parseRoleIds(value) {
+  if (typeof value !== 'string') return []
+  const ids = value.split(',')
+  return ids.every(isSnowflake) ? ids : []
+}
+
 export function createDeathwatchAccess({
   roles,
   store,
@@ -26,7 +34,8 @@ export function createDeathwatchAccess({
   now = Date.now,
 }) {
   // No defaults for the ids: until both are set the handler answers 503.
-  const configured = isSnowflake(deathwatchRoleId) && isSnowflake(commanderRoleId)
+  const deathwatchRoleIds = parseRoleIds(deathwatchRoleId)
+  const configured = deathwatchRoleIds.length > 0 && isSnowflake(commanderRoleId)
   const cache = new Map() // sha256 of the Authorization header -> { verdict, until }
   // Replaced by forget(). A lookup that began under an earlier epoch may be telling a story forget() has
   // since made false (a grant revoked mid-lookup), so its verdict is returned but not remembered.
@@ -38,7 +47,7 @@ export function createDeathwatchAccess({
     // Stryker disable next-line ArrayDeclaration: a stray element is never a role id, so it grants nothing
     const held = (await roles.rolesOf(user.id)) ?? []
     const watchCommander = held.includes(commanderRoleId)
-    const access = watchCommander || held.includes(deathwatchRoleId) || (await store.isGranted(user.id))
+    const access = watchCommander || deathwatchRoleIds.some((id) => held.includes(id)) || (await store.isGranted(user.id))
     return { user, access, watchCommander }
   }
 

@@ -70,7 +70,7 @@ No role ids are in the repo; the area answers 503 "not configured" until both ar
 1. Apply the schema to the real database (idempotent): from `server/`,
    `docker compose exec -T db psql -v ON_ERROR_STOP=1 -U salamanders salamanders_builds < schema.sql`
 2. Put the two role ids in `server/.env`: `DEATHWATCH_ROLE_ID=` and `WATCH_COMMANDER_ROLE_ID=`
-   (the Discord role ids of the Deathwatch and the Watch Commander roles).
+   (the Discord role ids of the Deathwatch and the Watch Commander roles; `DEATHWATCH_ROLE_ID` may list several, comma-separated with no spaces).
 3. `docker compose up -d --build api`.
 4. Check: `curl -s -H 'Authorization: Bearer x' https://builds-api.armorybot.win/deathwatch/me`
    gives `401 {"error":"Sign in with Discord."}` once the ids are set (and 503 "not

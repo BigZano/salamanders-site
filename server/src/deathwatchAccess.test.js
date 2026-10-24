@@ -1,4 +1,5 @@
 import { describe, it, expect, vi } from 'vitest'
+import * as fc from 'fast-check'
 import { createDeathwatchAccess } from './deathwatchAccess'
 import { Upstream } from './discordRoles'
 
@@ -242,5 +243,122 @@ describe('the verdict cache', () => {
     expect(roles.identify).toHaveBeenCalledTimes(3)
     await access.resolve(req('watcher')) // gone, looked up again
     expect(roles.identify).toHaveBeenCalledTimes(4)
+  })
+})
+
+// DEATHWATCH_ROLE_ID may name several roles at once: a comma-separated list, no spaces. The Watch Commander
+// role stays a single id. A list with any bad item opens nothing, never a part of it.
+describe('several Deathwatch roles', () => {
+  const B = '200000000000000103'
+  const C = '200000000000000104'
+  const configured = (deathwatchRoleId, commanderRoleId = WC) =>
+    createDeathwatchAccess({ roles: {}, store: {}, deathwatchRoleId, commanderRoleId }).configured
+
+  async function verdictHolding(deathwatchRoleId, held) {
+    const access = createDeathwatchAccess({
+      roles: { identify: async () => ({ id: '300000000000000009', username: 'u' }), rolesOf: async () => held },
+      store: { isGranted: async () => false },
+      deathwatchRoleId,
+      commanderRoleId: WC,
+    })
+    return access.resolve(req('any'))
+  }
+
+  it('is configured by a comma-separated list of snowflakes', () => {
+    expect(configured(`${DW},${B}`)).toBe(true)
+    expect(configured(`${DW},${B},${C}`)).toBe(true)
+  })
+
+  it('is not configured when any item of the list is empty, malformed or spaced', () => {
+    const bad = [
+      `${DW},`,
+      `,${DW}`,
+      `${DW},,${B}`,
+      `${DW},abc`,
+      `${DW},${'1'.repeat(16)}`,
+      `${DW},${'1'.repeat(21)}`,
+      `${DW}, ${B}`,
+      `${DW} ,${B}`,
+      `${DW} ${B}`,
+      `${DW};${B}`,
+      `${DW}\n${B}`,
+    ]
+    for (const list of bad) expect(configured(list), JSON.stringify(list)).toBe(false)
+  })
+
+  it('keeps the Watch Commander role a single id', () => {
+    expect(configured(DW, `${WC},${B}`)).toBe(false)
+  })
+
+  it('admits the holder of any one listed role, without Commander status', async () => {
+    for (const mine of [DW, B, C]) {
+      const v = await verdictHolding(`${DW},${B},${C}`, [mine])
+      expect([v.access, v.watchCommander], mine).toEqual([true, false])
+    }
+  })
+
+  it('admits the holder of a listed role among others they hold', async () => {
+    const v = await verdictHolding(`${DW},${B}`, [LEGION, B])
+    expect([v.access, v.watchCommander]).toEqual([true, false])
+  })
+
+  it('does not admit the holder of an unlisted role, or the Legion role alone', async () => {
+    for (const held of [[C], [LEGION], [], [C, LEGION]]) {
+      const v = await verdictHolding(`${DW},${B}`, held)
+      expect([v.access, v.watchCommander], held.join()).toEqual([false, false])
+    }
+  })
+
+  it('still lets the Watch Commander in when the list names other roles', async () => {
+    const v = await verdictHolding(`${DW},${B}`, [WC])
+    expect([v.access, v.watchCommander]).toEqual([true, true])
+  })
+
+  it('opens nothing by role when one item of the list is bad', async () => {
+    for (const mine of [DW, B]) {
+      const v = await verdictHolding(`${DW},oops,${B}`, [mine])
+      expect([v.access, v.watchCommander], mine).toEqual([false, false])
+    }
+  })
+
+  const snowflake = fc.stringMatching(/^[1-9]\d{16,19}$/)
+  const ids = fc.uniqueArray(snowflake, { minLength: 1, maxLength: 6 })
+
+  it('property: a holder of exactly one listed role is admitted, whatever the list or its order', async () => {
+    await fc.assert(
+      fc.asyncProperty(ids, fc.nat(), async (list, pick) => {
+        fc.pre(!list.includes(WC))
+        const v = await verdictHolding(list.join(','), [list[pick % list.length]])
+        return v.access === true && v.watchCommander === false
+      }),
+    )
+  })
+
+  it('property: a holder of no listed role is denied', async () => {
+    await fc.assert(
+      fc.asyncProperty(ids, snowflake, async (list, other) => {
+        fc.pre(!list.includes(other) && other !== WC && !list.includes(WC))
+        const v = await verdictHolding(list.join(','), [other])
+        return v.access === false && v.watchCommander === false
+      }),
+    )
+  })
+
+  it('property: one bad item anywhere in the list unconfigures it and admits nobody', async () => {
+    const badItem = fc.constantFrom('', 'abc', ' ', '1'.repeat(16), '1'.repeat(21), `${DW} `, ' 1')
+    await fc.assert(
+      fc.asyncProperty(ids, badItem, fc.nat(), async (list, bad, at) => {
+        fc.pre(!list.includes(WC))
+        const items = [...list]
+        items.splice(at % (items.length + 1), 0, bad)
+        const text = items.join(',')
+        if (configured(text) !== false) return false
+        for (const mine of list) {
+          const v = await verdictHolding(text, [mine])
+          if (v.access !== false) return false
+        }
+        return true
+      }),
+    )
   })
 })

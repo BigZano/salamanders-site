@@ -26,6 +26,8 @@ test.describe('Deathwatch API', () => {
     expect((await request.get(`${API}/deathwatch/me`)).status()).toBe(401)
     const me = async (token) => (await get(request, '/deathwatch/me', token)).json()
     expect(await me(DEATHWATCH)).toEqual({ access: true, watchCommander: false })
+    // DEATHWATCH_ROLE_ID lists two roles; a holder of the second one is as welcome as a holder of the first.
+    expect(await me('test-deathwatch-second-token')).toEqual({ access: true, watchCommander: false })
     expect(await me(COMMANDER)).toEqual({ access: true, watchCommander: true })
     // The Legion role alone does not open the area, and neither does holding no role.
     expect(await me('test-member-token')).toEqual({ access: false, watchCommander: false })

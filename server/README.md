@@ -74,7 +74,7 @@ transaction as the change.
 
 | Variable | Value |
 |---|---|
-| `DEATHWATCH_ROLE_ID` | the Deathwatch role id — no default, required |
+| `DEATHWATCH_ROLE_ID` | the Deathwatch role id, or several separated by commas with no spaces (a holder of any one gets in) — no default, required |
 | `WATCH_COMMANDER_ROLE_ID` | the Watch Commander role id — no default, required |
 
 Until **both** are set every `/deathwatch/*` route answers 503 "not configured". The role
