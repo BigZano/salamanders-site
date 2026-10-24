@@ -2,74 +2,28 @@
 import { describe, it, expect } from 'vitest'
 import { mount } from '@vue/test-utils'
 
-// The 20 views are skeletons: the original's real headings and labels over shimmer where the content will be.
-// This is the contract each one keeps until its port replaces it. A page lists exactly what it may say, so a
-// real name can never slip in: whatever text is left after the allowed labels are removed must be nothing.
-const MODULES = import.meta.glob('./*/*.vue', { eager: true })
+// The views not yet ported are skeletons: the original's real headings and labels over shimmer where the content
+// will be. This is the contract each one keeps until its port replaces it. A page lists exactly what it may say, so
+// a real name can never slip in: whatever text is left after the allowed labels are removed must be nothing.
+// A ported view leaves this list for PORTED; tracker-pages.test.js says what the real views contain.
+const PORTED = [
+  'eventtracker/standings',
+  'eventtracker/kill-teams',
+  'eventtracker/players',
+  'eventtracker/honour-roll',
+  'eventtracker/game-stats',
+  'eventtracker/scoring',
+  'eventtracker/archive',
+]
+const ALL = import.meta.glob('./*/*.vue', { eager: true })
+const MODULES = Object.fromEntries(Object.entries(ALL).filter(([k]) => !PORTED.includes(k.slice(2, -4))))
 
 const NOTE = 'This view is being rebuilt.'
-const PLAYER_COLS = ['Player', 'Obj', 'Kills', 'Special', 'Melee', 'Ranged', 'Items', 'Dmg taken', 'Incaps', 'Revives', 'MVP']
-const MISSION_COLS = ['Mission', 'Kills', 'Special', 'Melee', 'Ranged', 'Incaps', 'Revives', 'Seed', 'Armoury', 'Relic', 'Ext', 'Points', 'MVP']
 const ARMOUR = ['Helm', 'Pauldrons', 'Wargear', 'Breastplate', 'Gauntlets', 'Greaves', 'Armour Set']
 const armour = (label) => ({ h2: [label], labels: ARMOUR, figure: true })
 
 // h2/h3: every heading, in order; tables: every table's column labels; labels: every tile and field label.
 const PAGES = {
-  'eventtracker/standings': {
-    h2: ['Standings', 'Points progression', 'Watch Companies'],
-    tables: [['#', 'Kill Team', 'W1', 'W2', 'W3', 'W4', 'Total', 'Gap', 'Ø/mission'], ['Company', 'Kill Teams', 'Points']],
-    podium: true,
-    chart: true,
-  },
-  'eventtracker/kill-teams': {
-    h2: ['Kill Team profile', 'Players', 'Points per week', 'Missions'],
-    labels: ['Kill Team', 'Rank', 'Event points', 'Move', 'Gap to #1', 'Missions played', 'KIA'],
-    tables: [PLAYER_COLS, ['Week', 'Points', 'Total'], MISSION_COLS],
-  },
-  'eventtracker/players': {
-    h2: ['Players'],
-    tables: [['#', 'Player', 'MVP', 'Kills', 'Special', 'Revives', 'Incaps', 'Seeds', 'Class']],
-  },
-  'eventtracker/honour-roll': {
-    h2: ['Honour Roll', 'Kill Team awards'],
-    labels: [
-      'Event Champion',
-      'MVP',
-      'Executioner · most kills',
-      'Terminator · most special kills',
-      'Blade Master · melee damage',
-      'Marksman · ranged damage',
-      'Scavenger · most items',
-      'Guardian Angel · most revives',
-      'Gene-Seed Hunter · seeds found',
-      'Best Average',
-    ],
-  },
-  'eventtracker/game-stats': {
-    h2: ['Game Stats'],
-    labels: [
-      'Missions played',
-      'Kills',
-      'Special Kills',
-      'Melee Damage',
-      'Ranged Damage',
-      'Items Found',
-      'Damage Taken',
-      'Incapacitations',
-      'Revives',
-      'In-Game Score',
-      'Gene-Seed',
-    ],
-    tables: [
-      ['Class', 'Played', 'Share', 'Ø kills', 'Seeds'],
-      ['Kill Team', 'Tactical', 'Assault', 'Vanguard', 'Bulwark', 'Sniper', 'Heavy', 'Techmarine', 'Apothecary'],
-    ],
-  },
-  'eventtracker/scoring': {
-    h2: ['Event points per mission', 'Best possible mission', 'MVP score per objective'],
-    labels: ['Played mission', 'Gene-Seed', '2 Guardian Relics', '3 Armoury Data', 'Extermination Rank', 'Total'],
-  },
-  'eventtracker/archive': { h2: ['Archive'] },
   'chronicles/hall-of-champions': {
     h2: ['Hall of Champions', 'Past Champions', 'How to earn this honor?'],
     labels: ['Requirements', 'Award', 'Accolade Duration', 'Legacy'],
@@ -102,9 +56,10 @@ const PAGES = {
 
 const mountPage = (key) => mount(MODULES[`./${key}.vue`].default)
 
-describe('the 20 view skeletons', () => {
-  it('are exactly the pages listed here', () => {
+describe('the view skeletons', () => {
+  it('are exactly the pages listed here, and every other view is a ported one', () => {
     expect(Object.keys(MODULES).map((k) => k.slice(2, -4)).sort()).toEqual(Object.keys(PAGES).sort())
+    expect(Object.keys(ALL)).toHaveLength(PORTED.length + Object.keys(PAGES).length)
   })
 
   for (const [key, want] of Object.entries(PAGES)) {
@@ -152,6 +107,5 @@ describe('the 20 view skeletons', () => {
       expect(first.classes(), key).toContain('dw-sr-only')
       expect(first.classes(), key).not.toContain('dw-plaque')
     }
-    expect(mountPage('eventtracker/standings').get('h2').classes()).toContain('dw-plaque')
   })
 })

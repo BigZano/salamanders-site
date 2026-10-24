@@ -1,21 +1,21 @@
 <script setup>
-// A skeleton: the original's headings and labels over shimmer, until this view is rebuilt. Replace this file
-// with the real view; nothing else needs to change (see src/lib/deathwatch/pages.js).
-import { SkChart, SkNote, SkPodium, SkTable } from '../../../../components/deathwatch/skeleton'
+// Event Tracker → Standings: the running event. With no Kill Teams yet, a pointer to the Archive.
+import { useTracker } from '../../../../lib/deathwatch/useTracker'
+import { useDeathwatch } from '../../../../stores/deathwatch'
+import TrackerState from '../../../../components/deathwatch/tracker/TrackerState.vue'
+import StandingsView from '../../../../components/deathwatch/tracker/StandingsView.vue'
 
-const columns = ['#', 'Kill Team', 'W1', 'W2', 'W3', 'W4', 'Total', 'Gap', 'Ø/mission']
-const columns2 = ['Company', 'Kill Teams', 'Points']
+const { data, R, eventName, live, all, reload } = useTracker()
+const gate = useDeathwatch()
 </script>
 
 <template>
-  <div class="dw-page">
-    <SkNote />
-    <h2 class="dw-plaque">Standings</h2>
-    <SkPodium />
-    <SkTable :columns="columns" :rows="7" />
-    <h2 class="dw-plaque">Points progression</h2>
-    <SkChart />
-    <h2 class="dw-plaque">Watch Companies</h2>
-    <SkTable :columns="columns2" />
-  </div>
+  <TrackerState :status="data.status" :error="data.error" @retry="reload">
+    <p class="dw-sub">{{ eventName }}</p>
+    <template v-if="!R.ts.length">
+      <h2 class="dw-plaque">Standings</h2>
+      <p class="dw-empty">No event is running. Finished tours are in the <RouterLink class="dw-link" :to="all()">Archive</RouterLink>.</p>
+    </template>
+    <StandingsView v-else :R="R" :team="live.team" :share="gate.commander" />
+  </TrackerState>
 </template>

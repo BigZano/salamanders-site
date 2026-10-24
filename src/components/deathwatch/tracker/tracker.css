@@ -1,0 +1,290 @@
+/* The Event Tracker's and the Manage pages' shared pieces: tables, stat tiles, forms, chips and messages, in the
+ * cogitator look of deathwatch.css (its tokens, its type). Every rule sits under .dw, so nothing reaches another
+ * page. Imported by TrackerState.vue, which every one of those views renders. */
+
+/* A table scrolls sideways inside its own wrapper: one with many columns never widens the page. */
+.dw .dw-scroll {
+  overflow-x: auto;
+  overscroll-behavior-x: contain;
+  border: 1px solid var(--dw-line-2);
+  background: color-mix(in oklab, var(--dw-surface) 85%, transparent);
+}
+.dw .dw-table {
+  width: 100%;
+  border-collapse: collapse;
+  font: 400 0.95rem / 1.3 var(--dw-font-cond);
+  font-variant-numeric: tabular-nums;
+}
+.dw .dw-table th {
+  padding: 0.5rem 0.7rem;
+  font-size: 0.78rem;
+  font-weight: 600;
+  letter-spacing: 0.12em;
+  text-align: right;
+  text-transform: uppercase;
+  white-space: nowrap;
+  color: var(--dw-muted);
+  border-bottom: 1px solid var(--dw-line-2);
+}
+.dw .dw-table td {
+  padding: 0.55rem 0.7rem;
+  text-align: right;
+  white-space: nowrap;
+  border-bottom: 1px solid var(--dw-line);
+}
+.dw .dw-table .l {
+  text-align: left;
+}
+.dw .dw-table td.l b {
+  display: block;
+  font-weight: 600;
+  color: var(--dw-ink);
+}
+.dw .dw-table td.l small {
+  color: var(--dw-muted);
+}
+.dw .dw-table .big {
+  font: 500 1.2rem / 1 var(--dw-font-hud);
+  letter-spacing: 0.04em;
+  color: var(--dw-ink);
+}
+.dw .dw-table tr.dim td {
+  color: var(--dw-muted);
+}
+/* A guest's row: played for a Kill Team whose roster they are not on. */
+.dw .dw-table tr.guest td {
+  background: color-mix(in oklab, var(--dw-gold) 6%, transparent);
+}
+.dw .dw-table tr.m1 .big,
+.dw .dw-table tr.m1 .rank {
+  color: var(--dw-gold);
+}
+.dw .dw-table tr.m2 .rank {
+  color: var(--dw-silver);
+}
+.dw .dw-table tr.m3 .rank {
+  color: #d39a68;
+}
+.dw .dw-table .rank {
+  font: 500 1.3rem / 1 var(--dw-font-hud);
+  color: var(--dw-accent);
+}
+.dw .dw-table tfoot td {
+  border-top: 1px solid var(--dw-line-2);
+}
+
+/* A row of stat tiles: a label, a value, and a line under it. */
+.dw .dw-tiles {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(11rem, 1fr));
+  gap: 0.75rem;
+}
+.dw .dw-tile {
+  display: grid;
+  align-content: start;
+  gap: 0.25rem;
+  padding: 0.8rem 1rem 0.9rem;
+  border: 1px solid var(--dw-line-2);
+  background: color-mix(in oklab, var(--dw-surface) 85%, transparent);
+}
+.dw .dw-tile-label {
+  margin: 0;
+  font: 600 0.78rem / 1.2 var(--dw-font-cond);
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--dw-muted);
+}
+.dw .dw-tile-who {
+  font-weight: 600;
+  color: var(--dw-ink);
+  overflow-wrap: anywhere;
+}
+.dw .dw-tile-value {
+  font: 500 1.7rem / 1 var(--dw-font-hud);
+  letter-spacing: 0.04em;
+  color: var(--dw-accent);
+}
+.dw .dw-tile-note {
+  font-size: 0.85rem;
+  color: var(--dw-muted);
+}
+.dw button.dw-tile {
+  font: inherit;
+  color: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.dw button.dw-tile:focus-visible {
+  outline: 2px solid var(--dw-accent);
+  outline-offset: 2px;
+}
+@media (hover: hover) and (pointer: fine) {
+  .dw button.dw-tile:hover {
+    border-color: var(--dw-accent);
+  }
+}
+
+/* A link inside a table or a tile: a name that opens its profile. */
+.dw .dw-link {
+  color: inherit;
+  text-decoration: underline;
+  text-decoration-color: color-mix(in oklab, var(--dw-accent) 45%, transparent);
+  text-underline-offset: 3px;
+}
+.dw .dw-link:focus-visible {
+  outline: 2px solid var(--dw-accent);
+  outline-offset: 2px;
+}
+@media (hover: hover) and (pointer: fine) {
+  .dw .dw-link:hover {
+    color: var(--dw-accent);
+  }
+}
+
+/* Small labels: a company, a status, a class count. */
+.dw .dw-chips {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.4rem;
+}
+.dw .dw-chip {
+  display: inline-flex;
+  gap: 0.35rem;
+  align-items: baseline;
+  padding: 0.2rem 0.55rem;
+  font: 600 0.8rem / 1.3 var(--dw-font-cond);
+  letter-spacing: 0.06em;
+  color: var(--dw-silver);
+  border: 1px solid var(--dw-line-2);
+}
+.dw .dw-chip.accent {
+  color: var(--dw-accent);
+  border-color: color-mix(in oklab, var(--dw-accent) 50%, var(--dw-line-2));
+}
+.dw .dw-chip.gold {
+  color: var(--dw-gold);
+  border-color: color-mix(in oklab, var(--dw-gold) 50%, var(--dw-line-2));
+}
+.dw .dw-chip.down {
+  color: var(--dw-down);
+  border-color: color-mix(in oklab, var(--dw-down) 50%, var(--dw-line-2));
+}
+.dw .dw-tag {
+  margin-left: 0.4rem;
+  padding: 0 0.35rem;
+  font: 600 0.7rem / 1.4 var(--dw-font-cond);
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  vertical-align: middle;
+  border: 1px solid currentColor;
+}
+.dw .dw-tag.guest {
+  color: var(--dw-gold);
+}
+.dw .dw-tag.kia {
+  color: var(--dw-down);
+}
+.dw .up {
+  color: var(--dw-up);
+}
+.dw .down {
+  color: var(--dw-down);
+}
+
+/* A line of help under a heading, and a message after an action. */
+.dw .dw-sub {
+  margin: 0;
+  color: var(--dw-muted);
+}
+.dw .dw-msg {
+  margin: 0;
+  color: var(--dw-silver);
+}
+.dw .dw-msg.ok {
+  color: var(--dw-up);
+}
+.dw .dw-msg.bad {
+  color: var(--dw-down);
+}
+.dw .dw-empty {
+  margin: 0;
+  padding: 1.6rem 1.2rem;
+  border: 1px solid var(--dw-line-2);
+  color: var(--dw-silver);
+  background: color-mix(in oklab, var(--dw-surface) 85%, transparent);
+}
+
+/* A form: labelled fields in a grid that folds to one column on a phone. */
+.dw .dw-form {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(10.5rem, 1fr));
+  gap: 0.75rem;
+}
+.dw .dw-field {
+  display: grid;
+  gap: 0.3rem;
+  font: 600 0.78rem / 1.2 var(--dw-font-cond);
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--dw-muted);
+}
+.dw .dw-field input,
+.dw .dw-field select {
+  min-height: 44px;
+  padding: 0.45rem 0.6rem;
+  font: 400 1rem / 1.2 var(--dw-font-body);
+  letter-spacing: 0;
+  text-transform: none;
+  color: var(--dw-ink);
+  background: var(--dw-bg);
+  border: 1px solid var(--dw-line-2);
+  border-radius: 0;
+}
+.dw .dw-field input:focus-visible,
+.dw .dw-field select:focus-visible {
+  outline: 2px solid var(--dw-accent);
+  outline-offset: 0;
+}
+.dw .dw-fieldset {
+  display: grid;
+  gap: 0.75rem;
+  margin: 0;
+  padding: 0.9rem 1rem 1rem;
+  border: 1px solid var(--dw-line-2);
+  background: color-mix(in oklab, var(--dw-surface) 70%, transparent);
+}
+.dw .dw-fieldset legend {
+  padding: 0 0.4rem;
+  font: 500 1.25rem / 1 var(--dw-font-hud);
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--dw-silver);
+}
+.dw .dw-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.6rem;
+}
+/* A destructive action: the same button in red. */
+.dw .dw-btn.danger {
+  color: var(--dw-down);
+  text-shadow: none;
+  background: color-mix(in oklab, var(--dw-down) 14%, transparent);
+  box-shadow: inset 0 0 14px color-mix(in oklab, var(--dw-down) 18%, transparent);
+}
+.dw .dw-btn:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+/* The danger zone at the foot of a Manage page. */
+.dw .dw-danger {
+  display: grid;
+  gap: 0.75rem;
+  padding: 1rem;
+  border: 1px solid color-mix(in oklab, var(--dw-down) 45%, var(--dw-line-2));
+}
+.dw .dw-danger > .dw-plaque {
+  margin: 0;
+}

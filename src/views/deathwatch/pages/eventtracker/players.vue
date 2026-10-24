@@ -1,15 +1,22 @@
 <script setup>
-// A skeleton: the original's headings and labels over shimmer, until this view is rebuilt. Replace this file
-// with the real view; nothing else needs to change (see src/lib/deathwatch/pages.js).
-import { SkNote, SkTable } from '../../../../components/deathwatch/skeleton'
+// Event Tracker → Players: the running event's players by MVP, or one player's profile (?p=<name>).
+import { computed } from 'vue'
+import { useRoute, useRouter } from 'vue-router'
+import { useTracker } from '../../../../lib/deathwatch/useTracker'
+import { useDeathwatch } from '../../../../stores/deathwatch'
+import TrackerState from '../../../../components/deathwatch/tracker/TrackerState.vue'
+import PlayersView from '../../../../components/deathwatch/tracker/PlayersView.vue'
 
-const columns = ['#', 'Player', 'MVP', 'Kills', 'Special', 'Revives', 'Incaps', 'Seeds', 'Class']
+const route = useRoute()
+const router = useRouter()
+const { data, R, live, reload } = useTracker()
+const gate = useDeathwatch()
+const player = computed(() => (typeof route.query.p === 'string' ? route.query.p : ''))
+const pick = (p) => router.push({ query: { ...route.query, p } })
 </script>
 
 <template>
-  <div class="dw-page">
-    <SkNote />
-    <h2 class="dw-plaque">Players</h2>
-    <SkTable :columns="columns" :rows="8" />
-  </div>
+  <TrackerState :status="data.status" :error="data.error" @retry="reload">
+    <PlayersView :R="R" :player="player" :to="live" :notes="gate.commander" @pick="pick" />
+  </TrackerState>
 </template>
