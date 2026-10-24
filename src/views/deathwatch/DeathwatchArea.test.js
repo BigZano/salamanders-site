@@ -199,7 +199,7 @@ describe('DeathwatchArea', () => {
 
   it('shows the Watch Command tab to the Watch Commander only, and anyone else a notice in its place', async () => {
     const other = (await mountAt('/deathwatch/armouringhall/watch-command', { commander: false })).w
-    expect(other.find('.dw-area-sheet').text()).toBe('Restricted to the Watch Commander.')
+    expect(other.find('.dw-area-sheet').text()).toBe('Reserved for the Deathwatch Command role.')
     expect(other.find('nav').text()).not.toContain('Watch Command')
     expect(other.find('nav').text()).toContain('Specialist')
     const commander = (await mountAt('/deathwatch/armouringhall/watch-command', { commander: true })).w
