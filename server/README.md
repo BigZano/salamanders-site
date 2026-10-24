@@ -1,5 +1,21 @@
 # Builds API
 
+## Database roles
+
+The API connects as `salamanders_app`: it can read and write the tables and
+nothing else (not a superuser, cannot create roles or tables). `salamanders`
+(`POSTGRES_USER`) owns the tables and is for admin work such as applying
+`schema.sql`. Roles live in the cluster, not the database, so create the app role
+once on a fresh volume, or after restoring a dump into one. Put
+`APP_DB_PASSWORD` in `server/.env` and export it in your shell, then:
+
+```sh
+{ printf '\\set app_password '"'"'%s'"'"'\n' "$APP_DB_PASSWORD"; cat app-role.sql; } \
+  | docker compose exec -T db psql -U salamanders -d salamanders_builds -v ON_ERROR_STOP=1
+```
+
+It is idempotent. Tables added later by `schema.sql` are covered automatically.
+
 ## Archive key (`GET /archive/key`)
 
 Hands the Legion Archive decryption key to a caller whose Discord token is
