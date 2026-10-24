@@ -8,7 +8,12 @@ import { createPinia, setActivePinia } from 'pinia'
 import { createRouter, createMemoryHistory, RouterView } from 'vue-router'
 import { deathwatchRedirect } from '../../lib/deathwatch/redirect'
 import { useDeathwatch } from '../../stores/deathwatch'
+import { useDeathwatchData } from '../../stores/deathwatchData'
 import DeathwatchArea from './DeathwatchArea.vue'
+// The rebuilt views pull in the auth store, and with it the Legion Archive's modules. Load them here rather than
+// inside a test, where the lazy views would first import them: the mutation gate would then count the archive's
+// module-level code as covered by that test, and no longer as static.
+import '../../lib/deathwatch/useTracker'
 
 // A view is loaded lazily by the registry (lib/deathwatch/pages.js). A test can make the registry fail, or find
 // nothing, for the address it opens; otherwise this is the real registry.
@@ -30,6 +35,8 @@ async function mountAt(path, { commander = false } = {}) {
   const pinia = createPinia()
   setActivePinia(pinia)
   useDeathwatch().$patch({ status: 'allowed', commander })
+  // The ported views read the area's data: an empty event, already loaded, so none of them asks a server.
+  useDeathwatchData().$patch({ status: 'ready', local: true })
   const router = createRouter({
     history: createMemoryHistory(),
     routes: [
@@ -65,7 +72,7 @@ describe('DeathwatchArea', () => {
     const { w } = await mountAt('/deathwatch/eventtracker/players')
     expect(w.find('h1').text()).toBe('Event Tracker')
     expect(w.find('h2').text()).toBe('Players')
-    expect(w.text()).toContain('This view is being rebuilt.')
+    expect(w.find('.dw-area-sheet .dw-page').exists()).toBe(true)
     const current = w.find('nav [aria-current="page"]')
     expect(current.text()).toBe('Players')
   })
@@ -113,7 +120,7 @@ describe('DeathwatchArea', () => {
     expect(rail).toContain('overflow-y: auto')
   })
 
-  it('leaves the fan-site disclaimer to the layout, which shows it on every screen', async () => {
+  it('leaves the fan-site disclaimer to the site footer', async () => {
     const { w } = await mountAt('/deathwatch/eventtracker/standings')
     expect(w.find('.dw-legal').exists()).toBe(false)
   })

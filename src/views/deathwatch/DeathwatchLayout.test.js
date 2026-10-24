@@ -34,11 +34,10 @@ describe('DeathwatchLayout', () => {
     expect(w.find('.dw .child').text()).toBe('the hub')
   })
 
-  it('carries the fan-site disclaimer on every screen: the page, and each state of the gate', async () => {
+  it('leaves the fan-site disclaimer to the site footer, which already carries it', async () => {
     for (const status of ['allowed', 'denied', 'signin', 'checking', 'unavailable']) {
       const w = await mountLayout({ _fixture: true, scene: status, status, commander: false })
-      expect(w.find('.dw .dw-legal').text(), status).toContain('Not affiliated with or endorsed by Games Workshop')
-      expect(w.findAll('.dw-legal'), status).toHaveLength(1)
+      expect(w.find('.dw-legal').exists(), status).toBe(false)
     }
   })
 

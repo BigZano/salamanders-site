@@ -3,7 +3,6 @@
 // Everything under /deathwatch is behind the gate, so no page here has to check access itself.
 import DeathwatchShell from '../../components/deathwatch/DeathwatchShell.vue'
 import DeathwatchGate from '../../components/deathwatch/DeathwatchGate.vue'
-import DeathwatchLegal from '../../components/deathwatch/DeathwatchLegal.vue'
 </script>
 
 <template>
@@ -11,7 +10,5 @@ import DeathwatchLegal from '../../components/deathwatch/DeathwatchLegal.vue'
     <DeathwatchGate>
       <RouterView />
     </DeathwatchGate>
-    <!-- Outside the gate, so it is on every screen: the page, and each state of the gate (the only one the public sees). -->
-    <DeathwatchLegal />
   </DeathwatchShell>
 </template>
