@@ -45,3 +45,39 @@ new API image — the new `listBuilds` reads `builds.deleted_at`, so the API
 errors until the column exists. Then seed once with `docker compose exec -T api bun
 run src/seed.js < ../src/data/perk-corrections.json`. `DISCORD_MOD_ROLE_ID` is
 no longer read; moderator roles live in `src/privileges.js`.
+
+## Deathwatch (`/deathwatch/*`)
+
+The Discord-role-gated Deathwatch area ("Watch Fortress Ebonhold"). Design:
+`docs/superpowers/specs/2026-10-20-deathwatch-design.md`. Access is the Watch
+Commander role, or the Deathwatch role, or a user id the Watch Commander has
+granted; Commander status comes only from the role, never from a grant. Roles
+are asked of Discord live. Reads (`/me`, `/data`) reuse a verdict for 30 seconds;
+every write and grant change checks Discord afresh and drops the cached verdicts.
+Any Discord failure answers 503: the area fails closed.
+
+| Endpoint | Who | Notes |
+|---|---|---|
+| `GET /deathwatch/me` | any signed-in user | `{ access, watchCommander }`; never 403 |
+| `GET /deathwatch/data` | access | `{ teams, cfg, archive }`; `ETag`, 304 on `If-None-Match`; 403 without access |
+| `POST /deathwatch/doc` | Watch Commander | `{ col, id, op: 'set' \| 'delete', doc }`; JSON content type required |
+| `GET /deathwatch/grants` | Watch Commander | active grants |
+| `POST /deathwatch/grants` | Watch Commander | `{ discordId }`; 201 new, 200 if already active, 409 at 200 active |
+| `DELETE /deathwatch/grants/:discordId` | Watch Commander | revokes; 404 if none is active |
+
+Limits: collections `teams`, `cfg`, `archive`; ids match `^[A-Za-z0-9_-]{1,64}$`; a
+document is a JSON object of at most 1 MB with no U+0000 or lone surrogate (Postgres
+`jsonb` cannot store them); a request body is at most 2 MB (the server refuses more than
+4 MB outright); `discordId` is 17 to 20 digits. Document edits and grant changes are
+recorded in `deathwatch_doc_history` and `deathwatch_grant_events`, in the same
+transaction as the change.
+
+| Variable | Value |
+|---|---|
+| `DEATHWATCH_ROLE_ID` | the Deathwatch role id, or several separated by commas with no spaces (a holder of any one gets in) — no default, required |
+| `WATCH_COMMANDER_ROLE_ID` | the Watch Commander role id — no default, required |
+
+Until **both** are set every `/deathwatch/*` route answers 503 "not configured". The role
+ids are supplied at deploy time and never committed. To deploy: set both in `server/.env`,
+apply the schema (idempotent, command in the reports section above) before starting the new
+image, then restart the API. The one-time import of the old site's data is a separate job.

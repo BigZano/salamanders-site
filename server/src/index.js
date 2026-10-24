@@ -16,6 +16,10 @@ import { createBakeLoader, DEFAULT_BAKE_BASE_URL } from './bake.js'
 import { rowToBuild, publicBuild } from './buildRow.js'
 import { createBuildModeration } from './buildModeration.js'
 import { validateBuildText } from './buildText.js'
+import { applyCors } from './cors.js'
+import { createDeathwatchAccess } from './deathwatchAccess.js'
+import { createDeathwatchHandler } from './deathwatchHandler.js'
+import { createDeathwatchStore } from './deathwatchStore.js'
 import { createDiscordRoles } from './discordRoles.js'
 import { createDisplayNames } from './displayNames.js'
 import { createHistoryStore } from './historyStore.js'
@@ -78,6 +82,19 @@ const reports = createReportsHandler({
   siteUrl: ALLOWED_ORIGIN,
 })
 
+// The Deathwatch area — see deathwatchHandler.js. Its two role ids have no
+// defaults: until both are set in the environment every route answers 503.
+const deathwatchStore = createDeathwatchStore(pool)
+const deathwatch = createDeathwatchHandler({
+  access: createDeathwatchAccess({
+    roles,
+    store: deathwatchStore,
+    deathwatchRoleId: process.env.DEATHWATCH_ROLE_ID,
+    commanderRoleId: process.env.WATCH_COMMANDER_ROLE_ID,
+  }),
+  store: deathwatchStore,
+})
+
 // Perk corrections, version history, privilege revocation — see perks.js.
 // The webhook is the reports one: leadership watches a single channel.
 const history = createHistoryStore(pool)
@@ -95,10 +112,7 @@ const perks = createPerksHandler({
 const moderation = createBuildModeration({ roles, privileges, store: history, notify })
 
 function cors(res) {
-  res.headers.set('Access-Control-Allow-Origin', ALLOWED_ORIGIN)
-  res.headers.set('Access-Control-Allow-Methods', 'GET, POST, DELETE, OPTIONS')
-  res.headers.set('Access-Control-Allow-Headers', 'Content-Type, Authorization')
-  return res
+  return applyCors(res, ALLOWED_ORIGIN)
 }
 
 function json(body, status = 200) {
@@ -169,6 +183,9 @@ async function createBuild(request) {
 
 Bun.serve({
   port: PORT,
+  // Bun's default is 128 MB. The largest legitimate body is a 2 MB Deathwatch edit; this refuses anything
+  // bigger (a chunked body included) before a handler reads it into memory.
+  maxRequestBodySize: 4 * 1024 * 1024,
   async fetch(request) {
     if (request.method === 'OPTIONS') return cors(new Response(null, { status: 204 }))
 
@@ -178,6 +195,8 @@ Bun.serve({
     try {
       const reportsRes = await reports(request, url)
       if (reportsRes) return cors(reportsRes)
+      const deathwatchRes = await deathwatch(request, url)
+      if (deathwatchRes) return cors(deathwatchRes)
       const perksRes = await perks(request, url)
       if (perksRes) return cors(perksRes)
       const rosterPublicRes = await rosterPublicRoutes(request, url)

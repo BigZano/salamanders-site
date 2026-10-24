@@ -2,6 +2,7 @@ import { defineStore } from 'pinia'
 import * as discordAuth from '../lib/discordAuth'
 import { useArchive } from './archive'
 import { useRoster } from './roster'
+import { useDeathwatch } from './deathwatch'
 import { stashAnchor } from '../lib/archive/anchor'
 
 // Thin reactive wrapper around discordAuth.js. Sign-in itself is a full-page
@@ -20,11 +21,12 @@ export const useAuth = defineStore('auth', {
     token: (s) => (s.member ? discordAuth.getAccessToken() : null),
   },
   actions: {
-    signIn() {
+    // options.returnTo: a path on this site to come back to (see discordAuth.beginSignIn); by default, this page.
+    signIn(options) {
       // Nav bar or archive gate alike: keep a Legion Archive message anchor
       // across the Discord round-trip (a no-op anywhere else).
       stashAnchor(window.location.pathname, window.location.hash)
-      discordAuth.beginSignIn()
+      discordAuth.beginSignIn(options)
     },
     signOut() {
       discordAuth.signOut()
@@ -34,6 +36,8 @@ export const useAuth = defineStore('auth', {
       useArchive().reset()
       // Likewise the roster (and Infirmary list), held in memory only.
       useRoster().reset()
+      // And the Deathwatch clearance: signed out means no access, even for a page that stays open.
+      useDeathwatch().reset()
     },
   },
 })

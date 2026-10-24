@@ -1,0 +1,34 @@
+name: PR check
+
+# Runs the tests and a build on pull requests into main and the long-lived feature branches (feat/**),
+# including pull requests from forks, so a contributor sees a result without installing anything.
+#
+# Keep it free of secrets and write permissions: this workflow runs code from forks. A fork's pull
+# request gets no secrets anyway, and scripts/pr-check-workflow.test.mjs pins the rest. The slow
+# coverage and mutation gate is the maintainer's pre-push hook, not part of this check.
+
+on:
+  pull_request:
+    branches: [main, 'feat/**']
+
+permissions:
+  contents: read
+
+concurrency:
+  group: pr-check-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+      - run: bun install --frozen-lockfile
+        env:
+          # `bun install` installs husky, which would put the repo's git hooks in the runner's checkout.
+          HUSKY: '0'
+      - name: Guard — no plaintext archive tracked
+        run: node scripts/archive-leak-guard.mjs --tracked
+      - run: bun run test
+      - run: bun run build

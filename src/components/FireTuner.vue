@@ -7,6 +7,7 @@ import {
   resetTuning,
   routeProfiles,
   profileFor,
+  profileKeyFor,
   DEFAULTS,
   RANDOMIZE_DEFAULTS,
   ROUTE_PROFILE_DEFAULTS,
@@ -73,8 +74,8 @@ const PROFILE_FIELDS = [
 ]
 
 const profile = computed(() => profileFor(route.path))
-/** Which entry is actually being edited — '*' when the route has none. */
-const profileKey = computed(() => (routeProfiles[route.path] ? route.path : '*'))
+/** Which entry is actually being edited: the route's own, its section's ("/deathwatch/*"), or '*' when it has none. */
+const profileKey = computed(() => profileKeyFor(route.path))
 const profileChanged = (key) =>
   profile.value[key] !== ROUTE_PROFILE_DEFAULTS[profileKey.value]?.[key]
 
