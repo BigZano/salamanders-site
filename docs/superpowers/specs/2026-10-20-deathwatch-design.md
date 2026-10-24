@@ -56,7 +56,7 @@ Non-goals:
 
 | Area | Decision |
 | --- | --- |
-| Access | Deathwatch role, or Watch Commander role, or a UserID the Watch Commander has granted. The Legion role alone never opens it, and is not required. Checked live on the server; fails closed. |
+| Access | Deathwatch role (one or several), or Watch Commander role, or a UserID the Watch Commander has granted, or the guild owner or anyone holding an Administrator role. The Legion role alone never opens it, and is not required. Owner and Administrator open the area but are not the Commander. Checked live on the server; fails closed. |
 | Grants | View-only. Watch Commander status only ever comes from the Discord role, never from a grant. |
 | Banner | Shown to everyone. Signed out: one click starts Discord sign-in and returns to `/deathwatch`. Signed in: goes to `/deathwatch`. No role lookup on `/companies`. |
 | Secrecy | Thematic. Names never in the repo; fixtures use invented names. |
@@ -165,7 +165,7 @@ Access verdict for a bearer token:
 1. `identify(request)` gives the Discord user, or null (401).
 2. `rolesOf(user.id)` gives the held roles (null = not in the guild).
 3. `watchCommander` = holds the Watch Commander role.
-4. `access` = `watchCommander` or holds the Deathwatch role or has an active grant.
+4. `access` = `watchCommander` or holds a Deathwatch role or has an active grant or is the guild owner or holds an Administrator role (`discordRoles.isAdmin`, asked last and only of someone nothing else admits). Administrators never get `watchCommander`.
 5. Any Discord failure (`Upstream`) fails closed (503).
 
 `discordRoles.js` asks Discord on every call and has no cache. Reads (`/me`,
