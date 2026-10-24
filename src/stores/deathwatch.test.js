@@ -100,6 +100,21 @@ describe('deathwatch store', () => {
     }
   })
 
+  it('reports Deathwatch Command for its holders and for the commander, never for someone refused', async () => {
+    const s = useDeathwatch()
+    getMe.mockResolvedValue({ access: true, watchCommander: false, deathwatchCommand: true })
+    await s.load('t')
+    expect(s).toMatchObject({ status: 'allowed', commander: false, command: true })
+    getMe.mockResolvedValue({ access: true, watchCommander: true })
+    await s.load('t')
+    expect(s).toMatchObject({ status: 'allowed', commander: true, command: true })
+    for (const body of [{ access: true, deathwatchCommand: 'true' }, { access: true }, { access: false, deathwatchCommand: true }]) {
+      getMe.mockResolvedValue(body)
+      await s.load('t')
+      expect(s, JSON.stringify(body)).toMatchObject({ command: false })
+    }
+  })
+
   it('does not stay a commander after a failed check', async () => {
     const s = useDeathwatch()
     getMe.mockResolvedValue({ access: true, watchCommander: true })

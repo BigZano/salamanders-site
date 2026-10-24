@@ -11,13 +11,13 @@ const props = defineProps({
   area: { type: String, required: true },
   // The slug of the tab being shown.
   current: { type: String, required: true },
-  // Whether the viewer is the Watch Commander: a tab marked `commander` is listed only for them.
-  commander: { type: Boolean, default: false },
+  // Whether the viewer holds Deathwatch Command: a tab marked `command` is listed only for them.
+  command: { type: Boolean, default: false },
 })
 const emit = defineEmits(['navigate'])
 
 const info = computed(() => AREAS[props.area])
-const tabs = computed(() => info.value.tabs.filter((t) => props.commander || !t.commander))
+const tabs = computed(() => info.value.tabs.filter((t) => props.command || !t.command))
 </script>
 
 <template>

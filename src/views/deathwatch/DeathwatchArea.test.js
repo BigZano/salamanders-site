@@ -31,10 +31,10 @@ async function settle() {
 }
 
 // The area route as production declares it (router.js): the view as the component, and the same global guard.
-async function mountAt(path, { commander = false } = {}) {
+async function mountAt(path, { commander = false, command = commander } = {}) {
   const pinia = createPinia()
   setActivePinia(pinia)
-  useDeathwatch().$patch({ status: 'allowed', commander })
+  useDeathwatch().$patch({ status: 'allowed', commander, command })
   // The ported views read the area's data: an empty event, already loaded, so none of them asks a server.
   useDeathwatchData().$patch({ status: 'ready', local: true })
   const router = createRouter({
@@ -197,14 +197,14 @@ describe('DeathwatchArea', () => {
     expect(w.find('button.dw-areabar').attributes('aria-expanded')).toBe('false')
   })
 
-  it('shows the Watch Command tab to the Watch Commander only, and anyone else a notice in its place', async () => {
+  it('shows the Watch Command tab to Deathwatch Command only, and anyone else a notice in its place', async () => {
     const other = (await mountAt('/deathwatch/armouringhall/watch-command', { commander: false })).w
     expect(other.find('.dw-area-sheet').text()).toBe('Reserved for the Deathwatch Command role.')
     expect(other.find('nav').text()).not.toContain('Watch Command')
     expect(other.find('nav').text()).toContain('Specialist')
-    const commander = (await mountAt('/deathwatch/armouringhall/watch-command', { commander: true })).w
-    expect(commander.find('.dw-area-sheet').text()).not.toContain('Restricted')
-    expect(commander.find('nav').text()).toContain('Watch Command')
+    const command = (await mountAt('/deathwatch/armouringhall/watch-command', { command: true })).w
+    expect(command.find('.dw-area-sheet').text()).not.toContain('Reserved for the Deathwatch Command role.')
+    expect(command.find('nav').text()).toContain('Watch Command')
   })
 
   it('shows anyone else a notice in place of the Manage area, with no way into its views', async () => {

@@ -24,8 +24,8 @@ export const AREAS = {
     tabs: [
       tab('standard', 'Standard'),
       tab('specialist', 'Specialist'),
-      // Only the Watch Commander sees this tab (DeathwatchNav, DeathwatchArea).
-      { slug: 'watch-command', label: 'Watch Command', commander: true },
+      // Only Deathwatch Command (and the Watch Commander) see this tab (DeathwatchNav, DeathwatchArea).
+      { slug: 'watch-command', label: 'Watch Command', command: true },
       tab('restricted-wargear', 'Restricted Wargear'),
     ],
   },
