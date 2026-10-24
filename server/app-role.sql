@@ -8,8 +8,9 @@
 -- the password again.
 --
 -- Run it as the owner, after schema.sql, with the password on stdin (not on a
--- command line). Roles live in the cluster, not in the database, so a restore
--- into a fresh volume needs this run again:
+-- command line). Roles live in the cluster, not in the database, so on a fresh
+-- volume run this BEFORE restoring a dump (the dump's GRANTs name the role, and
+-- pg_restore stops at the first one if it does not exist):
 --
 --   { printf '\\set app_password '"'"'%s'"'"'\n' "$APP_DB_PASSWORD"; cat app-role.sql; } \
 --     | docker compose exec -T db psql -U salamanders -d salamanders_builds -v ON_ERROR_STOP=1

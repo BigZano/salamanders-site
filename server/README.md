@@ -6,8 +6,9 @@ The API connects as `salamanders_app`: it can read and write the tables and
 nothing else (not a superuser, cannot create roles or tables). `salamanders`
 (`POSTGRES_USER`) owns the tables and is for admin work such as applying
 `schema.sql`. Roles live in the cluster, not the database, so create the app role
-once on a fresh volume, or after restoring a dump into one. Put
-`APP_DB_PASSWORD` in `server/.env` and export it in your shell, then:
+once on a fresh volume, and do it **before** restoring a dump into one: the dump's
+`GRANT`s name the role, and `pg_restore` stops at the first one if it does not exist.
+Put `APP_DB_PASSWORD` in `server/.env` and export it in your shell, then:
 
 ```sh
 { printf '\\set app_password '"'"'%s'"'"'\n' "$APP_DB_PASSWORD"; cat app-role.sql; } \
