@@ -22,7 +22,8 @@ const companies = (ks) => ks.map((k) => [ORD[k], [k * 2, k * 2 + 1]])
     <ArmourHead :label="label" :tab="tab" :list="list" :current="current" />
     <div class="ah-grid">
       <figure class="ah-fig">
-        <img :src="current.img" alt="Watch Brother armour, front view" width="468" height="880" />
+        <div class="ah-screen"><img :src="current.img" alt="Watch Brother armour, front view" width="468" height="880" /></div>
+        <figcaption>Watch Brother · front view</figcaption>
       </figure>
       <div class="ah-col">
         <section class="ah-part">
@@ -74,13 +75,14 @@ const companies = (ks) => ks.map((k) => [ORD[k], [k * 2, k * 2 + 1]])
   letter-spacing: 0.08em;
   color: var(--dw-ink);
 }
-.co :deep(.ah-tile) {
-  width: min(70px, 47%);
+.co {
+  --tiles-max: 9.5rem;
 }
 .wm {
   margin-bottom: 0.75rem;
 }
-.wm :deep(.ah-tile) {
-  width: 100%;
+.wm {
+  --tiles: 5;
+  --tiles-max: none;
 }
 </style>

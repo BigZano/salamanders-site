@@ -23,16 +23,19 @@ defineProps({
 </template>
 
 <style scoped>
+/* Two tiles share the card's width (a part with one tile takes one column); --tiles changes the count. */
 .ah-tiles {
-  display: flex;
+  display: grid;
+  grid-template-columns: repeat(var(--tiles, 2), minmax(0, 1fr));
   gap: 8px;
+  max-width: var(--tiles-max, 15rem);
 }
 .ah-tile {
   display: block;
-  width: min(112px, calc(50% - 4px));
   aspect-ratio: 160 / 234;
   background-repeat: no-repeat;
   border: 1px solid var(--dw-line-2);
+  background-color: var(--dw-bg);
   clip-path: polygon(5px 0, calc(100% - 5px) 0, 100% 5px, 100% calc(100% - 5px), calc(100% - 5px) 100%, 5px 100%, 0 calc(100% - 5px), 0 5px);
 }
 </style>

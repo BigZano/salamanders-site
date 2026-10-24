@@ -47,7 +47,7 @@ function jump(title) {
 
     <div class="ah-grid">
       <figure class="ah-fig">
-        <span class="ah-ring" aria-hidden="true" />
+        <div class="ah-screen">
         <img :src="current.img" :alt="`${current.name} armour, front view`" width="468" height="880" />
         <button
           v-for="p in parts"
@@ -65,6 +65,8 @@ function jump(title) {
         >
           <span>{{ p[0] }}</span>
         </button>
+        </div>
+        <figcaption>{{ current.name }} · front view<span>Tap a marker to find its part</span></figcaption>
       </figure>
       <div v-for="(col, c) in [current.L, current.R]" :key="c" class="ah-col" :class="{ r: c }">
         <section
@@ -137,19 +139,9 @@ function jump(title) {
 .ah-role b {
   color: #f3d27a;
 }
-.ah-ring {
-  position: absolute;
-  left: 50%;
-  top: 38%;
-  z-index: -1;
-  width: 116%;
-  aspect-ratio: 1;
-  translate: -50% -50%;
-  border: 1px dashed rgb(127 211 92 / 0.25);
-  border-radius: 50%;
-}
 .ah-hs {
   position: absolute;
+  z-index: 2;
   width: 18px;
   height: 18px;
   margin: -9px 0 0 -9px;
@@ -200,14 +192,16 @@ function jump(title) {
 }
 .ah-part.on {
   border-color: var(--dw-accent);
-  box-shadow: 0 0 0 1px var(--dw-accent), 0 14px 36px -12px rgb(127 211 92 / 0.45);
+  background: var(--dw-grain), color-mix(in oklab, var(--dw-accent) 8%, #0b130c);
 }
 .ah-part.flash {
-  animation: ah-flash 1.3s ease;
+  animation: ah-flash 1.3s ease-out;
 }
+/* The card a marker jumped to brightens, then settles. Its corners are clipped, so it lights from inside. */
 @keyframes ah-flash {
-  30% {
-    box-shadow: 0 0 0 3px var(--dw-accent), 0 0 30px var(--dw-accent);
+  from {
+    border-color: var(--dw-accent);
+    background-color: color-mix(in oklab, var(--dw-accent) 22%, #0b130c);
   }
 }
 .ah-nt {
@@ -216,7 +210,7 @@ function jump(title) {
   gap: 4px 12px;
   padding: 0.55rem 0.75rem;
   font-size: 0.9rem;
-  border-left: 2px solid var(--dw-accent);
+  border-left: 1px solid color-mix(in oklab, var(--dw-accent) 70%, transparent);
   background: linear-gradient(90deg, color-mix(in oklab, var(--dw-accent) 9%, transparent), transparent 85%);
 }
 .ah-nt b {
