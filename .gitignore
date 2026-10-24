@@ -43,6 +43,15 @@ src/data/rank-requirements/
 legacy-accolades*.json
 error_reports/
 
+# Deathwatch tracker: real names live only in the server's database. The Manage pages' "Download backup" file (the
+# old site made one with the same name), the old site's data, rolling backups and config, and the .7z archives it
+# came in must never be committed. scripts/archive-leak-guard.mjs refuses them too, ignored or not.
+deathwatch-backup*.json
+deathwatch-data*.json
+data-backup/
+config.php
+*.7z
+
 # Test tooling output
 coverage/
 .stryker-tmp/

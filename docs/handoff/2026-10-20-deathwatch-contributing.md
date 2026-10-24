@@ -76,6 +76,9 @@ git merge upstream/feat/deathwatch
 ## Rules
 
 - Names, ids, passwords: never (see the top of this page).
+- The **Download backup** button on the Manage pages saves a file full of real names. Keep it out of your repository
+  folder. The commit hook and the PR check refuse backup and data files, `config.php`, `.7z` archives, and any file
+  whose contents look like a tracker dump, so if one of them stops you, delete the file; do not rename it.
 - No `v-html` anywhere in the Deathwatch code. Text from the database is shown by normal Vue interpolation.
 - Do not edit `.github/` or `server/` without asking first.
 - Your fork never holds secrets, and you should never add one. Nothing here needs one.
