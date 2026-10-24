@@ -81,10 +81,10 @@ describe('Armouring Hall', () => {
     expect(w.findAll('.wm .ah-tile')).toHaveLength(5)
   })
 
-  it('Watch Command: the Sergeant is reserved for Deathwatch Command and still WIP; the Specialist links no Watch-Brother uniform', async () => {
+  it('Watch Command: the Sergeant is still WIP; the Specialist links no Watch-Brother uniform', async () => {
     const w = await mountPage('watch-command')
     expect(w.get('.ah-title').text()).toBe('Watch Sergeant')
-    expect(w.text()).toContain('Reserved for members holding the Deathwatch Command role.')
+    expect(w.text()).not.toContain('Reserved')
     expect(w.find('.ah-head .ah-wip').exists()).toBe(true)
     const s = await mountPage('watch-command', 'watchspecialist')
     expect(s.get('.ah-lead').text()).not.toContain('Watch-Brother')

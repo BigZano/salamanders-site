@@ -43,7 +43,6 @@ function jump(title) {
       <template v-if="current.command">{{ current.specialistOnly ? '' : ' and the' }} <RouterLink :to="link('specialist')">Specialist</RouterLink> markings</template>, {{ current.who }}
       may use the following colors and markings:
     </p>
-    <p v-if="current.command" class="ah-role">Reserved for members holding the <b>Deathwatch Command</b> role.</p>
 
     <div class="ah-grid">
       <figure class="ah-fig">
@@ -123,21 +122,6 @@ function jump(title) {
 .ah-lead a:focus-visible {
   outline: 2px solid var(--dw-accent);
   outline-offset: 2px;
-}
-.ah-role {
-  justify-self: center;
-  margin: 0;
-  padding: 0.35rem 0.9rem;
-  font: 600 0.85rem / 1.3 var(--dw-font-cond);
-  letter-spacing: 0.08em;
-  text-align: center;
-  color: #e8d29a;
-  border: 1px solid rgb(214 176 92 / 0.55);
-  border-radius: 999px;
-  background: rgb(214 176 92 / 0.08);
-}
-.ah-role b {
-  color: #f3d27a;
 }
 .ah-hs {
   position: absolute;
