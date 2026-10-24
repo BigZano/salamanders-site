@@ -14,6 +14,9 @@ const PORTED = [
   'eventtracker/game-stats',
   'eventtracker/scoring',
   'eventtracker/archive',
+  'manage/enter-mission',
+  'manage/manage',
+  'manage/checks',
 ]
 const ALL = import.meta.glob('./*/*.vue', { eager: true })
 const MODULES = Object.fromEntries(Object.entries(ALL).filter(([k]) => !PORTED.includes(k.slice(2, -4))))
@@ -41,15 +44,6 @@ const PAGES = {
   'armouringhall/standard': armour('Standard'),
   'armouringhall/specialist': armour('Specialist'),
   'armouringhall/watch-command': armour('Watch Command'),
-  'manage/enter-mission': {
-    h2: ['Enter mission', 'Reset all missions'],
-    labels: ['Kill Team', 'Week', 'Objective', 'Played', 'In-Game Score', 'Gene-Seed'],
-  },
-  'manage/manage': {
-    h2: ['Scoring', 'Rename or merge player', 'Kill Teams', 'Restore from backup', 'Event archive', 'Reset Kill Teams'],
-    labels: ['Base points', 'Incap penalty', 'Revive bonus', 'Gene-Seed bonus', 'Armoury Data bonus', 'Guardian Relic bonus'],
-  },
-  'manage/checks': { h2: ['Data checks'], tables: [['']] },
   'manage/records': { h2: ['New operational record', 'Records created here'], h3: ['Kill Teams', 'Top Operatives'] },
   'manage/page-texts': { h2: ['Page Texts'] },
 }

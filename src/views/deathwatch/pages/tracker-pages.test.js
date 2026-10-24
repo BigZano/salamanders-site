@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
-// The rebuilt Event Tracker views, mounted on the invented fixture data: each shows the original's
-// headings and its data, and links between the views carry the dev ?scene=.
+// The rebuilt Event Tracker and Manage views, mounted on the invented fixture data: each shows the original's
+// headings and its data, links between the views carry the dev ?scene=, and the Manage pages write through the store.
 import { describe, it, expect, beforeEach, vi } from 'vitest'
 import { flushPromises, mount } from '@vue/test-utils'
 import { createPinia, setActivePinia } from 'pinia'
@@ -128,5 +128,73 @@ describe('Event Tracker', () => {
     useDeathwatchData().$patch({ status: 'idle', local: false })
     const { w } = await mountPage('eventtracker/players')
     expect(w.get('[role="alert"]').text()).toContain('Restricted to the Deathwatch.')
+  })
+})
+
+describe('Manage', () => {
+  it('Enter mission: saves a new mission into its slot and moves on', async () => {
+    const data = useDeathwatchData()
+    const team = Object.values(data.teams)[0]
+    const free = [1, 2, 3, 4].flatMap((wk) => [1, 2, 3, 4].map((o) => [wk, o])).find(([wk, o]) => !team.m.some((m) => m[0] === wk && m[1] === o))
+    const { w } = await mountPage('manage/enter-mission')
+    const btn = w.findAll('.grid button').find((b) => b.attributes('title').startsWith(`W${free[0]} · O${free[1]}`))
+    await btn.trigger('click')
+    await w.find('input[list="dw-players"]').setValue('Brother Newcomer')
+    await w.findAll('button').find((b) => b.text() === 'Save mission').trigger('click')
+    await flushPromises()
+    const saved = data.teams[team.id].m.find((m) => m[0] === free[0] && m[1] === free[1])
+    expect(saved[8][0][0]).toBe('Brother Newcomer')
+    expect(w.text()).toContain('Saved ✓')
+    expect(w.find('.dw-tag.guest').exists()).toBe(true)
+  })
+
+  it('Enter mission: refuses more than three carry slots', async () => {
+    const { w } = await mountPage('manage/enter-mission')
+    const sel = w.findAll('select')
+    await sel.at(4).setValue('1') // Gene-Seed
+    // A Relic count over the cap is disabled in the picker.
+    expect(sel.at(6).findAll('option').at(3).attributes('disabled')).toBeDefined()
+  })
+
+  it('Manage: saves the weights, adds a Kill Team and renames a player', async () => {
+    const data = useDeathwatchData()
+    const { w } = await mountPage('manage/manage')
+    expect(h2(w)).toEqual(['Scoring', 'Rename or merge player', 'Kill Teams', 'Restore from backup', 'Event archive', 'Reset Kill Teams'])
+    await w.find('input[type="number"]').setValue('450')
+    await w.findAll('button').find((b) => b.text() === 'Save scoring').trigger('click')
+    await flushPromises()
+    expect(data.cfg.s.base).toBe(450)
+
+    const before = Object.keys(data.teams).length
+    await w.findAll('button').find((b) => b.text() === 'Add Kill Team').trigger('click')
+    await flushPromises()
+    expect(Object.keys(data.teams)).toHaveLength(before + 1)
+
+    const [a, b] = w.findAll('input[list="dw-names"]')
+    await a.setValue('Brother Ashkar')
+    await b.setValue('Brother Ashkarr')
+    await w.findAll('button').find((x) => x.text() === 'Check').trigger('click')
+    await w.findAll('button').find((x) => x.text() === 'Rename everywhere').trigger('click')
+    await flushPromises()
+    expect(data.teams[1].ro).toContain('Brother Ashkarr')
+    expect(data.archive.e1.teams[0].ro).toContain('Brother Ashkarr')
+  })
+
+  it('Manage: archive & reset keeps a copy, then clears the live event', async () => {
+    const data = useDeathwatchData()
+    const { w } = await mountPage('manage/manage')
+    await w.findAll('button').find((b) => b.text() === 'Archive & reset').trigger('click')
+    const confirm = w.findAll('button').filter((b) => b.text() === 'Archive & reset').at(1)
+    expect(confirm.attributes('disabled')).toBeDefined()
+    await w.findAll('input').find((i) => i.element.parentElement.textContent.includes('Type RESET')).setValue('reset')
+    await confirm.trigger('click')
+    await flushPromises()
+    expect(Object.keys(data.archive)).toHaveLength(2)
+    expect(data.teams).toEqual({})
+  })
+
+  it('Checks: every check with its count', async () => {
+    const { w } = await mountPage('manage/checks')
+    expect(w.findAll('tbody tr')).toHaveLength(5)
   })
 })
