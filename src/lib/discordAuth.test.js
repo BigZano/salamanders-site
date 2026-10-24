@@ -7,6 +7,8 @@ import {
   scrubCallbackHash,
   finishSignIn,
   beginSignIn,
+  sanitizeReturnPath,
+  RETURN_FALLBACK_MS,
 } from './discordAuth'
 
 const STORAGE_KEY = 'salamanders-discord-member'
@@ -324,5 +326,169 @@ describe('scrubCallbackHash + finishSignIn', () => {
     setHash('#access_token=tok2&expires_in=3600')
     scrubCallbackHash()
     expect(window.location.pathname).toBe('/armoury')
+  })
+})
+
+// The return path: where sign-in brings the visitor back to. Discord's redirect is a fixed address, so the
+// page is kept across the round trip: in sessionStorage, and (for a phone whose Discord app hands the
+// redirect to a different browser context, where sessionStorage is empty) in a short-lived localStorage copy.
+const RETURN_PATH_KEY = 'salamanders-discord-return-path'
+const RETURN_FALLBACK_KEY = 'salamanders-discord-return-fallback'
+const NOW = 1_700_000_000_000
+
+const startSignIn = (options, page = { pathname: '/planner', search: '?x=1' }) =>
+  withFakeLocation({ origin: 'https://sm2salamanders.site', href: '', ...page }, () => beginSignIn(options))
+const stashFallback = (value) => localStorage.setItem(RETURN_FALLBACK_KEY, JSON.stringify(value))
+// Discord's bounce: the fixed root, token in the fragment.
+const callback = () => {
+  history.pushState(null, '', '/')
+  setHash('#access_token=tok&expires_in=3600')
+  scrubCallbackHash()
+}
+
+describe('sanitizeReturnPath', () => {
+  it('accepts a path on this site', () => {
+    for (const p of ['/', '/deathwatch', '/a/b?x=1#h', '/deathwatch/eventtracker/standings', '/' + 'a'.repeat(511)]) {
+      expect(sanitizeReturnPath(p), p).toBe(p)
+    }
+  })
+
+  it('rejects anything that could leave the site or is malformed', () => {
+    const bad = [
+      '//evil.example',
+      'https://evil.example',
+      '/\\evil',
+      '/a\\b',
+      'javascript:alert(1)',
+      '',
+      'deathwatch',
+      ' /x',
+      '/ x',
+      '/x\t',
+      '/x\n',
+      '/' + 'a'.repeat(512), // 513 characters
+    ]
+    for (const p of bad) expect(sanitizeReturnPath(p), JSON.stringify(p)).toBeNull()
+  })
+
+  it('rejects anything that is not a string', () => {
+    for (const p of [null, undefined, 5, ['/x'], {}, true]) expect(sanitizeReturnPath(p), String(p)).toBeNull()
+  })
+})
+
+describe('beginSignIn: the return path', () => {
+  afterEach(() => vi.restoreAllMocks())
+
+  it('keeps an explicit returnTo in the session and in the fallback', () => {
+    vi.spyOn(Date, 'now').mockReturnValue(NOW)
+    startSignIn({ returnTo: '/deathwatch' })
+    expect(sessionStorage.getItem(RETURN_PATH_KEY)).toBe('/deathwatch')
+    expect(JSON.parse(localStorage.getItem(RETURN_FALLBACK_KEY))).toEqual({ path: '/deathwatch', at: NOW })
+  })
+
+  it('keeps the current page, in both places, when there is no returnTo', () => {
+    vi.spyOn(Date, 'now').mockReturnValue(NOW)
+    startSignIn()
+    expect(sessionStorage.getItem(RETURN_PATH_KEY)).toBe('/planner?x=1')
+    expect(JSON.parse(localStorage.getItem(RETURN_FALLBACK_KEY))).toEqual({ path: '/planner?x=1', at: NOW })
+  })
+
+  it('ignores a returnTo that is not a path on this site, and keeps the current page', () => {
+    for (const returnTo of ['//evil.example', 'https://evil.example', '/\\evil', 'javascript:alert(1)', '', 5, null]) {
+      sessionStorage.clear()
+      localStorage.clear()
+      startSignIn({ returnTo })
+      expect(sessionStorage.getItem(RETURN_PATH_KEY), String(returnTo)).toBe('/planner?x=1')
+      expect(JSON.parse(localStorage.getItem(RETURN_FALLBACK_KEY)).path, String(returnTo)).toBe('/planner?x=1')
+    }
+  })
+
+  it('still signs in when the fallback cannot be written', () => {
+    const realSet = Storage.prototype.setItem
+    vi.spyOn(Storage.prototype, 'setItem').mockImplementation(function (key, value) {
+      if (this === localStorage) throw new Error('quota')
+      return realSet.call(this, key, value)
+    })
+    const page = { origin: 'https://sm2salamanders.site', pathname: '/planner', search: '', href: '' }
+    expect(() => withFakeLocation(page, () => beginSignIn({ returnTo: '/deathwatch' }))).not.toThrow()
+    expect(page.href).toContain('https://discord.com/oauth2/authorize')
+    expect(sessionStorage.getItem(RETURN_PATH_KEY)).toBe('/deathwatch')
+  })
+})
+
+describe('scrubCallbackHash: the return path fallback', () => {
+  afterEach(() => vi.restoreAllMocks())
+
+  it('restores the fallback when the session copy is gone, as after a hand-off to another browser context', () => {
+    vi.spyOn(Date, 'now').mockReturnValue(NOW)
+    stashFallback({ path: '/deathwatch', at: NOW - 1000 })
+    callback()
+    expect(window.location.pathname).toBe('/deathwatch')
+    expect(window.location.hash).toBe('')
+  })
+
+  it('prefers the session copy to the fallback', () => {
+    vi.spyOn(Date, 'now').mockReturnValue(NOW)
+    sessionStorage.setItem(RETURN_PATH_KEY, '/builds')
+    stashFallback({ path: '/deathwatch', at: NOW })
+    callback()
+    expect(window.location.pathname).toBe('/builds')
+  })
+
+  it('honours a fallback up to ten minutes old and not a millisecond older', () => {
+    vi.spyOn(Date, 'now').mockReturnValue(NOW)
+    expect(RETURN_FALLBACK_MS).toBe(10 * 60 * 1000)
+    stashFallback({ path: '/deathwatch', at: NOW - RETURN_FALLBACK_MS })
+    callback()
+    expect(window.location.pathname).toBe('/deathwatch')
+
+    stashFallback({ path: '/deathwatch', at: NOW - RETURN_FALLBACK_MS - 1 })
+    callback()
+    expect(window.location.pathname).toBe('/')
+  })
+
+  it('ignores a fallback that has been tampered with', () => {
+    vi.spyOn(Date, 'now').mockReturnValue(NOW)
+    const tampered = [
+      { path: '//evil.example', at: NOW },
+      { path: 'https://evil.example', at: NOW },
+      { path: '/deathwatch', at: 'yesterday' },
+      { path: '/deathwatch', at: String(NOW) }, // a numeric string is not a stamp we wrote
+      { path: '/deathwatch', at: NOW + 60_000 }, // from the future
+      { path: '/deathwatch' },
+      { at: NOW },
+      null,
+      [],
+    ]
+    for (const value of tampered) {
+      stashFallback(value)
+      callback()
+      expect(window.location.pathname, JSON.stringify(value)).toBe('/')
+    }
+    localStorage.setItem(RETURN_FALLBACK_KEY, '{not json')
+    callback()
+    expect(window.location.pathname).toBe('/')
+  })
+
+  it('ignores a hostile session copy', () => {
+    sessionStorage.setItem(RETURN_PATH_KEY, '//evil.example')
+    callback()
+    expect(window.location.pathname).toBe('/')
+    expect(window.location.host).not.toBe('evil.example')
+  })
+
+  it('removes both copies, whether it used them or not', () => {
+    vi.spyOn(Date, 'now').mockReturnValue(NOW)
+    sessionStorage.setItem(RETURN_PATH_KEY, '/builds')
+    stashFallback({ path: '/deathwatch', at: NOW })
+    callback()
+    expect(sessionStorage.getItem(RETURN_PATH_KEY)).toBeNull()
+    expect(localStorage.getItem(RETURN_FALLBACK_KEY)).toBeNull()
+
+    sessionStorage.setItem(RETURN_PATH_KEY, '//evil.example')
+    stashFallback({ path: '//evil.example', at: NOW })
+    callback()
+    expect(sessionStorage.getItem(RETURN_PATH_KEY)).toBeNull()
+    expect(localStorage.getItem(RETURN_FALLBACK_KEY)).toBeNull()
   })
 })

@@ -11,6 +11,13 @@ import members from '../data/discord-members.json'
 const CLIENT_ID = '1538255597810483210'
 const STORAGE_KEY = 'salamanders-discord-member'
 const RETURN_PATH_KEY = 'salamanders-discord-return-path'
+// A second copy of the return path, in localStorage. On a phone the Discord app can take the authorize step and
+// hand the redirect to a different browser context, where sessionStorage is empty and the visitor would land on
+// "/". It is honoured for ten minutes: long enough to authorize and come back, short enough that an old one
+// never sends a later sign-in somewhere unexpected.
+const RETURN_FALLBACK_KEY = 'salamanders-discord-return-fallback'
+export const RETURN_FALLBACK_MS = 10 * 60 * 1000
+const RETURN_PATH_MAX = 512
 // Overridable so E2E runs can point identify checks at a local fixture
 // instead of the real Discord API — see e2e/discord-mock.
 const DISCORD_API_BASE = import.meta.env.VITE_DISCORD_API_BASE || 'https://discord.com/api'
@@ -25,8 +32,42 @@ function redirectUri() {
   return window.location.origin + '/'
 }
 
-export function beginSignIn() {
-  sessionStorage.setItem(RETURN_PATH_KEY, window.location.pathname + window.location.search)
+/**
+ * `p` if it is a path on this site ("/" then neither "/" nor "\", no whitespace, at most 512 characters),
+ * else null. The return path is replayed into the address bar after sign-in, so anything that could name
+ * another origin ("//host", "https://…", a backslash, or a tab or newline the URL parser would strip) must
+ * never pass, whether it came from a caller, from sessionStorage or from localStorage.
+ */
+export function sanitizeReturnPath(p) {
+  if (typeof p !== 'string' || p.length > RETURN_PATH_MAX) return null
+  return /^\/(?!\/)[^\s\\]*$/.test(p) ? p : null
+}
+
+// Best effort: storage can be full or blocked (a private tab), and that must never stop sign-in itself.
+function writeFallback(path) {
+  try {
+    localStorage.setItem(RETURN_FALLBACK_KEY, JSON.stringify({ path, at: Date.now() }))
+  } catch {
+    // The session copy still works wherever the redirect comes back to the same tab.
+  }
+}
+
+/** The fallback path if there is one that is recent and sane (a string stamp, never from the future), else null. */
+function readFallback() {
+  try {
+    const { path, at } = JSON.parse(localStorage.getItem(RETURN_FALLBACK_KEY))
+    const age = Date.now() - at
+    return typeof at === 'number' && age >= 0 && age <= RETURN_FALLBACK_MS ? sanitizeReturnPath(path) : null
+  } catch {
+    return null
+  }
+}
+
+/** options.returnTo: the page to come back to, if it is a path on this site; otherwise the page sign-in started from. */
+export function beginSignIn(options) {
+  const path = sanitizeReturnPath(options?.returnTo) ?? window.location.pathname + window.location.search
+  sessionStorage.setItem(RETURN_PATH_KEY, path)
+  writeFallback(path)
   const url = new URL('https://discord.com/oauth2/authorize')
   url.searchParams.set('client_id', CLIENT_ID)
   url.searchParams.set('response_type', 'token')
@@ -87,8 +128,10 @@ export function scrubCallbackHash() {
   const params = new URLSearchParams(hash.slice(1))
   pendingToken = params.get('access_token')
   pendingExpiresIn = Number(params.get('expires_in')) || null
-  const returnPath = sessionStorage.getItem(RETURN_PATH_KEY)
+  // The session copy if it is sane, else the fallback; both are cleared whether or not they were used.
+  const returnPath = sanitizeReturnPath(sessionStorage.getItem(RETURN_PATH_KEY)) ?? readFallback()
   sessionStorage.removeItem(RETURN_PATH_KEY)
+  localStorage.removeItem(RETURN_FALLBACK_KEY)
   history.replaceState(null, '', returnPath || window.location.pathname + window.location.search)
 }
 

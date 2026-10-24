@@ -13,6 +13,9 @@ const GATED = [
   'server/src/archiveKey.js',
   'src/lib/longPress.js',
   'src/lib/perkStateKey.js',
+  'src/lib/deathwatch/areas.js',
+  'src/lib/deathwatch/sheetDrag.js',
+  'src/lib/deathwatch/icons.js',
   'server/src/displayNames.js',
   'server/src/rosterMember.js',
   'server/src/rosterCore.js',
@@ -20,6 +23,11 @@ const GATED = [
   'server/src/rosterHandler.js',
   'server/src/rosterPublic.js',
   'server/src/rosterPublicHandler.js',
+  'server/src/cors.js',
+  'server/src/deathwatchEtag.js',
+  'server/src/deathwatchValidate.js',
+  'server/src/deathwatchAccess.js',
+  'server/src/deathwatchHandler.js',
 ]
 
 export default defineConfig({

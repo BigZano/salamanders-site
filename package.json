@@ -25,7 +25,11 @@
     "archive:dev:fixture": "bun scripts/archive-dev-fixture.mjs"
   },
   "dependencies": {
+    "@fontsource-variable/cinzel": "^5.3.0",
     "@fontsource-variable/oswald": "^5.2.8",
+    "@fontsource-variable/teko": "^5.3.0",
+    "@fontsource/barlow": "^5.3.0",
+    "@fontsource/barlow-condensed": "^5.3.0",
     "@vue-flow/core": "^1.48.2",
     "pinia": "^4.0.2",
     "vue": "^3.5.39",

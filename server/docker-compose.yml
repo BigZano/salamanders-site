@@ -47,6 +47,9 @@ services:
       MECHADENDRITE_ROLE_ID: ${MECHADENDRITE_ROLE_ID:-}
       FORGE_ROLE_ID: ${FORGE_ROLE_ID:-}
       HIERARCHY_ROLE_ID: ${HIERARCHY_ROLE_ID:-}
+      # Deathwatch area. No defaults anywhere: until both are set it answers 503.
+      DEATHWATCH_ROLE_ID: ${DEATHWATCH_ROLE_ID:-}
+      WATCH_COMMANDER_ROLE_ID: ${WATCH_COMMANDER_ROLE_ID:-}
     ports:
       - '8787:8787'
 

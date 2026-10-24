@@ -5,7 +5,11 @@
     "": {
       "name": "salamanders-site",
       "dependencies": {
+        "@fontsource-variable/cinzel": "^5.3.0",
         "@fontsource-variable/oswald": "^5.2.8",
+        "@fontsource-variable/teko": "^5.3.0",
+        "@fontsource/barlow": "^5.3.0",
+        "@fontsource/barlow-condensed": "^5.3.0",
         "@vue-flow/core": "^1.48.2",
         "pinia": "^4.0.2",
         "vue": "^3.5.39",
@@ -167,7 +171,15 @@
 
     "@esbuild/win32-x64": ["@esbuild/win32-x64@0.28.2", "", { "os": "win32", "cpu": "x64" }, "sha512-5ebpxr3nWMzrL/rnUI755Jkuee0bHL/Gq0WTF9lvcpv73wAp5eu8MfBUgWK9bhWvZjj7yX8etf/8tI8Ney695g=="],
 
+    "@fontsource-variable/cinzel": ["@fontsource-variable/cinzel@5.3.0", "", {}, "sha512-eFcU0TwaAP5QESF2pV8VoOPJJXJ6sSGm/6mXMwqTdMBPAJMaLhfa6oISHuOtFeddsoHP9RYm4Io0j1j3mNEz2Q=="],
+
     "@fontsource-variable/oswald": ["@fontsource-variable/oswald@5.2.8", "", {}, "sha512-sIXwfKbyHOATgBWOlpR73VMQ8pA8XCToiyy6sL02ZfYEZPpW18TLtpxPBpYXId7xKbWCousOTzlJsa/9rTd8WQ=="],
+
+    "@fontsource-variable/teko": ["@fontsource-variable/teko@5.3.0", "", {}, "sha512-/Pq5z/kpf3QgAIjuGXRnSt9boC/jeIEsXtQnxfNlAov9mpwsznCZikofAuZMU8JCphWwjtZwugkvlq0iyq8Ywg=="],
+
+    "@fontsource/barlow": ["@fontsource/barlow@5.3.0", "", {}, "sha512-tGR0y6QObRtKv71MOth44222+mdNFM/ZWFWDV1VLzNbG4oK9PNRlyJzmkck4vHAi9ibHBXgt4SlY51amFP55CA=="],
+
+    "@fontsource/barlow-condensed": ["@fontsource/barlow-condensed@5.3.0", "", {}, "sha512-RA7MmIx0v3eQ6Gcf74qLVLOwLB0GpPOzx+eU9iG/AmCnSJGcIWYeU8y6CEMGZ210MGwGg5CZhzLkkvyZdTTk1g=="],
 
     "@inquirer/ansi": ["@inquirer/ansi@2.0.8", "", {}, "sha512-WpQM+Ti6Z40EFwwt+uL2p4UabT+W179zHp6HhLVOzfbwnVn05IPO/eXIZXGNqcT1jbQ15SujNLzQ39k4QPPxBQ=="],
 

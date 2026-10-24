@@ -1,0 +1,364 @@
+import { describe, it, expect, vi } from 'vitest'
+import * as fc from 'fast-check'
+import { createDeathwatchAccess } from './deathwatchAccess'
+import { Upstream } from './discordRoles'
+
+// Invented ids only: the real role and user ids never enter the repo.
+const DW = '200000000000000101'
+const WC = '200000000000000102'
+const LEGION = '200000000000000199'
+
+const USERS = {
+  commander: { id: '300000000000000001', username: 'commander', roles: [WC] },
+  watcher: { id: '300000000000000002', username: 'watcher', roles: [DW] },
+  both: { id: '300000000000000003', username: 'both', roles: [DW, WC] },
+  plain: { id: '300000000000000004', username: 'plain', roles: [] },
+  legion: { id: '300000000000000005', username: 'legion', roles: [LEGION] },
+  stranger: { id: '300000000000000006', username: 'stranger', roles: null }, // not in the guild
+}
+// A bearer token names a user; two tokens may name the same one.
+const TOKENS = { ...USERS, 'tok-a': USERS.watcher, 'tok-b': USERS.watcher }
+
+const req = (token) =>
+  new Request('https://api.test/deathwatch/me', { headers: token ? { Authorization: `Bearer ${token}` } : {} })
+
+function setup({ granted = [], ...opts } = {}) {
+  const clock = { t: 1_000 }
+  const fail = { identify: false, roles: false }
+  const roles = {
+    identify: vi.fn(async (request) => {
+      if (fail.identify) throw new Upstream()
+      const u = TOKENS[(request.headers.get('Authorization') || '').slice(7)]
+      return u ? { id: u.id, username: u.username } : null
+    }),
+    rolesOf: vi.fn(async (id) => {
+      if (fail.roles) throw new Upstream()
+      return Object.values(USERS).find((u) => u.id === id).roles
+    }),
+  }
+  const grants = new Set(granted)
+  const store = { isGranted: vi.fn(async (id) => grants.has(id)) }
+  const access = createDeathwatchAccess({
+    roles,
+    store,
+    deathwatchRoleId: DW,
+    commanderRoleId: WC,
+    now: () => clock.t,
+    ...opts,
+  })
+  return { access, roles, store, clock, fail, grants }
+}
+
+describe('configured', () => {
+  const make = (deathwatchRoleId, commanderRoleId) =>
+    createDeathwatchAccess({ roles: {}, store: {}, deathwatchRoleId, commanderRoleId }).configured
+
+  it('is true only when both role ids are snowflakes', () => {
+    expect(make(DW, WC)).toBe(true)
+    expect(make('1'.repeat(17), '1'.repeat(20))).toBe(true)
+  })
+
+  it('is false when either id is missing or malformed', () => {
+    // 12345678901234567 is a number whose text is 17 digits: only the string check refuses it.
+    for (const bad of [undefined, '', 'abc', '1'.repeat(16), '1'.repeat(21), ` ${DW}`, 7, 12345678901234567]) {
+      expect(make(bad, WC)).toBe(false)
+      expect(make(DW, bad)).toBe(false)
+    }
+    expect(make(undefined, undefined)).toBe(false)
+  })
+})
+
+describe('the verdict', () => {
+  it('gives the Commander role access and Commander status', async () => {
+    const { access } = setup()
+    expect(await access.resolve(req('commander'))).toEqual({
+      user: { id: USERS.commander.id, username: 'commander' },
+      access: true,
+      watchCommander: true,
+    })
+  })
+
+  it('gives the Deathwatch role access without Commander status', async () => {
+    const { access } = setup()
+    const v = await access.resolve(req('watcher'))
+    expect([v.access, v.watchCommander]).toEqual([true, false])
+  })
+
+  it('gives both roles together both', async () => {
+    const { access } = setup()
+    const v = await access.resolve(req('both'))
+    expect([v.access, v.watchCommander]).toEqual([true, true])
+  })
+
+  it('gives a grant access, but never Commander status', async () => {
+    const { access } = setup({ granted: [USERS.plain.id] })
+    const v = await access.resolve(req('plain'))
+    expect([v.access, v.watchCommander]).toEqual([true, false])
+  })
+
+  it('denies the Legion role alone and a user with no roles', async () => {
+    const { access } = setup()
+    for (const who of ['legion', 'plain']) {
+      const v = await access.resolve(req(who))
+      expect([v.access, v.watchCommander]).toEqual([false, false])
+    }
+  })
+
+  it('lets a granted user who is not in the guild in', async () => {
+    const { access } = setup({ granted: [USERS.stranger.id] })
+    const v = await access.resolve(req('stranger'))
+    expect([v.access, v.watchCommander]).toEqual([true, false])
+  })
+
+  it('denies, without an error, a user who is not in the guild and has no grant', async () => {
+    const { access } = setup()
+    const v = await access.resolve(req('stranger'))
+    expect([v.access, v.watchCommander]).toEqual([false, false])
+  })
+
+  it('does not touch the grants table for someone a role already admits', async () => {
+    const { access, store } = setup()
+    await access.resolve(req('watcher'))
+    await access.resolve(req('commander'))
+    expect(store.isGranted).not.toHaveBeenCalled()
+  })
+
+  it('asks the grants table about the user it identified', async () => {
+    const { access, store } = setup()
+    await access.resolve(req('plain'))
+    expect(store.isGranted).toHaveBeenCalledWith(USERS.plain.id)
+  })
+})
+
+describe('no identity, no cache', () => {
+  it('returns null for no Authorization header and for an unknown token, and caches neither', async () => {
+    const { access, roles } = setup()
+    expect(await access.resolve(req(null))).toBeNull()
+    expect(await access.resolve(req('nobody'))).toBeNull()
+    expect(await access.resolve(req('nobody'))).toBeNull()
+    expect(roles.identify).toHaveBeenCalledTimes(3)
+    expect(roles.rolesOf).not.toHaveBeenCalled()
+  })
+})
+
+describe('Discord failures fail closed', () => {
+  it('rejects with Upstream when identify fails, and does not cache the failure', async () => {
+    const { access, fail } = setup()
+    fail.identify = true
+    await expect(access.resolve(req('watcher'))).rejects.toBeInstanceOf(Upstream)
+    fail.identify = false
+    expect((await access.resolve(req('watcher'))).access).toBe(true)
+  })
+
+  it('rejects with Upstream when the role lookup fails, even for a granted user', async () => {
+    const { access, fail } = setup({ granted: [USERS.plain.id] })
+    fail.roles = true
+    await expect(access.resolve(req('plain'))).rejects.toBeInstanceOf(Upstream)
+    fail.roles = false
+    expect((await access.resolve(req('plain'))).access).toBe(true)
+  })
+})
+
+describe('the verdict cache', () => {
+  it('serves a verdict for ttlMs and looks again one millisecond later', async () => {
+    const { access, roles, clock } = setup()
+    await access.resolve(req('watcher'))
+    clock.t = 1_000 + 29_999
+    await access.resolve(req('watcher'))
+    expect(roles.identify).toHaveBeenCalledTimes(1)
+    expect(roles.rolesOf).toHaveBeenCalledTimes(1)
+    clock.t = 1_000 + 30_000
+    await access.resolve(req('watcher'))
+    expect(roles.identify).toHaveBeenCalledTimes(2)
+  })
+
+  it('honours a different ttlMs', async () => {
+    const { access, roles, clock } = setup({ ttlMs: 5 })
+    await access.resolve(req('watcher'))
+    clock.t = 1_004
+    await access.resolve(req('watcher'))
+    expect(roles.identify).toHaveBeenCalledTimes(1)
+    clock.t = 1_005
+    await access.resolve(req('watcher'))
+    expect(roles.identify).toHaveBeenCalledTimes(2)
+  })
+
+  it('keeps a separate entry per token, even for tokens that differ in one character', async () => {
+    const { access, roles } = setup()
+    await access.resolve(req('tok-a'))
+    await access.resolve(req('tok-b'))
+    expect(roles.identify).toHaveBeenCalledTimes(2)
+    await access.resolve(req('tok-a'))
+    await access.resolve(req('tok-b'))
+    expect(roles.identify).toHaveBeenCalledTimes(2)
+  })
+
+  it('lets fresh bypass the cache and leaves the cache as it was', async () => {
+    const { access, roles } = setup()
+    await access.resolve(req('watcher'))
+    await access.resolve(req('watcher'), { fresh: true })
+    expect(roles.identify).toHaveBeenCalledTimes(2)
+    await access.resolve(req('watcher'))
+    expect(roles.identify).toHaveBeenCalledTimes(2)
+  })
+
+  it('does not cache what a fresh call learned', async () => {
+    const { access, roles } = setup()
+    await access.resolve(req('watcher'), { fresh: true })
+    await access.resolve(req('watcher'))
+    expect(roles.identify).toHaveBeenCalledTimes(2)
+  })
+
+  it('drops every cached verdict on forget', async () => {
+    const { access, roles, grants } = setup()
+    expect((await access.resolve(req('plain'))).access).toBe(false)
+    grants.add(USERS.plain.id)
+    expect((await access.resolve(req('plain'))).access).toBe(false) // still the cached answer
+    access.forget()
+    expect((await access.resolve(req('plain'))).access).toBe(true)
+    expect(roles.identify).toHaveBeenCalledTimes(2)
+  })
+
+  it('does not remember a verdict that a forget() overtook while it was being looked up', async () => {
+    const { access, store, grants } = setup({ granted: [USERS.plain.id] })
+    let answer
+    store.isGranted.mockImplementationOnce(() => new Promise((resolve) => (answer = resolve)))
+    const inFlight = access.resolve(req('plain')) // a read that is about to be told "granted"
+    await vi.waitFor(() => expect(store.isGranted).toHaveBeenCalled())
+    grants.delete(USERS.plain.id) // the grant is revoked, and every cached verdict dropped,
+    access.forget() // while that lookup is still running
+    answer(true)
+    expect((await inFlight).access).toBe(true) // the caller who asked early still gets what was true then
+    expect((await access.resolve(req('plain'))).access).toBe(false) // but it was not kept for the next read
+  })
+
+  it('is bounded: a full cache evicts its oldest entry', async () => {
+    const { access, roles } = setup({ maxEntries: 2 })
+    await access.resolve(req('watcher'))
+    await access.resolve(req('commander'))
+    await access.resolve(req('plain')) // evicts watcher
+    expect(roles.identify).toHaveBeenCalledTimes(3)
+    await access.resolve(req('commander'))
+    await access.resolve(req('plain'))
+    expect(roles.identify).toHaveBeenCalledTimes(3)
+    await access.resolve(req('watcher')) // gone, looked up again
+    expect(roles.identify).toHaveBeenCalledTimes(4)
+  })
+})
+
+// DEATHWATCH_ROLE_ID may name several roles at once: a comma-separated list, no spaces. The Watch Commander
+// role stays a single id. A list with any bad item opens nothing, never a part of it.
+describe('several Deathwatch roles', () => {
+  const B = '200000000000000103'
+  const C = '200000000000000104'
+  const configured = (deathwatchRoleId, commanderRoleId = WC) =>
+    createDeathwatchAccess({ roles: {}, store: {}, deathwatchRoleId, commanderRoleId }).configured
+
+  async function verdictHolding(deathwatchRoleId, held) {
+    const access = createDeathwatchAccess({
+      roles: { identify: async () => ({ id: '300000000000000009', username: 'u' }), rolesOf: async () => held },
+      store: { isGranted: async () => false },
+      deathwatchRoleId,
+      commanderRoleId: WC,
+    })
+    return access.resolve(req('any'))
+  }
+
+  it('is configured by a comma-separated list of snowflakes', () => {
+    expect(configured(`${DW},${B}`)).toBe(true)
+    expect(configured(`${DW},${B},${C}`)).toBe(true)
+  })
+
+  it('is not configured when any item of the list is empty, malformed or spaced', () => {
+    const bad = [
+      `${DW},`,
+      `,${DW}`,
+      `${DW},,${B}`,
+      `${DW},abc`,
+      `${DW},${'1'.repeat(16)}`,
+      `${DW},${'1'.repeat(21)}`,
+      `${DW}, ${B}`,
+      `${DW} ,${B}`,
+      `${DW} ${B}`,
+      `${DW};${B}`,
+      `${DW}\n${B}`,
+    ]
+    for (const list of bad) expect(configured(list), JSON.stringify(list)).toBe(false)
+  })
+
+  it('keeps the Watch Commander role a single id', () => {
+    expect(configured(DW, `${WC},${B}`)).toBe(false)
+  })
+
+  it('admits the holder of any one listed role, without Commander status', async () => {
+    for (const mine of [DW, B, C]) {
+      const v = await verdictHolding(`${DW},${B},${C}`, [mine])
+      expect([v.access, v.watchCommander], mine).toEqual([true, false])
+    }
+  })
+
+  it('admits the holder of a listed role among others they hold', async () => {
+    const v = await verdictHolding(`${DW},${B}`, [LEGION, B])
+    expect([v.access, v.watchCommander]).toEqual([true, false])
+  })
+
+  it('does not admit the holder of an unlisted role, or the Legion role alone', async () => {
+    for (const held of [[C], [LEGION], [], [C, LEGION]]) {
+      const v = await verdictHolding(`${DW},${B}`, held)
+      expect([v.access, v.watchCommander], held.join()).toEqual([false, false])
+    }
+  })
+
+  it('still lets the Watch Commander in when the list names other roles', async () => {
+    const v = await verdictHolding(`${DW},${B}`, [WC])
+    expect([v.access, v.watchCommander]).toEqual([true, true])
+  })
+
+  it('opens nothing by role when one item of the list is bad', async () => {
+    for (const mine of [DW, B]) {
+      const v = await verdictHolding(`${DW},oops,${B}`, [mine])
+      expect([v.access, v.watchCommander], mine).toEqual([false, false])
+    }
+  })
+
+  const snowflake = fc.stringMatching(/^[1-9]\d{16,19}$/)
+  const ids = fc.uniqueArray(snowflake, { minLength: 1, maxLength: 6 })
+
+  it('property: a holder of exactly one listed role is admitted, whatever the list or its order', async () => {
+    await fc.assert(
+      fc.asyncProperty(ids, fc.nat(), async (list, pick) => {
+        fc.pre(!list.includes(WC))
+        const v = await verdictHolding(list.join(','), [list[pick % list.length]])
+        return v.access === true && v.watchCommander === false
+      }),
+    )
+  })
+
+  it('property: a holder of no listed role is denied', async () => {
+    await fc.assert(
+      fc.asyncProperty(ids, snowflake, async (list, other) => {
+        fc.pre(!list.includes(other) && other !== WC && !list.includes(WC))
+        const v = await verdictHolding(list.join(','), [other])
+        return v.access === false && v.watchCommander === false
+      }),
+    )
+  })
+
+  it('property: one bad item anywhere in the list unconfigures it and admits nobody', async () => {
+    const badItem = fc.constantFrom('', 'abc', ' ', '1'.repeat(16), '1'.repeat(21), `${DW} `, ' 1')
+    await fc.assert(
+      fc.asyncProperty(ids, badItem, fc.nat(), async (list, bad, at) => {
+        fc.pre(!list.includes(WC))
+        const items = [...list]
+        items.splice(at % (items.length + 1), 0, bad)
+        const text = items.join(',')
+        if (configured(text) !== false) return false
+        for (const mine of list) {
+          const v = await verdictHolding(text, [mine])
+          if (v.access !== false) return false
+        }
+        return true
+      }),
+    )
+  })
+})

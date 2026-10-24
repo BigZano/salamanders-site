@@ -24,6 +24,13 @@ const USERS = {
   'test-forge-token': { id: '100000000000000011', username: 'forge-tester' },
   // Company command (Captain of the 3rd) — may open the Infirmary list.
   'test-captain-token': { id: '100000000000000020', username: 'captain-tester' },
+  // Deathwatch area (e2e/tests/deathwatch-api.spec.js): invented ids, here and in DEATHWATCH_MEMBERS.
+  'test-deathwatch-token': { id: '200000000000000001', username: 'deathwatch-tester' },
+  'test-commander-token': { id: '200000000000000002', username: 'commander-tester' },
+  // Holds the second of the two Deathwatch roles the api is given as a list.
+  'test-deathwatch-second-token': { id: '200000000000000004', username: 'deathwatch-second-tester' },
+  // Not in the guild at all: the spec gives this id a grant and takes it away again.
+  'test-granted-token': { id: '200000000000000003', username: 'granted-tester' },
 }
 const LEGION_ROLE = '1377787723976409211'
 const RECLUSIARCH_ROLE = '1323334632904855592'
@@ -37,6 +44,18 @@ const LORD_OF_DRAKES_ROLE = '1322056087888859199'
 const SCOUT_ROLE = '1430743608822206504'
 const INFIRMARY_ROLE = '1362059023481831517'
 const GUILD_ID = '1322056087792521269'
+// Invented ids; e2e/docker-compose.yml hands the same ones to the api (DEATHWATCH_ROLE_ID is a list of two,
+// WATCH_COMMANDER_ROLE_ID a single id).
+const DEATHWATCH_ROLE = '200000000000000101'
+const DEATHWATCH_SECOND_ROLE = '200000000000000103'
+const WATCH_COMMANDER_ROLE = '200000000000000102'
+// Deathwatch members answer the single-member lookup only. They stay out of MEMBERS, which feeds the
+// full member list, so the roster specs' counts do not change.
+const DEATHWATCH_MEMBERS = {
+  '200000000000000001': { roles: [DEATHWATCH_ROLE] },
+  '200000000000000002': { roles: [WATCH_COMMANDER_ROLE] },
+  '200000000000000004': { roles: [DEATHWATCH_SECOND_ROLE] },
+}
 // Guild membership as Discord's bot endpoint would report it.
 const MEMBERS = {
   // Has a server nickname, so builds show it instead of the username.
@@ -108,7 +127,7 @@ Bun.serve({
     // The Techmarine and Forge testers hold mod roles; nobody else does.
     const memberMatch = url.pathname.match(/^\/v10\/guilds\/[^/]+\/members\/([^/]+)$/)
     if (memberMatch) {
-      const member = MEMBERS[memberMatch[1]]
+      const member = MEMBERS[memberMatch[1]] ?? DEATHWATCH_MEMBERS[memberMatch[1]]
       return withCors(member ? Response.json(member) : Response.json({ message: 'Unknown Member' }, { status: 404 }))
     }
 
