@@ -75,6 +75,7 @@ function setup({ configured = true } = {}) {
       return u ? { id: u.id, username: 'u' + u.id } : null
     }),
     rolesOf: vi.fn(async (id) => Object.values(users).find((u) => u.id === id).roles),
+    isAdmin: async () => false, // nobody here is an administrator
   }
   const store = memStore()
   const access = createDeathwatchAccess({

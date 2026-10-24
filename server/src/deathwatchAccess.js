@@ -1,9 +1,11 @@
 /**
  * Who may use the Deathwatch area, asked of Discord live (discordRoles.js) and
  * of the grants table. Access is the Watch Commander role, any one of the
- * Deathwatch roles, or an active grant; Watch Commander status comes only from the role, never
- * from a grant. Someone who is not in the guild holds no roles, and can still
- * have a grant. Any Discord failure throws Upstream: callers fail closed.
+ * Deathwatch roles, an active grant, or being the guild owner or an
+ * Administrator (discordRoles.isAdmin). Watch Commander status comes only from
+ * the Commander role, never from a grant and never from being an administrator.
+ * Someone who is not in the guild holds no roles, and can still have a grant.
+ * Any Discord failure throws Upstream: callers fail closed.
  *
  * Reads may reuse a verdict for a short while, keyed by a hash of the whole
  * Authorization header, so a polling page does not cost two Discord calls per
@@ -47,7 +49,12 @@ export function createDeathwatchAccess({
     // Stryker disable next-line ArrayDeclaration: a stray element is never a role id, so it grants nothing
     const held = (await roles.rolesOf(user.id)) ?? []
     const watchCommander = held.includes(commanderRoleId)
-    const access = watchCommander || deathwatchRoleIds.some((id) => held.includes(id)) || (await store.isGranted(user.id))
+    // Cheapest first: the guild lookup is only made for someone nothing else admits.
+    const access =
+      watchCommander ||
+      deathwatchRoleIds.some((id) => held.includes(id)) ||
+      (await store.isGranted(user.id)) ||
+      (await roles.isAdmin(user.id, held))
     return { user, access, watchCommander }
   }
 

@@ -29,6 +29,9 @@ const USERS = {
   'test-commander-token': { id: '200000000000000002', username: 'commander-tester' },
   // Holds the second of the two Deathwatch roles the api is given as a list.
   'test-deathwatch-second-token': { id: '200000000000000004', username: 'deathwatch-second-tester' },
+  // The guild owner and a holder of an Administrator role: both open the Deathwatch area, neither is a Commander.
+  'test-owner-token': { id: '200000000000000005', username: 'owner-tester' },
+  'test-admin-token': { id: '200000000000000006', username: 'admin-tester' },
   // Not in the guild at all: the spec gives this id a grant and takes it away again.
   'test-granted-token': { id: '200000000000000003', username: 'granted-tester' },
 }
@@ -48,6 +51,8 @@ const GUILD_ID = '1322056087792521269'
 // WATCH_COMMANDER_ROLE_ID a single id).
 const DEATHWATCH_ROLE = '200000000000000101'
 const DEATHWATCH_SECOND_ROLE = '200000000000000103'
+const ADMINISTRATOR_ROLE = '200000000000000104'
+const GUILD_OWNER_ID = '200000000000000005'
 const WATCH_COMMANDER_ROLE = '200000000000000102'
 // Deathwatch members answer the single-member lookup only. They stay out of MEMBERS, which feeds the
 // full member list, so the roster specs' counts do not change.
@@ -55,6 +60,8 @@ const DEATHWATCH_MEMBERS = {
   '200000000000000001': { roles: [DEATHWATCH_ROLE] },
   '200000000000000002': { roles: [WATCH_COMMANDER_ROLE] },
   '200000000000000004': { roles: [DEATHWATCH_SECOND_ROLE] },
+  '200000000000000005': { roles: [] },
+  '200000000000000006': { roles: [ADMINISTRATOR_ROLE] },
 }
 // Guild membership as Discord's bot endpoint would report it.
 const MEMBERS = {
@@ -107,9 +114,19 @@ Bun.serve({
       return withCors(Response.json({ fetched: new Date(0).toISOString(), guildId: GUILD_ID, roleId: LEGION_ROLE, memberIds: ['75633559351595008'] }))
     }
 
-    // Guild role table (Administrator checks). Nobody here is an admin.
+    // Guild role table (Administrator checks). Nobody is an admin except the Deathwatch-area owner and
+    // Administrator testers; everyone else, the Legion testers included, is not.
     if (url.pathname === `/v10/guilds/${GUILD_ID}`) {
-      return withCors(Response.json({ owner_id: '1', roles: [{ id: GUILD_ID, permissions: '0' }, { id: RECLUSIARCH_ROLE, permissions: '0' }] }))
+      return withCors(
+        Response.json({
+          owner_id: GUILD_OWNER_ID,
+          roles: [
+            { id: GUILD_ID, permissions: '0' },
+            { id: RECLUSIARCH_ROLE, permissions: '0' },
+            { id: ADMINISTRATOR_ROLE, permissions: '8' },
+          ],
+        }),
+      )
     }
 
     // Full member list (build authors' display names, see displayNames.js).

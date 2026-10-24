@@ -28,11 +28,18 @@ test.describe('Deathwatch API', () => {
     expect(await me(DEATHWATCH)).toEqual({ access: true, watchCommander: false })
     // DEATHWATCH_ROLE_ID lists two roles; a holder of the second one is as welcome as a holder of the first.
     expect(await me('test-deathwatch-second-token')).toEqual({ access: true, watchCommander: false })
+    // The guild owner and an Administrator are let in too, but they are not the Commander.
+    for (const who of ['test-owner-token', 'test-admin-token'])
+      expect(await me(who), who).toEqual({ access: true, watchCommander: false })
     expect(await me(COMMANDER)).toEqual({ access: true, watchCommander: true })
     // The Legion role alone does not open the area, and neither does holding no role.
     expect(await me('test-member-token')).toEqual({ access: false, watchCommander: false })
     expect(await me('test-norole-token')).toEqual({ access: false, watchCommander: false })
     expect((await get(request, '/deathwatch/data', 'test-member-token')).status()).toBe(403)
+    for (const who of ['test-owner-token', 'test-admin-token']) {
+      expect((await get(request, '/deathwatch/data', who)).status(), who).toBe(200)
+      expect((await get(request, '/deathwatch/grants', who)).status(), who).toBe(403)
+    }
   })
 
   test('the Commander edits documents and readers poll them by ETag', async ({ request }) => {
