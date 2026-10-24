@@ -75,3 +75,60 @@ describe('checkHash', () => {
     expect(checkHash('x.png', 'a'.repeat(64), new Set())).toBeNull()
   })
 })
+
+// The Deathwatch tracker keeps real names in the server's database only. Everything that can carry them out of
+// it (the Manage pages' "Download backup" file, the old site's data file, backups and config, the .7z archives it
+// was handed over in) must never reach the public repo.
+describe('checkPath: Deathwatch tracker data', () => {
+  it.each([
+    'deathwatch-backup-2026-10-24.json', // the Manage pages' "Download backup" file
+    'Downloads/deathwatch-backup-2026-10-16.json', // the old site's, same name
+    'DEATHWATCH-BACKUP-2026-10-24.JSON', // case-insensitive filesystems (Windows host)
+    'data/deathwatch-data.json', // the old site's live data file
+    'dist/data/deathwatch-data.json',
+    'data/backups/deathwatch-data-2026-10-16.json',
+    'data-backup/1.json', // its rolling backups
+    'deathwatch-tracker/data-backup/7.json',
+    'config.php', // its config held the old shared passwords
+    'deathwatch-tracker/dist/config.php',
+    'Config.PHP',
+    'dist.7z', // the archives it was handed over in
+    'deathwatch-tracker.7z',
+    'Downloads/DIST.7Z',
+  ])('blocks %s', (p) => expect(checkPath(p)).toMatch(/^Deathwatch data/))
+
+  it.each([
+    'config.example.php', // the template, with no passwords
+    'old-config.php', // only a file named exactly config.php is the real one
+    'src/lib/deathwatch/fixtureData.js',
+    'src/lib/deathwatch/download.js',
+    'src/lib/deathwatch/deathwatch-data.js', // source, not a JSON dump
+    'src/views/deathwatch/pages/manage/manage.vue',
+    'server/src/deathwatchStore.js',
+    'docs/handoff/2026-10-20-deathwatch-contributing.md',
+    'docs/handoff/deathwatch-backup-restore.md', // a note about backups is not a backup
+    'predeathwatch-backup-1.json', // the name must start the file name
+    'src/metadata-backup/restore.js', // only a folder named exactly data-backup
+    'docs/notes.7z.md', // only a file that ends in .7z
+  ])('allows %s', (p) => expect(checkPath(p)).toBeNull())
+})
+
+describe('checkContent: Deathwatch tracker dumps', () => {
+  // Kill Team document keys, assembled at runtime like the Discord ones above.
+  const RO = K('r' + 'o')
+  const KI = K('k' + 'i')
+  const KW = K('k' + 'w')
+
+  it('blocks text carrying two or more Kill Team keys, whatever the file is called', () => {
+    expect(checkContent('my-notes.txt', `{"teams":[{${RO}[],${KI}[]}]}`)).toMatch(/Deathwatch tracker dump \(2 Kill Team keys/)
+    expect(checkContent('x.json', `${KW}{} ${RO}[]`)).toMatch(/Deathwatch/)
+    expect(checkContent('x.json', `${RO}[] ${KI}[] ${KW}{}`)).toMatch(/\(3 Kill Team keys/)
+  })
+  it('names the file so the problem can be found', () => {
+    expect(checkContent('where/it/is.txt', `${RO} ${KI}`)).toContain('where/it/is.txt')
+  })
+  it('allows a single key, and code that spells the keys without quotes', () => {
+    expect(checkContent('x.md', `a ${RO} field`)).toBeNull()
+    expect(checkContent('m.js', 'const t = { id: 1, ro: [], ki: [], kw: {} }; t.ro.push(n)')).toBeNull()
+  })
+})

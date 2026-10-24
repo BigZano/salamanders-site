@@ -17,22 +17,38 @@ const BLOCKED = [
   /(^|\/)src\/data\/(accolades|rank-requirements)\//i,
   /(^|\/)legacy-accolades[^/]*\.json$/i, // holds member names, wherever --out or `unseal <dest>` puts it
 ]
+// Deathwatch tracker data. Real names live only in the server's database; what can carry them out of it is the
+// Manage pages' "Download backup" file (the old site made the same one), the old site's data file and rolling
+// backups, its config (the old shared passwords) and the .7z archives it was handed over in.
+const DEATHWATCH_BLOCKED = [
+  /(^|\/)deathwatch-(backup|data)[^/]*\.json$/i,
+  /(^|\/)data-backup\//i,
+  /(^|\/)config\.php$/i,
+  /\.7z$/i,
+]
 // JSON-key signatures of a raw Discord export, assembled so this file never
 // contains them literally.
 const SIGNATURES = ['guild' + '_id', 'mention' + '_roles', 'available' + '_tags', 'applied' + '_tags', 'permission' + '_overwrites'].map(
   (k) => '"' + k + '":',
 )
+// A Kill Team document's keys (roster, killed, killed-week). Any backup or data file carries all three, so two
+// is already a dump, however the file was renamed.
+const KILL_TEAM_KEYS = ['r' + 'o', 'k' + 'i', 'k' + 'w'].map((k) => '"' + k + '":')
 const SEALED_MAGIC = 'LAR\u0001'
 
 export function checkPath(p) {
   if (typeof p !== 'string' || p === '') return 'invalid path'
   const norm = p.replace(/\\/g, '/')
-  return BLOCKED.some((re) => re.test(norm)) ? `archive path must never be committed: ${p}` : null
+  if (BLOCKED.some((re) => re.test(norm))) return `archive path must never be committed: ${p}`
+  if (DEATHWATCH_BLOCKED.some((re) => re.test(norm))) return `Deathwatch data file must never be committed: ${p}`
+  return null
 }
 
 export function checkContent(p, text) {
   const hits = SIGNATURES.filter((s) => text.includes(s)).length
   if (hits >= 2) return `looks like a raw Discord export (${hits} signatures): ${p}`
+  const dw = KILL_TEAM_KEYS.filter((s) => text.includes(s)).length
+  if (dw >= 2) return `looks like a Deathwatch tracker dump (${dw} Kill Team keys; names stay in the server's database): ${p}`
   if (text.startsWith(SEALED_MAGIC)) return `sealed archive file outside the release flow: ${p}`
   return null
 }
