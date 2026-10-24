@@ -108,7 +108,8 @@ describe('the views', () => {
   })
 
   it('writes the standings for Discord', () => {
-    const text = discordText(calc(teams()), new Date('2026-10-24'))
+    // Local noon: discordText prints the viewer's own date, and an ISO date string is midnight UTC (the day before, west of it).
+    const text = discordText(calc(teams()), new Date(2026, 9, 24, 12))
     expect(text).toContain('(as of 24 Oct 2026)')
     expect(text).toContain('• Event Champion: Alpha (1.275)')
   })
