@@ -66,8 +66,22 @@ describe('the Armouring Hall tabs', () => {
       const slugs = list.map(itemSlug)
       expect(new Set(slugs).size, tab).toBe(slugs.length)
     }
-    // Why the check is needed: names that differ only in case, spaces or punctuation share a slug.
-    expect(itemSlug({ name: 'Watch-Brother' })).toBe(itemSlug({ name: 'watch brother' }))
+  })
+
+  // Why the check above is needed: names that differ only in case, spaces or punctuation share a slug, and then
+  // the address can only ever reach the first of them.
+  it('reaches only the first of two uniforms that share a slug', () => {
+    const first = { name: 'Watch-Brother' }
+    const second = { name: 'watch brother' }
+    expect(itemSlug(first)).toBe('watchbrother')
+    expect(itemSlug(second)).toBe('watchbrother')
+    UNIFORMS.duplicate = [first, second]
+    try {
+      expect(uniformFor('duplicate', 'watchbrother')).toBe(first)
+      expect(uniformFor('duplicate', 'nope')).toBe(first)
+    } finally {
+      delete UNIFORMS.duplicate
+    }
   })
 
   it('show the first uniform for any sub-slug that is not one of theirs', () => {
