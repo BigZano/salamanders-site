@@ -52,6 +52,8 @@ services:
       # Deathwatch area. No defaults anywhere: until both are set it answers 503.
       DEATHWATCH_ROLE_ID: ${DEATHWATCH_ROLE_ID:-}
       WATCH_COMMANDER_ROLE_ID: ${WATCH_COMMANDER_ROLE_ID:-}
+      # Optional: the Deathwatch Command role (it shows the Watch Command tab). Unset, nobody is Deathwatch Command.
+      DEATHWATCH_COMMAND_ROLE_ID: ${DEATHWATCH_COMMAND_ROLE_ID:-}
     ports:
       - '8787:8787'
 

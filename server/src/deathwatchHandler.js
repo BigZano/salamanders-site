@@ -40,7 +40,8 @@ async function readJson(request) {
 }
 
 export function createDeathwatchHandler({ access, store }) {
-  const me = async (_request, verdict) => reply(200, { access: verdict.access, watchCommander: verdict.watchCommander })
+  const me = async (_request, verdict) =>
+    reply(200, { access: verdict.access, watchCommander: verdict.watchCommander, deathwatchCommand: verdict.deathwatchCommand })
 
   async function data(request, verdict) {
     if (!verdict.access) return reply(403, { error: 'Restricted to the Deathwatch.' })

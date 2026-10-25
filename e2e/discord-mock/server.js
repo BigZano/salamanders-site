@@ -32,6 +32,9 @@ const USERS = {
   // The guild owner and a holder of an Administrator role: both open the Deathwatch area, neither is a Commander.
   'test-owner-token': { id: '200000000000000005', username: 'owner-tester' },
   'test-admin-token': { id: '200000000000000006', username: 'admin-tester' },
+  // The Deathwatch Command role: with a Deathwatch role (a member), and on its own (no way in).
+  'test-command-token': { id: '200000000000000007', username: 'command-tester' },
+  'test-command-only-token': { id: '200000000000000008', username: 'command-only-tester' },
   // Not in the guild at all: the spec gives this id a grant and takes it away again.
   'test-granted-token': { id: '200000000000000003', username: 'granted-tester' },
 }
@@ -48,12 +51,13 @@ const SCOUT_ROLE = '1430743608822206504'
 const INFIRMARY_ROLE = '1362059023481831517'
 const GUILD_ID = '1322056087792521269'
 // Invented ids; e2e/docker-compose.yml hands the same ones to the api (DEATHWATCH_ROLE_ID is a list of two,
-// WATCH_COMMANDER_ROLE_ID a single id).
+// WATCH_COMMANDER_ROLE_ID and DEATHWATCH_COMMAND_ROLE_ID single ids).
 const DEATHWATCH_ROLE = '200000000000000101'
 const DEATHWATCH_SECOND_ROLE = '200000000000000103'
 const ADMINISTRATOR_ROLE = '200000000000000104'
 const GUILD_OWNER_ID = '200000000000000005'
 const WATCH_COMMANDER_ROLE = '200000000000000102'
+const DEATHWATCH_COMMAND_ROLE = '200000000000000110'
 // Deathwatch members answer the single-member lookup only. They stay out of MEMBERS, which feeds the
 // full member list, so the roster specs' counts do not change.
 const DEATHWATCH_MEMBERS = {
@@ -62,6 +66,8 @@ const DEATHWATCH_MEMBERS = {
   '200000000000000004': { roles: [DEATHWATCH_SECOND_ROLE] },
   '200000000000000005': { roles: [] },
   '200000000000000006': { roles: [ADMINISTRATOR_ROLE] },
+  '200000000000000007': { roles: [DEATHWATCH_ROLE, DEATHWATCH_COMMAND_ROLE] },
+  '200000000000000008': { roles: [DEATHWATCH_COMMAND_ROLE] },
 }
 // Guild membership as Discord's bot endpoint would report it.
 const MEMBERS = {
