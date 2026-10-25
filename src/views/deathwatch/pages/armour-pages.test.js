@@ -18,6 +18,13 @@ async function mountPage(tab, sub = '', query = {}) {
   return w
 }
 const texts = (w, sel) => w.findAll(sel).map((e) => e.text())
+const card = (w, title) => w.findAll('.ah-part').find((c) => c.get('h4').text() === title)
+const spot = (w, title) => w.get(`.ah-hs[aria-label="Show ${title}"]`)
+// Which cards and hotspots are lit right now, by name.
+const lit = (w) => ({
+  cards: w.findAll('.ah-part.on').map((c) => c.get('h4').text()),
+  spots: w.findAll('.ah-hs.on').map((h) => h.attributes('aria-label')),
+})
 
 // jsdom has no scrollIntoView: stand one in for each test, and take it away again after.
 const scrollIntoView = Element.prototype.scrollIntoView
@@ -27,6 +34,7 @@ beforeEach(() => {
 })
 afterEach(() => {
   Element.prototype.scrollIntoView = scrollIntoView
+  vi.unstubAllGlobals()
 })
 
 describe('Armouring Hall', () => {
@@ -70,20 +78,68 @@ describe('Armouring Hall', () => {
     expect(pauldrons.get('.ah-chl').attributes('href')).toBe('/deathwatch/armouringhall/standard/companyheraldry')
   })
 
-  it('lights a part card and its hotspot together, and a hotspot scrolls to its card', async () => {
+  it('lights a part card and its hotspot together under the pointer, and puts them out when it leaves', async () => {
     const w = await mountPage('standard')
-    const hs = w.findAll('.ah-hs')[3]
-    await hs.trigger('mouseenter')
-    expect(w.findAll('.ah-part.on').map((c) => c.get('h4').text())).toEqual(['Breastplate'])
-    await hs.trigger('click')
-    const breastplate = w.findAll('.ah-part')[3].element
-    expect(Element.prototype.scrollIntoView).toHaveBeenCalledOnce()
-    expect(Element.prototype.scrollIntoView.mock.contexts[0]).toBe(breastplate)
-    expect(document.activeElement).toBe(breastplate)
+    await spot(w, 'Breastplate').trigger('mouseenter')
+    expect(lit(w)).toEqual({ cards: ['Breastplate'], spots: ['Show Breastplate'] })
+    await spot(w, 'Breastplate').trigger('mouseleave')
+    expect(lit(w)).toEqual({ cards: [], spots: [] })
+    await card(w, 'Helm').trigger('mouseenter')
+    expect(lit(w)).toEqual({ cards: ['Helm'], spots: ['Show Helm'] })
+    await card(w, 'Helm').trigger('mouseleave')
+    expect(lit(w)).toEqual({ cards: [], spots: [] })
+  })
+
+  it('lights a card and its hotspot while either has focus, and puts them out when focus leaves', async () => {
+    const w = await mountPage('standard')
+    spot(w, 'Wargear').element.focus()
     await w.vm.$nextTick()
-    expect(w.findAll('.ah-part.on').map((c) => c.get('h4').text())).toEqual(['Breastplate'])
-    await w.findAll('.ah-part')[0].trigger('mouseenter')
-    expect(w.findAll('.ah-hs.on').map((h) => h.attributes('aria-label'))).toEqual(['Show Helm'])
+    expect(lit(w)).toEqual({ cards: ['Wargear'], spots: ['Show Wargear'] })
+    spot(w, 'Wargear').element.blur()
+    await w.vm.$nextTick()
+    expect(lit(w)).toEqual({ cards: [], spots: [] })
+    card(w, 'Gauntlets').element.focus()
+    await w.vm.$nextTick()
+    expect(lit(w)).toEqual({ cards: ['Gauntlets'], spots: ['Show Gauntlets'] })
+    card(w, 'Gauntlets').element.blur()
+    await w.vm.$nextTick()
+    expect(lit(w)).toEqual({ cards: [], spots: [] })
+  })
+
+  it('a hotspot scrolls to its card, moves focus to it and lights it, with no pointer ever over it', async () => {
+    const w = await mountPage('standard')
+    await spot(w, 'Greaves').trigger('click')
+    const greaves = card(w, 'Greaves').element
+    expect(Element.prototype.scrollIntoView).toHaveBeenCalledOnce()
+    expect(Element.prototype.scrollIntoView.mock.contexts[0]).toBe(greaves)
+    expect(document.activeElement).toBe(greaves)
+    await w.vm.$nextTick()
+    expect(lit(w)).toEqual({ cards: ['Greaves'], spots: ['Show Greaves'] })
+  })
+
+  it('flashes the card a hotspot scrolled to, afresh on each click, until its animation ends', async () => {
+    const frames = []
+    vi.stubGlobal('requestAnimationFrame', (run) => frames.push(run))
+    const nextFrame = async (w) => {
+      frames.splice(0).forEach((run) => run(0))
+      await w.vm.$nextTick()
+    }
+    const flashing = (w) => w.findAll('.ah-part.flash').map((c) => c.get('h4').text())
+    const w = await mountPage('standard')
+    await spot(w, 'Helm').trigger('click')
+    expect(flashing(w)).toEqual([])
+    await nextFrame(w)
+    expect(flashing(w)).toEqual(['Helm'])
+    // The same marker again: the flash goes out until the next frame, so the animation starts over.
+    await spot(w, 'Helm').trigger('click')
+    expect(flashing(w)).toEqual([])
+    await nextFrame(w)
+    expect(flashing(w)).toEqual(['Helm'])
+    await spot(w, 'Pauldrons').trigger('click')
+    await nextFrame(w)
+    expect(flashing(w)).toEqual(['Pauldrons'])
+    await card(w, 'Pauldrons').trigger('animationend')
+    expect(flashing(w)).toEqual([])
   })
 
   it('Company Heraldry shows every company, the Watch Company markings and the alternative colors', async () => {
