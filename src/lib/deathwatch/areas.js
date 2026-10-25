@@ -21,7 +21,15 @@ export const AREAS = {
   armouringhall: {
     label: 'Armouring Hall',
     blurb: 'Specialist armour, standard uniform and heraldry',
-    tabs: [tab('standard', 'Standard'), tab('specialist', 'Specialist'), tab('watch-command', 'Watch Command')],
+    // `items`: a tab's uniforms, in the picker's order (armour.test.js keeps them in step with armour.js), so the
+    // address always names the one shown.
+    tabs: [
+      { slug: 'standard', label: 'Standard', items: ['watchbrother', 'companyheraldry'] },
+      { slug: 'specialist', label: 'Specialist', items: ['apothecarion', 'librarium', 'mechanicus', 'reclusiarc'] },
+      // Only Deathwatch Command (and the Watch Commander) see this tab (DeathwatchNav, DeathwatchArea).
+      { slug: 'watch-command', label: 'Watch Command', command: true, items: ['watchsergeant', 'watchspecialist'] },
+      tab('restricted-wargear', 'Restricted Wargear'),
+    ],
   },
   chronicles: {
     label: 'Chronicles of Valor',
@@ -47,21 +55,18 @@ export const AREAS = {
   },
 }
 
-// An Armouring Hall page names one item, e.g. /armouringhall/standard/<item>: lowercase letters and digits
-// only, which is what the old site's slugs were reduced to.
-const SUB = /^[a-z0-9]{1,40}$/
-
 /**
  * Resolves router params ({ area, tab, sub }) to the page they name, or null for an unknown area.
- * An unknown or missing tab falls back to the area's first; a sub-slug survives only on the Armouring
- * Hall and only if it is well formed. `canonical` is the one path for that page. Params come from the
- * URL, so nothing here trusts their type or indexes an object with them.
+ * An unknown or missing tab falls back to the area's first. A sub-slug survives only if it is one of the tab's
+ * items (an Armouring Hall uniform); anything else becomes the tab's first item, or nothing on a tab with none.
+ * `canonical` is the one path for that page. Params come from the URL, so nothing here trusts their type or
+ * indexes an object with them.
  */
 export function resolveArea(params) {
   const { area, tab: wanted, sub } = params ?? {}
   if (typeof area !== 'string' || !Object.hasOwn(AREAS, area)) return null
   const { tabs } = AREAS[area]
-  const slug = (tabs.find((t) => t.slug === wanted) ?? tabs[0]).slug
-  const item = area === 'armouringhall' && typeof sub === 'string' && SUB.test(sub) ? sub : ''
+  const { slug, items = [] } = tabs.find((t) => t.slug === wanted) ?? tabs[0]
+  const item = items.includes(sub) ? sub : (items[0] ?? '')
   return { area, tab: slug, sub: item, canonical: `/deathwatch/${area}/${slug}${item ? `/${item}` : ''}` }
 }

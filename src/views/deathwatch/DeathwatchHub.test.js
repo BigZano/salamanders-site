@@ -35,7 +35,7 @@ describe('DeathwatchHub', () => {
   it('offers the three areas, each straight to its first tab, and a way back to the Salamanders', () => {
     expect(cards(mountHub())).toEqual([
       { title: 'Event Tracker', href: '/deathwatch/eventtracker/standings' },
-      { title: 'Armouring Hall', href: '/deathwatch/armouringhall/standard' },
+      { title: 'Armouring Hall', href: '/deathwatch/armouringhall/standard/watchbrother' },
       { title: 'Chronicles of Valor', href: '/deathwatch/chronicles/hall-of-champions' },
       { title: 'Return to the Salamanders', href: '/' },
     ])

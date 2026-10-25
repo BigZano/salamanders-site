@@ -37,6 +37,12 @@
   font-family: var(--dw-font-body);
 }
 
+/* The site's route enter animation (App.vue) holds its last frame's transform, which would make the fixed backdrop
+   below scroll with the page. The area lets go of it once the animation ends. `body` outranks App.vue's scoped rule. */
+body main > .dw {
+  animation-fill-mode: backwards;
+}
+
 /* The page behind an open bottom sheet does not scroll (the sheet is a native modal dialog). Here, not in the
    sheet's own scoped styles, because a scoped rule cannot select the body. It matches only while a sheet is open. */
 body:has(.dw-sheet[open]) {

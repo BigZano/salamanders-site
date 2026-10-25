@@ -5,7 +5,8 @@ import { mount } from '@vue/test-utils'
 // The views not yet ported are skeletons: the original's real headings and labels over shimmer where the content
 // will be. This is the contract each one keeps until its port replaces it. A page lists exactly what it may say, so
 // a real name can never slip in: whatever text is left after the allowed labels are removed must be nothing.
-// A ported view leaves this list for PORTED; tracker-pages.test.js says what the real views contain.
+// A ported view leaves this list for PORTED; tracker-pages.test.js and armour-pages.test.js
+// say what the real views contain.
 const PORTED = [
   'eventtracker/standings',
   'eventtracker/kill-teams',
@@ -17,13 +18,15 @@ const PORTED = [
   'manage/enter-mission',
   'manage/manage',
   'manage/checks',
+  'armouringhall/standard',
+  'armouringhall/specialist',
+  'armouringhall/watch-command',
+  'armouringhall/restricted-wargear',
 ]
 const ALL = import.meta.glob('./*/*.vue', { eager: true })
 const MODULES = Object.fromEntries(Object.entries(ALL).filter(([k]) => !PORTED.includes(k.slice(2, -4))))
 
 const NOTE = 'This view is being rebuilt.'
-const ARMOUR = ['Helm', 'Pauldrons', 'Wargear', 'Breastplate', 'Gauntlets', 'Greaves', 'Armour Set']
-const armour = (label) => ({ h2: [label], labels: ARMOUR, figure: true })
 
 // h2/h3: every heading, in order; tables: every table's column labels; labels: every tile and field label.
 const PAGES = {
@@ -41,9 +44,6 @@ const PAGES = {
   },
   'chronicles/in-memoriam': { h2: ['In Memoriam'] },
   'chronicles/operational-records': { h2: ['Operational Records', 'Current Kill-Team Standings'], tables: [['#', 'Kill Team', 'Points']] },
-  'armouringhall/standard': armour('Standard'),
-  'armouringhall/specialist': armour('Specialist'),
-  'armouringhall/watch-command': armour('Watch Command'),
   'manage/records': { h2: ['New operational record', 'Records created here'], h3: ['Kill Teams', 'Top Operatives'] },
   'manage/page-texts': { h2: ['Page Texts'] },
 }
@@ -96,7 +96,7 @@ describe('the view skeletons', () => {
   }
 
   it('hides the heading of a page whose original had none, but keeps it for assistive technology', () => {
-    for (const key of ['chronicles/hall-of-champions', 'chronicles/in-memoriam', 'chronicles/player-profiles', 'armouringhall/standard']) {
+    for (const key of ['chronicles/hall-of-champions', 'chronicles/in-memoriam', 'chronicles/player-profiles']) {
       const first = mountPage(key).get('h2')
       expect(first.classes(), key).toContain('dw-sr-only')
       expect(first.classes(), key).not.toContain('dw-plaque')

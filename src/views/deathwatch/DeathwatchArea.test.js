@@ -31,10 +31,10 @@ async function settle() {
 }
 
 // The area route as production declares it (router.js): the view as the component, and the same global guard.
-async function mountAt(path, { commander = false } = {}) {
+async function mountAt(path, { commander = false, command = commander } = {}) {
   const pinia = createPinia()
   setActivePinia(pinia)
-  useDeathwatch().$patch({ status: 'allowed', commander })
+  useDeathwatch().$patch({ status: 'allowed', commander, command })
   // The ported views read the area's data: an empty event, already loaded, so none of them asks a server.
   useDeathwatchData().$patch({ status: 'ready', local: true })
   const router = createRouter({
@@ -195,6 +195,22 @@ describe('DeathwatchArea', () => {
     await settle()
     expect(HTMLDialogElement.prototype.close).toHaveBeenCalledTimes(1)
     expect(w.find('button.dw-areabar').attributes('aria-expanded')).toBe('false')
+  })
+
+  it('shows the Watch Command tab to Deathwatch Command only, and anyone else a notice in its place', async () => {
+    const other = (await mountAt('/deathwatch/armouringhall/watch-command', { commander: false })).w
+    expect(other.find('.dw-area-sheet').text()).toBe('Reserved for the Deathwatch Command.')
+    expect(other.find('nav').text()).not.toContain('Watch Command')
+    expect(other.find('nav').text()).toContain('Specialist')
+    const command = (await mountAt('/deathwatch/armouringhall/watch-command', { command: true })).w
+    expect(command.find('.dw-area-sheet').text()).not.toContain('Reserved for the Deathwatch Command.')
+    expect(command.find('nav').text()).toContain('Watch Command')
+  })
+
+  it('keeps Manage restricted for Deathwatch Command, who is not the Watch Commander', async () => {
+    const { w } = await mountAt('/deathwatch/manage/checks', { commander: false, command: true })
+    expect(w.text()).toContain('Restricted to the Watch Commander.')
+    expect(w.find('nav').exists()).toBe(false)
   })
 
   it('shows anyone else a notice in place of the Manage area, with no way into its views', async () => {

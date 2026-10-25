@@ -24,7 +24,10 @@ const page = computed(() => resolveArea(route.params))
 const area = computed(() => AREAS[page.value.area])
 // Manage is the Watch Commander's dashboard. Hiding it here only spares others a dead end: the server refuses them anyway.
 const restricted = computed(() => page.value.area === 'manage' && !store.commander)
-const tabLabel = computed(() => area.value.tabs.find((t) => t.slug === page.value.tab).label)
+const currentTab = computed(() => area.value.tabs.find((t) => t.slug === page.value.tab))
+const tabLabel = computed(() => currentTab.value.label)
+// A single tab may be Deathwatch Command's (Watch Command): the rest of the area stays open. Hidden only, as above.
+const locked = computed(() => currentTab.value.command === true && !store.command)
 
 // While a view's chunk is on its way (after a short delay, so a fast one never flashes it), and if it fails.
 const Loading = { render: () => h('p', { class: 'dw-area-loading', role: 'status' }, 'Loading…') }
@@ -53,17 +56,18 @@ const view = computed(() => {
           </div>
         </header>
         <div class="dw-area-navwrap">
-          <DeathwatchNav :area="page.area" :current="page.tab" />
+          <DeathwatchNav :area="page.area" :current="page.tab" :command="store.command" />
         </div>
       </aside>
       <!-- A phone: the bar says which view is open and opens the list of views from the foot of the screen. -->
       <DeathwatchAreaBar class="dw-area-bar" :area-label="area.label" :tab-label="tabLabel" :open="sheetOpen" @open="sheetOpen = true" />
       <DeathwatchNavSheet v-model="sheetOpen" :aria-label="`${area.label} views`">
-        <DeathwatchNav :area="page.area" :current="page.tab" @navigate="sheetOpen = false" />
+        <DeathwatchNav :area="page.area" :current="page.tab" :command="store.command" @navigate="sheetOpen = false" />
       </DeathwatchNavSheet>
       <div class="dw-area-main">
         <div class="dw-area-sheet dw-panel">
-          <component :is="view" :key="viewKey" />
+          <p v-if="locked" class="dw-area-restricted" role="status">Reserved for the Deathwatch Command.</p>
+          <component :is="view" v-else :key="viewKey" />
         </div>
       </div>
     </template>

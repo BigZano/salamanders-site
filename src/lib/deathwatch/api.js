@@ -5,7 +5,7 @@
  */
 import { API_BASE, BuildsApiError, request } from '../buildsApi'
 
-/** → { access: boolean, watchCommander: boolean } */
+/** → { access: boolean, watchCommander: boolean, deathwatchCommand: boolean } */
 export const getMe = (token) => request('/deathwatch/me', { token, cache: 'no-store' })
 
 /**

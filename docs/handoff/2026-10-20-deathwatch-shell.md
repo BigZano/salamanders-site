@@ -28,7 +28,8 @@ VITE_DEATHWATCH_FIXTURE=1 bun run dev      # then open http://localhost:5173/dea
 ```
 
 `?scene=` picks what the gate shows, with no sign-in: `allowed`, `commander` (adds the Manage card and area),
-`denied`, `signin`, `checking` and `unavailable`. It survives the address being tidied. The volcano's look for the
+`command` (Deathwatch Command: the Armouring Hall's Watch Command tab, not Manage), `denied`, `signin`, `checking`
+and `unavailable`. It survives the address being tidied. The volcano's look for the
 section can be tuned with `?tune=1` (the `/deathwatch/*` row).
 
 ## Real-phone checks (nothing here can be proved on a desktop)
