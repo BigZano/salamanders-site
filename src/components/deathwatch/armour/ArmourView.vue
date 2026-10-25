@@ -1,9 +1,10 @@
 <script setup>
 // One uniform: its parts in two columns either side of the figure. A part card and the figure's hotspot for it
 // light up together (hover or focus on either); a hotspot also scrolls to its card. Notes that refer to Company
-// Heraldry link there.
+// Heraldry link there. Every link goes to the canonical address, so the guard never replaces a history entry.
 import { computed, ref } from 'vue'
 import { useRoute } from 'vue-router'
+import { resolveArea } from '../../../lib/deathwatch/areas'
 import { PAINT, hotspot, noteParts } from '../../../lib/deathwatch/armour'
 import ArmourHead from './ArmourHead.vue'
 import ArmourTiles from './ArmourTiles.vue'
@@ -16,7 +17,7 @@ const props = defineProps({
 })
 
 const route = useRoute()
-const link = (tab, item) => ({ path: `/deathwatch/armouringhall/${tab}${item ? `/${item}` : ''}`, query: route.query.scene ? { scene: route.query.scene } : {} })
+const link = (tab, item) => ({ path: resolveArea({ area: 'armouringhall', tab, sub: item }).canonical, query: route.query.scene ? { scene: route.query.scene } : {} })
 const lit = ref('')
 const flash = ref('')
 const cards = ref({})
@@ -29,6 +30,7 @@ const heraldry = (n) => /Company Heraldry/.test(n)
 
 function jump(title) {
   cards.value[title]?.scrollIntoView({ behavior: reduced() ? 'auto' : 'smooth', block: 'center' })
+  cards.value[title]?.focus({ preventScroll: true })
   flash.value = ''
   requestAnimationFrame(() => (flash.value = title))
 }
@@ -77,6 +79,8 @@ function jump(title) {
           tabindex="-1"
           @mouseenter="lit = title"
           @mouseleave="lit = ''"
+          @focus="lit = title"
+          @blur="lit = ''"
           @animationend="flash = ''"
         >
           <h4>{{ title }}</h4>

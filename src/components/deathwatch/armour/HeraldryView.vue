@@ -80,8 +80,6 @@ const companies = (ks) => ks.map((k) => [ORD[k], [k * 2, k * 2 + 1]])
 }
 .wm {
   margin-bottom: 0.75rem;
-}
-.wm {
   --tiles: 5;
   --tiles-max: none;
 }

@@ -33,17 +33,18 @@ describe('deathwatch store', () => {
 
   it('does not keep an earlier clearance while it checks again, not even for an instant', () => {
     const s = useDeathwatch()
-    s.$patch({ status: 'allowed', commander: true })
+    s.$patch({ status: 'allowed', commander: true, command: true })
     getMe.mockReturnValue(deferred().promise)
     s.load('tok') // not awaited: the state straight after the call is what a render would see
-    expect(s).toMatchObject({ status: 'checking', commander: false })
+    expect(s).toMatchObject({ status: 'checking', commander: false, command: false })
   })
 
   it('sends someone with no token to sign in, without asking the server', async () => {
     const s = useDeathwatch()
     for (const token of [null, undefined, '']) {
+      s.$patch({ commander: true, command: true })
       await s.load(token)
-      expect(s.status, String(token)).toBe('signin')
+      expect(s, String(token)).toMatchObject({ status: 'signin', commander: false, command: false })
     }
     expect(getMe).not.toHaveBeenCalled()
   })
@@ -117,11 +118,11 @@ describe('deathwatch store', () => {
 
   it('does not stay a commander after a failed check', async () => {
     const s = useDeathwatch()
-    getMe.mockResolvedValue({ access: true, watchCommander: true })
+    getMe.mockResolvedValue({ access: true, watchCommander: true, deathwatchCommand: true })
     await s.load('tok')
     getMe.mockRejectedValue(apiError(503))
     await s.load('tok')
-    expect(s).toMatchObject({ status: 'unavailable', commander: false })
+    expect(s).toMatchObject({ status: 'unavailable', commander: false, command: false })
   })
 
   it('drops an answer that arrives after reset()', async () => {
@@ -163,17 +164,23 @@ describe('deathwatch store', () => {
 
   it('reset() goes back to idle and not a commander', async () => {
     const s = useDeathwatch()
-    getMe.mockResolvedValue({ access: true, watchCommander: true })
+    getMe.mockResolvedValue({ access: true, watchCommander: true, deathwatchCommand: true })
     await s.load('tok')
     s.reset()
-    expect(s).toMatchObject({ status: 'idle', commander: false })
+    expect(s).toMatchObject({ status: 'idle', commander: false, command: false })
   })
 
   it('shows a fixture scene instead of asking the server, even with no token', async () => {
     const s = useDeathwatch()
-    loadFixture.mockResolvedValue({ _fixture: true, scene: 'commander', status: 'allowed', commander: true })
+    loadFixture.mockResolvedValue({ _fixture: true, scene: 'commander', status: 'allowed', commander: true, command: true })
     await s.load(null)
-    expect(s).toMatchObject({ status: 'allowed', commander: true })
+    expect(s).toMatchObject({ status: 'allowed', commander: true, command: true })
+    loadFixture.mockResolvedValue({ _fixture: true, scene: 'command', status: 'allowed', commander: false, command: true })
+    await s.load(null)
+    expect(s).toMatchObject({ status: 'allowed', commander: false, command: true })
+    loadFixture.mockResolvedValue({ _fixture: true, scene: 'allowed', status: 'allowed', commander: false, command: false })
+    await s.load(null)
+    expect(s).toMatchObject({ status: 'allowed', commander: false, command: false })
     expect(getMe).not.toHaveBeenCalled()
   })
 

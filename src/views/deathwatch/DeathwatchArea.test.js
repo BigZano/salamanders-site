@@ -207,6 +207,12 @@ describe('DeathwatchArea', () => {
     expect(command.find('nav').text()).toContain('Watch Command')
   })
 
+  it('keeps Manage restricted for Deathwatch Command, who is not the Watch Commander', async () => {
+    const { w } = await mountAt('/deathwatch/manage/checks', { commander: false, command: true })
+    expect(w.text()).toContain('Restricted to the Watch Commander.')
+    expect(w.find('nav').exists()).toBe(false)
+  })
+
   it('shows anyone else a notice in place of the Manage area, with no way into its views', async () => {
     const { w } = await mountAt('/deathwatch/manage/checks', { commander: false })
     expect(w.text()).toContain('Restricted to the Watch Commander.')

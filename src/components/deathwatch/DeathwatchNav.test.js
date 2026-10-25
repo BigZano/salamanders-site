@@ -2,7 +2,7 @@
 import { describe, it, expect } from 'vitest'
 import { mount } from '@vue/test-utils'
 import { createRouter, createMemoryHistory } from 'vue-router'
-import { AREAS } from '../../lib/deathwatch/areas'
+import { AREAS, resolveArea } from '../../lib/deathwatch/areas'
 import DeathwatchNav from './DeathwatchNav.vue'
 
 const router = () => createRouter({ history: createMemoryHistory(), routes: [{ path: '/:rest(.*)*', component: { template: '<div />' } }] })
@@ -13,7 +13,8 @@ describe('DeathwatchNav', () => {
     const w = mountNav({ area, current: AREAS[area].tabs[0].slug, command: true })
     const tabLinks = w.findAll('a').slice(0, -1) // the last link goes back to the hub
     expect(tabLinks.map((a) => a.text())).toEqual(AREAS[area].tabs.map((t) => t.label))
-    expect(tabLinks.map((a) => a.attributes('href'))).toEqual(AREAS[area].tabs.map((t) => `/deathwatch/${area}/${t.slug}`))
+    // Straight to the canonical address: one the guard would rewrite replaces the history entry, and Back skips a page.
+    expect(tabLinks.map((a) => a.attributes('href'))).toEqual(AREAS[area].tabs.map((t) => resolveArea({ area, tab: t.slug }).canonical))
   })
 
   it('lists a Deathwatch Command tab only for Deathwatch Command', () => {

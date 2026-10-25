@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 // The rebuilt Armouring Hall: each tab shows the uniform its address names, with the old site's parts, paints and
 // notes; the picker and the Company Heraldry links keep a dev ?scene=; a part card and its hotspot light up together.
-import { describe, it, expect, beforeEach, vi } from 'vitest'
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import { flushPromises, mount } from '@vue/test-utils'
 import { createMemoryHistory, createRouter } from 'vue-router'
 
@@ -19,15 +19,23 @@ async function mountPage(tab, sub = '', query = {}) {
 }
 const texts = (w, sel) => w.findAll(sel).map((e) => e.text())
 
+// jsdom has no scrollIntoView: stand one in for each test, and take it away again after.
+const scrollIntoView = Element.prototype.scrollIntoView
 beforeEach(() => {
   document.body.innerHTML = ''
   Element.prototype.scrollIntoView = vi.fn()
+})
+afterEach(() => {
+  Element.prototype.scrollIntoView = scrollIntoView
 })
 
 describe('Armouring Hall', () => {
   it('Standard opens on the Watch Brother, with every part and the Armour Set to come', async () => {
     const w = await mountPage('standard')
     expect(w.get('h2').text()).toBe('Standard')
+    // The original had no heading here: kept for assistive technology, hidden on screen.
+    expect(w.get('h2').classes()).toContain('dw-sr-only')
+    expect(w.get('h2').classes()).not.toContain('dw-plaque')
     expect(w.get('.ah-title').text()).toBe('Watch Brother')
     expect(texts(w, '.ah-part h4')).toEqual(['Helm', 'Pauldrons', 'Wargear', 'Breastplate', 'Gauntlets', 'Greaves'])
     expect(w.text()).toContain('Armour Set')
@@ -68,7 +76,12 @@ describe('Armouring Hall', () => {
     await hs.trigger('mouseenter')
     expect(w.findAll('.ah-part.on').map((c) => c.get('h4').text())).toEqual(['Breastplate'])
     await hs.trigger('click')
-    expect(Element.prototype.scrollIntoView).toHaveBeenCalled()
+    const breastplate = w.findAll('.ah-part')[3].element
+    expect(Element.prototype.scrollIntoView).toHaveBeenCalledOnce()
+    expect(Element.prototype.scrollIntoView.mock.contexts[0]).toBe(breastplate)
+    expect(document.activeElement).toBe(breastplate)
+    await w.vm.$nextTick()
+    expect(w.findAll('.ah-part.on').map((c) => c.get('h4').text())).toEqual(['Breastplate'])
     await w.findAll('.ah-part')[0].trigger('mouseenter')
     expect(w.findAll('.ah-hs.on').map((h) => h.attributes('aria-label'))).toEqual(['Show Helm'])
   })
@@ -88,7 +101,7 @@ describe('Armouring Hall', () => {
     expect(w.find('.ah-head .ah-wip').exists()).toBe(true)
     const s = await mountPage('watch-command', 'watchspecialist')
     expect(s.get('.ah-lead').text()).not.toContain('Watch-Brother')
-    expect(s.get('.ah-lead a').attributes('href')).toBe('/deathwatch/armouringhall/specialist')
+    expect(s.get('.ah-lead a').attributes('href')).toBe('/deathwatch/armouringhall/specialist/apothecarion')
   })
 
   it('Restricted Wargear: the two locked pieces and how each is unlocked', async () => {

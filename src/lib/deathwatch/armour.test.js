@@ -54,9 +54,26 @@ describe('the helpers', () => {
 })
 
 describe('the Armouring Hall tabs', () => {
-  it('open on the first uniform of their list, as the address names it', () => {
-    for (const { slug, item } of AREAS.armouringhall.tabs.filter((t) => Object.hasOwn(UNIFORMS, t.slug))) {
-      expect(item, slug).toBe(itemSlug(UNIFORMS[slug][0]))
+  it('list the items of their uniforms, in order, and only the tabs with uniforms have any', () => {
+    for (const { slug, items } of AREAS.armouringhall.tabs) {
+      expect(items, slug).toEqual(Object.hasOwn(UNIFORMS, slug) ? UNIFORMS[slug].map(itemSlug) : undefined)
     }
+  })
+
+  // Two uniforms of one tab with the same slug would share an address, and uniformFor would only ever find the first.
+  it('give every uniform of a tab its own slug', () => {
+    for (const [tab, list] of Object.entries(UNIFORMS)) {
+      const slugs = list.map(itemSlug)
+      expect(new Set(slugs).size, tab).toBe(slugs.length)
+    }
+    // Why the check is needed: names that differ only in case, spaces or punctuation share a slug.
+    expect(itemSlug({ name: 'Watch-Brother' })).toBe(itemSlug({ name: 'watch brother' }))
+  })
+
+  it('show the first uniform for any sub-slug that is not one of theirs', () => {
+    for (const sub of ['nope', '', 123, null, undefined, ['watchbrother'], '__proto__']) {
+      expect(uniformFor('standard', sub), String(sub)).toBe(STANDARD[0])
+    }
+    expect(uniformFor('restricted-wargear', 'watchbrother')).toBeUndefined()
   })
 })

@@ -14,7 +14,7 @@ describe('deathwatchRedirect', () => {
   it('lets a canonical path through', () => {
     expect(deathwatchRedirect(to('/deathwatch/eventtracker/standings', { area: 'eventtracker', tab: 'standings' }))).toBeUndefined()
     expect(
-      deathwatchRedirect(to('/deathwatch/armouringhall/standard/battlebrother', { area: 'armouringhall', tab: 'standard', sub: 'battlebrother' })),
+      deathwatchRedirect(to('/deathwatch/armouringhall/standard/companyheraldry', { area: 'armouringhall', tab: 'standard', sub: 'companyheraldry' })),
     ).toBeUndefined()
   })
 

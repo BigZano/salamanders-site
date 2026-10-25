@@ -4,7 +4,7 @@
 // was used (`navigate`), so a sheet around it can close. Each link carries the original's icon for that view,
 // drawn from data (lib/deathwatch/icons.json), never from markup.
 import { computed } from 'vue'
-import { AREAS } from '../../lib/deathwatch/areas'
+import { AREAS, resolveArea } from '../../lib/deathwatch/areas'
 import { iconFor } from '../../lib/deathwatch/icons'
 
 const props = defineProps({
@@ -26,7 +26,7 @@ const tabs = computed(() => info.value.tabs.filter((t) => props.command || !t.co
       <li v-for="tab in tabs" :key="tab.slug">
         <RouterLink
           class="dw-nav-link"
-          :to="`/deathwatch/${area}/${tab.slug}`"
+          :to="resolveArea({ area, tab: tab.slug }).canonical"
           :aria-current="tab.slug === current ? 'page' : undefined"
           @click="emit('navigate')"
         >
