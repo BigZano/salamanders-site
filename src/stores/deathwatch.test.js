@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { setActivePinia, createPinia } from 'pinia'
+import fc from 'fast-check'
 
 vi.mock('../lib/deathwatch/api', () => ({ getMe: vi.fn() }))
 vi.mock('../lib/deathwatch/fixture', () => ({ loadFixture: vi.fn() }))
@@ -27,8 +28,8 @@ beforeEach(() => {
 })
 
 describe('deathwatch store', () => {
-  it('starts idle and not a commander', () => {
-    expect(useDeathwatch()).toMatchObject({ status: 'idle', commander: false })
+  it('starts idle, not a commander and without Deathwatch Command', () => {
+    expect(useDeathwatch()).toMatchObject({ status: 'idle', commander: false, command: false })
   })
 
   it('does not keep an earlier clearance while it checks again, not even for an instant', () => {
@@ -168,6 +169,71 @@ describe('deathwatch store', () => {
     await s.load('tok')
     s.reset()
     expect(s).toMatchObject({ status: 'idle', commander: false, command: false })
+  })
+
+  it('drops the answers of every earlier load after reset(), not only the latest one', async () => {
+    const first = deferred()
+    const second = deferred()
+    getMe.mockReturnValueOnce(first.promise).mockReturnValueOnce(second.promise)
+    const s = useDeathwatch()
+    const a = s.load('a')
+    await tick()
+    const b = s.load('b')
+    await tick()
+    s.reset()
+    first.resolve({ access: true, watchCommander: true, deathwatchCommand: true })
+    await a
+    expect(s).toMatchObject({ status: 'idle', commander: false, command: false })
+    second.resolve({ access: true, watchCommander: true, deathwatchCommand: true })
+    await b
+    expect(s).toMatchObject({ status: 'idle', commander: false, command: false })
+  })
+
+  // Any mix of loads and resets, their answers landing in any order: only the last call started may leave a mark.
+  const OUTCOMES = [
+    { reply: { access: true, watchCommander: true }, state: { status: 'allowed', commander: true, command: true } },
+    { reply: { access: true, deathwatchCommand: true }, state: { status: 'allowed', commander: false, command: true } },
+    { reply: { access: true }, state: { status: 'allowed', commander: false, command: false } },
+    { reply: { access: false }, state: { status: 'denied', commander: false, command: false } },
+    { error: apiError(401), state: { status: 'signin', commander: false, command: false } },
+    { error: apiError(503), state: { status: 'unavailable', commander: false, command: false } },
+  ]
+  const IDLE = { status: 'idle', commander: false, command: false }
+
+  it('lets only the last load or reset leave a mark, whatever order the answers arrive in', async () => {
+    const call = fc.oneof(
+      fc.record({ kind: fc.constant('load'), outcome: fc.integer({ min: 0, max: OUTCOMES.length - 1 }), arrives: fc.nat(50) }),
+      fc.record({ kind: fc.constant('reset') }),
+    )
+    await fc.assert(
+      fc.asyncProperty(fc.array(call, { minLength: 1, maxLength: 6 }), async (calls) => {
+        setActivePinia(createPinia())
+        vi.resetAllMocks()
+        loadFixture.mockResolvedValue(null)
+        const s = useDeathwatch()
+        const loads = []
+        for (const c of calls) {
+          if (c.kind === 'reset') {
+            s.reset()
+            continue
+          }
+          const d = deferred()
+          getMe.mockReturnValueOnce(d.promise)
+          loads.push({ ...c, d, done: s.load('tok') })
+          await tick() // let it reach its request before the next call starts
+        }
+        for (const l of [...loads].sort((x, y) => x.arrives - y.arrives)) {
+          const o = OUTCOMES[l.outcome]
+          if (o.error) l.d.reject(o.error)
+          else l.d.resolve(o.reply)
+        }
+        await Promise.all(loads.map((l) => l.done))
+        const last = calls[calls.length - 1]
+        const want = last.kind === 'reset' ? IDLE : OUTCOMES[last.outcome].state
+        expect(s.$state).toEqual(want)
+      }),
+      { numRuns: 150 },
+    )
   })
 
   it('shows a fixture scene instead of asking the server, even with no token', async () => {
