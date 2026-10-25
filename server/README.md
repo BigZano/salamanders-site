@@ -76,7 +76,7 @@ Any Discord failure answers 503: the area fails closed.
 
 | Endpoint | Who | Notes |
 |---|---|---|
-| `GET /deathwatch/me` | any signed-in user | `{ access, watchCommander }`; never 403 |
+| `GET /deathwatch/me` | any signed-in user | `{ access, watchCommander, deathwatchCommand }`; never 403 |
 | `GET /deathwatch/data` | access | `{ teams, cfg, archive }`; `ETag`, 304 on `If-None-Match`; 403 without access |
 | `POST /deathwatch/doc` | Watch Commander | `{ col, id, op: 'set' \| 'delete', doc }`; JSON content type required |
 | `GET /deathwatch/grants` | Watch Commander | active grants |
@@ -94,6 +94,7 @@ transaction as the change.
 |---|---|
 | `DEATHWATCH_ROLE_ID` | the Deathwatch role id, or several separated by commas with no spaces (a holder of any one gets in) — no default, required |
 | `WATCH_COMMANDER_ROLE_ID` | the Watch Commander role id — no default, required |
+| `DEATHWATCH_COMMAND_ROLE_ID` | the Deathwatch Command role id (one id, not the Watch Commander's) — optional. Its holders who also have access get `deathwatchCommand: true` from `/deathwatch/me`; it opens no route. Unset or not a single id, nobody holds it and nothing else changes |
 
 Until **both** are set every `/deathwatch/*` route answers 503 "not configured". The role
 ids are supplied at deploy time and never committed. To deploy: set both in `server/.env`,

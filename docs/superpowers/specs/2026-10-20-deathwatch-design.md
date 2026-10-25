@@ -166,7 +166,8 @@ Access verdict for a bearer token:
 2. `rolesOf(user.id)` gives the held roles (null = not in the guild).
 3. `watchCommander` = holds the Watch Commander role.
 4. `access` = `watchCommander` or holds a Deathwatch role or has an active grant or is the guild owner or holds an Administrator role (`discordRoles.isAdmin`, asked last and only of someone nothing else admits). Administrators never get `watchCommander`.
-5. Any Discord failure (`Upstream`) fails closed (503).
+5. `deathwatchCommand` = `access` and holds the Deathwatch Command role (`DEATHWATCH_COMMAND_ROLE_ID`, one id, a different role from the Watch Commander). From the role only: never from a grant, from being the owner or an Administrator, or from the Watch Commander role. It opens no route and no data; the front end uses it to show the Watch Command tab. Optional: unset or malformed, nobody holds it and the area is unaffected.
+6. Any Discord failure (`Upstream`) fails closed (503).
 
 `discordRoles.js` asks Discord on every call and has no cache. Reads (`/me`,
 `/data`) therefore use a short in-memory verdict cache keyed by a hash of the token
@@ -175,7 +176,7 @@ Access verdict for a bearer token:
 
 | Endpoint | Who | Notes |
 | --- | --- | --- |
-| `GET /deathwatch/me` | any signed-in user | `{ access, watchCommander }`; never 403 |
+| `GET /deathwatch/me` | any signed-in user | `{ access, watchCommander, deathwatchCommand }`; never 403 |
 | `GET /deathwatch/data` | access | `{ teams, cfg, archive }`; ETag, 304 on match; 403 if no access |
 | `POST /deathwatch/doc` | Watch Commander | `{ col, id, op: 'set' \| 'delete', doc }`; JSON content type required |
 | `GET /deathwatch/grants` | Watch Commander | active grants |
@@ -199,8 +200,8 @@ deathwatch_grant_events(id, discord_id, actor_discord_id, action 'granted'|'revo
 ```
 
 History and grant events are written in the same transaction as the change.
-Environment: `DEATHWATCH_ROLE_ID`, `WATCH_COMMANDER_ROLE_ID` (no defaults in code),
-documented in `server/README.md` and `docker-compose.yml`.
+Environment: `DEATHWATCH_ROLE_ID`, `WATCH_COMMANDER_ROLE_ID` (no defaults in code), and the optional
+`DEATHWATCH_COMMAND_ROLE_ID`, documented in `server/README.md` and `docker-compose.yml`.
 
 ### Fixtures and local development
 
