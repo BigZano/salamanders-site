@@ -9,9 +9,12 @@ import { etagOf } from './deathwatchEtag'
 const DW = '200000000000000101'
 const WC = '200000000000000102'
 const LEGION = '200000000000000199'
+const CMD = '200000000000000110' // the Deathwatch Command role
 const USERS = {
   commander: { id: '300000000000000001', roles: [WC] },
   watcher: { id: '300000000000000002', roles: [DW] },
+  command: { id: '300000000000000007', roles: [DW, CMD] }, // Deathwatch Command, never the Watch Commander
+  commandOnly: { id: '300000000000000008', roles: [CMD] }, // the role without the Deathwatch one: no way in
   granted: { id: '300000000000000003', roles: null }, // not in the guild; gets a grant in some tests
   plain: { id: '300000000000000004', roles: [] },
   legion: { id: '300000000000000005', roles: [LEGION] },
@@ -75,6 +78,7 @@ function setup({ configured = true } = {}) {
       return u ? { id: u.id, username: 'u' + u.id } : null
     }),
     rolesOf: vi.fn(async (id) => Object.values(users).find((u) => u.id === id).roles),
+    isAdmin: async () => false, // nobody here is an administrator
   }
   const store = memStore()
   const access = createDeathwatchAccess({
@@ -82,6 +86,7 @@ function setup({ configured = true } = {}) {
     store,
     deathwatchRoleId: configured ? DW : undefined,
     commanderRoleId: configured ? WC : undefined,
+    deathwatchCommandRoleId: CMD, // set even when the area is not: it must not configure anything
   })
   const handle = createDeathwatchHandler({ access, store })
 
@@ -189,17 +194,61 @@ describe('GET /deathwatch/me', () => {
     const { call, store } = setup()
     store.grants.set(USERS.granted.id, { active: true, by: 'x' })
     const me = async (who) => (await call(who, 'GET', '/deathwatch/me')).body
-    expect(await me('commander')).toEqual({ access: true, watchCommander: true })
-    expect(await me('watcher')).toEqual({ access: true, watchCommander: false })
-    expect(await me('granted')).toEqual({ access: true, watchCommander: false }) // not in the guild
-    expect(await me('plain')).toEqual({ access: false, watchCommander: false })
-    expect(await me('legion')).toEqual({ access: false, watchCommander: false })
-    expect(await me('stranger')).toEqual({ access: false, watchCommander: false })
+    expect(await me('commander')).toEqual({ access: true, watchCommander: true, deathwatchCommand: false })
+    expect(await me('watcher')).toEqual({ access: true, watchCommander: false, deathwatchCommand: false })
+    expect(await me('command')).toEqual({ access: true, watchCommander: false, deathwatchCommand: true })
+    expect(await me('commandOnly')).toEqual({ access: false, watchCommander: false, deathwatchCommand: false })
+    expect(await me('granted')).toEqual({ access: true, watchCommander: false, deathwatchCommand: false }) // not in the guild
+    expect(await me('plain')).toEqual({ access: false, watchCommander: false, deathwatchCommand: false })
+    expect(await me('legion')).toEqual({ access: false, watchCommander: false, deathwatchCommand: false })
+    expect(await me('stranger')).toEqual({ access: false, watchCommander: false, deathwatchCommand: false })
+  })
+
+  it('sends nothing but the three flags', async () => {
+    const { call } = setup()
+    expect(Object.keys((await call('command', 'GET', '/deathwatch/me')).body).sort()).toEqual(['access', 'deathwatchCommand', 'watchCommander'])
+  })
+
+  it('tells a Deathwatch Command member who is only granted access in, and not before', async () => {
+    const { call, store, access } = setup()
+    expect((await call('commandOnly', 'GET', '/deathwatch/me')).body).toEqual({ access: false, watchCommander: false, deathwatchCommand: false })
+    store.grants.set(USERS.commandOnly.id, { active: true, by: 'x' })
+    access.forget() // as the grant route does, so the earlier refusal is not served from the cache
+    expect((await call('commandOnly', 'GET', '/deathwatch/me')).body).toEqual({ access: true, watchCommander: false, deathwatchCommand: true })
   })
 
   it('is never a 403', async () => {
     const { call } = setup()
-    for (const who of ['plain', 'legion', 'stranger']) expect((await call(who, 'GET', '/deathwatch/me')).status).toBe(200)
+    for (const who of ['plain', 'legion', 'stranger', 'commandOnly']) expect((await call(who, 'GET', '/deathwatch/me')).status).toBe(200)
+  })
+})
+
+describe('the Deathwatch Command role and the Watch Commander routes', () => {
+  const COMMANDER_ONLY = [
+    ['POST', '/deathwatch/doc', DOC],
+    ['GET', '/deathwatch/grants'],
+    ['POST', '/deathwatch/grants', { discordId: OTHER }],
+    ['DELETE', `/deathwatch/grants/${OTHER}`],
+  ]
+
+  it('opens none of them: only the Watch Commander role does', async () => {
+    const { call, store } = setup()
+    for (const who of ['command', 'commandOnly']) {
+      for (const [m, p, b] of COMMANDER_ONLY) {
+        const res = await call(who, m, p, b)
+        expect([who, m, p, res.status, res.body]).toEqual([who, m, p, 403, { error: 'Only the Watch Commander can do that.' }])
+      }
+    }
+    expect(store.writeDoc).not.toHaveBeenCalled()
+    expect(store.listGrants).not.toHaveBeenCalled()
+    expect(store.grant).not.toHaveBeenCalled()
+    expect(store.revoke).not.toHaveBeenCalled()
+  })
+
+  it('reads the area like any other member, and only with access', async () => {
+    const { call } = setup()
+    expect((await call('command', 'GET', '/deathwatch/data')).status).toBe(200)
+    expect((await call('commandOnly', 'GET', '/deathwatch/data')).status).toBe(403)
   })
 })
 
@@ -440,6 +489,6 @@ describe('grants', () => {
     expect((await call('granted', 'GET', '/deathwatch/data')).status).toBe(403) // refusal now cached
     await call('commander', 'POST', '/deathwatch/grants', { discordId: USERS.granted.id })
     expect((await call('granted', 'GET', '/deathwatch/data')).status).toBe(200)
-    expect((await call('granted', 'GET', '/deathwatch/me')).body).toEqual({ access: true, watchCommander: false })
+    expect((await call('granted', 'GET', '/deathwatch/me')).body).toEqual({ access: true, watchCommander: false, deathwatchCommand: false })
   })
 })
