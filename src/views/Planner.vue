@@ -853,7 +853,7 @@ onBeforeUnmount(() => {
   resize: vertical;
 }
 .pa-field::placeholder {
-  color: #5f6f66;
+  color: var(--color-faint);
 }
 .perk-author-empty {
   margin-top: 0.9rem;
@@ -1031,7 +1031,7 @@ onBeforeUnmount(() => {
   color: var(--color-bone);
 }
 .build-name.empty {
-  color: #5f6f66;
+  color: var(--color-faint);
 }
 .build-summary {
   margin-top: 1rem;
@@ -1079,7 +1079,7 @@ onBeforeUnmount(() => {
   line-height: 1.3;
 }
 .bg-name.empty {
-  color: #5f6f66;
+  color: var(--color-faint);
 }
 .bg-pts {
   flex: none;
@@ -1155,7 +1155,7 @@ onBeforeUnmount(() => {
   resize: vertical;
 }
 .save .fld::placeholder {
-  color: #5f6f66;
+  color: var(--color-faint);
 }
 .build-actions {
   display: flex;
@@ -1289,7 +1289,7 @@ onBeforeUnmount(() => {
   text-transform: none;
   font-weight: 400;
   font-size: 0.8rem;
-  color: #5f6f66;
+  color: var(--color-faint);
 }
 .pr-rank-clear {
   margin-left: auto;

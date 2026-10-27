@@ -127,7 +127,7 @@ const slots = [
   margin: 0.35rem 0 0.6rem;
 }
 .b-author {
-  color: #5f6f66;
+  color: var(--color-faint);
   font-size: 0.72rem;
   font-style: italic;
   margin: -0.3rem 0 0.6rem;
@@ -202,7 +202,7 @@ const slots = [
 }
 .b-perk-none {
   font-size: 0.76rem;
-  color: #5f6f66;
+  color: var(--color-faint);
   font-style: italic;
 }
 .b-actions {

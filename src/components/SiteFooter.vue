@@ -77,7 +77,7 @@ const footerLinks = computed(() => links.value.filter((l) => l.to !== '/'))
   max-width: 76rem;
   margin: 1rem auto 0;
   padding: 1rem 1.5rem 2rem;
-  color: #5f6f66;
+  color: var(--color-faint);
   font-size: 0.72rem;
   line-height: 1.5;
 }

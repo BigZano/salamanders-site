@@ -332,7 +332,7 @@ const changed = (group, key) => fireTuning[group][key] !== DEFAULTS[group][key]
 .check-hint {
   display: block;
   font-size: 0.58rem;
-  color: #5f6f66;
+  color: var(--color-faint);
   line-height: 1.3;
 }
 .tuner-actions {

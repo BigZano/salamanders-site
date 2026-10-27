@@ -265,7 +265,7 @@ async function remove(b) {
   font-size: 0.92rem;
 }
 .b-search::placeholder {
-  color: #5f6f66;
+  color: var(--color-faint);
 }
 .b-filters {
   display: flex;

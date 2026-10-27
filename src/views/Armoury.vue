@@ -360,7 +360,7 @@ watch(() => route.query.w, openFromQuery)
   font-size: 0.9rem;
 }
 .w-search::placeholder {
-  color: #5f6f66;
+  color: var(--color-faint);
 }
 
 .a-layout {

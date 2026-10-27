@@ -15,6 +15,8 @@
   --color-ash-2: #3a5246;
   --color-bone: #e8efe9;
   --color-smoke: #96a59c;
+  /* The quiet tier under smoke: placeholders, empty states, hints. 4.8:1 on the lightest panel. */
+  --color-faint: #7a8a81;
   --color-drake: #59d66c;
   --color-drake-deep: #173c23;
   --color-gold: #dfb85b;

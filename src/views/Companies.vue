@@ -204,7 +204,7 @@ function backToIndex() {
   font-size: 0.95rem;
 }
 .c-search::placeholder {
-  color: #5f6f66;
+  color: var(--color-faint);
 }
 .rs-dev-scenes {
   display: flex;

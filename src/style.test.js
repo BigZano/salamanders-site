@@ -1,5 +1,7 @@
 import { describe, it, expect } from 'vitest'
-import { readFileSync } from 'node:fs'
+import { readFileSync, readdirSync } from 'node:fs'
+import { join } from 'node:path'
+import { fileURLToPath } from 'node:url'
 import { TEXT, contrast, over } from './test-utils/contrast'
 
 const css = readFileSync(new URL('./style.css', import.meta.url), 'utf8')
@@ -134,5 +136,26 @@ describe('mobile baseline', () => {
   it('leaves pull-to-refresh and text selection alone', () => {
     expect(css).not.toContain('overscroll-behavior: none')
     expect(bodyRule()).not.toContain('user-select: none')
+  })
+})
+
+// Placeholders, empty-state names, hints and the footer fine print used #5f6f66, which measured
+// 3.3 to 3.7:1 on the dark surfaces. This is the quiet tier that still reads.
+describe('quiet text', () => {
+  const rgb = (hex) => [1, 3, 5].map((i) => parseInt(hex.slice(i, i + 2), 16))
+
+  it('defines --color-faint at 4.5:1 or better on every dark surface it sits on', () => {
+    const faint = css.match(/--color-faint:\s*(#[0-9a-f]{6})/i)?.[1]
+    expect(faint).toBeTruthy()
+    // footer, search fields, the lightest panel, and the page ground, as measured on the live pages
+    for (const surface of ['#060e0b', '#0a1510', '#0e1c16', '#07110d']) {
+      expect(contrast(rgb(faint), rgb(surface)), surface).toBeGreaterThanOrEqual(4.5)
+    }
+  })
+
+  it('keeps the old grey out of every component', () => {
+    const dir = fileURLToPath(new URL('.', import.meta.url))
+    const files = readdirSync(dir, { recursive: true }).filter((f) => /\.(vue|css)$/.test(f))
+    expect(files.filter((f) => readFileSync(join(dir, f), 'utf8').includes('#5f6f66'))).toEqual([])
   })
 })
