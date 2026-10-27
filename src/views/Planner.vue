@@ -153,12 +153,41 @@ function onPerk(perk) {
 
 // Toast
 const toast = ref('')
+const toastUndo = ref(false)
 let toastTimer
 function flash(msg) {
   toast.value = msg
+  toastUndo.value = false
   clearTimeout(toastTimer)
   toastTimer = setTimeout(() => (toast.value = ''), 1800)
 }
+// A reset is one slip away from wiping a build, so it offers an Undo for a while. The store
+// remembers the reset (from this page's button or the nav's Perk Builder link), so a reset made
+// just before arriving here is offered too.
+const UNDO_MS = 8000
+function offerUndo() {
+  toast.value = 'Build reset'
+  toastUndo.value = true
+  clearTimeout(toastTimer)
+  toastTimer = setTimeout(() => {
+    toast.value = ''
+    toastUndo.value = false
+    planner.discardUndo()
+  }, UNDO_MS)
+}
+function undoReset() {
+  planner.restoreReset()
+  flash('Build restored')
+}
+watch(
+  () => planner.undoReset,
+  (undo) => {
+    if (!undo) return
+    if (Date.now() - undo.at < UNDO_MS) offerUndo()
+    else planner.discardUndo()
+  },
+  { immediate: true },
+)
 async function copy(text) {
   try {
     await navigator.clipboard.writeText(text)
@@ -517,7 +546,10 @@ onBeforeUnmount(() => {
     </section>
 
     <transition name="toast">
-      <div v-if="toast" class="toast">{{ toast }}</div>
+      <div v-if="toast" class="toast" role="status">
+        {{ toast }}
+        <button v-if="toastUndo" type="button" class="toast-undo" @click="undoReset">Undo</button>
+      </div>
     </transition>
   </section>
 </template>
@@ -1417,6 +1449,32 @@ onBeforeUnmount(() => {
   border-radius: 3px;
   font-size: 0.85rem;
   box-shadow: 0 10px 40px -8px rgba(0, 0, 0, 0.8);
+  display: flex;
+  align-items: center;
+  gap: 0.9rem;
+}
+/* The hit area grows into the toast's own padding, so the button is 44px tall without a fat toast. */
+.toast-undo {
+  min-height: 2.75rem;
+  margin: -0.6rem -0.6rem -0.6rem 0;
+  padding: 0 0.9rem;
+  background: none;
+  border: 0;
+  color: var(--color-drake);
+  font-family: var(--font-display);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  font-size: 0.82rem;
+  cursor: pointer;
+  transition: transform 150ms var(--ease-forge);
+}
+.toast-undo:active {
+  transform: scale(0.97);
+}
+@media (hover: hover) and (pointer: fine) {
+  .toast-undo:hover {
+    color: var(--color-bone);
+  }
 }
 .toast-enter-active,
 .toast-leave-active {
