@@ -80,8 +80,10 @@ body:has(.dw-sheet[open]) {
 .dw-backdrop::after {
   content: '';
   position: absolute;
-  inset: 0;
+  /* A light blur and a touch of light, so the picture stays behind the page yet reads; reaching past the window keeps its edges from fading. */
+  inset: -6px;
   background: center / cover no-repeat;
+  filter: blur(2.1px) brightness(1.2);
   opacity: var(--dw-wm);
   animation:
     dw-drift 40s ease-in-out infinite alternate,
@@ -109,10 +111,10 @@ body:has(.dw-sheet[open]) {
   background-image: url('./img/bg-chronicles.webp');
 }
 /* The Hall of Relics in the old site's black marble and gold: the area's green turns to gold, its frames to gold,
-   no scanlines or grain, and its panels are stone. The backdrop is its card picture, the old site's only painting
-   for it; it is bright, so it shows faintly. */
+   no scanlines or grain, and its panels are stone. The backdrop is a chapel's altar under
+   its stained glass. */
 .dw[data-area='hallofrelics'] {
-  --dw-wm: 0.22;
+  --dw-wm: 0.45;
   --dw-ink: #ece4d0;
   --dw-muted: #9d947f;
   --dw-line: #25262b;
@@ -129,7 +131,7 @@ body:has(.dw-sheet[open]) {
     url("data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' width='800' height='800'><filter id='c' x='0' y='0' width='100%' height='100%'><feTurbulence type='fractalNoise' baseFrequency='.0022 .0035' numOctaves='4' seed='9' stitchTiles='stitch'/><feColorMatrix values='0 0 0 0 .2  0 0 0 0 .2  0 0 0 0 .24  1.6 0 0 0 -.7'/></filter><filter id='n' x='0' y='0' width='100%' height='100%'><feTurbulence type='fractalNoise' baseFrequency='.85' numOctaves='2' seed='2' stitchTiles='stitch'/><feColorMatrix values='0 0 0 0 .9  0 0 0 0 .85  0 0 0 0 .75  0 0 0 .05 0'/></filter><rect width='100%' height='100%' fill='%230a0b0d'/><rect width='100%' height='100%' filter='url(%23c)' opacity='.55'/><rect width='100%' height='100%' filter='url(%23n)'/></svg>") 0 0 / 800px;
 }
 .dw[data-area='hallofrelics'] .dw-backdrop::after {
-  background-image: url('./img/card-relics.webp');
+  background-image: url('./img/bg-relics.webp');
 }
 /* Recruitment stands in the hub's own hall. */
 .dw[data-area='recruitment'] .dw-backdrop::after {

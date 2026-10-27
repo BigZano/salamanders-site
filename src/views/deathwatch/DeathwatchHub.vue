@@ -146,20 +146,6 @@ const recruitmentTo = resolveArea({ area: 'recruitment' }).canonical
   clip-path: polygon(10px 0, calc(100% - 10px) 0, 100% 10px, 100% calc(100% - 10px), calc(100% - 10px) 100%, 10px 100%, 0 calc(100% - 10px), 0 10px);
   transition: transform 0.15s var(--ease-forge);
 }
-/* The Inquisition's seal, faint and grey, behind the right side of every card. */
-.dw-card::before {
-  content: '';
-  position: absolute;
-  top: 50%;
-  right: 2.6rem;
-  width: clamp(70px, 7vw, 100px);
-  aspect-ratio: 1;
-  translate: 0 -50%;
-  background: url('../../components/deathwatch/img/inquisition.webp') center / contain no-repeat;
-  filter: grayscale(1) brightness(1.5);
-  opacity: 0.07;
-  pointer-events: none;
-}
 .dw-card-text,
 .dw-card-go {
   position: relative;
