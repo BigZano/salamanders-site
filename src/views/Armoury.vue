@@ -746,31 +746,9 @@ watch(() => route.query.w, openFromQuery)
   margin: 0.8rem 0 1.4rem;
   flex-wrap: wrap;
 }
-.btn-sm {
-  padding: 0.5rem 0.9rem;
-  border-radius: 2px;
-  font-size: 0.78rem;
-  cursor: pointer;
-}
 .btn-ember:disabled {
   filter: grayscale(0.6) brightness(0.7);
   cursor: not-allowed;
-}
-.btn-ghost {
-  display: inline-flex;
-  align-items: center;
-  font-family: var(--font-display);
-  text-transform: uppercase;
-  letter-spacing: 0.06em;
-  font-weight: 700;
-  color: var(--color-smoke);
-  background: transparent;
-  border: 1px solid var(--color-ash);
-  text-decoration: none;
-}
-.btn-ghost:hover {
-  color: var(--color-bone);
-  border-color: var(--color-ash-2);
 }
 
 .toast {

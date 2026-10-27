@@ -210,27 +210,8 @@ const slots = [
   gap: 0.4rem;
   margin-top: 1rem;
 }
-.btn-sm {
-  padding: 0.5rem 0.85rem;
-  border-radius: 2px;
-  font-size: 0.78rem;
-  cursor: pointer;
-}
 .btn-sm:disabled {
   cursor: not-allowed;
   opacity: 0.6;
-}
-.btn-ghost {
-  font-family: var(--font-display);
-  text-transform: uppercase;
-  letter-spacing: 0.06em;
-  font-weight: 700;
-  color: var(--color-smoke);
-  background: transparent;
-  border: 1px solid var(--color-ash);
-}
-.btn-ghost:hover {
-  color: var(--color-bone);
-  border-color: var(--color-ash-2);
 }
 </style>

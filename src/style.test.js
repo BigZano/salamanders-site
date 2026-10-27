@@ -118,16 +118,16 @@ describe('mobile baseline', () => {
   })
 
   it('gives the shared buttons a press state', () => {
-    for (const cls of ['btn-ember', 'btn-drake']) {
+    for (const cls of ['btn-ember', 'btn-drake', 'btn-ghost']) {
       const rule = css.match(new RegExp(`\\.${cls}:active\\s*\\{([^}]*)\\}`))
       expect(rule, cls).not.toBeNull()
       expect(rule[1], cls).toContain('transform: scale(0.97)')
     }
   })
 
-  it('animates the press on both shared buttons', () => {
+  it('animates the press on every shared button', () => {
     // Without a transform transition the press snaps instead of easing.
-    for (const cls of ['btn-ember', 'btn-drake']) {
+    for (const cls of ['btn-ember', 'btn-drake', 'btn-ghost']) {
       const rule = css.match(new RegExp(`\\.${cls}\\s*\\{([^}]*)\\}`))
       expect(rule[1], cls).toContain('transform 0.15s ease')
     }
@@ -157,5 +157,28 @@ describe('quiet text', () => {
     const dir = fileURLToPath(new URL('.', import.meta.url))
     const files = readdirSync(dir, { recursive: true }).filter((f) => /\.(vue|css)$/.test(f))
     expect(files.filter((f) => readFileSync(join(dir, f), 'utf8').includes('#5f6f66'))).toEqual([])
+  })
+})
+
+// The small and ghost buttons were redefined in the Armoury, Planner and build cards (three copies
+// that had drifted apart), and a fourth page used .btn-sm with no definition at all, so its button
+// had no padding. One definition now serves every page.
+describe('small buttons', () => {
+  const dir = fileURLToPath(new URL('.', import.meta.url))
+  const vueFiles = readdirSync(dir, { recursive: true }).filter((f) => f.endsWith('.vue'))
+
+  it('are defined once, in the shared stylesheet', () => {
+    expect(css).toMatch(/\.btn-sm\s*\{[^}]*padding:/)
+    expect(css).toMatch(/\.btn-ghost\s*\{[^}]*border:/)
+    const redefined = vueFiles.filter((f) => /^\.btn-(sm|ghost)\s*(\{|:hover)/m.test(readFileSync(join(dir, f), 'utf8')))
+    expect(redefined).toEqual([])
+  })
+
+  it('gate the ghost hover behind a real pointer', () => {
+    expect(css.slice(css.indexOf(HOVER_MEDIA))).toContain('.btn-ghost:hover')
+  })
+
+  it('grow to the 44px tap target on phones and touch screens', () => {
+    expect(css).toMatch(/@media \(pointer: coarse\), \(max-width: 768px\)\s*\{\s*\.btn-sm\s*\{\s*min-height:\s*44px/)
   })
 })
