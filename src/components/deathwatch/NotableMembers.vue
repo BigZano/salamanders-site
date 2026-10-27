@@ -414,6 +414,14 @@ const shown = computed(() => anyone(n.value))
 .nm :deep(b) {
   color: var(--gl);
 }
+.nm :deep(a) {
+  color: #e8c46a;
+  text-underline-offset: 3px;
+}
+.nm :deep(a:focus-visible) {
+  outline: 2px solid #e8c46a;
+  outline-offset: 2px;
+}
 /* A spoiler, as on the old site: hidden under a blur until hovered, focused or tapped open. */
 .nm :deep(.nm-spl) {
   border-radius: 2px;

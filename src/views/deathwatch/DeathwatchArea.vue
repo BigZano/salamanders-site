@@ -67,7 +67,8 @@ const view = computed(() => {
         <DeathwatchNav :area="page.area" :current="page.tab" :command="store.command" @navigate="sheetOpen = false" />
       </DeathwatchNavSheet>
       <div class="dw-area-main">
-        <div class="dw-area-sheet dw-panel">
+        <!-- Keyed on the view, so the whole framed sheet opens again (deathwatch.css) when the tab changes. -->
+        <div :key="viewKey" class="dw-area-sheet dw-panel">
           <p v-if="locked" class="dw-area-restricted" role="status">Reserved for the Deathwatch Command.</p>
           <component :is="view" v-else :key="viewKey" />
         </div>
@@ -136,8 +137,11 @@ const view = computed(() => {
 .dw-area-navwrap {
   display: none;
 }
+/* At least a screen tall: between one tab's view and the next (while its chunk loads) the sheet is empty, and it
+   would fold to a thin frame at the top before the new view opens it again. */
 .dw-area-sheet {
   min-width: 0;
+  min-height: calc(100dvh - 9rem);
   padding: 1.2rem 1rem 1.6rem;
 }
 .dw-area-restricted {

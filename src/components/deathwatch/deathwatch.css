@@ -37,12 +37,26 @@
   font-family: var(--dw-font-body);
 }
 
-/* The site's route enter animation (App.vue) holds its last frame's transform, which would make the fixed backdrop
-   below scroll with the page. The area lets go of it once the animation ends. `body` outranks App.vue's scoped rule. */
+/* The site's route enter animation (App.vue) slides and fades the page in. On the area itself it would take the fixed
+   backdrop with it: a transform hangs the backdrop from the area (it slid, then jumped into place), and an opacity
+   lifts the whole area, backdrop and all, above the site footer, dimming it. So the area does not animate; each
+   view on it slides and fades in the same way as it appears: the hub, an area as it opens, and the framed sheet with
+   the tab's view as the tab changes (the rail stays still). The backdrop stays fixed to the window. `body`
+   outranks App.vue's scoped rule. */
 body main > .dw {
-  animation-fill-mode: backwards;
+  animation: none;
 }
-
+.dw .dw-hub,
+.dw .dw-area,
+.dw .dw-area-sheet {
+  animation: dw-area-in 0.22s ease-out backwards;
+}
+@keyframes dw-area-in {
+  from {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+}
 /* The page behind an open bottom sheet does not scroll (the sheet is a native modal dialog). Here, not in the
    sheet's own scoped styles, because a scoped rule cannot select the body. It matches only while a sheet is open. */
 body:has(.dw-sheet[open]) {
@@ -117,6 +131,10 @@ body:has(.dw-sheet[open]) {
 .dw[data-area='hallofrelics'] .dw-backdrop::after {
   background-image: url('./img/card-relics.webp');
 }
+/* Recruitment stands in the hub's own hall. */
+.dw[data-area='recruitment'] .dw-backdrop::after {
+  background-image: url('./img/bg-hub.jpg');
+}
 .dw[data-area='manage'] {
   --dw-wm: 0.5;
 }
@@ -172,6 +190,11 @@ body:has(.dw-sheet[open]) {
     animation: none;
   }
   .dw-sk-bar {
+    animation: none;
+  }
+  .dw .dw-hub,
+  .dw .dw-area,
+  .dw .dw-area-sheet {
     animation: none;
   }
 }

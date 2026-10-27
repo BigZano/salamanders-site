@@ -9,16 +9,18 @@
 
 /**
  * A text's inline marks as segments the page renders without HTML: { k: 'b' | 'i' | 's' | '', t }, s a spoiler
- * (hidden until hovered or focused). A link keeps only its text: the area links nowhere from page texts. Each mark
- * stays on its line and is bounded, so a long run of "[" or "*" in a text costs no more than its length.
+ * (hidden until hovered or focused), and { k: 'a', t, href, segs } a link, its text marked up in segs: https, or a
+ * page of the area itself (/deathwatch/…), which the page opens in place. Each mark stays on its line and is
+ * bounded, so a long run of "[" or "*" in a text costs no more than its length.
  */
 export function inline(s) {
   const out = []
   let at = 0
-  for (const m of s.matchAll(/\*\*(.{1,400}?)\*\*|\|\|(.{1,400}?)\|\||\[([^\]\n]{1,200})\]\(https:\/\/[^)\s]{1,500}\)|\*(.{1,400}?)\*/g)) {
+  for (const m of s.matchAll(/\*\*(.{1,400}?)\*\*|\|\|(.{1,400}?)\|\||\[([^\]\n]{1,200})\]\((https:\/\/[^)\s]{1,500}|\/deathwatch\/[\w\-/]{0,200})\)|\*(.{1,400}?)\*/g)) {
     if (m.index > at) out.push({ k: '', t: s.slice(at, m.index) })
-    const [, b, sp, link, i] = m
-    out.push(b != null ? { k: 'b', t: plain(b) } : sp != null ? { k: 's', t: plain(sp) } : link != null ? { k: '', t: link } : { k: 'i', t: plain(i) })
+    const [, b, sp, link, href, i] = m
+    if (link != null) out.push({ k: 'a', t: plain(link), href, segs: inline(link) })
+    else out.push(b != null ? { k: 'b', t: plain(b) } : sp != null ? { k: 's', t: plain(sp) } : { k: 'i', t: plain(i) })
     at = m.index + m[0].length
   }
   if (at < s.length) out.push({ k: '', t: s.slice(at) })

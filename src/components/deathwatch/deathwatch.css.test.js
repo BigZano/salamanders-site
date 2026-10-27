@@ -70,6 +70,17 @@ describe('deathwatch.css', () => {
     expect(rule).toMatch(/outline-offset:\s*-6px/)
   })
 
+  // A transform or an opacity animated on the area itself carries the fixed backdrop with it: it slides and jumps,
+  // or it lifts above the site footer and dims it. Only what is on the area, never its backdrop, animates in.
+  it("animates each view in as it appears (hub, area, a tab's framed sheet), never the area itself or its backdrop", () => {
+    expect(css.match(/body main > \.dw\s*\{([^}]*)\}/)?.[1]).toMatch(/animation:\s*none/)
+    const views = /\.dw \.dw-hub,\s*\.dw \.dw-area,\s*\.dw \.dw-area-sheet\s*\{([^}]*)\}/
+    expect(css.match(views)?.[1]).toContain('animation: dw-area-in')
+    expect(css).not.toMatch(/dw-backdrop[^{]*\{[^}]*dw-area-in/)
+    const reduced = css.match(/@media \(prefers-reduced-motion: reduce\)\s*\{([\s\S]*?\n\})/)?.[1] ?? ''
+    expect(reduced.match(views)?.[1]).toMatch(/animation:\s*none/)
+  })
+
   it('paints a backdrop for the hub and each area, from images that exist', () => {
     const files = {
       hub: 'bg-hub.jpg',

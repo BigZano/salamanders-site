@@ -4,8 +4,8 @@ import { AREAS, resolveArea } from './areas'
 const tabsOf = (area) => AREAS[area].tabs.map((t) => t.slug)
 
 describe('AREAS', () => {
-  it('lists the five areas in hub order', () => {
-    expect(Object.keys(AREAS)).toEqual(['eventtracker', 'armouringhall', 'chronicles', 'hallofrelics', 'manage'])
+  it('lists the six areas in hub order', () => {
+    expect(Object.keys(AREAS)).toEqual(['eventtracker', 'armouringhall', 'chronicles', 'hallofrelics', 'recruitment', 'manage'])
   })
 
   it('lists the seven Event Tracker views in order', () => {
@@ -32,11 +32,11 @@ describe('AREAS', () => {
     expect(tabsOf('manage')).toEqual(['enter-mission', 'manage', 'checks', 'records', 'page-texts'])
   })
 
-  it("carries the archive's labels and blurbs verbatim", () => {
+  it("carries each area's label, blurb and tabs", () => {
     expect(AREAS).toEqual({
       eventtracker: {
         label: 'Event Tracker',
-        blurb: 'Standings, Kill Teams, players and honours',
+        blurb: 'Track events, standings, and your kill team’s progress.',
         tabs: [
           { slug: 'standings', label: 'Standings' },
           { slug: 'kill-teams', label: 'Kill Teams' },
@@ -49,7 +49,7 @@ describe('AREAS', () => {
       },
       armouringhall: {
         label: 'Armouring Hall',
-        blurb: 'Specialist armour, standard uniform and heraldry',
+        blurb: 'Explore armour sets, chapter colours, and heraldry.',
         tabs: [
           { slug: 'standard', label: 'Standard', items: ['watchbrother', 'companyheraldry'] },
           { slug: 'specialist', label: 'Specialist', items: ['apothecarion', 'librarium', 'mechanicus', 'reclusiarc'] },
@@ -59,7 +59,7 @@ describe('AREAS', () => {
       },
       chronicles: {
         label: 'Chronicles of Valor',
-        blurb: 'Deeds and honours of the Watch Fortress',
+        blurb: 'Discover the deeds, victories, and honours of the Watch.',
         tabs: [
           { slug: 'hall-of-champions', label: 'Hall of Champions' },
           { slug: 'chamber-of-honor', label: 'Chamber of Honor' },
@@ -70,10 +70,18 @@ describe('AREAS', () => {
       },
       hallofrelics: {
         label: 'Hall of Relics',
-        blurb: 'The notable members of the Watch Fortress',
+        blurb: 'Honour the warriors who shaped the history of Ebonhold.',
         tabs: [
           { slug: 'notable-members', label: 'Notable Members' },
           { slug: 'fortress-lore', label: 'Fortress Lore' },
+        ],
+      },
+      recruitment: {
+        label: 'Recruitment',
+        blurb: 'Terms of Service and requirements for the Watch',
+        tabs: [
+          { slug: 'terms-of-service', label: 'Terms of Service' },
+          { slug: 'requirements', label: 'Requirements' },
         ],
       },
       manage: {

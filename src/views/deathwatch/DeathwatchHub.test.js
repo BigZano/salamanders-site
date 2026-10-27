@@ -32,22 +32,21 @@ describe('DeathwatchHub', () => {
     expect(crest.attributes('height')).toBeTruthy()
   })
 
-  it('offers the three areas, each straight to its first tab, and a way back to the Salamanders', () => {
+  it('offers the four areas, each straight to its first tab', () => {
     expect(cards(mountHub())).toEqual([
       { title: 'Event Tracker', href: '/deathwatch/eventtracker/standings' },
       { title: 'Armouring Hall', href: '/deathwatch/armouringhall/standard/watchbrother' },
       { title: 'Chronicles of Valor', href: '/deathwatch/chronicles/hall-of-champions' },
       { title: 'Hall of Relics', href: '/deathwatch/hallofrelics/notable-members' },
-      { title: 'Return to the Salamanders', href: '/' },
     ])
   })
 
-  it("describes each area in the old site's words", () => {
+  it('describes each area in one line', () => {
     const text = mountHub().text()
-    expect(text).toContain('Standings, Kill Teams, players and honours')
-    expect(text).toContain('Specialist armour, standard uniform and heraldry')
-    expect(text).toContain('Deeds and honours of the Watch Fortress')
-    expect(text).toContain('The notable members of the Watch Fortress')
+    expect(text).toContain('Track events, standings, and your kill team’s progress.')
+    expect(text).toContain('Explore armour sets, chapter colours, and heraldry.')
+    expect(text).toContain('Discover the deeds, victories, and honours of the Watch.')
+    expect(text).toContain('Honour the warriors who shaped the history of Ebonhold.')
   })
 
   it('paints each area card with its own picture, dimensioned and lazy, with no alt text (the card names it)', () => {
@@ -61,13 +60,15 @@ describe('DeathwatchHub', () => {
     }
   })
 
-  it('shows the Salamanders card with the clan icon, below the area cards', () => {
+  it('calls to enlist under the area cards, with a button to Recruitment', () => {
     const w = mountHub()
-    const clan = w.find('a.dw-card-home')
-    expect(clan.find('img').attributes('src')).toContain('clan')
-    expect(clan.find('img').attributes('alt')).toBe('')
-    expect(clan.text()).toContain('Back to the main site')
-    expect(w.find('ul.dw-hub-cards').find('a.dw-card-home').exists()).toBe(false)
+    const call = w.get('.dw-call')
+    expect(call.get('.dw-call-t').text()).toBe('The Watch needs you')
+    const btn = call.get('a.dw-call-btn')
+    expect(btn.text()).toBe('Enlist now')
+    expect(btn.attributes('href')).toBe('/deathwatch/recruitment/terms-of-service')
+    expect(call.get('img').attributes('alt')).toBe('')
+    expect(w.find('ul.dw-hub-cards').find('.dw-call').exists()).toBe(false)
   })
 
   it('leaves the fan-site disclaimer to the site footer', () => {

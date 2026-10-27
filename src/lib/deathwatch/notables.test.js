@@ -21,7 +21,7 @@ const TX = {
 }
 
 describe('inline', () => {
-  it('splits bold, italic, spoiler and link marks into segments, a link keeping only its text', () => {
+  it('splits bold, italic, spoiler and link marks into segments', () => {
     expect(inline('a **b** *c* ||d|| [e](https://example.com/x) f')).toEqual([
       { k: '', t: 'a ' },
       { k: 'b', t: 'b' },
@@ -30,7 +30,7 @@ describe('inline', () => {
       { k: '', t: ' ' },
       { k: 's', t: 'd' },
       { k: '', t: ' ' },
-      { k: '', t: 'e' },
+      { k: 'a', t: 'e', href: 'https://example.com/x', segs: [{ k: '', t: 'e' }] },
       { k: '', t: ' f' },
     ])
   })
@@ -39,6 +39,20 @@ describe('inline', () => {
     expect(inline('||*lost*||')).toEqual([{ k: 's', t: 'lost' }])
     expect(inline('[x](javascript:alert(1))')).toEqual([{ k: '', t: '[x](javascript:alert(1))' }])
     expect(inline('')).toEqual([])
+    expect(inline('[**Sergeant**](https://example.com/x) rank')).toEqual([
+      { k: 'a', t: 'Sergeant', href: 'https://example.com/x', segs: [{ k: 'b', t: 'Sergeant' }] },
+      { k: '', t: ' rank' },
+    ])
+    expect(inline('[x](http://example.com/y)')).toEqual([{ k: '', t: '[x](http://example.com/y)' }])
+  })
+
+  it('takes a link to a page of the area, and nothing else that is not https', () => {
+    expect(inline('[Requirements](/deathwatch/recruitment/requirements)')).toEqual([
+      { k: 'a', t: 'Requirements', href: '/deathwatch/recruitment/requirements', segs: [{ k: '', t: 'Requirements' }] },
+    ])
+    for (const text of ['[x](/companies)', '[x](//evil.example)', '[x](/deathwatch/../x)', '[x](deathwatch/x)', '[x](/deathwatch/a b)']) {
+      expect(inline(text).some((s) => s.k === 'a'), text).toBe(false)
+    }
   })
 })
 
@@ -72,7 +86,7 @@ describe('notables', () => {
       { k: '', t: ' ' },
       { k: 's', t: 'Records lost' },
       { k: '', t: ' — ' },
-      { k: '', t: 'March 1st' },
+      { k: 'a', t: 'March 1st', href: 'https://example.com/a', segs: [{ k: '', t: 'March 1st' }] },
     ])
     expect(notables({ nm_h: '- **A:** one\n## Empty\n## B\n- two' }).chronicles.groups.map((g) => g.h)).toEqual(['', 'B'])
   })
