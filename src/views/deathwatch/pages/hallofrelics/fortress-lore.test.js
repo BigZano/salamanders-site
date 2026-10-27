@@ -31,13 +31,16 @@ describe('Fortress Lore', () => {
     expect(w.text()).not.toMatch(/\*/)
   })
 
-  it('scrolls to a chapter from its button, without changing the address', () => {
+  it('scrolls to a chapter from its button and takes the focus there, without changing the address', () => {
     Element.prototype.scrollIntoView = vi.fn()
     const w = mountLore()
     const buttons = w.findAll('.lo-toc button')
     expect(buttons).toHaveLength(6)
     buttons[2].trigger('click')
-    expect(Element.prototype.scrollIntoView.mock.contexts[0]).toBe(w.findAll('.lo-c')[2].element)
+    const chapter = w.findAll('.lo-c')[2].element
+    expect(Element.prototype.scrollIntoView.mock.contexts[0]).toBe(chapter)
+    expect(chapter.getAttribute('tabindex')).toBe('-1')
+    expect(document.activeElement).toBe(chapter)
   })
 
   it('shows what the data holds in place of the default', () => {

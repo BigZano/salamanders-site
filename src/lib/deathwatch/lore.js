@@ -3,7 +3,7 @@
 //   lo_s  subtitle      lo_e  epigraph
 //   lo1…lo6  a chapter: first line its title, then one paragraph a line. Lines in *…* in a row are one speech,
 //            lines in **…** in a row are battle cries, and a lone **…** line a proclamation.
-import { inline } from './notables'
+import { inline, whole } from './notables'
 import { LORE_TEXTS } from './loreTexts'
 
 const NUMERALS = ['I', 'II', 'III', 'IV', 'V', 'VI']
@@ -13,7 +13,8 @@ const lines = (t) =>
     .split('\n')
     .map((l) => l.trim())
     .filter(Boolean)
-const kind = (l) => (/^\*\*.+\*\*$/.test(l) ? 'x' : /^\*[^*].*\*$/.test(l) ? 'q' : 'p')
+// A speech or proclamation line is one mark from end to end: "*a* and *b*" is a paragraph with two in it.
+const kind = (l) => (whole(l, 'b') ? 'x' : whole(l, 'i') ? 'q' : 'p')
 
 /** A chapter's lines as blocks: { kind: 'p' | 'q' | 'x' | 'cry', lines: segs[] }, the marks around q and x gone. */
 function blocks(ls) {

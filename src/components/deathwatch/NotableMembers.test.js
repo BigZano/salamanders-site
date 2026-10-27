@@ -19,7 +19,7 @@ beforeEach(() => vi.clearAllMocks())
 
 describe('NotableMembers', () => {
   // Invented names only: the real ones live in the server's data.
-  it('shows the Watch Commander, the Chronicles, the veterans and the cries, a sealed veteran without the record', () => {
+  it('shows the Watch Commander, the Chronicles, the veterans and the cries, a sealed veteran without the record', async () => {
     const w = mountWith({
       status: 'ready',
       cfg: {
@@ -41,9 +41,15 @@ describe('NotableMembers', () => {
     expect(nm.get('.nm-cmd img').attributes('src')).toContain('crest-gold')
     expect(nm.get('.nm-body b').text()).toBe('Long Vigil')
     expect(nm.get('.nm-lh').text()).toBe('Watch Commanders')
+    // A spoiler: focusable, said to be one to a screen reader, and opened or closed by a tap (a phone has no hover).
     const spoiler = nm.get('.nm-l .nm-spl')
-    expect(spoiler.text()).toBe('lost')
+    expect(spoiler.text()).toBe('Spoiler: lost')
+    expect(spoiler.get('.dw-sr-only').text()).toBe('Spoiler:')
     expect(spoiler.attributes('tabindex')).toBe('0')
+    await spoiler.trigger('click')
+    expect(spoiler.classes()).toContain('open')
+    await spoiler.trigger('click')
+    expect(spoiler.classes()).not.toContain('open')
     expect(nm.findAll('.nm-v h4').map((h) => h.text())).toEqual(['Sergeant Ilo', 'Brother Quell'])
     expect(nm.findAll('.nm-b').map((b) => b.text())).toEqual(['Honored Veteran', 'Honored Veteran'])
     expect(nm.get('.nm-v:not(.sealed) .nm-vt').text()).toBe('Led from the front.')

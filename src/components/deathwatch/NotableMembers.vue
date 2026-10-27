@@ -4,11 +4,12 @@
 // gold-edged list, the Honored Veterans as cards (a sealed one under a wax seal and a stamp), and the closing
 // battle cries, the last in gold. The content is only what the area's data holds (cfg.tx, read by
 // lib/deathwatch/notables.js): members' names never ship in the site's code. With nobody named there, a note says so.
-import { computed, h, onMounted } from 'vue'
+import { computed, onMounted } from 'vue'
 import { anyone, notables } from '../../lib/deathwatch/notables'
 import { useAuth } from '../../stores/auth'
 import { useDeathwatchData } from '../../stores/deathwatchData'
 import crestGold from './img/crest-gold.png'
+import Inline from './Inline'
 
 const auth = useAuth()
 const data = useDeathwatchData()
@@ -19,11 +20,6 @@ onMounted(() => {
 
 const n = computed(() => notables(data.cfg.tx))
 const shown = computed(() => anyone(n.value))
-
-// A text's segments as elements, never as HTML. A spoiler is hidden until hovered or focused, as on the old site.
-const TAG = { b: 'b', i: 'i', s: 'span' }
-const Inline = (props) => props.segs.map((s) => (s.k ? h(TAG[s.k], s.k === 's' ? { class: 'nm-spl', tabindex: 0 } : null, s.t) : s.t))
-Inline.props = ['segs']
 </script>
 
 <template>
@@ -418,7 +414,7 @@ Inline.props = ['segs']
 .nm :deep(b) {
   color: var(--gl);
 }
-/* A spoiler, as on the old site: hidden under a blur until hovered or focused. */
+/* A spoiler, as on the old site: hidden under a blur until hovered, focused or tapped open. */
 .nm :deep(.nm-spl) {
   border-radius: 2px;
   filter: blur(4px);
@@ -426,7 +422,8 @@ Inline.props = ['segs']
   cursor: help;
 }
 .nm :deep(.nm-spl:hover),
-.nm :deep(.nm-spl:focus-visible) {
+.nm :deep(.nm-spl:focus-visible),
+.nm :deep(.nm-spl.open) {
   filter: none;
   outline: none;
 }

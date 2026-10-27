@@ -9,12 +9,13 @@
 
 /**
  * A text's inline marks as segments the page renders without HTML: { k: 'b' | 'i' | 's' | '', t }, s a spoiler
- * (hidden until hovered or focused). A link keeps only its text: the area links nowhere from page texts.
+ * (hidden until hovered or focused). A link keeps only its text: the area links nowhere from page texts. Each mark
+ * stays on its line and is bounded, so a long run of "[" or "*" in a text costs no more than its length.
  */
 export function inline(s) {
   const out = []
   let at = 0
-  for (const m of s.matchAll(/\*\*(.+?)\*\*|\|\|(.+?)\|\||\[([^\]]+)\]\(https:\/\/[^)\s]+\)|\*(.+?)\*/g)) {
+  for (const m of s.matchAll(/\*\*(.{1,400}?)\*\*|\|\|(.{1,400}?)\|\||\[([^\]\n]{1,200})\]\(https:\/\/[^)\s]{1,500}\)|\*(.{1,400}?)\*/g)) {
     if (m.index > at) out.push({ k: '', t: s.slice(at, m.index) })
     const [, b, sp, link, i] = m
     out.push(b != null ? { k: 'b', t: plain(b) } : sp != null ? { k: 's', t: plain(sp) } : link != null ? { k: '', t: link } : { k: 'i', t: plain(i) })
@@ -25,6 +26,12 @@ export function inline(s) {
 }
 const plain = (s) => inline(s).map((x) => x.t).join('')
 
+/** Whether a text is one mark from end to end: **…** for 'b', *…* for 'i'. "**A** and **B**" is not: it is two. */
+export const whole = (s, k) => {
+  const segs = inline(s)
+  return segs.length === 1 && segs[0].k === k
+}
+
 const text = (v) => (typeof v === 'string' ? v : '')
 const paras = (t) =>
   text(t)
@@ -32,7 +39,7 @@ const paras = (t) =>
     .map((b) => b.trim())
     .filter(Boolean)
 // The introductions are one quote each, *…* around the whole: the marks go, the page sets them as quotes.
-const quote = (t) => paras(t).map((p) => inline(p.replace(/^\*([^*][\s\S]*)\*$/, '$1')))
+const quote = (t) => paras(t).map((p) => inline(whole(p, 'i') ? p.slice(1, -1) : p))
 const SEALED = /\s*\[sealed\]\s*$/i
 
 export function notables(tx) {
@@ -60,7 +67,7 @@ export function notables(tx) {
     .filter((v) => v.name)
 
   const closing = paras(t.nm_e).map((p) =>
-    /^\*\*[\s\S]+\*\*$/.test(p) ? { kind: 'cry', t: plain(p) } : /^\*[^*][\s\S]*\*$/.test(p) ? { kind: 'quote', t: plain(p) } : { kind: 'p', segs: inline(p) },
+    whole(p, 'b') ? { kind: 'cry', t: plain(p) } : whole(p, 'i') ? { kind: 'quote', t: plain(p) } : { kind: 'p', segs: inline(p) },
   )
 
   return {

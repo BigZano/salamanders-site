@@ -18,7 +18,12 @@ const l = computed(() => lore(data.cfg.tx))
 
 const sections = ref({})
 const reduced = () => globalThis.matchMedia?.('(prefers-reduced-motion: reduce)').matches
-const jump = (key) => sections.value[key]?.scrollIntoView({ behavior: reduced() ? 'auto' : 'smooth', block: 'start' })
+// To the chapter, and the keyboard's focus with it, so the next Tab goes on from there.
+function jump(key) {
+  const el = sections.value[key]
+  el?.scrollIntoView({ behavior: reduced() ? 'auto' : 'smooth', block: 'start' })
+  el?.focus({ preventScroll: true })
+}
 </script>
 
 <template>
@@ -38,7 +43,7 @@ const jump = (key) => sections.value[key]?.scrollIntoView({ behavior: reduced() 
       </button>
     </nav>
 
-    <section v-for="c in l.chapters" :key="c.n" :ref="(el) => (sections[c.n] = el)" class="lo-c">
+    <section v-for="c in l.chapters" :key="c.n" :ref="(el) => (sections[c.n] = el)" class="lo-c" tabindex="-1">
       <header>
         <span class="lo-n" aria-hidden="true"><span>{{ c.n }}</span></span>
         <h3 class="lo-h"><Inline :segs="c.title" /></h3>
@@ -174,6 +179,13 @@ const jump = (key) => sections.value[key]?.scrollIntoView({ behavior: reduced() 
 .lo-toc button:focus-visible {
   border-color: var(--gd);
   background: rgb(214 176 92 / 0.14);
+}
+.lo-toc button:focus-visible {
+  outline: 2px solid var(--gl);
+  outline-offset: 2px;
+}
+/* A chapter takes the focus from its button; it is no control, so it shows no ring of its own. */
+.lo-c:focus {
   outline: none;
 }
 

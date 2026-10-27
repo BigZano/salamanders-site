@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { anyone, inline, notables } from './notables'
+import { anyone, inline, notables, whole } from './notables'
 
 // Invented names only: the real ones live in the server's data. The shape is the old site's, 1:1.
 const TX = {
@@ -107,5 +107,39 @@ describe('notables', () => {
     expect(anyone(notables({ nm_v: 'A' }))).toBe(true)
     expect(anyone(notables({ nm_h: '- A' }))).toBe(true)
     expect(notables({ nm_c: 'A' }).commander.kicker).toBe('Watch Commander')
+  })
+})
+
+// Two marks on one line are two marks, not one with the text between them marked (the Watch Commander writes these).
+describe('two marks on one line', () => {
+  it('reads each mark, and only a mark from end to end counts as whole', () => {
+    expect(inline('**A** and **B**')).toEqual([{ k: 'b', t: 'A' }, { k: '', t: ' and ' }, { k: 'b', t: 'B' }])
+    expect(whole('**A** and **B**', 'b')).toBe(false)
+    expect(whole('*a* and *b*', 'i')).toBe(false)
+    expect(whole('**ALL OF IT**', 'b')).toBe(true)
+    expect(whole('*all of it*', 'i')).toBe(true)
+  })
+
+  it('keeps a closing line with two marks a paragraph, and an introduction with two marks unquoted', () => {
+    const n = notables({ nm_c: 'A', nm_e: '**A** and **B**\n\n*a* and *b*', nm_i: '*a* and *b*' })
+    expect(n.closing.map((c) => c.kind)).toEqual(['p', 'p'])
+    expect(n.closing[0].segs).toEqual([{ k: 'b', t: 'A' }, { k: '', t: ' and ' }, { k: 'b', t: 'B' }])
+    expect(n.intro[0]).toEqual([{ k: 'i', t: 'a' }, { k: '', t: ' and ' }, { k: 'i', t: 'b' }])
+  })
+})
+
+// A text may be up to 1 MB: a long run of one character must not cost more than its length.
+describe('long runs', () => {
+  it('reads 40,000 of "[", "*" or "||" quickly', () => {
+    for (const s of ['['.repeat(40000), '*'.repeat(40000), '||'.repeat(20000), '[x](https://'.repeat(4000)]) {
+      const t0 = performance.now()
+      inline(s)
+      expect(performance.now() - t0, s.slice(0, 12)).toBeLessThan(250)
+    }
+  })
+
+  it('keeps a mark on its line and bounded in length', () => {
+    expect(inline('**a\nb**').some((x) => x.k === 'b')).toBe(false)
+    expect(inline('*' + 'x'.repeat(401) + '*').some((x) => x.k === 'i')).toBe(false)
   })
 })

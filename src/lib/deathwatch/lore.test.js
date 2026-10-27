@@ -38,4 +38,10 @@ describe('lore', () => {
     expect(plain(l.sub)).toBe('Ours')
     expect(lore('nonsense').chapters).toHaveLength(6)
   })
+
+  it('keeps a line with two marks a paragraph, not a speech or a proclamation', () => {
+    const c = lore({ lo1: 'Title\n*a* and *b*\n**A** and **B**' }).chapters[0]
+    expect(c.blocks.map((b) => b.kind)).toEqual(['p', 'p'])
+    expect(c.blocks[0].lines[0]).toEqual([{ k: 'i', t: 'a' }, { k: '', t: ' and ' }, { k: 'i', t: 'b' }])
+  })
 })
