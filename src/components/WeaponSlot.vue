@@ -135,6 +135,7 @@ const wikiUrl = computed(() => WIKI + encodeURIComponent(weapon.value))
   border-radius: 2px;
   padding: 0.45rem 0.5rem;
   font-size: 0.88rem;
+  min-height: var(--tap);
 }
 .slot-select:disabled {
   opacity: 0.4;

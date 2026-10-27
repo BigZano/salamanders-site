@@ -64,6 +64,10 @@ const footerLinks = computed(() => links.value.filter((l) => l.to !== '/'))
   flex-wrap: wrap;
 }
 .footer-links a {
+  display: flex;
+  align-items: center;
+  min-height: var(--tap);
+  min-width: var(--tap);
   font-family: var(--font-display);
   text-transform: uppercase;
   letter-spacing: 0.08em;

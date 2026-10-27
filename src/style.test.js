@@ -178,8 +178,42 @@ describe('small buttons', () => {
     expect(css.slice(css.indexOf(HOVER_MEDIA))).toContain('.btn-ghost:hover')
   })
 
-  it('grow to the 44px tap target on phones and touch screens', () => {
-    expect(css).toMatch(/@media \(pointer: coarse\), \(max-width: 768px\)\s*\{\s*\.btn-sm\s*\{\s*min-height:\s*44px/)
+  it('grow to the tap target on phones and touch screens', () => {
+    expect(css).toMatch(/\.btn-sm\s*\{[^}]*min-height:\s*var\(--tap\)/)
+  })
+})
+
+// PRODUCT.md promises tap targets of at least 44px on phones. --tap is `auto` on desktop (a control keeps
+// its own size) and 44px on phones and touch screens; a control writes min-height: var(--tap).
+describe('tap targets', () => {
+  const dir = fileURLToPath(new URL('.', import.meta.url))
+  const read = (file) => readFileSync(join(dir, file), 'utf8')
+  const rule = (source, selector) =>
+    new RegExp(`\\n${selector.replace(/[.[\]]/g, '\\$&')} \\{([^}]*)\\}`).exec(source)?.[1] ?? ''
+
+  it('is auto on desktop and 44px on phones and touch screens', () => {
+    expect(css).toMatch(/:root\s*\{\s*--tap:\s*auto;/)
+    expect(css).toMatch(/@media \(pointer: coarse\), \(max-width: 768px\)\s*\{\s*:root\s*\{\s*--tap:\s*44px;/)
+  })
+
+  it.each([
+    ['components/AppNav.vue', '.brand'],
+    ['components/SiteFooter.vue', '.footer-links a'],
+    ['components/WeaponSlot.vue', '.slot-select'],
+    ['views/Armoury.vue', '.cat-tab'],
+    ['views/Armoury.vue', '.w-item'],
+    ['views/Armoury.vue', '.w-search'],
+    ['views/Companies.vue', '.c-chip'],
+    ['views/Planner.vue', '.class-tab'],
+    ['views/Planner.vue', '.save-more'],
+    ['views/Planner.vue', '.save-needs-pick'],
+    ['views/Planner.vue', '.save .fld'],
+  ])('%s %s uses it', (file, selector) => {
+    expect(rule(read(file), selector), `${file} ${selector}`).toMatch(/min-height:\s*var\(--tap\)/)
+  })
+
+  it('makes the menu button 44px square', () => {
+    expect(rule(read('components/AppNav.vue'), '.burger')).toMatch(/width:\s*44px;[^}]*height:\s*44px;/)
   })
 })
 

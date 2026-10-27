@@ -349,6 +349,7 @@ watch(() => route.query.w, openFromQuery)
   padding: 0.5rem 0.9rem;
   border-radius: 2px;
   cursor: pointer;
+  min-height: var(--tap);
 }
 .cat-tab.on {
   color: #1a0d06;
@@ -369,6 +370,7 @@ watch(() => route.query.w, openFromQuery)
   border-radius: 3px;
   color: var(--color-bone);
   font-size: 0.9rem;
+  min-height: var(--tap);
 }
 .w-search::placeholder {
   color: var(--color-faint);
@@ -409,6 +411,7 @@ watch(() => route.query.w, openFromQuery)
   color: var(--color-bone);
   font-size: 0.85rem;
   cursor: pointer;
+  min-height: var(--tap);
   transition: 0.12s;
 }
 .w-item:hover {

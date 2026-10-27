@@ -587,6 +587,7 @@ onBeforeUnmount(() => {
   padding: 0.55rem 1rem;
   border-radius: 2px;
   cursor: pointer;
+  min-height: var(--tap);
   transition: all 0.15s ease;
 }
 .class-tab:hover {
@@ -1147,6 +1148,7 @@ onBeforeUnmount(() => {
   border: 0;
   padding: 0.15rem 0;
   cursor: pointer;
+  min-height: var(--tap);
 }
 .save-more:hover {
   color: var(--color-bone);
@@ -1174,6 +1176,7 @@ onBeforeUnmount(() => {
   border-radius: 2px;
   padding: 0.2rem 0.45rem;
   cursor: pointer;
+  min-height: var(--tap);
 }
 .save .fld {
   width: 100%;
@@ -1184,6 +1187,7 @@ onBeforeUnmount(() => {
   padding: 0.5rem 0.6rem;
   font-size: 0.82rem;
   font-family: var(--font-sans);
+  min-height: var(--tap);
   resize: vertical;
 }
 .save .fld::placeholder {

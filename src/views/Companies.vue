@@ -254,6 +254,7 @@ function backToIndex() {
   background: rgba(5, 10, 8, 0.6);
   font-family: inherit;
   cursor: pointer;
+  min-height: var(--tap);
   transition: border-color 0.15s ease, color 0.15s ease;
 }
 .c-chip:hover {
