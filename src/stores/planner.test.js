@@ -513,3 +513,60 @@ describe('Patch 15.0 migration', () => {
     expect(again.staleNotices).toEqual([])
   })
 })
+
+describe('undoing a reset', () => {
+  it('remembers the build that resetClass cleared', () => {
+    const planner = usePlanner()
+    setUpBuild(planner)
+    planner.resetClass()
+    expect(planner.selected).toEqual({})
+    expect(planner.activeWeapons).toEqual({})
+    expect(planner.undoReset?.className).toBe(CLASS)
+  })
+
+  it('puts the perks, notes, prestige picks and weapons back, and saves them', () => {
+    const planner = usePlanner()
+    const { perk, prestigeName } = setUpBuild(planner)
+    planner.resetClass()
+
+    expect(planner.restoreReset()).toBe(true)
+    expect(planner.selected[perk.col]).toBe(perk.name)
+    expect(planner.justified[perk.col]).toContain('Solid pick')
+    expect(planner.activePrestigePicks).toContain(prestigeName)
+    expect(planner.activeWeapons.primary).toBe('Bolt Rifle')
+    expect(planner.undoReset).toBeNull()
+
+    setActivePinia(createPinia())
+    const reloaded = usePlanner()
+    reloaded.hydrate()
+    expect(reloaded.selected[perk.col]).toBe(perk.name)
+  })
+
+  it('offers nothing to undo when the class was already empty', () => {
+    const planner = usePlanner()
+    planner.setClass(CLASS)
+    planner.resetClass()
+    expect(planner.undoReset).toBeNull()
+    expect(planner.restoreReset()).toBe(false)
+  })
+
+  it('brings the reset class back on screen, even after switching away', () => {
+    const planner = usePlanner()
+    const { perk } = setUpBuild(planner)
+    planner.resetClass()
+    planner.setClass('Devastator')
+    planner.restoreReset()
+    expect(planner.activeClass).toBe(CLASS)
+    expect(planner.selected[perk.col]).toBe(perk.name)
+  })
+
+  it('can be discarded, and is never written to storage', () => {
+    const planner = usePlanner()
+    setUpBuild(planner)
+    planner.resetClass()
+    expect(localStorage.getItem('salamanders-planner-v1')).not.toContain('undoReset')
+    planner.discardUndo()
+    expect(planner.undoReset).toBeNull()
+    expect(planner.restoreReset()).toBe(false)
+  })
+})

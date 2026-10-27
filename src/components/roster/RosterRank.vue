@@ -52,7 +52,7 @@ defineProps({
 }
 .rs-count {
   font-family: var(--font-mono);
-  font-size: 0.68rem;
+  font-size: max(0.68rem, var(--text-floor));
   letter-spacing: 0;
   color: var(--color-smoke);
 }

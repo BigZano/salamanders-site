@@ -1,5 +1,7 @@
 import { describe, it, expect } from 'vitest'
-import { readFileSync } from 'node:fs'
+import { readFileSync, readdirSync } from 'node:fs'
+import { join } from 'node:path'
+import { fileURLToPath } from 'node:url'
 import { TEXT, contrast, over } from './test-utils/contrast'
 
 const css = readFileSync(new URL('./style.css', import.meta.url), 'utf8')
@@ -116,16 +118,16 @@ describe('mobile baseline', () => {
   })
 
   it('gives the shared buttons a press state', () => {
-    for (const cls of ['btn-ember', 'btn-drake']) {
+    for (const cls of ['btn-ember', 'btn-drake', 'btn-ghost']) {
       const rule = css.match(new RegExp(`\\.${cls}:active\\s*\\{([^}]*)\\}`))
       expect(rule, cls).not.toBeNull()
       expect(rule[1], cls).toContain('transform: scale(0.97)')
     }
   })
 
-  it('animates the press on both shared buttons', () => {
+  it('animates the press on every shared button', () => {
     // Without a transform transition the press snaps instead of easing.
-    for (const cls of ['btn-ember', 'btn-drake']) {
+    for (const cls of ['btn-ember', 'btn-drake', 'btn-ghost']) {
       const rule = css.match(new RegExp(`\\.${cls}\\s*\\{([^}]*)\\}`))
       expect(rule[1], cls).toContain('transform 0.15s ease')
     }
@@ -134,5 +136,106 @@ describe('mobile baseline', () => {
   it('leaves pull-to-refresh and text selection alone', () => {
     expect(css).not.toContain('overscroll-behavior: none')
     expect(bodyRule()).not.toContain('user-select: none')
+  })
+})
+
+// Placeholders, empty-state names, hints and the footer fine print used #5f6f66, which measured
+// 3.3 to 3.7:1 on the dark surfaces. This is the quiet tier that still reads.
+describe('quiet text', () => {
+  const rgb = (hex) => [1, 3, 5].map((i) => parseInt(hex.slice(i, i + 2), 16))
+
+  it('defines --color-faint at 4.5:1 or better on every dark surface it sits on', () => {
+    const faint = css.match(/--color-faint:\s*(#[0-9a-f]{6})/i)?.[1]
+    expect(faint).toBeTruthy()
+    // footer, search fields, the lightest panel, and the page ground, as measured on the live pages
+    for (const surface of ['#060e0b', '#0a1510', '#0e1c16', '#07110d']) {
+      expect(contrast(rgb(faint), rgb(surface)), surface).toBeGreaterThanOrEqual(4.5)
+    }
+  })
+
+  it('keeps the old grey out of every component', () => {
+    const dir = fileURLToPath(new URL('.', import.meta.url))
+    const files = readdirSync(dir, { recursive: true }).filter((f) => /\.(vue|css)$/.test(f))
+    expect(files.filter((f) => readFileSync(join(dir, f), 'utf8').includes('#5f6f66'))).toEqual([])
+  })
+})
+
+// The small and ghost buttons were redefined in the Armoury, Planner and build cards (three copies
+// that had drifted apart), and a fourth page used .btn-sm with no definition at all, so its button
+// had no padding. One definition now serves every page.
+describe('small buttons', () => {
+  const dir = fileURLToPath(new URL('.', import.meta.url))
+  const vueFiles = readdirSync(dir, { recursive: true }).filter((f) => f.endsWith('.vue'))
+
+  it('are defined once, in the shared stylesheet', () => {
+    expect(css).toMatch(/\.btn-sm\s*\{[^}]*padding:/)
+    expect(css).toMatch(/\.btn-ghost\s*\{[^}]*border:/)
+    const redefined = vueFiles.filter((f) => /^\.btn-(sm|ghost)\s*(\{|:hover)/m.test(readFileSync(join(dir, f), 'utf8')))
+    expect(redefined).toEqual([])
+  })
+
+  it('gate the ghost hover behind a real pointer', () => {
+    expect(css.slice(css.indexOf(HOVER_MEDIA))).toContain('.btn-ghost:hover')
+  })
+
+  it('grow to the tap target on phones and touch screens', () => {
+    expect(css).toMatch(/\.btn-sm\s*\{[^}]*min-height:\s*var\(--tap\)/)
+  })
+})
+
+// PRODUCT.md promises tap targets of at least 44px on phones. --tap is `auto` on desktop (a control keeps
+// its own size) and 44px on phones and touch screens; a control writes min-height: var(--tap).
+describe('tap targets', () => {
+  const dir = fileURLToPath(new URL('.', import.meta.url))
+  const read = (file) => readFileSync(join(dir, file), 'utf8')
+  const rule = (source, selector) =>
+    new RegExp(`\\n${selector.replace(/[.[\]]/g, '\\$&')} \\{([^}]*)\\}`).exec(source)?.[1] ?? ''
+
+  it('is auto on desktop and 44px on phones and touch screens', () => {
+    expect(css).toMatch(/:root\s*\{\s*--tap:\s*auto;/)
+    expect(css).toMatch(/@media \(pointer: coarse\), \(max-width: 768px\)\s*\{\s*:root\s*\{\s*--tap:\s*44px;/)
+  })
+
+  it.each([
+    ['components/AppNav.vue', '.brand'],
+    ['components/SiteFooter.vue', '.footer-links a'],
+    ['components/WeaponSlot.vue', '.slot-select'],
+    ['views/Armoury.vue', '.cat-tab'],
+    ['views/Armoury.vue', '.w-item'],
+    ['views/Armoury.vue', '.w-search'],
+    ['views/Companies.vue', '.c-chip'],
+    ['views/Planner.vue', '.class-tab'],
+    ['views/Planner.vue', '.save-more'],
+    ['views/Planner.vue', '.save-needs-pick'],
+    ['views/Planner.vue', '.save .fld'],
+  ])('%s %s uses it', (file, selector) => {
+    expect(rule(read(file), selector), `${file} ${selector}`).toMatch(/min-height:\s*var\(--tap\)/)
+  })
+
+  it('makes the menu button 44px square', () => {
+    expect(rule(read('components/AppNav.vue'), '.burger')).toMatch(/width:\s*44px;[^}]*height:\s*44px;/)
+  })
+})
+
+// The micro-labels (mono caps, 8.6 to 10.9px) are unreadable on a phone. Each sub-11px size is written
+// max(<its size>, var(--text-floor)): the variable is 0 on desktop, so nothing there changes, and 11px on phones.
+describe('small text', () => {
+  const dir = fileURLToPath(new URL('.', import.meta.url))
+  const files = readdirSync(dir, { recursive: true }).filter((f) => /\.(vue|css)$/.test(f))
+
+  it('has a text floor that is off on desktop and 11px on phones', () => {
+    expect(css).toMatch(/:root\s*\{\s*--text-floor:\s*0rem;/)
+    expect(css).toMatch(/@media \(max-width: 768px\)\s*\{\s*:root\s*\{\s*--text-floor:\s*0\.6875rem;/)
+  })
+
+  it('lets no component set a font size under 11px without it', () => {
+    const under = []
+    for (const f of files) {
+      readFileSync(join(dir, f), 'utf8').split('\n').forEach((line, i) => {
+        const m = line.match(/font-size:\s*([\d.]+)rem\b/)
+        if (m && parseFloat(m[1]) < 0.6875) under.push(`${f}:${i + 1} ${line.trim()}`)
+      })
+    }
+    expect(under).toEqual([])
   })
 })

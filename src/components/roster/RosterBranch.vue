@@ -187,7 +187,7 @@ const bodyId = `rs-body-${props.branch.key}`
   width: 100%;
   margin: 0 0 -0.1rem;
   font-family: var(--font-mono);
-  font-size: 0.62rem;
+  font-size: max(0.62rem, var(--text-floor));
   font-weight: 400;
   letter-spacing: 0.16em;
   text-transform: uppercase;
