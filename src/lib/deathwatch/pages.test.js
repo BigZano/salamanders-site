@@ -16,7 +16,7 @@ const listed = Object.entries(AREAS).flatMap(([area, { tabs }]) => tabs.map((t) 
 describe('pageLoader', () => {
   it('has exactly one view file for every tab of every area, and none for anything else', () => {
     expect(files.sort()).toEqual([...listed].sort())
-    expect(listed).toHaveLength(21)
+    expect(listed).toHaveLength(23)
   })
 
   it('gives a lazy loader for each of them', () => {

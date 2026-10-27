@@ -4,8 +4,8 @@ import { AREAS, resolveArea } from './areas'
 const tabsOf = (area) => AREAS[area].tabs.map((t) => t.slug)
 
 describe('AREAS', () => {
-  it('lists the four areas in hub order', () => {
-    expect(Object.keys(AREAS)).toEqual(['eventtracker', 'armouringhall', 'chronicles', 'manage'])
+  it('lists the five areas in hub order', () => {
+    expect(Object.keys(AREAS)).toEqual(['eventtracker', 'armouringhall', 'chronicles', 'hallofrelics', 'manage'])
   })
 
   it('lists the seven Event Tracker views in order', () => {
@@ -66,6 +66,14 @@ describe('AREAS', () => {
           { slug: 'player-profiles', label: 'Player Profiles' },
           { slug: 'in-memoriam', label: 'In Memoriam' },
           { slug: 'operational-records', label: 'Operational Records' },
+        ],
+      },
+      hallofrelics: {
+        label: 'Hall of Relics',
+        blurb: 'The notable members of the Watch Fortress',
+        tabs: [
+          { slug: 'notable-members', label: 'Notable Members' },
+          { slug: 'fortress-lore', label: 'Fortress Lore' },
         ],
       },
       manage: {

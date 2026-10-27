@@ -37,6 +37,7 @@ describe('DeathwatchHub', () => {
       { title: 'Event Tracker', href: '/deathwatch/eventtracker/standings' },
       { title: 'Armouring Hall', href: '/deathwatch/armouringhall/standard/watchbrother' },
       { title: 'Chronicles of Valor', href: '/deathwatch/chronicles/hall-of-champions' },
+      { title: 'Hall of Relics', href: '/deathwatch/hallofrelics/notable-members' },
       { title: 'Return to the Salamanders', href: '/' },
     ])
   })
@@ -46,11 +47,12 @@ describe('DeathwatchHub', () => {
     expect(text).toContain('Standings, Kill Teams, players and honours')
     expect(text).toContain('Specialist armour, standard uniform and heraldry')
     expect(text).toContain('Deeds and honours of the Watch Fortress')
+    expect(text).toContain('The notable members of the Watch Fortress')
   })
 
   it('paints each area card with its own picture, dimensioned and lazy, with no alt text (the card names it)', () => {
     const arts = mountHub().findAll('a.dw-card img.dw-card-art')
-    expect(arts.map((i) => i.attributes('src').match(/card-[a-z]+/)[0])).toEqual(['card-tracker', 'card-armouring', 'card-chronicles'])
+    expect(arts.map((i) => i.attributes('src').match(/card-[a-z]+/)[0])).toEqual(['card-tracker', 'card-armouring', 'card-chronicles', 'card-relics'])
     for (const img of arts) {
       expect(img.attributes('alt')).toBe('')
       expect(img.attributes('loading')).toBe('lazy')

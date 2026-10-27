@@ -43,7 +43,42 @@ export function fixtureData(scene) {
   const old = TEAMS.slice(0, 4).map((t, i) => team(i + 1, t, 4, r))
   return {
     teams: live,
-    cfg: { s: {}, tx: { cur_n: 'Deathwatch Tour — Ember Moon' } },
+    cfg: {
+      s: {},
+      // The Hall of Relics' Notable Members (notables.js), with invented members as everything here.
+      tx: {
+        cur_n: 'Deathwatch Tour — Ember Moon',
+        nm_i: '*Within the obsidian halls of the fortress, the names of its greatest warriors are forever remembered.*',
+        nm_ck: 'Watch Commander of Ebonhold · Sworn in at the Ember Moon',
+        nm_c: [
+          'Watch Commander Varn Hollis',
+          '**Known for:** a proud warrior of the **1st Company**, first onto every drop.',
+          '',
+          'A warrior of few words, he believes that deeds speak louder than any oath.',
+        ].join('\n'),
+        nm_hi: '*The names of those who once held command over Ebonhold remain etched within its archives.*',
+        nm_h: [
+          '## Watch Commanders',
+          '- **Watch Commander Varn Hollis:** Ember Moon — *present*',
+          '- **Watch Commander Teme Sarr:** ||*Records of appointment lost to the archives*|| — Ember Moon',
+          '## Watch Captains',
+          '- **Watch Captain Ilo Brask:** Ash Season — Ember Moon',
+        ].join('\n'),
+        nm_vi: '*Before the fortress stood as a bastion, these warriors forged the foundations of the brotherhood.*',
+        nm_vk: 'Former Watch Command',
+        nm_v: [
+          'Watch Captain Ilo Brask — The Unyielding Brother',
+          'A veteran whose command was forged in the fires of war, never one to lead from safety.',
+          '',
+          'Reclusiarch Teme Sarr — Keeper of the Flame',
+          'Kept the rites and the courage of the Watch through the longest tours.',
+          '',
+          'Watch Captain Quell — ///Classified/// [sealed]',
+          'What he did on the Ember Moon stays sealed.',
+        ].join('\n'),
+        nm_e: '*Not every warrior is worthy of the Long Vigil.*\n\n**ONLY THE ELITE CAN SLAY THE ELITE.**\n\n**SUFFER NOT THE ALIEN TO LIVE!**',
+      },
+    },
     archive: { e1: archiveDoc(Object.fromEntries(old.map((t) => [t.id, t])), WEIGHTS, 'Deathwatch Tour — Ash Season', new Date('2026-05-30T18:00:00Z')) },
   }
 }

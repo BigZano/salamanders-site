@@ -222,4 +222,9 @@ describe('DeathwatchArea', () => {
     expect(w.find('button.dw-areabar').exists()).toBe(false)
     expect(w.find('dialog').exists()).toBe(false)
   })
+
+  it('shows the gold crest in the Hall of Relics, as the old site did, and the plain one elsewhere', async () => {
+    expect((await mountAt('/deathwatch/hallofrelics/notable-members')).w.get('img.dw-area-crest').attributes('src')).toContain('crest-gold')
+    expect((await mountAt('/deathwatch/eventtracker/players')).w.get('img.dw-area-crest').attributes('src')).not.toContain('crest-gold')
+  })
 })

@@ -76,6 +76,7 @@ describe('deathwatch.css', () => {
       eventtracker: 'bg-tracker.webp',
       armouringhall: 'bg-armouring.jpg',
       chronicles: 'bg-chronicles.webp',
+      hallofrelics: 'card-relics.webp',
       manage: 'bg-manage.jpg',
     }
     for (const [area, file] of Object.entries(files)) {
