@@ -5,6 +5,7 @@ import { createPinia, setActivePinia } from 'pinia'
 import { createRouter, createMemoryHistory } from 'vue-router'
 import { useDeathwatch } from '../../stores/deathwatch'
 import DeathwatchHub from './DeathwatchHub.vue'
+import source from './DeathwatchHub.vue?raw'
 
 function mountHub({ commander = false } = {}) {
   const pinia = createPinia()
@@ -82,5 +83,35 @@ describe('DeathwatchHub', () => {
     expect(manage.attributes('href')).toBe('/deathwatch/manage/enter-mission')
     expect(manage.find('svg').attributes('aria-hidden')).toBe('true')
     expect(cards(mountHub({ commander: true })).map((c) => c.title)).not.toContain('Manage')
+  })
+})
+
+// jsdom lays nothing out, so these are held by the rules; the widths were measured in a browser at 320 to 500px.
+describe('DeathwatchHub styles', () => {
+  const style = source.slice(source.indexOf('<style'))
+  const rule = (selector, at = 0) => {
+    const from = style.indexOf(`${selector} {`, at)
+    return from < 0 ? '' : style.slice(from, style.indexOf('}', from))
+  }
+
+  // The cards' corners are clipped, which also clips an outline drawn outside them.
+  it("shows a card's keyboard focus ring inside its clipped corners", () => {
+    const ring = rule('.dw-card:focus-visible')
+    expect(ring).toMatch(/outline:\s*2px solid/)
+    expect(Number(ring.match(/outline-offset:\s*(-?\d+)px/)?.[1])).toBeLessThan(0)
+    expect(rule('.dw-card')).toContain('clip-path')
+  })
+
+  it('gives the picture less of the card on a narrow phone, so the longest name fits beside the arrow', () => {
+    const narrow = style.indexOf('@media (max-width: 420px)')
+    expect(narrow).toBeGreaterThan(0)
+    const wide = Number(rule('.dw-card').match(/grid-template-columns:\s*(\d+)%/)?.[1])
+    const small = Number(rule('.dw-card', narrow).match(/grid-template-columns:\s*(\d+)%/)?.[1])
+    expect(small).toBeLessThan(wide)
+    expect(small).toBeLessThanOrEqual(38)
+  })
+
+  it('makes the Enlist button a full 44px tap target', () => {
+    expect(rule('.dw-call-btn')).toMatch(/min-height:\s*44px/)
   })
 })

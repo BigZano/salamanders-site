@@ -32,7 +32,7 @@ const rq = computed(() => requirements(data.cfg.tx))
       <ul v-if="b.items.length" class="rc-req">
         <li v-for="(item, j) in b.items" :key="j">
           <Inline :segs="item.segs" />
-          <p v-if="item.note" class="rc-l"><Inline :segs="item.note" /></p>
+          <p v-for="(note, k) in item.notes" :key="k" class="rc-l"><Inline :segs="note" /></p>
         </li>
       </ul>
       <p v-for="(note, j) in b.notes" :key="j" class="rc-l"><Inline :segs="note" /></p>

@@ -227,4 +227,17 @@ describe('DeathwatchArea', () => {
     expect((await mountAt('/deathwatch/hallofrelics/notable-members')).w.get('img.dw-area-crest').attributes('src')).toContain('crest-gold')
     expect((await mountAt('/deathwatch/eventtracker/players')).w.get('img.dw-area-crest').attributes('src')).not.toContain('crest-gold')
   })
+
+  // Following a link inside a view rebuilds the sheet; the keyboard's focus must not fall back to the top.
+  it("moves the keyboard's focus to the new view's heading when the tab changes", async () => {
+    const { w, router } = await mountAt('/deathwatch/eventtracker/standings')
+    document.body.appendChild(w.element.parentNode ?? w.element)
+    await router.push('/deathwatch/eventtracker/scoring')
+    await settle()
+    for (let i = 0; i < 5 && document.activeElement?.tagName !== 'H2'; i++) await new Promise((r) => setTimeout(r, 20))
+    const heading = document.activeElement
+    expect(heading.tagName).toBe('H2')
+    expect(heading.getAttribute('tabindex')).toBe('-1')
+    expect(w.get('.dw-area-sheet').element.contains(heading)).toBe(true)
+  })
 })

@@ -48,7 +48,7 @@ export const AREAS = {
     blurb: 'Honour the warriors who shaped the history of Ebonhold.',
     tabs: [tab('notable-members', 'Notable Members'), tab('fortress-lore', 'Fortress Lore')],
   },
-  // The old site's Recruitment, at its old address: the hub's wide card goes here.
+  // The old site's Recruitment, at its old address: the hub's Enlist button goes here.
   recruitment: {
     label: 'Recruitment',
     blurb: 'Terms of Service and requirements for the Watch',

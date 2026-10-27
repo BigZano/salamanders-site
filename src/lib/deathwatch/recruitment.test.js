@@ -40,7 +40,8 @@ describe('termsOfService', () => {
       'Heraldry & Recognition',
       'Standards of Service',
     ])
-    expect(tos.sections[0].subs.map((s) => s.title)).toEqual(['Tour of Duty', 'Operational Authority'])
+    expect(tos.sections[0].subs.map((s) => plain(s.title))).toEqual(['Tour of Duty', 'Operational Authority'])
+    expect(tos.sections.map((s) => s.n)).toEqual([1, 2, 3, 4, 5, 6])
     expect(tos.sections[0].subs[0].clauses[0][0]).toEqual({ k: 'b', t: 'Service Duration:' })
     expect(tos.sections.every((s) => s.subs.length && s.subs.every((sub) => sub.clauses.length))).toBe(true)
     expect(tos.head.map(plain)).toEqual(['Official Deathwatch Terms of Service', 'Issued by the XVIIIth Legiones Astartes — The Salamanders'])
@@ -51,7 +52,7 @@ describe('termsOfService', () => {
   it('takes what the data holds over the default, and starts an untitled sub-section for clauses before any', () => {
     const tos = termsOfService({ ts1: 'Only\nfirst clause\n## Sub\nsecond', ts_i: '*A quote.*\n\nPlain **words**.', ts_e: '' })
     expect(plain(tos.sections[0].title)).toBe('Only')
-    expect(tos.sections[0].subs.map((s) => [s.title, s.clauses.map(plain)])).toEqual([
+    expect(tos.sections[0].subs.map((s) => [plain(s.title), s.clauses.map(plain)])).toEqual([
       ['', ['first clause']],
       ['Sub', ['second']],
     ])
@@ -67,6 +68,19 @@ describe('termsOfService', () => {
     expect(termsOfService({ ts1: 42, ts_h: null }).head).toEqual([])
     expect(termsOfService('nonsense').sections).toHaveLength(6)
   })
+
+  // Section 3 refers to "Section 4": blanking an earlier section must not renumber the rest.
+  it('numbers each section by its key, so blanking one leaves the others their numbers', () => {
+    const tos = termsOfService({ ts2: '' })
+    expect(tos.sections.map((s) => s.n)).toEqual([1, 3, 4, 5, 6])
+    expect(plain(tos.sections.find((s) => s.n === 4).title)).toBe('Failure Progression')
+  })
+
+  it('reads a sub-section title with its marks, and two marks on one line as two', () => {
+    const tos = termsOfService({ ts1: 'T\n## **Bold** title\nclause', ts_i: '*a* and *b*' })
+    expect(tos.sections[0].subs[0].title).toEqual([{ k: 'b', t: 'Bold' }, { k: '', t: ' title' }])
+    expect(tos.intro).toEqual([{ quote: false, segs: [{ k: 'i', t: 'a' }, { k: '', t: ' and ' }, { k: 'i', t: 'b' }] }])
+  })
 })
 
 describe('requirements', () => {
@@ -80,13 +94,20 @@ describe('requirements', () => {
     expect(plain(rq.quote)).not.toMatch(/^\*|\*$/)
   })
 
-  it('puts an indented line under the requirement above it', () => {
-    const b = requirements({ rq1: 'T\nLead\n- one\n  - under one\n- two\nbelow' }).blocks[0]
-    expect(b.items.map((i) => [plain(i.segs), i.note && plain(i.note)])).toEqual([
-      ['one', 'under one'],
-      ['two', null],
+  it('puts every indented line under the requirement above it, a second one too', () => {
+    const b = requirements({ rq1: 'T\nLead\n- one\n  - under one\n  - and again\n- two\nbelow' }).blocks[0]
+    expect(b.items.map((i) => [plain(i.segs), i.notes.map(plain)])).toEqual([
+      ['one', ['under one', 'and again']],
+      ['two', []],
     ])
     expect(b.notes.map(plain)).toEqual(['below'])
     expect(requirements({ rq2: '' }).blocks).toHaveLength(2)
+  })
+})
+
+describe('the Requirements quote', () => {
+  it('drops the marks of a quote that is one *…*, and keeps two marks on one line as two', () => {
+    expect(requirements({ rq_q: '*All of it.*' }).quote).toEqual([{ k: '', t: 'All of it.' }])
+    expect(requirements({ rq_q: '*a* and *b*' }).quote).toEqual([{ k: 'i', t: 'a' }, { k: '', t: ' and ' }, { k: 'i', t: 'b' }])
   })
 })

@@ -91,7 +91,7 @@ body:has(.dw-sheet[open]) {
   --dw-wm: 0.5;
 }
 .dw[data-area='hub'] .dw-backdrop::after {
-  background-image: url('./img/bg-hub.jpg');
+  background-image: url('./img/bg-hub.webp');
 }
 .dw[data-area='eventtracker'] .dw-backdrop::after {
   background-image: url('./img/bg-tracker.webp');
@@ -133,7 +133,7 @@ body:has(.dw-sheet[open]) {
 }
 /* Recruitment stands in the hub's own hall. */
 .dw[data-area='recruitment'] .dw-backdrop::after {
-  background-image: url('./img/bg-hub.jpg');
+  background-image: url('./img/bg-hub.webp');
 }
 .dw[data-area='manage'] {
   --dw-wm: 0.5;

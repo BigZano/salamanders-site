@@ -256,6 +256,9 @@ const recruitmentTo = resolveArea({ area: 'recruitment' }).canonical
   text-shadow: 0 0 14px rgb(255 120 40 / 0.6);
 }
 .dw-call-btn {
+  display: inline-flex;
+  align-items: center;
+  min-height: 44px;
   padding: 0.75rem clamp(2rem, 6vw, 3.6rem);
   font: 700 1rem / 1 var(--dw-font-title);
   letter-spacing: 0.14em;
@@ -287,6 +290,27 @@ const recruitmentTo = resolveArea({ area: 'recruitment' }).canonical
 }
 .dw-card:active {
   transform: scale(0.99);
+}
+/* The corners are clipped, which also clips an outline drawn outside the card: draw the ring inside it, as .dw-btn. */
+.dw-card:focus-visible {
+  outline: 2px solid var(--dw-accent);
+  outline-offset: -4px;
+}
+/* A narrow phone: the picture gives way, so the longest names (ARMOURING, CHRONICLES) fit beside the arrow. */
+@media (max-width: 420px) {
+  .dw-card {
+    grid-template-columns: 34% minmax(0, 1fr) auto;
+  }
+  .dw-card-text {
+    padding-left: 0.85rem;
+  }
+  .dw-card-title {
+    font-size: 0.98rem;
+    letter-spacing: 0.04em;
+  }
+  .dw-card-go {
+    padding-right: 0.8rem;
+  }
 }
 .dw-manage {
   justify-self: start;

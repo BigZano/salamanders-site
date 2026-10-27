@@ -83,7 +83,7 @@ describe('deathwatch.css', () => {
 
   it('paints a backdrop for the hub and each area, from images that exist', () => {
     const files = {
-      hub: 'bg-hub.jpg',
+      hub: 'bg-hub.webp',
       eventtracker: 'bg-tracker.webp',
       armouringhall: 'bg-armouring.jpg',
       chronicles: 'bg-chronicles.webp',
