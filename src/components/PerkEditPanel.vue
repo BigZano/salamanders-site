@@ -157,7 +157,7 @@ function cancel() {
   font-family: var(--font-mono);
   text-transform: uppercase;
   letter-spacing: 0.1em;
-  font-size: 0.58rem;
+  font-size: max(0.58rem, var(--text-floor));
   color: var(--color-smoke);
 }
 .pe input,
@@ -174,7 +174,7 @@ function cancel() {
   font-family: var(--font-display);
   text-transform: uppercase;
   letter-spacing: 0.06em;
-  font-size: 0.68rem;
+  font-size: max(0.68rem, var(--text-floor));
   color: var(--color-bone);
   background: transparent;
   border: 1px solid var(--color-ash-2);

@@ -38,6 +38,17 @@
   --font-mono: 'Cascadia Code', 'Cascadia Mono', ui-monospace, Consolas, monospace;
 }
 
+/* Smallest text on a phone. Micro-labels write their size as max(<size>, var(--text-floor)), so
+   desktop keeps the small plate lettering and a phone never drops under 11px. */
+:root {
+  --text-floor: 0rem;
+}
+@media (max-width: 768px) {
+  :root {
+    --text-floor: 0.6875rem;
+  }
+}
+
 /* ------------------------------------------------------------------ *
  * Base
  * ------------------------------------------------------------------ */

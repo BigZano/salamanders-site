@@ -210,7 +210,7 @@ function toggle(p) {
   font-family: var(--font-mono);
   text-transform: uppercase;
   letter-spacing: 0.1em;
-  font-size: 0.6rem;
+  font-size: max(0.6rem, var(--text-floor));
   color: var(--color-smoke);
 }
 .wtree-budget input {
@@ -390,7 +390,7 @@ function toggle(p) {
   font-family: var(--font-mono);
   text-transform: uppercase;
   letter-spacing: 0.12em;
-  font-size: 0.6rem;
+  font-size: max(0.6rem, var(--text-floor));
   color: var(--color-gold);
 }
 .wdetail-name {
@@ -409,7 +409,7 @@ function toggle(p) {
   font-family: var(--font-mono);
   text-transform: uppercase;
   letter-spacing: 0.1em;
-  font-size: 0.58rem;
+  font-size: max(0.58rem, var(--text-floor));
   color: var(--color-gold);
   border: 1px solid rgba(214, 170, 72, 0.45);
   border-radius: 2px;

@@ -53,7 +53,7 @@ const emit = defineEmits(['update:page'])
 }
 .pager-label {
   font-family: var(--font-mono);
-  font-size: 0.68rem;
+  font-size: max(0.68rem, var(--text-floor));
   color: var(--color-smoke);
   min-width: 7rem;
   text-align: center;

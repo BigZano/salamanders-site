@@ -421,7 +421,7 @@ watch(() => route.query.w, openFromQuery)
 .w-item-users {
   flex: none;
   font-family: var(--font-mono);
-  font-size: 0.62rem;
+  font-size: max(0.62rem, var(--text-floor));
   color: var(--color-drake);
 }
 .w-empty {
@@ -499,7 +499,7 @@ watch(() => route.query.w, openFromQuery)
   font-family: var(--font-mono);
   text-transform: uppercase;
   letter-spacing: 0.1em;
-  font-size: 0.58rem;
+  font-size: max(0.58rem, var(--text-floor));
   padding: 2px 7px;
   border-radius: 2px;
   border: 1px solid var(--color-ash);
@@ -532,7 +532,7 @@ watch(() => route.query.w, openFromQuery)
   font-family: var(--font-mono);
   text-transform: uppercase;
   letter-spacing: 0.14em;
-  font-size: 0.54rem;
+  font-size: max(0.54rem, var(--text-floor));
   color: var(--color-smoke);
 }
 .w-tags dd {
@@ -573,7 +573,7 @@ watch(() => route.query.w, openFromQuery)
   font-family: var(--font-mono);
   text-transform: uppercase;
   letter-spacing: 0.1em;
-  font-size: 0.62rem;
+  font-size: max(0.62rem, var(--text-floor));
   padding: 2px 8px;
   border: 1px solid currentColor;
   border-radius: 2px;
@@ -607,7 +607,7 @@ watch(() => route.query.w, openFromQuery)
   font-family: var(--font-mono);
   text-transform: uppercase;
   letter-spacing: 0.14em;
-  font-size: 0.54rem;
+  font-size: max(0.54rem, var(--text-floor));
   color: var(--color-smoke);
 }
 .stats-version select {
@@ -639,7 +639,7 @@ watch(() => route.query.w, openFromQuery)
   font-family: var(--font-mono);
   text-transform: uppercase;
   letter-spacing: 0.1em;
-  font-size: 0.58rem;
+  font-size: max(0.58rem, var(--text-floor));
   color: var(--color-smoke);
 }
 /* Track is notched into ten segments, like a gauge struck on the anvil. */
@@ -683,7 +683,7 @@ watch(() => route.query.w, openFromQuery)
 }
 .gauge-delta {
   font-family: var(--font-mono);
-  font-size: 0.66rem;
+  font-size: max(0.66rem, var(--text-floor));
   text-align: right;
 }
 .gauge-delta.over {
@@ -714,7 +714,7 @@ watch(() => route.query.w, openFromQuery)
   font-family: var(--font-mono);
   text-transform: uppercase;
   letter-spacing: 0.14em;
-  font-size: 0.54rem;
+  font-size: max(0.54rem, var(--text-floor));
   color: var(--color-smoke);
 }
 .figures dd {

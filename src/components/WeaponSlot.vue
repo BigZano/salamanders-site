@@ -123,7 +123,7 @@ const wikiUrl = computed(() => WIKI + encodeURIComponent(weapon.value))
   font-family: var(--font-mono);
   text-transform: uppercase;
   letter-spacing: 0.14em;
-  font-size: 0.58rem;
+  font-size: max(0.58rem, var(--text-floor));
   color: var(--color-smoke);
 }
 .slot-select {
@@ -145,7 +145,7 @@ const wikiUrl = computed(() => WIKI + encodeURIComponent(weapon.value))
 .slot-pts {
   flex: none;
   font-family: var(--font-mono);
-  font-size: 0.62rem;
+  font-size: max(0.62rem, var(--text-floor));
   letter-spacing: 0.1em;
   text-transform: uppercase;
   color: var(--color-smoke);

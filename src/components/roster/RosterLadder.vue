@@ -146,7 +146,7 @@ const styleOf = (item) => ({ '--s': item.s, '--h': item.heat.h, '--hp': item.hea
 }
 .rs-aside-label {
   font-family: var(--font-mono);
-  font-size: 0.64rem;
+  font-size: max(0.64rem, var(--text-floor));
   letter-spacing: 0.16em;
   text-transform: uppercase;
   color: var(--color-gold);

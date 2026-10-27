@@ -182,3 +182,26 @@ describe('small buttons', () => {
     expect(css).toMatch(/@media \(pointer: coarse\), \(max-width: 768px\)\s*\{\s*\.btn-sm\s*\{\s*min-height:\s*44px/)
   })
 })
+
+// The micro-labels (mono caps, 8.6 to 10.9px) are unreadable on a phone. Each sub-11px size is written
+// max(<its size>, var(--text-floor)): the variable is 0 on desktop, so nothing there changes, and 11px on phones.
+describe('small text', () => {
+  const dir = fileURLToPath(new URL('.', import.meta.url))
+  const files = readdirSync(dir, { recursive: true }).filter((f) => /\.(vue|css)$/.test(f))
+
+  it('has a text floor that is off on desktop and 11px on phones', () => {
+    expect(css).toMatch(/:root\s*\{\s*--text-floor:\s*0rem;/)
+    expect(css).toMatch(/@media \(max-width: 768px\)\s*\{\s*:root\s*\{\s*--text-floor:\s*0\.6875rem;/)
+  })
+
+  it('lets no component set a font size under 11px without it', () => {
+    const under = []
+    for (const f of files) {
+      readFileSync(join(dir, f), 'utf8').split('\n').forEach((line, i) => {
+        const m = line.match(/font-size:\s*([\d.]+)rem\b/)
+        if (m && parseFloat(m[1]) < 0.6875) under.push(`${f}:${i + 1} ${line.trim()}`)
+      })
+    }
+    expect(under).toEqual([])
+  })
+})

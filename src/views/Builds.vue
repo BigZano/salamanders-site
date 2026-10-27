@@ -303,7 +303,7 @@ async function remove(b) {
 }
 .b-chip-n {
   font-family: var(--font-mono);
-  font-size: 0.66rem;
+  font-size: max(0.66rem, var(--text-floor));
   opacity: 0.75;
 }
 .b-none {

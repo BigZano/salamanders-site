@@ -805,7 +805,7 @@ onBeforeUnmount(() => {
   top: 4px;
   right: 4px;
   font-family: var(--font-mono);
-  font-size: 0.55rem;
+  font-size: max(0.55rem, var(--text-floor));
   color: var(--color-gold);
   border: 1px solid rgba(223, 184, 91, 0.4);
   border-radius: 2px;
@@ -859,7 +859,7 @@ onBeforeUnmount(() => {
   font-family: var(--font-mono);
   text-transform: none;
   font-weight: 400;
-  font-size: 0.68rem;
+  font-size: max(0.68rem, var(--text-floor));
   letter-spacing: 0.06em;
   color: var(--color-gold);
 }
@@ -868,7 +868,7 @@ onBeforeUnmount(() => {
   font-family: var(--font-mono);
   text-transform: uppercase;
   letter-spacing: 0.12em;
-  font-size: 0.56rem;
+  font-size: max(0.56rem, var(--text-floor));
   color: var(--color-smoke);
   margin: 0.5rem 0 0.3rem;
 }
@@ -952,7 +952,7 @@ onBeforeUnmount(() => {
 }
 .pp-meta {
   font-family: var(--font-mono);
-  font-size: 0.64rem;
+  font-size: max(0.64rem, var(--text-floor));
   color: var(--color-gold);
   margin: 0.15rem 0 0.4rem;
 }
@@ -960,7 +960,7 @@ onBeforeUnmount(() => {
   font-family: var(--font-mono);
   text-transform: uppercase;
   letter-spacing: 0.1em;
-  font-size: 0.58rem;
+  font-size: max(0.58rem, var(--text-floor));
   color: var(--color-gold);
   margin: 0.2rem 0 0.3rem;
 }
@@ -984,7 +984,7 @@ onBeforeUnmount(() => {
   font-family: var(--font-mono);
   text-transform: uppercase;
   letter-spacing: 0.1em;
-  font-size: 0.56rem;
+  font-size: max(0.56rem, var(--text-floor));
   color: var(--color-ember);
   margin-bottom: 0.2rem;
 }
@@ -1054,7 +1054,7 @@ onBeforeUnmount(() => {
 }
 .build-label {
   font-family: var(--font-mono);
-  font-size: 0.56rem;
+  font-size: max(0.56rem, var(--text-floor));
   letter-spacing: 0.12em;
   color: var(--color-smoke);
 }
@@ -1101,7 +1101,7 @@ onBeforeUnmount(() => {
   font-family: var(--font-mono);
   text-transform: uppercase;
   letter-spacing: 0.1em;
-  font-size: 0.54rem;
+  font-size: max(0.54rem, var(--text-floor));
   color: var(--color-smoke);
 }
 .bg-name {
@@ -1116,7 +1116,7 @@ onBeforeUnmount(() => {
 .bg-pts {
   flex: none;
   font-family: var(--font-mono);
-  font-size: 0.58rem;
+  font-size: max(0.58rem, var(--text-floor));
   color: var(--color-ember);
   border: 1px solid rgba(255, 106, 43, 0.4);
   border-radius: 2px;
@@ -1133,7 +1133,7 @@ onBeforeUnmount(() => {
   font-family: var(--font-mono);
   text-transform: uppercase;
   letter-spacing: 0.14em;
-  font-size: 0.54rem;
+  font-size: max(0.54rem, var(--text-floor));
   color: var(--color-smoke);
 }
 .save-more {
@@ -1141,7 +1141,7 @@ onBeforeUnmount(() => {
   font-family: var(--font-mono);
   text-transform: uppercase;
   letter-spacing: 0.1em;
-  font-size: 0.56rem;
+  font-size: max(0.56rem, var(--text-floor));
   color: var(--color-drake);
   background: transparent;
   border: 0;
@@ -1285,7 +1285,7 @@ onBeforeUnmount(() => {
   font-family: var(--font-mono);
   text-transform: uppercase;
   letter-spacing: 0.14em;
-  font-size: 0.54rem;
+  font-size: max(0.54rem, var(--text-floor));
   color: var(--color-smoke);
 }
 .pr-rank-perk {
@@ -1325,7 +1325,7 @@ onBeforeUnmount(() => {
   font-family: var(--font-mono);
   text-transform: uppercase;
   letter-spacing: 0.14em;
-  font-size: 0.58rem;
+  font-size: max(0.58rem, var(--text-floor));
   color: var(--color-smoke);
   margin-bottom: 0.6rem;
 }
