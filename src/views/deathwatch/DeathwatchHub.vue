@@ -284,6 +284,13 @@ const recruitmentTo = resolveArea({ area: 'recruitment' }).canonical
   outline: 2px solid var(--dw-accent);
   outline-offset: -7px;
 }
+/* A phone: the heading's veil spans the screen, so its sides fall past the edges instead of showing as a seam. */
+@media (max-width: 600px) {
+  .dw-hub-head {
+    justify-self: stretch;
+    margin-inline: -1rem;
+  }
+}
 /* A narrow phone: the picture gives way, so the longest names (ARMOURING, CHRONICLES) fit beside the arrow. */
 @media (max-width: 420px) {
   .dw-card {
