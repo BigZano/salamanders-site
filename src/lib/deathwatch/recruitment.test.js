@@ -63,10 +63,17 @@ describe('termsOfService', () => {
     expect(tos.end).toEqual([])
   })
 
-  it('drops a section the data blanks, and survives texts that are not text', () => {
+  it('drops a section the data blanks, and keeps the default for a value that is not text', () => {
     expect(termsOfService({ ts6: '' }).sections).toHaveLength(5)
-    expect(termsOfService({ ts1: 42, ts_h: null }).head).toEqual([])
+    const odd = termsOfService({ ts1: 42, ts_h: null })
+    expect(odd.head).toEqual(termsOfService().head)
+    expect(odd.sections[0]).toEqual(termsOfService().sections[0])
     expect(termsOfService('nonsense').sections).toHaveLength(6)
+  })
+
+  it('keeps a section with clauses but no title', () => {
+    const s = termsOfService({ ts1: '\nfirst clause' }).sections[0]
+    expect([s.n, s.title, s.subs[0].clauses.length]).toEqual([1, [], 1])
   })
 
   // Section 3 refers to "Section 4": blanking an earlier section must not renumber the rest.
@@ -102,6 +109,10 @@ describe('requirements', () => {
     ])
     expect(b.notes.map(plain)).toEqual(['below'])
     expect(requirements({ rq2: '' }).blocks).toHaveLength(2)
+    // A block with no title still shows its requirements; a value that is not text keeps the default.
+    const untitled = requirements({ rq1: '\n\n- one' }).blocks[0]
+    expect([untitled.title, untitled.items.map((i) => plain(i.segs))]).toEqual([[], ['one']])
+    expect(requirements({ rq1: 7 }).blocks[0]).toEqual(requirements().blocks[0])
   })
 })
 

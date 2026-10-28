@@ -38,6 +38,11 @@ describe('Terms of Service', () => {
     expect(w.findAll('.rc-s')[2].get('.rc-n').text()).toBe('4.1.1')
   })
 
+  it('shows "Section 1" alone, with no dash, for a section without a title', () => {
+    const w = mountPage(TermsOfService, { ts1: '\nfirst clause' })
+    expect(w.findAll('.rc-s h3')[0].text()).toBe('Section 1')
+  })
+
   it('shows a sub-section title with its marks, and no empty list for a sub-section without clauses', () => {
     const w = mountPage(TermsOfService, { ts1: 'First\n## **Bold** title\n## Empty one' })
     const first = w.findAll('.rc-s')[0]
@@ -65,5 +70,12 @@ describe('Requirements', () => {
     expect(items).toHaveLength(2)
     expect(texts(items[0], '.rc-l')).toEqual(['first note', 'second note'])
     expect(items[1].findAll('.rc-l')).toHaveLength(0)
+  })
+
+  it('shows a block without a title, with no empty heading', () => {
+    const w = mountPage(Requirements, { rq1: '\n\n- one' })
+    const first = w.findAll('.rc-s')[0]
+    expect(first.find('h3').exists()).toBe(false)
+    expect(first.get('.rc-req li').text()).toBe('one')
   })
 })

@@ -44,18 +44,22 @@ const view = computed(() => {
 
 // A tab change rebuilds the sheet, which would drop the keyboard's focus back to the top of the document: move it to
 // the new view's heading instead, once the view has arrived (its chunk may still be on its way; a few frames at most).
+// A view with no heading yet (loading, empty, an error) gives the focus to the sheet itself. A later tab change wins.
 const sheet = ref(null)
-watch(viewKey, async () => {
-  for (let frame = 0; frame < 30; frame++) {
+const frame = () => new Promise((r) => (typeof requestAnimationFrame === 'function' ? requestAnimationFrame(r) : setTimeout(r, 16)))
+const focusOn = (el) => {
+  el.setAttribute('tabindex', '-1')
+  el.focus({ preventScroll: true })
+}
+watch(viewKey, async (key) => {
+  for (let tries = 0; tries < 30; tries++) {
     await nextTick()
+    if (viewKey.value !== key) return
     const heading = sheet.value?.querySelector('h1, h2')
-    if (heading) {
-      heading.setAttribute('tabindex', '-1')
-      heading.focus({ preventScroll: true })
-      return
-    }
-    await new Promise((r) => requestAnimationFrame(r))
+    if (heading) return focusOn(heading)
+    await frame()
   }
+  if (viewKey.value === key && sheet.value) focusOn(sheet.value)
 })
 </script>
 
@@ -162,7 +166,8 @@ watch(viewKey, async () => {
   padding: 1.2rem 1rem 1.6rem;
 }
 /* The heading the focus is moved to on a tab change: it is no control, so it shows no ring of its own. */
-.dw-area-sheet :deep(:is(h1, h2)[tabindex='-1']:focus) {
+.dw-area-sheet :deep(:is(h1, h2)[tabindex='-1']:focus),
+.dw-area-sheet[tabindex='-1']:focus {
   outline: none;
 }
 .dw-area-restricted {

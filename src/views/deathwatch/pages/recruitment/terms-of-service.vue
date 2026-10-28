@@ -30,7 +30,7 @@ const tos = computed(() => termsOfService(data.cfg.tx))
       <p v-for="(p, i) in tos.intro" :key="i" :class="{ 'rc-q': p.quote }"><Inline :segs="p.segs" /></p>
     </div>
     <section v-for="s in tos.sections" :key="s.n" class="rc-s">
-      <h3>Section {{ s.n }} — <Inline :segs="s.title" /></h3>
+      <h3>Section {{ s.n }}<template v-if="s.title.length"> — <Inline :segs="s.title" /></template></h3>
       <template v-for="(sub, j) in s.subs" :key="j">
         <h4 v-if="sub.title.length">{{ s.n }}.{{ j + 1 }} — <Inline :segs="sub.title" /></h4>
         <ol v-if="sub.clauses.length">

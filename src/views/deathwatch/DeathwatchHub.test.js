@@ -98,7 +98,9 @@ describe('DeathwatchHub styles', () => {
   it("shows a card's keyboard focus ring inside its clipped corners", () => {
     const ring = rule('.dw-card:focus-visible')
     expect(ring).toMatch(/outline:\s*2px solid/)
-    expect(Number(ring.match(/outline-offset:\s*(-?\d+)px/)?.[1])).toBeLessThan(0)
+    // Its outer edge, the offset less the width in, must clear the 10px chamfer: a corner at (d, d) is cut while 2d < 10.
+    const inset = -Number(ring.match(/outline-offset:\s*(-?\d+)px/)?.[1]) - Number(ring.match(/outline:\s*(\d+)px/)?.[1])
+    expect(2 * inset).toBeGreaterThanOrEqual(10)
     expect(rule('.dw-card')).toContain('clip-path')
   })
 

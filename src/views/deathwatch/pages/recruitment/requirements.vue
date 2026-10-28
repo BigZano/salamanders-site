@@ -27,7 +27,7 @@ const rq = computed(() => requirements(data.cfg.tx))
       <p v-if="rq.quote.length" class="rc-sub rc-q"><Inline :segs="rq.quote" /></p>
     </header>
     <section v-for="(b, i) in rq.blocks" :key="i" class="rc-s">
-      <h3><Inline :segs="b.title" /></h3>
+      <h3 v-if="b.title.length"><Inline :segs="b.title" /></h3>
       <p v-if="b.lead.length" class="rc-l"><Inline :segs="b.lead" /></p>
       <ul v-if="b.items.length" class="rc-req">
         <li v-for="(item, j) in b.items" :key="j">

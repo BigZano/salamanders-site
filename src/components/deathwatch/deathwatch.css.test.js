@@ -85,10 +85,10 @@ describe('deathwatch.css', () => {
     const files = {
       hub: 'bg-hub.webp',
       eventtracker: 'bg-tracker.webp',
-      armouringhall: 'bg-armouring.jpg',
+      armouringhall: 'bg-armouring.webp',
       chronicles: 'bg-chronicles.webp',
       hallofrelics: 'bg-relics.webp',
-      manage: 'bg-manage.jpg',
+      manage: 'bg-manage.webp',
     }
     for (const [area, file] of Object.entries(files)) {
       const rule = css.match(new RegExp(`\\.dw\\[data-area='${area}'\\]\\s+\\.dw-backdrop::after\\s*\\{([^}]*)\\}`))?.[1] ?? ''
@@ -137,5 +137,18 @@ describe('a spoiler in a page text', () => {
   it('reveals on hover only where a pointer can hover', () => {
     expect(css).toMatch(/@media \(hover: hover\) and \(pointer: fine\)\s*\{\s*\.dw \.nm-spl:hover\s*\{\s*filter:\s*none;/)
     expect(css.replace(/@media \(hover: hover\)[^{]*\{\s*\.dw \.nm-spl:hover/, '')).not.toMatch(/nm-spl:hover/)
+  })
+})
+
+// The backdrop layer moves all the time (dw-drift, dw-flicker); a filter on it could be repainted every frame on a
+// phone. Its blur and brightness are baked into the pictures instead.
+describe('the backdrop layer', () => {
+  it('moves without a filter of its own', () => {
+    const layer = css.match(/(^|\n)\.dw-backdrop::after\s*\{([^}]*)\}/)?.[2] ?? ''
+    expect(layer).toContain('animation')
+    expect(layer).not.toMatch(/filter\s*:/)
+  })
+  it('is never filtered from an area rule either', () => {
+    for (const [, body] of css.matchAll(/\.dw-backdrop::after\s*\{([^}]*)\}/g)) expect(body).not.toMatch(/filter\s*:/)
   })
 })

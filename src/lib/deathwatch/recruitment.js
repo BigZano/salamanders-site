@@ -11,7 +11,11 @@ import { inline, whole } from './notables'
 import { RECRUITMENT_TEXTS } from './recruitmentTexts'
 
 const text = (v) => (typeof v === 'string' ? v : '')
-const texts = (tx) => ({ ...RECRUITMENT_TEXTS, ...(tx && typeof tx === 'object' ? tx : {}) })
+// Only text replaces a default: a value of any other type (a number, null) leaves the old site's text in place.
+const texts = (tx) => ({
+  ...RECRUITMENT_TEXTS,
+  ...Object.fromEntries(Object.entries(tx && typeof tx === 'object' ? tx : {}).filter(([, v]) => typeof v === 'string')),
+})
 /** Paragraphs (blank line between), each { quote, segs }: a paragraph that is one *…* from end to end is a quote. */
 const paras = (t) =>
   text(t)
@@ -58,7 +62,7 @@ export function requirements(tx) {
       }
       return { title: inline(title.trim()), lead: inline(lead.trim()), items, notes }
     })
-    .filter((b) => b.title.length)
+    .filter((b) => b.title.length || b.lead.length || b.items.length || b.notes.length)
   const q = text(t.rq_q).trim()
   return { quote: inline(whole(q, 'i') ? q.slice(1, -1) : q), blocks }
 }

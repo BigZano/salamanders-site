@@ -80,10 +80,10 @@ body:has(.dw-sheet[open]) {
 .dw-backdrop::after {
   content: '';
   position: absolute;
-  /* A light blur and a touch of light, so the picture stays behind the page yet reads; reaching past the window keeps its edges from fading. */
-  inset: -6px;
+  /* No filter here: the layer moves all the time, and a phone could repaint a filter every frame. The pictures
+     carry their light blur and brightness in the files (1600px WebPs). */
+  inset: 0;
   background: center / cover no-repeat;
-  filter: blur(2.1px) brightness(1.2);
   opacity: var(--dw-wm);
   animation:
     dw-drift 40s ease-in-out infinite alternate,
@@ -102,7 +102,7 @@ body:has(.dw-sheet[open]) {
   --dw-wm: 0.55;
 }
 .dw[data-area='armouringhall'] .dw-backdrop::after {
-  background-image: url('./img/bg-armouring.jpg');
+  background-image: url('./img/bg-armouring.webp');
 }
 .dw[data-area='chronicles'] {
   --dw-wm: 0.6;
@@ -141,7 +141,7 @@ body:has(.dw-sheet[open]) {
   --dw-wm: 0.5;
 }
 .dw[data-area='manage'] .dw-backdrop::after {
-  background-image: url('./img/bg-manage.jpg');
+  background-image: url('./img/bg-manage.webp');
 }
 /* A slow push-in, and a faint firelight flicker. Both are transform or opacity only, so they run on the GPU. */
 @keyframes dw-drift {

@@ -81,7 +81,8 @@ const recruitmentTo = resolveArea({ area: 'recruitment' }).canonical
   gap: 0.5rem;
   padding: 1.2rem 1.5rem;
   text-align: center;
-  background: radial-gradient(ellipse at center, rgb(6 9 6 / 0.7), transparent 72%);
+  /* A dark veil behind the heading, so its small lines hold 4.5:1 on the bright backdrop at any width. */
+  background: radial-gradient(ellipse at center, rgb(6 9 6 / 0.88) 35%, rgb(6 9 6 / 0.6) 60%, transparent 82%);
 }
 .dw-hub-crest {
   width: clamp(70px, 12.5dvh, 160px);
@@ -109,14 +110,14 @@ const recruitmentTo = resolveArea({ area: 'recruitment' }).canonical
   margin: 0;
   font-style: italic;
   font-weight: 500;
-  color: var(--dw-muted);
+  color: #cdd6ce;
 }
 .dw-hub-prompt {
   margin: 0.6rem 0 0;
   font: 600 0.8rem / 1.2 var(--dw-font-cond);
   letter-spacing: 0.22em;
   text-transform: uppercase;
-  color: var(--dw-silver);
+  color: var(--dw-ink);
 }
 /* Two wide cards to a row from 760px, one below: each the area's art on the left, its name and line on the right,
    and an arrow. Thin chamfered frames, as the area's panels. */
@@ -277,10 +278,11 @@ const recruitmentTo = resolveArea({ area: 'recruitment' }).canonical
 .dw-card:active {
   transform: scale(0.99);
 }
-/* The corners are clipped, which also clips an outline drawn outside the card: draw the ring inside it, as .dw-btn. */
+/* The corners are clipped, which also clips an outline drawn outside the card: draw the ring inside it, as .dw-btn,
+   far enough in (2px thick, from 5px to 7px) that its own corners clear the 10px chamfer (x + y = 10). */
 .dw-card:focus-visible {
   outline: 2px solid var(--dw-accent);
-  outline-offset: -4px;
+  outline-offset: -7px;
 }
 /* A narrow phone: the picture gives way, so the longest names (ARMOURING, CHRONICLES) fit beside the arrow. */
 @media (max-width: 420px) {
