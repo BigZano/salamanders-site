@@ -29,6 +29,7 @@ const tune = fireTuning.bed
 
 const host = ref(null)
 const canvas = ref(null)
+const glowEl = ref(null)
 // Pages flagged meta.ashOver (the archive) get the near ash on a second
 // canvas above their content, so it drifts across the page, not behind it.
 const veil = ref(null)
@@ -45,6 +46,11 @@ let hidden = false
 let mountain = null // { peak, left, right, profile, crater }
 let ridges = [] // distant silhouettes, for depth
 let flows = [] // lava running down the flanks
+let lip = null // the molten lip along the crater rim, brimming over
+let spits = [] // lava spat up off the lip, and bubbles popping on it
+const SPIT_MAX = 18
+// Phones get seven of the default eleven channels.
+const PHONE_FLOW_SHARE = 0.64
 let silhouette = null // cached rock, redrawn only on resize
 let drift = [] // continuous sparks/embers off the summit
 let burst = [] // sparks thrown by an eruption pulse
@@ -160,12 +166,19 @@ function seedForRoute() {
 // Read through profileFor rather than the `prof` binding so the painted sky
 // tracks a profile edit in the tuning panel without waiting for a rebuild.
 const glowStyle = computed(() => {
-  const g = tune.glow * profileFor(route.path).density
+  // x1.4: the layer's opacity runs 0.62 to 1 with the caldera's breathing and flare (see draw), so the gradient has headroom
+  const g = tune.glow * profileFor(route.path).density * 1.4
   return {
+    // Two layers: the glow at the foot of the cone, and a faint wash over the heavens above the crater, orange
+    // at the heart and sulphur-ochre toward its edge.
     background: `radial-gradient(90% 55% at ${(face.value * 100).toFixed(0)}% 100%,
     rgba(224, 67, 29, ${g.toFixed(3)}),
     rgba(150, 35, 15, ${(g * 0.35).toFixed(3)}) 40%,
-    transparent 72%)`,
+    transparent 76%),
+    radial-gradient(80% 62% at ${(face.value * 100).toFixed(0)}% 30%,
+    rgba(255, 112, 36, ${(g * 0.17).toFixed(3)}),
+    rgba(176, 128, 34, ${(g * 0.09).toFixed(3)}) 48%,
+    transparent 78%)`,
   }
 })
 
@@ -175,10 +188,12 @@ function makeGlow() {
   cv.width = cv.height = s
   const g = cv.getContext('2d')
   const grd = g.createRadialGradient(s / 2, s / 2, 0, s / 2, s / 2, s / 2)
-  grd.addColorStop(0, 'rgba(255,255,255,1)')
-  grd.addColorStop(0.2, 'rgba(255,214,150,0.9)')
-  grd.addColorStop(0.5, 'rgba(255,106,43,0.4)')
-  grd.addColorStop(1, 'rgba(224,67,29,0)')
+  // Yellow-white at the heart (about 1100 C), not pure white: added to the dark sky, white reads as a moon.
+  grd.addColorStop(0, 'rgba(255,238,190,1)')
+  grd.addColorStop(0.18, 'rgba(255,190,110,0.9)')
+  grd.addColorStop(0.45, 'rgba(255,106,43,0.42)')
+  grd.addColorStop(0.75, 'rgba(224,67,29,0.12)')
+  grd.addColorStop(1, 'rgba(180,40,18,0)')
   g.fillStyle = grd
   g.fillRect(0, 0, s, s)
   return cv
@@ -295,34 +310,95 @@ function buildRockShape() {
 }
 
 /**
- * Riders on a flow: glowing magma packets and dark rock chunks, both moving
+ * Riders on a flow: dark rock chunks, rafts of crust carried along. They move
  * along the channel's own point list over time rather than drawn as part of
  * the static line. `u` is 0 at the crater end, 1 at the base, and wraps back
  * to 0 — an endless procession rather than a one-shot particle.
+ * (The glow inside a channel is not a rider: it is a pattern of crust windows, see the lava pass in draw.)
  */
 function buildRiders() {
   return {
-    packets: Array.from({ length: 1 + ((rng() * 2) | 0) }, () => ({
+    // Rafts of crust: three to seven on a channel, spread along it at random and in all sizes, so it reads as
+    // scattered rockfall and not a pattern. About one in five is a big slab.
+    chunks: Array.from({ length: 3 + ((rng() * 5) | 0) }, () => ({
+      boost: 0, // extra speed from being thrown out by a blast; it dies away
       u: rng(),
-      speed: grand(0.0015, 0.0032),
-      size: grand(0.9, 1.6),
+      speed: grand(0.0007, 0.0014), // rock is heavier than the glow riding past it
+      size: rng() < 0.2 ? grand(4.5, 7) : grand(1.8, 4.5),
+      angle: grand(0, Math.PI * 2),
+      spin: grand(-1.4, 1.4),
+      shape: buildRockShape(),
     })),
-    // Not every channel carries visible debris — a chunk on every flow reads
-    // as a mechanical pattern rather than scattered rockfall.
-    chunks:
-      rng() < 0.55
-        ? [
-            {
-              u: rng(),
-              speed: grand(0.0007, 0.0014), // rock is heavier than the glow riding past it
-              size: grand(2.2, 4.5),
-              angle: grand(0, Math.PI * 2),
-              spin: grand(-1.4, 1.4),
-              shape: buildRockShape(),
-            },
-          ]
-        : [],
   }
+}
+
+/**
+ * Lava spat up off the crater lip ("lava spat and bubbled", Lords of Nocturne), and bubbles that burst on it. A glob is
+ * thrown up from a random point on the lip and falls back under gravity; a bubble swells to a bright flash and goes.
+ * Both scale with the crater, and thin out on the pages that are mostly reading.
+ */
+function spawnSpit(m) {
+  const p = lip.pts[(Math.random() * lip.pts.length) | 0]
+  const k = m.craterHalf / 90
+  const bubble = Math.random() < 0.4
+  return bubble
+    ? { bubble: true, x: p.x, y: p.y, vx: 0, vy: 0, age: 0, life: rand(0.35, 0.7), size: rand(5, 11) * k }
+    : { bubble: false, x: p.x, y: p.y, vx: rand(-0.7, 0.7) * k, vy: -rand(1.4, 3.8) * k, age: 0, life: rand(0.6, 1.5), size: rand(1.2, 2.8) * Math.max(0.7, k) }
+}
+
+/**
+ * The crater lip: a molten edge along the rim that is rough, uneven and different on every route. A slow
+ * undulation, crags and a little grit are stacked, tapering to nothing at both corners so the ends meet the rock
+ * outline exactly; some stretches burn brighter than others, as a crust forms and breaks. It has its own random
+ * stream, so the seeded one that shapes the mountain is not touched, and a resize redraws the same lip.
+ * `base` is the resting line; the draw loop heaves `pts` around it.
+ */
+function buildLip(m) {
+  const r = mulberry32(hashString(route.path || '/') ^ 0x11b5)
+  const n = 64
+  const bump = Math.max(2.5, m.craterHalf * 0.11)
+  const coarse = Array.from({ length: 9 }, () => r())
+  const crags = Array.from({ length: 24 }, () => r())
+  const at = (arr, u) => {
+    const x = u * (arr.length - 1)
+    const i = Math.floor(x)
+    const f = x - i
+    return arr[i] + (arr[Math.min(arr.length - 1, i + 1)] - arr[i]) * (f * f * (3 - 2 * f))
+  }
+  const pts = []
+  const w = []
+  for (let i = 0; i <= n; i++) {
+    const u = i / n
+    const edge = Math.sqrt(Math.sin(Math.PI * u))
+    const lift = (at(coarse, u) * 0.55 + at(crags, u) * 0.35 + r() * 0.35 - 0.3) * edge
+    w.push(edge)
+    pts.push({
+      x: m.rimL.x + (m.rimR.x - m.rimL.x) * u + (r() - 0.5) * m.craterHalf * 0.014 * edge,
+      y: m.rimL.y + (m.rimR.y - m.rimL.y) * u - lift * bump,
+    })
+  }
+  const stops = Array.from({ length: 13 }, (_, i) => [i / 12, 0.4 + r() * 0.6])
+  return { pts, base: pts.map((p) => ({ x: p.x, y: p.y })), w, stops }
+}
+
+/** The lip's bloom, body and core as horizontal gradients whose strength varies along the rim. */
+function lipGlow(ctx, lip, m) {
+  const make = (rgb) => {
+    const g = ctx.createLinearGradient(m.rimL.x, 0, m.rimR.x, 0)
+    for (const [at, a] of lip.stops) g.addColorStop(at, `rgba(${rgb},${a.toFixed(2)})`)
+    return g
+  }
+  return { bloom: make('255,106,43'), body: make('255,154,77'), core: make('255,212,138') }
+}
+
+/** Trace the stretch of a flow between fractions `lo` and `hi` of its length onto the current path. */
+function traceSlice(ctx, f, lo, hi) {
+  const nSeg = f.pts.length - 1
+  const start = pointOnFlow(f, lo)
+  ctx.moveTo(start.x, start.y)
+  for (let k = Math.floor(lo * nSeg) + 1; k < hi * nSeg; k++) ctx.lineTo(f.pts[k].x, f.pts[k].y)
+  const end = pointOnFlow(f, hi)
+  ctx.lineTo(end.x, end.y)
 }
 
 /**
@@ -337,14 +413,15 @@ function buildRiders() {
  * actually need it — the seed is fixed per route, so re-running this after a
  * resize already retraces the same channels against the new mountain, not
  * new random ones. But the riders on those channels (buildRiders, below) use
- * *unseeded* progress so packets and rockfall never repeat in lockstep, and
+ * *unseeded* progress so rockfall and the crust pattern never repeat in lockstep, and
  * without carrying that progress across, every rider would snap back to a
  * fresh random position the moment the window resizes — a real pop, just one
  * frame later than the geometry itself.
  */
 function buildFlows(prev) {
   const out = []
-  const count = Math.max(0, Math.round(tune.flows))
+  const phone = window.matchMedia?.('(max-width: 768px)').matches
+  const count = Math.max(0, Math.round(tune.flows * (phone ? PHONE_FLOW_SHARE : 1)))
   const rows = mountain.left.length
 
   for (let i = 0; i < count; i++) {
@@ -373,10 +450,31 @@ function buildFlows(prev) {
     }
 
     if (pts.length < 2) continue
-    const riders = prev?.[i] ? { packets: prev[i].packets, chunks: prev[i].chunks } : buildRiders()
+    // The glow is sampled at GLOW_STOPS places along the channel. Where each sits in the pattern, how much crust it
+    // carries (little near the vent, more toward the toe), and its heat colours depend only on its place: worked out once.
+    const phs = new Float32Array(GLOW_STOPS)
+    const thrs = new Float32Array(GLOW_STOPS)
+    const bodyA = new Float32Array(GLOW_STOPS * 4)
+    const coreA = new Float32Array(GLOW_STOPS * 4)
+    for (let gi = 0; gi < GLOW_STOPS; gi++) {
+      const s = gi / (GLOW_STOPS - 1)
+      // Pattern phase: its wavelength follows the lava's speed (1.5 at the vent, 0.3 at the toe), so it bunches up downstream.
+      phs[gi] = (5 * Math.log(1.5 / lavaSpeed(s))) / 1.2
+      thrs[gi] = 0.18 + 0.5 * Math.pow(s, 0.8)
+      bodyA.set(rampAt(BODY_STOPS, s), gi * 4)
+      coreA.set(rampAt(CORE_STOPS, s), gi * 4)
+    }
+    const riders = prev?.[i] ? { chunks: prev[i].chunks, seed: prev[i].seed } : { ...buildRiders(), seed: rand(0, 900) }
     out.push({
       pts,
-      width: grand(1.6, 4.2),
+      phs,
+      thrs,
+      bodyA,
+      coreA,
+      D: rand(0, 40), // how far the pattern has been carried: it moves at a speed that wanders
+      tau: rand(0, 40), // how far it has evolved
+      surge: -1, // where a pulse from an eruption has got to, 0 at the vent to 1 at the toe; -1 when none
+      width: grand(2.4, 5.2),
       phase: grand(0, Math.PI * 2),
       rate: grand(0.12, 0.4),
       heat: grand(0.55, 1),
@@ -384,6 +482,71 @@ function buildFlows(prev) {
     })
   }
   return out
+}
+
+/** Non-repeating smooth value noise in two dimensions: hashed lattice, smoothly interpolated. */
+function hash2(x, y) {
+  let h = (x * 374761393 + y * 668265263) | 0
+  h = ((h ^ (h >>> 13)) * 1274126177) | 0
+  return ((h ^ (h >>> 16)) >>> 0) / 4294967296
+}
+function vnoise(x, y) {
+  const xi = Math.floor(x)
+  const yi = Math.floor(y)
+  const fx = x - xi
+  const fy = y - yi
+  const u = fx * fx * (3 - 2 * fx)
+  const v = fy * fy * (3 - 2 * fy)
+  const a = hash2(xi, yi)
+  const b = hash2(xi + 1, yi)
+  const c = hash2(xi, yi + 1)
+  const d = hash2(xi + 1, yi + 1)
+  return a + (b - a) * u + (c - a) * v + (a - b - c + d) * u * v
+}
+
+/** Linear lookup in a ramp of [position, r, g, b, a] stops. */
+function rampAt(stops, s) {
+  let k = 1
+  while (k < stops.length - 1 && stops[k][0] < s) k++
+  const a = stops[k - 1]
+  const b = stops[k]
+  const u = Math.max(0, Math.min(1, (s - a[0]) / (b[0] - a[0] || 1)))
+  return [1, 2, 3, 4].map((j) => a[j] + (b[j] - a[j]) * u)
+}
+
+// The heat colours of a channel's glow, vent to toe, as [position, r, g, b, a] (the same ramp flowRamp paints).
+const BODY_STOPS = [[0, 255, 196, 110, 1], [0.25, 255, 138, 61, 1], [0.6, 224, 67, 29, 1], [0.92, 150, 40, 18, 0.6], [1, 100, 26, 12, 0]]
+const CORE_STOPS = [[0, 255, 226, 150, 1], [0.2, 255, 190, 100, 0.9], [0.42, 255, 150, 70, 0], [1, 255, 150, 70, 0]]
+// How many places along a channel its glow is sampled; the gradient between them is smooth.
+const GLOW_STOPS = 12
+// How fast things are carried at `u` (0 vent, 1 toe), relative: lava is thick, quick off the steep top and crawling
+// toward the toe as it cools and stiffens. The glow pattern and the rock chunks both follow it.
+const lavaSpeed = (u) => 1.5 - 1.2 * u
+const sstep = (x) => {
+  const c = x < 0 ? 0 : x > 1 ? 1 : x
+  return c * c * (3 - 2 * c)
+}
+
+/**
+ * Heat along one channel, vent to toe: yellow-white, orange, red, then dark crust (USGS: about 1100 C reads
+ * yellow, 900 orange, 700 red, cooler is black). Built once per flow and reused every frame. The colours run
+ * along the line from the channel's first point to its last, which for a channel running down the cone is the
+ * line of flow. Alpha does the cooling, not a dark colour, because the pass is additive.
+ */
+function flowRamp(ctx, f) {
+  const a = f.pts[0]
+  const b = f.pts[f.pts.length - 1]
+  const make = (stops) => {
+    const g = ctx.createLinearGradient(a.x, a.y, b.x, b.y)
+    for (const [at, color] of stops) g.addColorStop(at, color)
+    return g
+  }
+  return {
+    bloom: make([[0, 'rgba(255,150,70,1)'], [0.4, 'rgba(224,67,29,1)'], [0.85, 'rgba(140,35,15,0.55)'], [1, 'rgba(90,22,10,0)']]),
+    body: make([[0, 'rgba(255,196,110,1)'], [0.25, 'rgba(255,138,61,1)'], [0.6, 'rgba(224,67,29,1)'], [0.92, 'rgba(150,40,18,0.6)'], [1, 'rgba(100,26,12,0)']]),
+    // the white-hot core only near the vent
+    core: make([[0, 'rgba(255,226,150,1)'], [0.2, 'rgba(255,190,100,0.9)'], [0.42, 'rgba(255,150,70,0)'], [1, 'rgba(255,150,70,0)']]),
+  }
 }
 
 /** A point at fraction `u` (0 = crater end, 1 = base) along a flow's path. */
@@ -548,6 +711,7 @@ function layout() {
   mountain = buildMountain(w, h)
   ridges = buildRidges(w, h)
   flows = buildFlows(flows)
+  lip = buildLip(mountain)
   silhouette = buildSilhouette(w, h)
 
   const mobile = window.matchMedia?.('(max-width: 768px)').matches
@@ -610,6 +774,16 @@ function erupt() {
     })
   }
   mountain.flare = 1
+  for (const f of flows) {
+    f.surge = 0
+    // the blast throws rocks out of the vent: they start at the crater, fast, and the lava slows them
+    for (const c of f.chunks) {
+      if (Math.random() < 0.35) {
+        c.u = 0
+        c.boost = 2.2
+      }
+    }
+  }
 }
 
 function draw(dt) {
@@ -662,6 +836,8 @@ function draw(dt) {
   ctx.drawImage(spriteGlow, m.peakX - cs / 2, m.peakY - cs * 0.62, cs, cs * 0.9)
   deathfireHeat.breathe = breathe
   deathfireHeat.flare = flare
+  // The painted haze breathes and flares with the caldera, so the flash and the glow move together.
+  if (glowEl.value) glowEl.value.style.opacity = Math.min(1, 0.62 + 0.18 * ((breathe - 0.2) / 0.8) + 0.3 * flare).toFixed(3)
   if (m.flare) m.flare = Math.max(0, m.flare - secs * 1.8)
 
   // 3. The rock.
@@ -678,67 +854,72 @@ function draw(dt) {
     // touches negative for part of every cycle. heat <= 0.01 then skipped the
     // whole channel, so each flow blinked fully out of existence on its own
     // independent cycle. Breathes between 0.44 and 1 instead of 0 and 1.
-    const pulse = 0.72 + Math.sin(t * f.rate + f.phase) * 0.28
-    const heat = f.heat * pulse * tune.flowHeat * prof.density
+    const pulse = 0.76 + (vnoise(t * 0.14, f.seed + 31) - 0.5) * 0.6 // a slow, non-repeating swell
+    // the channels follow the caldera too: a flare lights them, a lull dims them
+    const heat = f.heat * pulse * tune.flowHeat * prof.density * (0.82 + 0.18 * breathe + flare * 0.5)
     f._heat = heat // read by the chunk pass below, after this loop's dash state is gone
     if (heat <= 0.01) continue
+    const ramp = (f.ramp ??= flowRamp(ctx, f))
     ctx.beginPath()
     ctx.moveTo(f.pts[0].x, f.pts[0].y)
     for (const p of f.pts) ctx.lineTo(p.x, p.y)
 
-    // Bloom, body, then a tight core — molten rock never reads as one stroke.
-    // Fully solid: a dashed version of this was tried and read as a string of
-    // separate glowing capsules, not a flow — the gap was bigger than the
-    // dash. The channel itself always stays one continuous line; motion comes
-    // from the travelling highlight below instead, layered on top of it.
+    // The bloom: one soft stroke along the whole channel.
     ctx.globalAlpha = Math.max(0, heat * 0.22)
-    ctx.strokeStyle = '#e0431d'
+    ctx.strokeStyle = ramp.bloom
     ctx.lineWidth = f.width * 6
     ctx.stroke()
+
+    // The glow inside the channel is a continuous ribbon that swells brighter and dimmer along its length. Nothing in it
+    // runs on a clock: the pattern is smooth, non-repeating noise carried down the channel at a speed that itself
+    // wanders, and it evolves slowly as it goes, so no two moments look alike. Near the vent it burns steadily; toward
+    // the toe the swells deepen as a crust forms and breaks (USGS aerials of Kilauea's 2018 channels). Brightness and
+    // heat colour are set by a gradient along the channel, so it varies smoothly with no steps.
+    f.D += secs * (0.21 + 0.15 * vnoise(t * 0.05, f.seed))
+    f.tau += secs * (0.035 + 0.03 * vnoise(t * 0.04, f.seed + 17))
+    // An eruption sends a pulse of fresh, hotter lava down the channel: slow, spreading as it goes and fading as it cools.
+    if (f.surge >= 0) {
+      f.surge += dt * 0.0035 * lavaSpeed(Math.min(1, f.surge))
+      if (f.surge > 1.15) f.surge = -1
+    }
+    const tail = f.pts[f.pts.length - 1]
+    const body = ctx.createLinearGradient(f.pts[0].x, f.pts[0].y, tail.x, tail.y)
+    const core = ctx.createLinearGradient(f.pts[0].x, f.pts[0].y, tail.x, tail.y)
+    for (let gi = 0; gi < GLOW_STOPS; gi++) {
+      const s = gi / (GLOW_STOPS - 1)
+      const x = f.phs[gi] - f.D
+      const y = f.tau + f.seed
+      const n = vnoise(x, y) * 0.65 + vnoise(x * 2.3 + 7, y * 1.7 + 3) * 0.35
+      // A quiet slow swell from the noise, and the real swells from the rocks: each rock shoves a bright bow wave of
+      // fresh lava ahead of it and drags a fading glow behind. Big rocks shove harder. The volcano is spewing rocks
+      // and they are pushing the lava down.
+      let b = 0.34 + 0.26 * sstep((n - f.thrs[gi] + 0.1) / 0.45)
+      for (const c of f.chunks) {
+        const w = 0.035 + 0.008 * c.size
+        const ahead = (s - c.u - w * 0.6) / w
+        const wake = s < c.u ? 0.45 * Math.exp(-(c.u - s) / (w * 3)) : 0
+        b += Math.min(1, 0.3 + 0.1 * c.size) * Math.min(1, Math.min(c.u, 1 - c.u) * 8) * (Math.exp(-ahead * ahead) + wake)
+      }
+      b = Math.min(1, b)
+      if (f.surge >= 0) {
+        const d = (s - f.surge) / (0.07 + 0.2 * f.surge)
+        b = Math.min(1, b + (1 - Math.min(1, f.surge)) * Math.exp(-d * d))
+      }
+      const o = gi * 4
+      body.addColorStop(s, `rgba(${f.bodyA[o]},${f.bodyA[o + 1]},${f.bodyA[o + 2]},${(f.bodyA[o + 3] * b).toFixed(3)})`)
+      core.addColorStop(s, `rgba(${f.coreA[o]},${f.coreA[o + 1]},${f.coreA[o + 2]},${(f.coreA[o + 3] * b * b).toFixed(3)})`)
+    }
+    ctx.beginPath()
+    ctx.moveTo(f.pts[0].x, f.pts[0].y)
+    for (const p of f.pts) ctx.lineTo(p.x, p.y)
     ctx.globalAlpha = Math.max(0, heat * 0.8)
-    ctx.strokeStyle = '#ff8a3d'
+    ctx.strokeStyle = body
     ctx.lineWidth = f.width * 1.8
     ctx.stroke()
     ctx.globalAlpha = Math.max(0, heat)
-    ctx.strokeStyle = '#ffe6c0'
+    ctx.strokeStyle = core
     ctx.lineWidth = f.width * 0.55
     ctx.stroke()
-
-    // Magma packets: not a separate shape riding the line — a brighter
-    // highlight painted over a moving stretch of the *same* polyline. Drawing
-    // it as its own sprite (a circle sliding along the path) was the first
-    // attempt, and it read as beads — hot tic-tacs — because nothing tied it
-    // to the line it was supposed to be part of. Restroking a slice of the
-    // real path can't detach from it.
-    for (const p of f.packets) {
-      p.u += p.speed * dt
-      if (p.u > 1) p.u -= 1
-      const edge = Math.min(p.u, 1 - p.u)
-      const fade = Math.min(1, edge * 6)
-      if (fade <= 0.02) continue
-      const span = 0.05 * p.size
-      const lo = Math.max(0, p.u - span)
-      const hi = Math.min(1, p.u + span)
-      const nSeg = f.pts.length - 1
-      const i0 = Math.floor(lo * nSeg)
-      const i1 = Math.ceil(hi * nSeg)
-      if (i1 <= i0) continue
-      ctx.beginPath()
-      const start = pointOnFlow(f, lo)
-      ctx.moveTo(start.x, start.y)
-      for (let k = i0; k <= i1; k++) ctx.lineTo(f.pts[k].x, f.pts[k].y)
-      const end = pointOnFlow(f, hi)
-      ctx.lineTo(end.x, end.y)
-      const hot = heat * fade
-      ctx.globalAlpha = Math.max(0, hot * 0.5)
-      ctx.strokeStyle = '#ffb066'
-      ctx.lineWidth = f.width * 2
-      ctx.stroke()
-      ctx.globalAlpha = Math.max(0, hot)
-      ctx.strokeStyle = '#fff6e6'
-      ctx.lineWidth = f.width * 0.65
-      ctx.stroke()
-    }
   }
 
   // 4b. Rock chunks tumbling in the flow — dark against the lava, so this
@@ -746,12 +927,13 @@ function draw(dt) {
   ctx.globalCompositeOperation = 'source-over'
   for (const f of flows) {
     for (const c of f.chunks) {
-      c.u += c.speed * dt
+      c.u += c.speed * dt * lavaSpeed(c.u) * 0.9 * (1 + c.boost) // carried at the lava's own, slow, speed; a rock thrown by a blast starts fast
+      c.boost *= Math.pow(0.97, dt)
       if (c.u > 1) {
         c.u -= 1
         c.angle = rand(0, Math.PI * 2) // runtime, not seeded — see `rand` above
       }
-      c.angle += c.spin * 0.01 * dt
+      c.angle += c.spin * 0.004 * dt // rafts of crust turn slowly in thick lava
       const pt = pointOnFlow(f, c.u)
       const edge = Math.min(c.u, 1 - c.u)
       const fade = Math.min(1, edge * 8) * Math.max(0, f._heat)
@@ -781,14 +963,85 @@ function draw(dt) {
   }
   ctx.globalCompositeOperation = 'lighter'
 
-  // 5. The lit crater mouth.
-  ctx.globalAlpha = Math.max(0, calderaHeat)
-  ctx.strokeStyle = '#ffd9a0'
-  ctx.lineWidth = 2.4
-  ctx.beginPath()
-  ctx.moveTo(m.rimL.x, m.rimL.y)
-  ctx.lineTo(m.rimR.x, m.rimR.y)
-  ctx.stroke()
+  // 5. The lit crater mouth: a molten lip brimming over, and a tongue of lava spilling across it at the head of
+  // each channel. The lip swells and eases with the caldera's breathing.
+  ctx.lineCap = 'round'
+  ctx.lineJoin = 'round'
+  if (lip) {
+    const swell = 0.85 + breathe * 0.3
+    // The lip is molten, so it heaves: two slow waves around its resting line, none at the corners.
+    const heave = m.craterHalf * 0.012
+    for (let i = 0; i < lip.pts.length; i++) {
+      lip.pts[i].y = lip.base[i].y + (Math.sin(t * 1.3 + i * 0.9) + Math.sin(t * 0.7 - i * 0.4) * 0.6) * heave * lip.w[i]
+    }
+    const g = (lip.g ??= lipGlow(ctx, lip, m))
+    ctx.lineCap = 'butt' // the ends meet the rock outline instead of poking out past it
+    ctx.beginPath()
+    ctx.moveTo(lip.pts[0].x, lip.pts[0].y)
+    for (const p of lip.pts) ctx.lineTo(p.x, p.y)
+    ctx.globalAlpha = Math.max(0, calderaHeat * 0.32)
+    ctx.strokeStyle = g.bloom
+    ctx.lineWidth = Math.max(4, m.craterHalf * 0.1) * swell
+    ctx.stroke()
+    ctx.globalAlpha = Math.max(0, calderaHeat * 0.85)
+    ctx.strokeStyle = g.body
+    ctx.lineWidth = Math.max(2.5, m.craterHalf * 0.045) * swell
+    ctx.stroke()
+    ctx.globalAlpha = Math.max(0, calderaHeat)
+    ctx.strokeStyle = g.core
+    ctx.lineWidth = 2.2
+    ctx.stroke()
+    ctx.lineCap = 'round'
+  }
+  for (const f of flows) {
+    if (f._heat <= 0.01 || f.pts.length < 3) continue
+    // How far the lava has spilled over the lip: it surges with the caldera, and every channel keeps its own rhythm.
+    const spill = 0.06 + 0.05 * breathe + 0.03 * Math.sin(t * f.rate * 3 + f.phase)
+    ctx.beginPath()
+    traceSlice(ctx, f, 0, spill)
+    // the channel's own heat ramp, so a tongue is the hot end of its channel and not a white spike
+    ctx.globalAlpha = Math.max(0, f._heat * 0.5)
+    ctx.strokeStyle = f.ramp.bloom
+    ctx.lineWidth = f.width * 3.4
+    ctx.stroke()
+    ctx.globalAlpha = Math.max(0, f._heat * 0.7)
+    ctx.strokeStyle = f.ramp.body
+    ctx.lineWidth = f.width * 1.8
+    ctx.stroke()
+    // lava pooling where it tops the rim
+    const pool = f.width * 11
+    ctx.globalAlpha = Math.max(0, f._heat * 0.4 * (0.7 + breathe * 0.3))
+    ctx.drawImage(spriteGlow, f.pts[0].x - pool / 2, f.pts[0].y - pool / 2, pool, pool)
+  }
+  if (lip) {
+    if (spits.length < SPIT_MAX && Math.random() < 0.11 * dt * tune.sparks * prof.density) spits.push(spawnSpit(m))
+    for (let i = spits.length - 1; i >= 0; i--) {
+      const s = spits[i]
+      s.age += secs
+      const life = s.age / s.life
+      if (life >= 1) {
+        spits[i] = spits[spits.length - 1]
+        spits.pop()
+        continue
+      }
+      if (s.bubble) {
+        // swells, then bursts in a flash
+        const r = s.size * (0.4 + life * 0.9)
+        ctx.globalAlpha = Math.max(0, calderaHeat * 0.9 * (1 - life) * (life < 0.7 ? 0.6 : 1))
+        ctx.drawImage(spriteGlow, s.x - r, s.y - r * 1.4, r * 2, r * 2)
+      } else {
+        s.vy += 0.13 * dt
+        s.x += s.vx * dt
+        s.y += s.vy * dt
+        const r = s.size * 3.2
+        ctx.globalAlpha = Math.max(0, calderaHeat * 0.6 * (1 - life))
+        ctx.drawImage(spriteGlow, s.x - r, s.y - r, r * 2, r * 2)
+        ctx.globalAlpha = Math.max(0, calderaHeat * (1 - life * 0.6))
+        ctx.fillStyle = life < 0.5 ? '#ffe0a0' : '#ff9a4d'
+        ctx.fillRect(s.x - s.size / 2, s.y - s.size / 2, s.size, s.size)
+      }
+    }
+  }
   const ms = m.craterHalf * 2.6
   ctx.globalAlpha = Math.max(0, calderaHeat * 0.85)
   ctx.drawImage(spriteGlow, m.peakX - ms / 2, m.peakY - ms * 0.35, ms, ms * 0.7)
@@ -954,6 +1207,8 @@ onBeforeUnmount(() => {
   mountain = null
   ridges = []
   flows = []
+  lip = null
+  spits = []
   drift = []
   burst = []
   ashBack = []
@@ -963,7 +1218,10 @@ onBeforeUnmount(() => {
 </script>
 
 <template>
-  <div ref="host" class="deathfire" :data-mode="mode" :style="glowStyle" aria-hidden="true">
+  <div ref="host" class="deathfire" :data-mode="mode" aria-hidden="true">
+    <!-- The painted heat haze. A layer of its own, so its opacity can follow the caldera each frame without
+         fading the canvas on top of it. -->
+    <div ref="glowEl" class="deathfire-glow" :style="glowStyle" />
     <canvas ref="canvas" class="deathfire-canvas" />
   </div>
   <canvas v-show="ashOver" ref="veil" class="deathfire-veil" aria-hidden="true" />
@@ -982,6 +1240,11 @@ onBeforeUnmount(() => {
   inset: 0;
   width: 100%;
   height: 100%;
+}
+.deathfire-glow {
+  position: absolute;
+  inset: 0;
+  will-change: opacity;
 }
 /* Above page content, below the nav (z 50). */
 .deathfire-veil {
