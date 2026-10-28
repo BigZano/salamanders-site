@@ -8,7 +8,7 @@ import { computed, onMounted } from 'vue'
 import { anyone, notables } from '../../lib/deathwatch/notables'
 import { useAuth } from '../../stores/auth'
 import { useDeathwatchData } from '../../stores/deathwatchData'
-import crestGold from './img/crest-gold.png'
+import crestGold from './img/crest-gold.webp'
 import Inline from './Inline'
 
 const auth = useAuth()
@@ -422,19 +422,6 @@ const shown = computed(() => anyone(n.value))
   outline: 2px solid #e8c46a;
   outline-offset: 2px;
 }
-/* A spoiler, as on the old site: hidden under a blur until hovered, focused or tapped open. */
-.nm :deep(.nm-spl) {
-  border-radius: 2px;
-  filter: blur(4px);
-  transition: filter 0.2s;
-  cursor: help;
-}
-.nm :deep(.nm-spl:hover),
-.nm :deep(.nm-spl:focus-visible),
-.nm :deep(.nm-spl.open) {
-  filter: none;
-  outline: none;
-}
 @media (max-width: 620px) {
   .nm-cmd {
     grid-template-columns: 1fr;
@@ -446,8 +433,5 @@ const shown = computed(() => anyone(n.value))
   }
 }
 @media (prefers-reduced-motion: reduce) {
-  .nm :deep(.nm-spl) {
-    transition: none;
-  }
 }
 </style>

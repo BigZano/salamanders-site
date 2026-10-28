@@ -72,18 +72,6 @@
   outline: 2px solid var(--dw-accent);
   outline-offset: 2px;
 }
-/* A spoiler in a page text: hidden under a blur until hovered, focused or tapped open. */
-.dw .rc .nm-spl {
-  border-radius: 2px;
-  filter: blur(4px);
-  cursor: help;
-}
-.dw .rc .nm-spl:hover,
-.dw .rc .nm-spl:focus-visible,
-.dw .rc .nm-spl.open {
-  filter: none;
-  outline: none;
-}
 .dw .rc-q {
   font: italic 600 clamp(17px, 2vw, 21px) / 1.4 var(--dw-font-cond);
   color: var(--dw-ink);

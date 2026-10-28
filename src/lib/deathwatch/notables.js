@@ -9,22 +9,32 @@
 
 /**
  * A text's inline marks as segments the page renders without HTML: { k: 'b' | 'i' | 's' | '', t }, s a spoiler
- * (hidden until hovered or focused), and { k: 'a', t, href, segs } a link, its text marked up in segs: https, or a
- * page of the area itself (/deathwatch/…), which the page opens in place. Each mark stays on its line and is
- * bounded, so a long run of "[" or "*" in a text costs no more than its length.
+ * (hidden until opened), and { k: 'a', t, href, segs } a link, its text marked up in segs: https, or a page of the
+ * area itself (/deathwatch/…), which the page opens in place. Bold may hold italic and italic bold ("***a***",
+ * "*a **b** c*"): such a mark also carries its inner marks, as segs. A mark stays on its line and has no length
+ * limit; no two of its ways to read a character overlap, so a text costs no more than its length, a long run of "["
+ * or "*" too.
  */
 export function inline(s) {
   const out = []
   let at = 0
-  for (const m of s.matchAll(/\*\*(.{1,400}?)\*\*|\|\|(.{1,400}?)\|\||\[([^\]\n]{1,200})\]\((https:\/\/[^)\s]{1,500}|\/deathwatch\/[\w\-/]{0,200})\)|\*(.{1,400}?)\*/g)) {
+  for (const m of s.matchAll(MARKS)) {
     if (m.index > at) out.push({ k: '', t: s.slice(at, m.index) })
     const [, b, sp, link, href, i] = m
     if (link != null) out.push({ k: 'a', t: plain(link), href, segs: inline(link) })
-    else out.push(b != null ? { k: 'b', t: plain(b) } : sp != null ? { k: 's', t: plain(sp) } : { k: 'i', t: plain(i) })
+    else out.push(b != null ? marked('b', b) : sp != null ? { k: 's', t: plain(sp) } : marked('i', i))
     at = m.index + m[0].length
   }
   if (at < s.length) out.push({ k: '', t: s.slice(at) })
   return out
+}
+// **bold** (its text: no "*", or an *italic*), ||spoiler|| (no "||"), [link](https://… or /deathwatch/…) (no "[" in
+// its text), *italic* (no "*", or a **bold**).
+const MARKS =
+  /\*\*((?:[^*\n]|\*[^*\n]+\*)+)\*\*|\|\|((?:[^|\n]|\|(?!\|))+)\|\||\[([^[\]\n]{1,200})\]\((https:\/\/[^)\s]{1,500}|\/deathwatch\/[\w\-/]{0,200})\)|\*((?:[^*\n]|\*\*[^*\n]+\*\*)+)\*/g
+const marked = (k, t) => {
+  const segs = inline(t)
+  return segs.some((x) => x.k) ? { k, t: plain(t), segs } : { k, t: plain(t) }
 }
 const plain = (s) => inline(s).map((x) => x.t).join('')
 
