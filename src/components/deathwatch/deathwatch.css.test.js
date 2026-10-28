@@ -113,3 +113,18 @@ describe('deathwatch.css', () => {
     expect(rule).toMatch(/rgba\(6, 9, 6, 0\.\d+\)/)
   })
 })
+
+// One copy of the spoiler's look, for every page (Notable Members, the Fortress Lore, Recruitment).
+describe('a spoiler in a page text', () => {
+  const rule = (sel) => css.match(new RegExp(`(^|\\n)${sel.replace(/[.()]/g, '\\$&')}\\s*\\{([^}]*)\\}`))?.[2] ?? ''
+  it('is blurred until opened, and shows a focus ring', () => {
+    expect(rule('.dw .nm-spl')).toMatch(/filter:\s*blur\(/)
+    expect(rule('.dw .nm-spl.open')).toMatch(/filter:\s*none/)
+    expect(rule('.dw .nm-spl:focus-visible')).toMatch(/outline:\s*2px solid/)
+  })
+  // On a phone a hover state sticks after a tap, and a second tap would not visibly close the spoiler.
+  it('reveals on hover only where a pointer can hover', () => {
+    expect(css).toMatch(/@media \(hover: hover\) and \(pointer: fine\)\s*\{\s*\.dw \.nm-spl:hover\s*\{\s*filter:\s*none;/)
+    expect(css.replace(/@media \(hover: hover\)[^{]*\{\s*\.dw \.nm-spl:hover/, '')).not.toMatch(/nm-spl:hover/)
+  })
+})

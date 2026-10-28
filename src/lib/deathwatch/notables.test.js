@@ -130,16 +130,40 @@ describe('two marks on one line', () => {
 
 // A text may be up to 1 MB: a long run of one character must not cost more than its length.
 describe('long runs', () => {
-  it('reads 40,000 of "[", "*" or "||" quickly', () => {
-    for (const s of ['['.repeat(40000), '*'.repeat(40000), '||'.repeat(20000), '[x](https://'.repeat(4000)]) {
-      const t0 = performance.now()
-      inline(s)
-      expect(performance.now() - t0, s.slice(0, 12)).toBeLessThan(250)
-    }
+  // Linear, not quadratic: four times the text may take about four times as long, never sixteen. Compared with the
+  // same run's own shorter time, so a slow machine slows both alike; the slack covers timer noise.
+  const ms = (s) => {
+    const t0 = performance.now()
+    inline(s)
+    return performance.now() - t0
+  }
+  const unit = ['[', '*', '||', '[x](https://', '**a', '*a', '||a', '**' + 'a'.repeat(50)]
+  it.each(unit)('reads a long run of %j in time that grows with its length', (u) => {
+    const n = Math.ceil(20000 / u.length)
+    ms(u.repeat(n))
+    const short = Math.min(ms(u.repeat(n)), ms(u.repeat(n)))
+    const long = Math.min(ms(u.repeat(4 * n)), ms(u.repeat(4 * n)))
+    expect(long).toBeLessThan(8 * short + 20)
   })
 
-  it('keeps a mark on its line and bounded in length', () => {
+  it('keeps a mark on its line, at any length', () => {
     expect(inline('**a\nb**').some((x) => x.k === 'b')).toBe(false)
-    expect(inline('*' + 'x'.repeat(401) + '*').some((x) => x.k === 'i')).toBe(false)
+    const long = 'x'.repeat(5000)
+    expect(inline(`*${long}*`)).toEqual([{ k: 'i', t: long }])
+    expect(whole(`**${long}**`, 'b')).toBe(true)
+  })
+})
+
+describe('marks inside marks', () => {
+  it('reads ***a*** as bold holding italic', () => {
+    expect(inline('***a***')).toEqual([{ k: 'b', t: 'a', segs: [{ k: 'i', t: 'a' }] }])
+  })
+  it('keeps the bold inside an italic', () => {
+    expect(inline('*a **b** c*')).toEqual([
+      { k: 'i', t: 'a b c', segs: [{ k: '', t: 'a ' }, { k: 'b', t: 'b' }, { k: '', t: ' c' }] },
+    ])
+  })
+  it('gives a plain mark no segs', () => {
+    expect(inline('**a** *b*')).toEqual([{ k: 'b', t: 'a' }, { k: '', t: ' ' }, { k: 'i', t: 'b' }])
   })
 })

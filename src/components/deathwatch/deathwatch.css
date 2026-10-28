@@ -276,6 +276,33 @@ body:has(.dw-sheet[open]) {
   white-space: nowrap;
 }
 
+/* A spoiler in a page text (Inline.js), as on the old site: hidden under a blur until opened by a tap, a click,
+   Enter or Space, and shown while a mouse is over it (only where a pointer can hover: on a phone the hover state
+   would stick after a tap and hide the second tap's close). */
+.dw .nm-spl {
+  border-radius: 2px;
+  filter: blur(4px);
+  transition: filter 0.2s;
+  cursor: pointer;
+}
+.dw .nm-spl.open {
+  filter: none;
+}
+.dw .nm-spl:focus-visible {
+  outline: 2px solid var(--dw-accent);
+  outline-offset: 2px;
+}
+@media (hover: hover) and (pointer: fine) {
+  .dw .nm-spl:hover {
+    filter: none;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .dw .nm-spl {
+    transition: none;
+  }
+}
+
 /* A button: dark glass with glowing green type and clipped corners. It squeezes when pressed, and only
    brightens under a pointer that can hover. At least 44px tall. */
 .dw-btn {
