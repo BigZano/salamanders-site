@@ -47,6 +47,34 @@ let mountain = null // { peak, left, right, profile, crater }
 let ridges = [] // distant silhouettes, for depth
 let flows = [] // lava running down the flanks
 let lip = null // the molten lip along the crater rim, brimming over
+let moon = null // Prometheus: { sprite, r }
+// One Nocturne year, in the lore the moon's closest pass and the Time of Trial, is 15 Terran years; here 15 minutes.
+const CYCLE_MS = 15 * 60 * 1000
+let lastCycle = -1 // the cycle whose closest pass has been seen
+let trialAt = -1 // seconds into the Time of Trial in progress; -1 when none
+let trialTier = 1 // 1 a trial, 2 a great trial, 3 a cataclysm
+let trialClock = 0 // seconds until the blast throws again
+
+/** Where the moon is in its cycle, 0 to 1. The sky is shared: it follows the clock, so every visitor sees the same moon. */
+function moonPhase() {
+  // Dev preview: ?moon=0.5 puts the moon at its closest pass (and brings the Time of Trial) on load.
+  const dev = import.meta.env.DEV ? new URLSearchParams(window.location.search).get('moon') : null
+  if (dev !== null && Number.isFinite(parseFloat(dev))) return { cycle: 0, phase: parseFloat(dev) % 1 }
+  const now = Date.now()
+  return { cycle: Math.floor(now / CYCLE_MS), phase: (now % CYCLE_MS) / CYCLE_MS }
+}
+
+/** How hard the Time of Trial is raging, 0 to 1, eased in, held, and let go slowly. Nothing flashes. */
+const trialLength = (tier) => 6 + (6 + 8 * tier) + (30 + 10 * tier)
+function trialLevel(sec, tier) {
+  const rise = 6
+  const hold = 6 + 8 * tier
+  const fall = 30 + 10 * tier
+  const peak = [0, 0.55, 0.8, 1][tier]
+  if (sec < rise) return peak * sstep(sec / rise)
+  if (sec < rise + hold) return peak
+  return peak * (1 - sstep((sec - rise - hold) / fall))
+}
 let spits = [] // lava spat up off the lip, and bubbles popping on it
 const SPIT_MAX = 18
 // Phones get seven of the default eleven channels.
@@ -226,8 +254,8 @@ function buildMountain(w, h) {
   const vary = randomize.asymmetry
   const leftSpread = vary ? stray(1, grand(0.78, 1.24)) : 1
   const rightSpread = vary ? stray(1, grand(0.78, 1.24)) : 1
-  const leftCurve = vary ? stray(1.45, grand(1.3, 1.7)) : 1.45
-  const rightCurve = vary ? stray(1.45, grand(1.3, 1.7)) : 1.45
+  const leftCurve = vary ? stray(2.4, grand(2.15, 2.65)) : 2.4
+  const rightCurve = vary ? stray(2.4, grand(2.15, 2.65)) : 2.4
 
   // The crater rim. This is the brightest line in the scene, so it has to read
   // level. It used to drop by two independent draws — 0..6px on the left and
@@ -256,6 +284,14 @@ function buildMountain(w, h) {
       const jitter = (vary ? grand(-1, 1) : 0) * prof.variance * height * 0.03 * f
       pts.push({ x, y: y + jitter })
     }
+    // Terraces: a few cliff ledges step the flank outward as it falls, like the broken shelves of a collapsed caldera.
+    // They use their own random stream, so the seeded one that shapes the mountain is untouched.
+    const lr = mulberry32(hashString(route.path || '/') ^ (dir < 0 ? 0x1ed9e : 0x2fa7))
+    for (let n = 0; n < 3; n++) {
+      const k = 4 + Math.floor(lr() * (steps - 9))
+      const out = (0.03 + lr() * 0.05) * halfBase * spread
+      for (let i = k; i <= steps; i++) pts[i].x += dir * out
+    }
     // Share the rim's own point, so silhouette and lit mouth cannot disagree.
     pts[0] = dir < 0 ? { ...rimL } : { ...rimR }
     return pts
@@ -264,7 +300,140 @@ function buildMountain(w, h) {
   const left = flank(-1)
   const right = flank(1)
 
-  return { peakX, peakY, craterHalf, left, right, rimL, rimR }
+  const crown = buildCrown(rimL, rimR, craterHalf, left, right)
+  return { peakX, peakY, craterHalf, left, right, rimL, rimR, crown: crown.poly, mouthL: crown.mouthL, mouthR: crown.mouthR, litL: crown.litL, litR: crown.litR }
+}
+
+/**
+ * Prometheus, Nocturne's oversized moon, painted as Io, the most volcanically active world we know: sulphur ochre and
+ * orange with pale frost, dark volcanic paterae ringed in red, and hot cores glowing on the night side. Lit from below
+ * on its lower-left by the volcano's glow, with a thin warm rim on that edge. Painted once at layout, at the largest
+ * size it will be (its closest pass); the draw loop scales it.
+ */
+function buildMoon(w, h) {
+  const r = Math.max(20, Math.min(w * 0.13, h * 0.16))
+  const cv = document.createElement('canvas')
+  cv.width = cv.height = Math.ceil(r * 2)
+  const g = cv.getContext('2d')
+  const rr = mulberry32(0x10ba)
+  const body = g.createRadialGradient(r * 0.7, r * 1.35, r * 0.05, r, r, r)
+  body.addColorStop(0, 'rgb(176,126,48)')
+  body.addColorStop(0.45, 'rgb(122,76,32)')
+  body.addColorStop(0.8, 'rgb(64,36,24)')
+  body.addColorStop(1, 'rgb(16,10,9)')
+  g.fillStyle = body
+  g.beginPath()
+  g.arc(r, r, r - 1, 0, Math.PI * 2)
+  g.fill()
+  g.save()
+  g.clip()
+  const at = () => {
+    const a = rr() * Math.PI * 2
+    const d = Math.sqrt(rr()) * r * 0.92
+    return [r + Math.cos(a) * d, r + Math.sin(a) * d]
+  }
+  // mottling: sulphur, orange and frost
+  const palette = [[214, 178, 70], [190, 96, 40], [226, 214, 170], [124, 62, 28]]
+  for (let i = 0; i < 70; i++) {
+    const [x, y] = at()
+    const c = palette[(rr() * palette.length) | 0]
+    const br = r * (0.06 + rr() * 0.2)
+    const soft = g.createRadialGradient(x, y, 0, x, y, br)
+    soft.addColorStop(0, `rgba(${c[0]},${c[1]},${c[2]},${(0.16 + rr() * 0.22).toFixed(2)})`)
+    soft.addColorStop(1, `rgba(${c[0]},${c[1]},${c[2]},0)`)
+    g.fillStyle = soft
+    g.fillRect(x - br, y - br, br * 2, br * 2)
+  }
+  // plume deposits: broad, faint red-orange halos
+  for (let i = 0; i < 4; i++) {
+    const [x, y] = at()
+    const halo = g.createRadialGradient(x, y, 0, x, y, r * 0.3)
+    halo.addColorStop(0, 'rgba(200,70,40,0.26)')
+    halo.addColorStop(1, 'rgba(200,70,40,0)')
+    g.fillStyle = halo
+    g.fillRect(0, 0, r * 2, r * 2)
+  }
+  // paterae: dark volcanic craters ringed in red, a few with a hot core
+  for (let i = 0; i < 16; i++) {
+    const [x, y] = at()
+    const s = r * (0.03 + rr() * 0.07)
+    g.strokeStyle = 'rgba(150,36,22,0.5)'
+    g.lineWidth = Math.max(1, s * 0.35)
+    g.beginPath()
+    g.arc(x, y, s * 1.35, 0, Math.PI * 2)
+    g.stroke()
+    g.fillStyle = 'rgba(14,8,6,0.9)'
+    g.beginPath()
+    g.arc(x, y, s, 0, Math.PI * 2)
+    g.fill()
+    if (i % 3 === 0) {
+      g.fillStyle = 'rgba(255,128,50,0.9)'
+      g.beginPath()
+      g.arc(x, y, s * 0.4, 0, Math.PI * 2)
+      g.fill()
+    }
+  }
+  // the terminator: the side turned from the volcano falls into shadow
+  const shade = g.createRadialGradient(r * 0.65, r * 1.35, r * 0.5, r, r, r * 1.15)
+  shade.addColorStop(0, 'rgba(6,4,4,0)')
+  shade.addColorStop(1, 'rgba(6,4,4,0.88)')
+  g.fillStyle = shade
+  g.fillRect(0, 0, r * 2, r * 2)
+  g.restore()
+  g.strokeStyle = 'rgba(255,140,70,0.4)'
+  g.lineWidth = Math.max(1.5, r * 0.025)
+  g.beginPath()
+  g.arc(r, r, r - 2, Math.PI * 0.55, Math.PI * 1.05)
+  g.stroke()
+  return { sprite: cv, r }
+}
+
+// How far in from the rim corner each crest's base reaches, in crater widths: the rest of the rim is the mouth.
+const CROWN_BASE = 0.55
+
+/**
+ * The broken crown of the summit, built as the top of the mountain and not something set on it. Each crest rises from a
+ * rim corner along the line of its own flank, so the cliff face simply carries on upward, with a thick base, a jagged
+ * outer edge and a stepped inner wall. The mouth is the notch left between them, at rim level, where the lava lip, the
+ * channel heads and the caldera's light all sit. One crest is tall and one is a broken stub, and which is which, and
+ * the jags, belong to the route. Own random stream: the seeded one that shapes the mountain is untouched.
+ */
+function buildCrown(rimL, rimR, ch, leftFlank, rightFlank) {
+  const r = mulberry32(hashString(route.path || '/') ^ 0x5ead)
+  const j = (a, b) => a + (b - a) * r()
+  const tallLeft = r() < 0.5
+  // `side` is -1 for the left crest and +1 for the right; `rise` is its height in crater widths
+  const crest = (rim, flank, side, rise) => {
+    const inward = -side
+    // the flank's own direction near the rim, pointing up and in
+    let ux = flank[0].x - flank[2].x
+    let uy = flank[0].y - flank[2].y
+    const len = Math.hypot(ux, uy) || 1
+    ux /= len
+    uy /= len
+    const along = (rise * ch) / Math.max(0.2, -uy)
+    const on = (tt, wobble) => ({ x: rim.x + ux * along * tt - uy * wobble * ch, y: rim.y + uy * along * tt + ux * wobble * ch })
+    const outer = [0.3, 0.62, 0.86].map((tt) => on(tt, j(-0.05, 0.05)))
+    const tip = on(1, 0)
+    tip.x += inward * 0.05 * ch
+    outer.push(tip)
+    const edge = { x: rim.x + inward * CROWN_BASE * ch, y: rim.y }
+    const inner = [0.2, 0.42, 0.62, 0.82].map((tt, k) => ({
+      x: tip.x + (edge.x - tip.x) * tt + (k % 2 ? 1 : -1) * inward * j(0.02, 0.07) * ch,
+      y: tip.y + (edge.y - tip.y) * tt - (k % 2 ? 0 : j(0.02, 0.08)) * rise * ch * 0.3,
+    }))
+    inner.push(edge)
+    return { outer, tip, inner, edge }
+  }
+  const left = crest(rimL, leftFlank, -1, tallLeft ? j(1.5, 2.1) : j(0.55, 0.9))
+  const right = crest(rimR, rightFlank, 1, tallLeft ? j(0.55, 0.9) : j(1.5, 2.1))
+  return {
+    poly: [...left.outer, ...left.inner, ...[...right.inner].reverse(), ...[...right.outer].reverse()],
+    mouthL: left.edge,
+    mouthR: right.edge,
+    litL: [left.tip, ...left.inner],
+    litR: [right.tip, ...right.inner],
+  }
 }
 
 /** Lower, dimmer cones behind the main peak so the horizon has depth. */
@@ -373,8 +542,8 @@ function buildLip(m) {
     const lift = (at(coarse, u) * 0.55 + at(crags, u) * 0.35 + r() * 0.35 - 0.3) * edge
     w.push(edge)
     pts.push({
-      x: m.rimL.x + (m.rimR.x - m.rimL.x) * u + (r() - 0.5) * m.craterHalf * 0.014 * edge,
-      y: m.rimL.y + (m.rimR.y - m.rimL.y) * u - lift * bump,
+      x: m.mouthL.x + (m.mouthR.x - m.mouthL.x) * u + (r() - 0.5) * m.craterHalf * 0.014 * edge,
+      y: m.mouthL.y + (m.mouthR.y - m.mouthL.y) * u - lift * bump,
     })
   }
   const stops = Array.from({ length: 13 }, (_, i) => [i / 12, 0.4 + r() * 0.6])
@@ -384,7 +553,7 @@ function buildLip(m) {
 /** The lip's bloom, body and core as horizontal gradients whose strength varies along the rim. */
 function lipGlow(ctx, lip, m) {
   const make = (rgb) => {
-    const g = ctx.createLinearGradient(m.rimL.x, 0, m.rimR.x, 0)
+    const g = ctx.createLinearGradient(m.mouthL.x, 0, m.mouthR.x, 0)
     for (const [at, a] of lip.stops) g.addColorStop(at, `rgba(${rgb},${a.toFixed(2)})`)
     return g
   }
@@ -446,7 +615,8 @@ function buildFlows(prev) {
       u += grand(-0.05, 0.05) * prof.variance + Math.sign(u) * 0.012
       u = Math.max(-0.94, Math.min(0.94, u))
 
-      pts.push({ x: cx + u * halfW, y: (l.y + r.y) / 2 })
+      // the channels leave through the mouth, then fan out over the face
+      pts.push({ x: cx + u * (1 - CROWN_BASE + CROWN_BASE * Math.min(1, s / 6)) * halfW, y: (l.y + r.y) / 2 })
     }
 
     if (pts.length < 2) continue
@@ -671,6 +841,7 @@ function buildSilhouette(w, h) {
   g.moveTo(m.left[m.left.length - 1].x, h + 20)
   for (let i = m.left.length - 1; i >= 0; i--) g.lineTo(m.left[i].x, m.left[i].y)
   g.lineTo(m.rimL.x, m.rimL.y)
+  for (const p of m.crown) g.lineTo(p.x, p.y)
   g.lineTo(m.rimR.x, m.rimR.y)
   for (const p of m.right) g.lineTo(p.x, p.y)
   g.lineTo(m.right[m.right.length - 1].x, h + 20)
@@ -712,6 +883,7 @@ function layout() {
   ridges = buildRidges(w, h)
   flows = buildFlows(flows)
   lip = buildLip(mountain)
+  moon = buildMoon(w, h)
   silhouette = buildSilhouette(w, h)
 
   const mobile = window.matchMedia?.('(max-width: 768px)').matches
@@ -752,9 +924,9 @@ function relayout() {
 }
 
 /** A pulse from the vent: a burst of sparks straight up out of the crater. */
-function erupt() {
+function erupt(scale = 1) {
   if (!mountain) return
-  const n = Math.round(rand(6, 22) * tune.sparks)
+  const n = Math.round(rand(6, 22) * tune.sparks * scale)
   for (let i = 0; i < n; i++) {
     if (burst.length > 500) break
     const speed = rand(2.2, 6.5)
@@ -821,6 +993,52 @@ function draw(dt) {
     vctx.clearRect(0, 0, w, h)
   }
 
+  // 0. The sky. The moon crosses it once every cycle, swelling as it nears; at its closest pass (mid-cycle) it brings the
+  // Time of Trial, how hard decided by chance in tiers. It is drawn far behind everything, on slow non-repeating drifts,
+  // and the pages that are mostly reading see it dimmer.
+  const { cycle, phase } = moonPhase()
+  if (phase >= 0.5 && lastCycle !== cycle) {
+    lastCycle = cycle
+    // only if the pass is seen: a page opened long after it has nothing to catch
+    if (phase < 0.56 && mode.value === 'live' && trialAt < 0) {
+      const roll = Math.random()
+      trialTier = roll < 0.05 ? 3 : roll < 0.3 ? 2 : 1
+      trialAt = 0
+      trialClock = 0
+    }
+  }
+  let trial = 0
+  if (trialAt >= 0) {
+    trialAt += secs
+    trial = trialLevel(trialAt, trialTier)
+    if (trialAt > trialLength(trialTier)) trialAt = -1
+    // the blast keeps throwing: the caldera stays aflame, and rocks and sparks fly
+    if (trial > 0.2) {
+      if ((m.flare || 0) < trial) m.flare = trial
+      trialClock -= secs
+      if (trialClock <= 0) {
+        erupt(0.5 + trial)
+        trialClock = 2.8 - trial * 1.5
+      }
+    }
+  }
+  if (moon) {
+    const near = Math.sin(Math.PI * phase) // 0 far, 1 closest, at mid-cycle
+    const scale = 0.55 + 0.6 * near * near // swells as it nears; 1.15 at its closest
+    const x = (-0.12 + 1.24 * phase) * w + (vnoise(t * 0.02, 3) - 0.5) * w * 0.02
+    const y = (0.27 - 0.12 * near) * h + (vnoise(t * 0.017, 9) - 0.5) * h * 0.03
+    const rad = (moon.r * scale) / 1.15
+    ctx.globalCompositeOperation = 'source-over'
+    ctx.globalAlpha = Math.min(1, (0.4 + prof.density * 0.6) * (0.6 + 0.4 * near))
+    ctx.drawImage(moon.sprite, x - rad, y - rad, rad * 2, rad * 2)
+  }
+  // Time of Trial: the weak sun is blotted out. A smooth veil, eased in and out, never a flash.
+  if (trial > 0.01) {
+    ctx.globalAlpha = Math.min(0.7, 0.62 * trial)
+    ctx.fillStyle = '#0a0503'
+    ctx.fillRect(0, 0, w, h)
+  }
+  ctx.globalAlpha = 1
   // 1. Ash, falling behind the mountain. The nearer layer falls in step 5b.
   fallAsh(ashBack)
 
@@ -1002,7 +1220,7 @@ function draw(dt) {
     // the channel's own heat ramp, so a tongue is the hot end of its channel and not a white spike
     ctx.globalAlpha = Math.max(0, f._heat * 0.5)
     ctx.strokeStyle = f.ramp.bloom
-    ctx.lineWidth = f.width * 3.4
+    ctx.lineWidth = f.width * 2.6
     ctx.stroke()
     ctx.globalAlpha = Math.max(0, f._heat * 0.7)
     ctx.strokeStyle = f.ramp.body
@@ -1010,7 +1228,7 @@ function draw(dt) {
     ctx.stroke()
     // lava pooling where it tops the rim
     const pool = f.width * 11
-    ctx.globalAlpha = Math.max(0, f._heat * 0.4 * (0.7 + breathe * 0.3))
+    ctx.globalAlpha = Math.max(0, f._heat * 0.2 * (0.7 + breathe * 0.3))
     ctx.drawImage(spriteGlow, f.pts[0].x - pool / 2, f.pts[0].y - pool / 2, pool, pool)
   }
   if (lip) {
@@ -1041,6 +1259,22 @@ function draw(dt) {
         ctx.fillRect(s.x - s.size / 2, s.y - s.size / 2, s.size, s.size)
       }
     }
+  }
+  // The caldera lights the inner walls of the crown: a hot edge down each, so the crests belong to the mouth.
+  ctx.lineCap = 'round'
+  ctx.lineJoin = 'round'
+  for (const edge of [m.litL, m.litR]) {
+    ctx.beginPath()
+    ctx.moveTo(edge[0].x, edge[0].y)
+    for (const p of edge) ctx.lineTo(p.x, p.y)
+    ctx.globalAlpha = Math.max(0, calderaHeat * 0.3)
+    ctx.strokeStyle = '#ff6a2b'
+    ctx.lineWidth = Math.max(3, m.craterHalf * 0.07)
+    ctx.stroke()
+    ctx.globalAlpha = Math.max(0, calderaHeat * 0.75)
+    ctx.strokeStyle = '#ffb066'
+    ctx.lineWidth = 1.6
+    ctx.stroke()
   }
   const ms = m.craterHalf * 2.6
   ctx.globalAlpha = Math.max(0, calderaHeat * 0.85)
@@ -1208,6 +1442,8 @@ onBeforeUnmount(() => {
   ridges = []
   flows = []
   lip = null
+  moon = null
+  trialAt = -1
   spits = []
   drift = []
   burst = []
