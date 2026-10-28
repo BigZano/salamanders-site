@@ -48,6 +48,10 @@ let ridges = [] // distant silhouettes, for depth
 let flows = [] // lava running down the flanks
 let lip = null // the molten lip along the crater rim, brimming over
 let moon = null // Prometheus: { sprite, r }
+let calmRects = [] // where reading text sits over the canvas, in viewport pixels, as of calmScroll
+let calmScroll = 0
+let calmShift = 0 // how far the page has scrolled since the text was measured
+let calmAt = -1 // when the text was last measured, in seconds
 // One Nocturne year, in the lore the moon's closest pass and the Time of Trial, is 15 Terran years; here 15 minutes.
 const CYCLE_MS = 15 * 60 * 1000
 let lastCycle = -1 // the cycle whose closest pass has been seen
@@ -626,6 +630,8 @@ function buildFlows(prev) {
     const thrs = new Float32Array(GLOW_STOPS)
     const bodyA = new Float32Array(GLOW_STOPS * 4)
     const coreA = new Float32Array(GLOW_STOPS * 4)
+    const gx = new Float32Array(GLOW_STOPS)
+    const gy = new Float32Array(GLOW_STOPS)
     for (let gi = 0; gi < GLOW_STOPS; gi++) {
       const s = gi / (GLOW_STOPS - 1)
       // Pattern phase: its wavelength follows the lava's speed (1.5 at the vent, 0.3 at the toe), so it bunches up downstream.
@@ -633,6 +639,10 @@ function buildFlows(prev) {
       thrs[gi] = 0.18 + 0.5 * Math.pow(s, 0.8)
       bodyA.set(rampAt(BODY_STOPS, s), gi * 4)
       coreA.set(rampAt(CORE_STOPS, s), gi * 4)
+      const at = s * (pts.length - 1)
+      const i0 = Math.min(pts.length - 2, Math.floor(at))
+      gx[gi] = pts[i0].x + (pts[i0 + 1].x - pts[i0].x) * (at - i0)
+      gy[gi] = pts[i0].y + (pts[i0 + 1].y - pts[i0].y) * (at - i0)
     }
     const riders = prev?.[i] ? { chunks: prev[i].chunks, seed: prev[i].seed } : { ...buildRiders(), seed: rand(0, 900) }
     out.push({
@@ -641,6 +651,9 @@ function buildFlows(prev) {
       thrs,
       bodyA,
       coreA,
+      gx,
+      gy,
+      calm: new Float32Array(GLOW_STOPS),
       D: rand(0, 40), // how far the pattern has been carried: it moves at a speed that wanders
       tau: rand(0, 40), // how far it has evolved
       surge: -1, // where a pulse from an eruption has got to, 0 at the vent to 1 at the toe; -1 when none
@@ -652,6 +665,49 @@ function buildFlows(prev) {
     })
   }
   return out
+}
+
+/**
+ * The calm band. The canvas sits behind the page, so lava can run behind text and make it hard to read (measured at
+ * 1.2 to 1.5:1 on the hero). Where reading text overlaps a channel, the channel's glow steps aside. This measures the
+ * text on the page: headings, paragraphs, controls. Big containers are skipped, since a panel has its own backing.
+ */
+function measureCalm() {
+  const w = window.innerWidth
+  const h = window.innerHeight
+  const out = []
+  const range = document.createRange()
+  for (const el of document.querySelectorAll('h1, h2, h3, p, li, label, button, a, dt, dd, input, textarea, select, td')) {
+    // controls have a box of their own; for text, take the line boxes of the words themselves, since a centred line sits
+    // in a block as wide as its container and the lava beside the words is not in their way
+    let boxes
+    if (/^(BUTTON|A|INPUT|TEXTAREA|SELECT)$/.test(el.tagName)) boxes = [el.getBoundingClientRect()]
+    else {
+      range.selectNodeContents(el)
+      boxes = range.getClientRects()
+    }
+    if (el.closest('.deathfire')) continue
+    for (const r of boxes) {
+      if (out.length >= 80) break
+      if (r.width < 8 || r.height < 8 || r.bottom < 0 || r.top > h || r.right < 0 || r.left > w) continue
+      if (r.width * r.height > w * h * 0.2) continue // a whole card or panel: it has its own backing
+      out.push({ l: r.left, t: r.top, r: r.right, b: r.bottom })
+    }
+  }
+  // dev: ?calm=0 switches the band off, to compare a page with and without it
+  const off = import.meta.env.DEV && new URLSearchParams(window.location.search).get('calm') === '0'
+  calmRects = off ? [] : out
+  calmScroll = window.scrollY
+}
+
+/** How much of its glow a channel keeps at this point, 1 in the clear and 0.1 under text, easing out over 48px. */
+function calmFactor(x, y) {
+  let k = 1
+  for (const r of calmRects) {
+    const d = Math.hypot(Math.max(r.l - x, 0, x - r.r), Math.max(r.t + calmShift - y, 0, y - (r.b + calmShift)))
+    if (d < 48) k = Math.min(k, 0.1 + 0.9 * sstep(d / 48))
+  }
+  return k
 }
 
 /** Non-repeating smooth value noise in two dimensions: hashed lattice, smoothly interpolated. */
@@ -1063,6 +1119,14 @@ function draw(dt) {
   ctx.globalAlpha = 1
   ctx.drawImage(silhouette, 0, 0, w, h)
 
+  // The calm band: where reading text sits over the lava, the lava steps aside (see calmFactor). The text is measured a
+  // few times a second, since pages scroll and re-flow; between measures the scroll is accounted for.
+  if (calmAt < 0 || t - calmAt > 0.4) {
+    measureCalm()
+    calmAt = t
+  }
+  calmShift = calmScroll - window.scrollY
+
   // 4. Lava running down the flanks, drawn over the rock as channels through it.
   ctx.globalCompositeOperation = 'lighter'
   ctx.lineCap = 'round'
@@ -1082,8 +1146,14 @@ function draw(dt) {
     ctx.moveTo(f.pts[0].x, f.pts[0].y)
     for (const p of f.pts) ctx.lineTo(p.x, p.y)
 
-    // The bloom: one soft stroke along the whole channel.
-    ctx.globalAlpha = Math.max(0, heat * 0.22)
+    // Where text sits over the channel its glow steps aside: how much it keeps at each sampled place.
+    let calmSum = 0
+    for (let gi = 0; gi < GLOW_STOPS; gi++) {
+      f.calm[gi] = calmFactor(f.gx[gi], f.gy[gi])
+      calmSum += f.calm[gi]
+    }
+    // The bloom: one soft stroke along the whole channel, dimmed by how much of it is under text.
+    ctx.globalAlpha = Math.max(0, heat * 0.22 * (calmSum / GLOW_STOPS))
     ctx.strokeStyle = ramp.bloom
     ctx.lineWidth = f.width * 6
     ctx.stroke()
@@ -1123,6 +1193,7 @@ function draw(dt) {
         const d = (s - f.surge) / (0.07 + 0.2 * f.surge)
         b = Math.min(1, b + (1 - Math.min(1, f.surge)) * Math.exp(-d * d))
       }
+      b *= f.calm[gi]
       const o = gi * 4
       body.addColorStop(s, `rgba(${f.bodyA[o]},${f.bodyA[o + 1]},${f.bodyA[o + 2]},${(f.bodyA[o + 3] * b).toFixed(3)})`)
       core.addColorStop(s, `rgba(${f.coreA[o]},${f.coreA[o + 1]},${f.coreA[o + 2]},${(f.coreA[o + 3] * b * b).toFixed(3)})`)
@@ -1187,6 +1258,7 @@ function draw(dt) {
   ctx.lineJoin = 'round'
   if (lip) {
     const swell = 0.85 + breathe * 0.3
+    const lipCalm = calmFactor(m.peakX, m.peakY)
     // The lip is molten, so it heaves: two slow waves around its resting line, none at the corners.
     const heave = m.craterHalf * 0.012
     for (let i = 0; i < lip.pts.length; i++) {
@@ -1197,15 +1269,15 @@ function draw(dt) {
     ctx.beginPath()
     ctx.moveTo(lip.pts[0].x, lip.pts[0].y)
     for (const p of lip.pts) ctx.lineTo(p.x, p.y)
-    ctx.globalAlpha = Math.max(0, calderaHeat * 0.32)
+    ctx.globalAlpha = Math.max(0, calderaHeat * 0.32 * lipCalm)
     ctx.strokeStyle = g.bloom
     ctx.lineWidth = Math.max(4, m.craterHalf * 0.1) * swell
     ctx.stroke()
-    ctx.globalAlpha = Math.max(0, calderaHeat * 0.85)
+    ctx.globalAlpha = Math.max(0, calderaHeat * 0.85 * lipCalm)
     ctx.strokeStyle = g.body
     ctx.lineWidth = Math.max(2.5, m.craterHalf * 0.045) * swell
     ctx.stroke()
-    ctx.globalAlpha = Math.max(0, calderaHeat)
+    ctx.globalAlpha = Math.max(0, calderaHeat * lipCalm)
     ctx.strokeStyle = g.core
     ctx.lineWidth = 2.2
     ctx.stroke()
@@ -1215,20 +1287,21 @@ function draw(dt) {
     if (f._heat <= 0.01 || f.pts.length < 3) continue
     // How far the lava has spilled over the lip: it surges with the caldera, and every channel keeps its own rhythm.
     const spill = 0.06 + 0.05 * breathe + 0.03 * Math.sin(t * f.rate * 3 + f.phase)
+    const spillCalm = calmFactor(f.pts[1].x, f.pts[1].y)
     ctx.beginPath()
     traceSlice(ctx, f, 0, spill)
     // the channel's own heat ramp, so a tongue is the hot end of its channel and not a white spike
-    ctx.globalAlpha = Math.max(0, f._heat * 0.5)
+    ctx.globalAlpha = Math.max(0, f._heat * 0.5 * spillCalm)
     ctx.strokeStyle = f.ramp.bloom
     ctx.lineWidth = f.width * 2.6
     ctx.stroke()
-    ctx.globalAlpha = Math.max(0, f._heat * 0.7)
+    ctx.globalAlpha = Math.max(0, f._heat * 0.7 * spillCalm)
     ctx.strokeStyle = f.ramp.body
     ctx.lineWidth = f.width * 1.8
     ctx.stroke()
     // lava pooling where it tops the rim
     const pool = f.width * 11
-    ctx.globalAlpha = Math.max(0, f._heat * 0.2 * (0.7 + breathe * 0.3))
+    ctx.globalAlpha = Math.max(0, f._heat * 0.2 * (0.7 + breathe * 0.3) * spillCalm)
     ctx.drawImage(spriteGlow, f.pts[0].x - pool / 2, f.pts[0].y - pool / 2, pool, pool)
   }
   if (lip) {
@@ -1443,6 +1516,7 @@ onBeforeUnmount(() => {
   flows = []
   lip = null
   moon = null
+  calmRects = []
   trialAt = -1
   spits = []
   drift = []
