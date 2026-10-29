@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { describe, it, expect, vi, beforeEach, onTestFinished } from 'vitest'
 import { h } from 'vue'
 import { readFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
@@ -226,5 +226,52 @@ describe('DeathwatchArea', () => {
   it('shows the gold crest in the Hall of Relics, as the old site did, and the plain one elsewhere', async () => {
     expect((await mountAt('/deathwatch/hallofrelics/notable-members')).w.get('img.dw-area-crest').attributes('src')).toContain('crest-gold')
     expect((await mountAt('/deathwatch/eventtracker/players')).w.get('img.dw-area-crest').attributes('src')).not.toContain('crest-gold')
+  })
+
+  // Following a link inside a view rebuilds the sheet; the keyboard's focus must not fall back to the top.
+  // jsdom only focuses an element in the document: the area is attached, and taken out again after each test.
+  const attached = async (path) => {
+    const at = await mountAt(path)
+    document.body.appendChild(at.w.element)
+    onTestFinished(() => {
+      at.w.unmount()
+      document.body.replaceChildren()
+    })
+    return at
+  }
+  const until = async (ok) => {
+    for (let i = 0; i < 60 && !ok(); i++) await new Promise((r) => setTimeout(r, 20))
+  }
+
+  it("moves the keyboard's focus to the new view's heading when the tab changes", async () => {
+    const { w, router } = await attached('/deathwatch/eventtracker/standings')
+    await router.push('/deathwatch/eventtracker/scoring')
+    await settle()
+    await until(() => document.activeElement?.tagName === 'H2')
+    const heading = document.activeElement
+    expect(heading.tagName).toBe('H2')
+    expect(heading.getAttribute('tabindex')).toBe('-1')
+    expect(w.get('.dw-area-sheet').element.contains(heading)).toBe(true)
+  })
+
+  it('gives the focus to the sheet when the new view has no heading', async () => {
+    const { w, router } = await attached('/deathwatch/eventtracker/standings')
+    override.loader = async () => ({ default: { render: () => h('p', 'nothing to head') } })
+    await router.push('/deathwatch/eventtracker/scoring')
+    await settle()
+    await until(() => document.activeElement?.classList.contains('dw-area-sheet'))
+    expect(document.activeElement).toBe(w.get('.dw-area-sheet').element)
+    expect(document.activeElement.getAttribute('tabindex')).toBe('-1')
+  })
+
+  it('moves the focus without requestAnimationFrame too', async () => {
+    vi.stubGlobal('requestAnimationFrame', undefined)
+    onTestFinished(() => vi.unstubAllGlobals())
+    const { router } = await attached('/deathwatch/eventtracker/standings')
+    override.loader = async () => ({ default: { render: () => h('p', 'nothing to head') } })
+    await router.push('/deathwatch/eventtracker/scoring')
+    await settle()
+    await until(() => document.activeElement?.classList.contains('dw-area-sheet'))
+    expect(document.activeElement.classList).toContain('dw-area-sheet')
   })
 })

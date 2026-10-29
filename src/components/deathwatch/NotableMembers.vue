@@ -414,6 +414,14 @@ const shown = computed(() => anyone(n.value))
 .nm :deep(b) {
   color: var(--gl);
 }
+.nm :deep(a) {
+  color: #e8c46a;
+  text-underline-offset: 3px;
+}
+.nm :deep(a:focus-visible) {
+  outline: 2px solid #e8c46a;
+  outline-offset: 2px;
+}
 @media (max-width: 620px) {
   .nm-cmd {
     grid-template-columns: 1fr;

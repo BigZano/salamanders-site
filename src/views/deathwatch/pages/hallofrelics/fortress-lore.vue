@@ -95,7 +95,7 @@ function jump(key) {
   background:
     radial-gradient(ellipse at 50% 40%, rgb(0 0 0 / 0.35), rgb(0 0 0 / 0.88) 78%),
     linear-gradient(180deg, rgb(5 6 4 / 0.2), rgb(5 6 4 / 0.95)),
-    url('../../../../components/deathwatch/img/card-relics.webp') center 30% / cover no-repeat;
+    url('../../../../components/deathwatch/img/lore-relics.webp') center 30% / cover no-repeat;
 }
 .lo-cls {
   margin: 0;

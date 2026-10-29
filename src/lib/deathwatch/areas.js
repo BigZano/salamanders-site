@@ -1,4 +1,4 @@
-// The Deathwatch area's route table: the five areas, their tabs, and how a URL resolves to them.
+// The Deathwatch area's route table: the six areas, their tabs, and how a URL resolves to them.
 // Slugs and labels are the old Watch Fortress site's, verbatim, so its URLs keep their shape beneath
 // /deathwatch. Pure, so the router, the hub and the navigation share one source and it can be tested hard.
 
@@ -7,7 +7,7 @@ const tab = (slug, label) => ({ slug, label })
 export const AREAS = {
   eventtracker: {
     label: 'Event Tracker',
-    blurb: 'Standings, Kill Teams, players and honours',
+    blurb: 'Track events, standings, and your kill team’s progress.',
     tabs: [
       tab('standings', 'Standings'),
       tab('kill-teams', 'Kill Teams'),
@@ -20,7 +20,7 @@ export const AREAS = {
   },
   armouringhall: {
     label: 'Armouring Hall',
-    blurb: 'Specialist armour, standard uniform and heraldry',
+    blurb: 'Explore armour sets, chapter colours, and heraldry.',
     // `items`: a tab's uniforms, in the picker's order (armour.test.js keeps them in step with armour.js), so the
     // address always names the one shown.
     tabs: [
@@ -33,7 +33,7 @@ export const AREAS = {
   },
   chronicles: {
     label: 'Chronicles of Valor',
-    blurb: 'Deeds and honours of the Watch Fortress',
+    blurb: 'Discover the deeds, victories, and honours of the Watch.',
     tabs: [
       tab('hall-of-champions', 'Hall of Champions'),
       tab('chamber-of-honor', 'Chamber of Honor'),
@@ -45,8 +45,14 @@ export const AREAS = {
   // The old site's Hall of Relics, at its old address. The Relics are still to come.
   hallofrelics: {
     label: 'Hall of Relics',
-    blurb: 'The notable members of the Watch Fortress',
+    blurb: 'Honour the warriors who shaped the history of Ebonhold.',
     tabs: [tab('notable-members', 'Notable Members'), tab('fortress-lore', 'Fortress Lore')],
+  },
+  // The old site's Recruitment, at its old address: the hub's Enlist button goes here.
+  recruitment: {
+    label: 'Recruitment',
+    blurb: 'Terms of Service and requirements for the Watch',
+    tabs: [tab('terms-of-service', 'Terms of Service'), tab('requirements', 'Requirements')],
   },
   manage: {
     label: 'Manage',

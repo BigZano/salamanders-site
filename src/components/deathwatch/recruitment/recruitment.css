@@ -1,0 +1,128 @@
+/* The Recruitment pages, as the old site set its Terms of Service and Requirements: a centred head, then sections
+ * whose clauses hang from a line in the accent. Every rule sits under .dw. Imported by both pages. */
+.dw .rc {
+  max-width: 860px;
+  margin: 0 auto;
+}
+.dw .rc-head {
+  display: grid;
+  justify-items: center;
+  gap: 6px;
+  margin: 6px 0 22px;
+  text-align: center;
+}
+.dw .rc-cls {
+  margin: 0;
+  font: 600 13px var(--dw-font-cond);
+  letter-spacing: 0.4em;
+  text-transform: uppercase;
+  color: var(--dw-muted);
+}
+.dw .rc-title {
+  margin: 0;
+  font: 700 clamp(30px, 6vw, 60px) / 1.05 var(--dw-font-title);
+  color: var(--dw-ink);
+  text-wrap: balance;
+}
+.dw .rc-orn {
+  position: relative;
+  display: block;
+  width: min(340px, 80%);
+  height: 14px;
+  margin: 4px auto 0;
+  background: linear-gradient(90deg, transparent, var(--dw-accent) 30%, var(--dw-accent) 70%, transparent) center / 100% 1px no-repeat;
+}
+.dw .rc-orn::after {
+  content: '';
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  width: 8px;
+  height: 8px;
+  background: var(--dw-accent);
+  transform: translate(-50%, -50%) rotate(45deg);
+  box-shadow: 0 0 10px var(--dw-accent);
+}
+.dw .rc-sub {
+  margin: 0;
+  max-width: 56ch;
+  font-size: 17px;
+  line-height: 1.6;
+  color: var(--dw-muted);
+}
+.dw .rc-intro {
+  max-width: 72ch;
+  margin: 0 auto 10px;
+  font-size: 16px;
+  line-height: 1.65;
+  text-align: center;
+  color: var(--dw-muted);
+}
+.dw .rc-intro p {
+  margin: 0 0 10px;
+}
+.dw .rc b {
+  color: var(--dw-ink);
+}
+.dw .rc a {
+  color: var(--dw-accent);
+  text-underline-offset: 3px;
+}
+.dw .rc a:focus-visible {
+  outline: 2px solid var(--dw-accent);
+  outline-offset: 2px;
+}
+.dw .rc-q {
+  font: italic 600 clamp(17px, 2vw, 21px) / 1.4 var(--dw-font-cond);
+  color: var(--dw-ink);
+}
+.dw .rc-end {
+  margin-top: 40px;
+}
+.dw .rc-s h3 {
+  margin: 34px 0 6px;
+  font: 700 clamp(19px, 2.4vw, 24px) / 1.2 var(--dw-font-title);
+  letter-spacing: 0.03em;
+  color: var(--dw-ink);
+}
+.dw .rc-s h4 {
+  margin: 22px 0 8px;
+  font: 700 17px var(--dw-font-title);
+  letter-spacing: 0.05em;
+  color: var(--dw-accent);
+}
+.dw .rc-s ol,
+.dw .rc-req {
+  display: grid;
+  gap: 10px;
+  margin: 0;
+  padding: 4px 0 4px 16px;
+  list-style: none;
+  line-height: 1.6;
+  border-left: 2px solid color-mix(in oklab, var(--dw-accent) 45%, transparent);
+}
+.dw .rc-n {
+  margin-right: 4px;
+  color: var(--dw-accent);
+  font-variant-numeric: tabular-nums;
+}
+.dw .rc-req li {
+  position: relative;
+  padding-left: 18px;
+}
+.dw .rc-req li::before {
+  content: '✠';
+  position: absolute;
+  left: 0;
+  color: var(--dw-accent);
+}
+.dw .rc-l {
+  margin: 12px 0;
+  font-style: italic;
+  line-height: 1.6;
+  color: var(--dw-muted);
+}
+.dw .rc-req .rc-l {
+  margin: 6px 0 0;
+  font-size: 14px;
+}

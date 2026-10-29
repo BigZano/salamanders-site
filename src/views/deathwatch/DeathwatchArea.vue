@@ -4,7 +4,7 @@
 // views themselves are files under ./pages/<area>/<tab>.vue (found by lib/deathwatch/pages.js); each is a
 // skeleton until it is rebuilt. The address is already canonical by the time this renders: the router's guard
 // (redirect.js) sees to that.
-import { computed, defineAsyncComponent, h, ref } from 'vue'
+import { computed, defineAsyncComponent, h, nextTick, ref, watch } from 'vue'
 import { useRoute } from 'vue-router'
 import { AREAS, resolveArea } from '../../lib/deathwatch/areas'
 import { pageLoader } from '../../lib/deathwatch/pages'
@@ -41,6 +41,26 @@ const view = computed(() => {
   const loader = pageLoader(areaSlug, tabSlug)
   return loader ? defineAsyncComponent({ loader, loadingComponent: Loading, errorComponent: Failed, delay: 200 }) : SkNote
 })
+
+// A tab change rebuilds the sheet, which would drop the keyboard's focus back to the top of the document: move it to
+// the new view's heading instead, once the view has arrived (its chunk may still be on its way; a few frames at most).
+// A view with no heading yet (loading, empty, an error) gives the focus to the sheet itself. A later tab change wins.
+const sheet = ref(null)
+const frame = () => new Promise((r) => (typeof requestAnimationFrame === 'function' ? requestAnimationFrame(r) : setTimeout(r, 16)))
+const focusOn = (el) => {
+  el.setAttribute('tabindex', '-1')
+  el.focus({ preventScroll: true })
+}
+watch(viewKey, async (key) => {
+  for (let tries = 0; tries < 30; tries++) {
+    await nextTick()
+    if (viewKey.value !== key) return
+    const heading = sheet.value?.querySelector('h1, h2')
+    if (heading) return focusOn(heading)
+    await frame()
+  }
+  if (viewKey.value === key && sheet.value) focusOn(sheet.value)
+})
 </script>
 
 <template>
@@ -67,7 +87,8 @@ const view = computed(() => {
         <DeathwatchNav :area="page.area" :current="page.tab" :command="store.command" @navigate="sheetOpen = false" />
       </DeathwatchNavSheet>
       <div class="dw-area-main">
-        <div class="dw-area-sheet dw-panel">
+        <!-- Keyed on the view, so the whole framed sheet opens again (deathwatch.css) when the tab changes. -->
+        <div :key="viewKey" ref="sheet" class="dw-area-sheet dw-panel">
           <p v-if="locked" class="dw-area-restricted" role="status">Reserved for the Deathwatch Command.</p>
           <component :is="view" v-else :key="viewKey" />
         </div>
@@ -136,9 +157,18 @@ const view = computed(() => {
 .dw-area-navwrap {
   display: none;
 }
+/* At least a screen tall: between one tab's view and the next (while its chunk loads) the sheet is empty, and it
+   would fold to a thin frame at the top before the new view opens it again. */
 .dw-area-sheet {
   min-width: 0;
+  /* svh, not dvh: the phone's address bar sliding away must not move the footer under a short page. */
+  min-height: calc(100svh - 9rem);
   padding: 1.2rem 1rem 1.6rem;
+}
+/* The heading the focus is moved to on a tab change: it is no control, so it shows no ring of its own. */
+.dw-area-sheet :deep(:is(h1, h2)[tabindex='-1']:focus),
+.dw-area-sheet[tabindex='-1']:focus {
+  outline: none;
 }
 .dw-area-restricted {
   grid-column: 1 / -1;

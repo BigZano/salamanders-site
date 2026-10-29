@@ -249,6 +249,22 @@
    }
   ]
  ],
+ "terms-of-service": [
+  [
+   "path",
+   {
+    "d": "M6 3h9l4 4v14H6zM14 3v5h5M9 12h7M9 16h7"
+   }
+  ]
+ ],
+ "requirements": [
+  [
+   "path",
+   {
+    "d": "M10 6h10M10 12h10M10 18h10M4 6l1.2 1.2L7.5 5M4 12l1.2 1.2 2.3-2.2M4 18l1.2 1.2 2.3-2.2"
+   }
+  ]
+ ],
  "fortress-lore": [
   [
    "path",

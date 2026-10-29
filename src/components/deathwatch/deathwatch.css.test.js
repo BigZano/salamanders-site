@@ -70,14 +70,25 @@ describe('deathwatch.css', () => {
     expect(rule).toMatch(/outline-offset:\s*-6px/)
   })
 
+  // A transform or an opacity animated on the area itself carries the fixed backdrop with it: it slides and jumps,
+  // or it lifts above the site footer and dims it. Only what is on the area, never its backdrop, animates in.
+  it("animates each view in as it appears (hub, area, a tab's framed sheet), never the area itself or its backdrop", () => {
+    expect(css.match(/body main > \.dw\s*\{([^}]*)\}/)?.[1]).toMatch(/animation:\s*none/)
+    const views = /\.dw \.dw-hub,\s*\.dw \.dw-area,\s*\.dw \.dw-area-sheet\s*\{([^}]*)\}/
+    expect(css.match(views)?.[1]).toContain('animation: dw-area-in')
+    expect(css).not.toMatch(/dw-backdrop[^{]*\{[^}]*dw-area-in/)
+    const reduced = css.match(/@media \(prefers-reduced-motion: reduce\)\s*\{([\s\S]*?\n\})/)?.[1] ?? ''
+    expect(reduced.match(views)?.[1]).toMatch(/animation:\s*none/)
+  })
+
   it('paints a backdrop for the hub and each area, from images that exist', () => {
     const files = {
-      hub: 'bg-hub.jpg',
+      hub: 'bg-hub.webp',
       eventtracker: 'bg-tracker.webp',
-      armouringhall: 'bg-armouring.jpg',
+      armouringhall: 'bg-armouring.webp',
       chronicles: 'bg-chronicles.webp',
-      hallofrelics: 'card-relics.webp',
-      manage: 'bg-manage.jpg',
+      hallofrelics: 'bg-relics.webp',
+      manage: 'bg-manage.webp',
     }
     for (const [area, file] of Object.entries(files)) {
       const rule = css.match(new RegExp(`\\.dw\\[data-area='${area}'\\]\\s+\\.dw-backdrop::after\\s*\\{([^}]*)\\}`))?.[1] ?? ''
@@ -126,5 +137,18 @@ describe('a spoiler in a page text', () => {
   it('reveals on hover only where a pointer can hover', () => {
     expect(css).toMatch(/@media \(hover: hover\) and \(pointer: fine\)\s*\{\s*\.dw \.nm-spl:hover\s*\{\s*filter:\s*none;/)
     expect(css.replace(/@media \(hover: hover\)[^{]*\{\s*\.dw \.nm-spl:hover/, '')).not.toMatch(/nm-spl:hover/)
+  })
+})
+
+// The backdrop layer moves all the time (dw-drift, dw-flicker); a filter on it could be repainted every frame on a
+// phone. Its blur and brightness are baked into the pictures instead.
+describe('the backdrop layer', () => {
+  it('moves without a filter of its own', () => {
+    const layer = css.match(/(^|\n)\.dw-backdrop::after\s*\{([^}]*)\}/)?.[2] ?? ''
+    expect(layer).toContain('animation')
+    expect(layer).not.toMatch(/filter\s*:/)
+  })
+  it('is never filtered from an area rule either', () => {
+    for (const [, body] of css.matchAll(/\.dw-backdrop::after\s*\{([^}]*)\}/g)) expect(body).not.toMatch(/filter\s*:/)
   })
 })
