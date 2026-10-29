@@ -94,6 +94,29 @@ body:has(.dw-sheet[open]) {
 .dw[data-area='chronicles'] .dw-backdrop::after {
   background-image: url('./img/bg-chronicles.webp');
 }
+/* The Hall of Relics in the old site's black marble and gold: the area's green turns to gold, its frames to gold,
+   no scanlines or grain, and its panels are stone. The backdrop is its card picture, the old site's only painting
+   for it; it is bright, so it shows faintly. */
+.dw[data-area='hallofrelics'] {
+  --dw-wm: 0.22;
+  --dw-ink: #ece4d0;
+  --dw-muted: #9d947f;
+  --dw-line: #25262b;
+  --dw-line-2: #5c4a26;
+  --dw-accent: #d4a94a;
+  --dw-accent-ink: #140f05;
+  --dw-frame:url("data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' width='96' height='96' viewBox='0 0 96 96' fill='none'><path d='M14 1H82L95 14V82L82 95H14L1 82V14Z' stroke='%23c99a3e' stroke-width='2'/><path d='M17 6.5H79L89.5 17V79L79 89.5H17L6.5 79V17Z' stroke='%23c99a3e' stroke-opacity='.3'/><path d='M1 26v10M95 26v10M1 60v10M95 60v10' stroke='%23f0d58a' stroke-width='3'/><g fill='%23f0d58a'><circle cx='22' cy='3.6' r='1.1'/><circle cx='27' cy='3.6' r='1.1'/><circle cx='32' cy='3.6' r='1.1'/><circle cx='64' cy='92.4' r='1.1'/><circle cx='69' cy='92.4' r='1.1'/><circle cx='74' cy='92.4' r='1.1'/></g></svg>");
+  --dw-frame-s:url("data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' width='40' height='40' viewBox='0 0 40 40' fill='none'><path d='M8 1H32L39 8V32L32 39H8L1 32V8Z' stroke='%23c99a3e' stroke-width='1.6'/><path d='M1 15v10M39 15v10' stroke='%23f0d58a' stroke-width='2.4'/></svg>");
+  --dw-scan: linear-gradient(transparent, transparent);
+  --dw-grain: linear-gradient(transparent, transparent);
+  --dw-stone:
+    linear-gradient(125deg, rgb(255 255 255 / 0.06), transparent 28%, transparent 62%, rgb(255 255 255 / 0.025) 78%, transparent),
+    radial-gradient(ellipse at 50% -10%, rgb(212 169 74 / 0.09), transparent 60%),
+    url("data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' width='800' height='800'><filter id='c' x='0' y='0' width='100%' height='100%'><feTurbulence type='fractalNoise' baseFrequency='.0022 .0035' numOctaves='4' seed='9' stitchTiles='stitch'/><feColorMatrix values='0 0 0 0 .2  0 0 0 0 .2  0 0 0 0 .24  1.6 0 0 0 -.7'/></filter><filter id='n' x='0' y='0' width='100%' height='100%'><feTurbulence type='fractalNoise' baseFrequency='.85' numOctaves='2' seed='2' stitchTiles='stitch'/><feColorMatrix values='0 0 0 0 .9  0 0 0 0 .85  0 0 0 0 .75  0 0 0 .05 0'/></filter><rect width='100%' height='100%' fill='%230a0b0d'/><rect width='100%' height='100%' filter='url(%23c)' opacity='.55'/><rect width='100%' height='100%' filter='url(%23n)'/></svg>") 0 0 / 800px;
+}
+.dw[data-area='hallofrelics'] .dw-backdrop::after {
+  background-image: url('./img/card-relics.webp');
+}
 .dw[data-area='manage'] {
   --dw-wm: 0.5;
 }
@@ -193,6 +216,19 @@ body:has(.dw-sheet[open]) {
   bottom: 0;
   clip-path: polygon(0 0, 100% 0, calc(100% - 5px) 100%, 5px 100%);
 }
+/* The Hall of Relics: its panels in stone, their edge lights in gold (the tokens are set with its backdrop, above). */
+.dw[data-area='hallofrelics'] .dw-panel {
+  background: var(--dw-stone);
+  box-shadow:
+    inset 0 0 0 1px rgb(240 213 138 / 0.12),
+    inset 0 1px 0 rgb(255 255 255 / 0.06),
+    inset 0 0 90px rgb(0 0 0 / 0.6);
+}
+.dw[data-area='hallofrelics'] .dw-panel::before,
+.dw[data-area='hallofrelics'] .dw-panel::after {
+  background: linear-gradient(90deg, #8a6216, #f0d58a 50%, #8a6216);
+  filter: drop-shadow(0 0 5px rgb(212 169 74 / 0.55));
+}
 
 /* A section heading: a little cogitator plaque, green phosphor on black. */
 .dw-plaque {
@@ -238,6 +274,33 @@ body:has(.dw-sheet[open]) {
   overflow: hidden;
   clip-path: inset(50%);
   white-space: nowrap;
+}
+
+/* A spoiler in a page text (Inline.js), as on the old site: hidden under a blur until opened by a tap, a click,
+   Enter or Space, and shown while a mouse is over it (only where a pointer can hover: on a phone the hover state
+   would stick after a tap and hide the second tap's close). */
+.dw .nm-spl {
+  border-radius: 2px;
+  filter: blur(4px);
+  transition: filter 0.2s;
+  cursor: pointer;
+}
+.dw .nm-spl.open {
+  filter: none;
+}
+.dw .nm-spl:focus-visible {
+  outline: 2px solid var(--dw-accent);
+  outline-offset: 2px;
+}
+@media (hover: hover) and (pointer: fine) {
+  .dw .nm-spl:hover {
+    filter: none;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .dw .nm-spl {
+    transition: none;
+  }
 }
 
 /* A button: dark glass with glowing green type and clipped corners. It squeezes when pressed, and only

@@ -12,10 +12,11 @@ import clan from '../../components/deathwatch/img/clan.png'
 import trackerArt from '../../components/deathwatch/img/card-tracker.webp'
 import armouringArt from '../../components/deathwatch/img/card-armouring.jpg'
 import chroniclesArt from '../../components/deathwatch/img/card-chronicles.webp'
+import relicsArt from '../../components/deathwatch/img/card-relics.webp'
 
 const store = useDeathwatch()
-const ART = { eventtracker: trackerArt, armouringhall: armouringArt, chronicles: chroniclesArt }
-// The three areas everyone sees. Manage has no card: it is a button, below.
+const ART = { eventtracker: trackerArt, armouringhall: armouringArt, chronicles: chroniclesArt, hallofrelics: relicsArt }
+// The four areas everyone sees. Manage has no card: it is a button, below.
 const cards = computed(() =>
   Object.entries(AREAS)
     .filter(([area]) => Object.hasOwn(ART, area))
@@ -124,7 +125,12 @@ const manageTo = resolveArea({ area: 'manage' }).canonical
 }
 @media (min-width: 640px) {
   .dw-hub-cards {
-    grid-template-columns: repeat(3, 1fr);
+    grid-template-columns: repeat(2, 1fr);
+  }
+}
+@media (min-width: 960px) {
+  .dw-hub-cards {
+    grid-template-columns: repeat(4, 1fr);
   }
 }
 .dw-card {

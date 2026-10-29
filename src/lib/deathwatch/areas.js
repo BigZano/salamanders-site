@@ -1,4 +1,4 @@
-// The Deathwatch area's route table: the four areas, their tabs, and how a URL resolves to them.
+// The Deathwatch area's route table: the five areas, their tabs, and how a URL resolves to them.
 // Slugs and labels are the old Watch Fortress site's, verbatim, so its URLs keep their shape beneath
 // /deathwatch. Pure, so the router, the hub and the navigation share one source and it can be tested hard.
 
@@ -41,6 +41,12 @@ export const AREAS = {
       tab('in-memoriam', 'In Memoriam'),
       tab('operational-records', 'Operational Records'),
     ],
+  },
+  // The old site's Hall of Relics, at its old address. The Relics are still to come.
+  hallofrelics: {
+    label: 'Hall of Relics',
+    blurb: 'The notable members of the Watch Fortress',
+    tabs: [tab('notable-members', 'Notable Members'), tab('fortress-lore', 'Fortress Lore')],
   },
   manage: {
     label: 'Manage',

@@ -10,6 +10,7 @@ import { AREAS, resolveArea } from '../../lib/deathwatch/areas'
 import { pageLoader } from '../../lib/deathwatch/pages'
 import { useDeathwatch } from '../../stores/deathwatch'
 import crest from '../../components/deathwatch/img/crest.webp'
+import crestGold from '../../components/deathwatch/img/crest-gold.webp'
 import DeathwatchAreaBar from '../../components/deathwatch/DeathwatchAreaBar.vue'
 import DeathwatchNav from '../../components/deathwatch/DeathwatchNav.vue'
 import DeathwatchNavSheet from '../../components/deathwatch/DeathwatchNavSheet.vue'
@@ -49,7 +50,8 @@ const view = computed(() => {
       <!-- The rail. On a phone only its head shows (the crest and the area's name); from 900px the list of views joins it. -->
       <aside class="dw-area-side dw-panel">
         <header class="dw-area-head">
-          <img class="dw-area-crest" :src="crest" alt="" width="120" height="120" />
+          <!-- The Hall of Relics shows the gold crest, as on the old site. -->
+          <img class="dw-area-crest" :src="page.area === 'hallofrelics' ? crestGold : crest" alt="" width="120" height="120" />
           <div>
             <p class="dw-area-eyebrow">Watch Fortress Ebonhold</p>
             <h1 class="dw-area-title">{{ area.label }}</h1>
