@@ -242,4 +242,20 @@ watch(viewKey, async (key) => {
     padding: 1.6rem 1.8rem 2rem;
   }
 }
+/* A wide screen: the rail docks at the left edge and the view sits in the middle of the screen, balanced on the
+   right by an empty column the rail's width. The view keeps the width it has below (78rem less the padding, the
+   rail and the gap), so only the rail moves and the view never narrows or widens across the step; the step is where
+   the centre column first holds that width with a scrollbar taking its share of the window. */
+@media (min-width: 1640px) {
+  .dw-area {
+    grid-template-columns: 18.75rem minmax(0, 1fr) 18.75rem;
+    max-width: none;
+    padding-inline: 1.5rem;
+  }
+  .dw-area-main {
+    justify-self: center;
+    width: 100%;
+    max-width: calc(78rem - 2rem - 18.75rem - 1.5rem);
+  }
+}
 </style>
