@@ -1,19 +1,20 @@
 // @vitest-environment jsdom
 // The Recruitment pages rendered: the Terms of Service with their numbering, and the Requirements with their notes.
 import { describe, it, expect, vi } from 'vitest'
-import { mount } from '@vue/test-utils'
+import { flushPromises, mount } from '@vue/test-utils'
 import { createPinia, setActivePinia } from 'pinia'
 import { createMemoryHistory, createRouter } from 'vue-router'
+import { getData } from '../../../../lib/deathwatch/api'
 import { useDeathwatchData } from '../../../../stores/deathwatchData'
 import TermsOfService from './terms-of-service.vue'
 import Requirements from './requirements.vue'
 
 vi.mock('../../../../lib/deathwatch/api', () => ({ getData: vi.fn(async () => null), writeDoc: vi.fn() }))
 
-function mountPage(page, tx) {
+function mountPage(page, tx, status = 'ready') {
   const pinia = createPinia()
   setActivePinia(pinia)
-  useDeathwatchData().$patch({ status: 'ready', cfg: { tx } })
+  useDeathwatchData().$patch({ status, cfg: { tx } })
   const router = createRouter({ history: createMemoryHistory(), routes: [{ path: '/:rest(.*)*', component: { render: () => null } }] })
   return mount(page, { global: { plugins: [pinia, router] } })
 }
@@ -59,6 +60,29 @@ describe('Terms of Service', () => {
     expect(page.attributes('href')).toBe('/deathwatch/recruitment/requirements')
     expect(page.attributes('target')).toBeUndefined()
     expect(links.find((a) => a.text() === 'dw-tour-signups').attributes('target')).toBe('_blank')
+  })
+})
+
+// The texts load once; if that fails the defaults stay, with a note and a button that loads them again.
+describe.each([
+  ['Terms of Service', TermsOfService],
+  ['Requirements', Requirements],
+])('%s after a failed load', (_, page) => {
+  it('keeps the default texts and offers to load them again', async () => {
+    getData.mockRejectedValueOnce(new Error('down'))
+    const w = mountPage(page, undefined, 'error')
+    await flushPromises()
+    expect(w.get('[role="alert"]').text()).toMatch(/^The latest texts could not be loaded\.\s*Try again$/)
+    expect(w.findAll('.rc-s').length).toBeGreaterThan(0)
+    vi.clearAllMocks()
+    await w.get('[role="alert"] button').trigger('click')
+    await flushPromises()
+    expect(getData).toHaveBeenCalledTimes(1)
+    expect(w.find('[role="alert"]').exists()).toBe(false)
+  })
+
+  it('shows no note once the texts are in', () => {
+    expect(mountPage(page).find('[role="alert"]').exists()).toBe(false)
   })
 })
 

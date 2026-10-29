@@ -10,6 +10,7 @@ import { useAuth } from '../../stores/auth'
 import { useDeathwatchData } from '../../stores/deathwatchData'
 import crestGold from './img/crest-gold.webp'
 import Inline from './Inline'
+import LoadRetry from './LoadRetry.vue'
 
 const auth = useAuth()
 const data = useDeathwatchData()
@@ -23,7 +24,7 @@ const shown = computed(() => anyone(n.value))
 </script>
 
 <template>
-  <p v-if="data.status === 'error'" class="nm-none" role="alert">The records could not be loaded. Try again.</p>
+  <LoadRetry v-if="data.status === 'error'" class="nm-none">The records could not be loaded.</LoadRetry>
   <p v-else-if="data.status !== 'ready'" class="nm-none" role="status">Loading…</p>
   <p v-else-if="!shown" class="nm-none">No notable members are recorded yet.</p>
   <section v-else class="nm" aria-labelledby="nm-title">

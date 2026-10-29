@@ -4,6 +4,7 @@
 // with their numeral, a gold initial, speeches, proclamations and battle cries. The texts are the old site's (lib/deathwatch/lore.js), each replaced by what the area's data holds for it.
 import { computed, onMounted, ref } from 'vue'
 import Inline from '../../../../components/deathwatch/Inline'
+import LoadRetry from '../../../../components/deathwatch/LoadRetry.vue'
 import { lore } from '../../../../lib/deathwatch/lore'
 import { useAuth } from '../../../../stores/auth'
 import { useDeathwatchData } from '../../../../stores/deathwatchData'
@@ -29,6 +30,7 @@ function jump(key) {
 <template>
   <div class="dw-page lo">
     <h2 class="dw-sr-only">Fortress Lore</h2>
+    <LoadRetry v-if="data.status === 'error'">The latest texts could not be loaded.</LoadRetry>
     <header class="lo-hero">
       <p class="lo-cls">Hall of Relics · Fortress Lore</p>
       <p class="lo-title" aria-hidden="true">Watch Fortress Ebonhold</p>

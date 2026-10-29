@@ -79,7 +79,18 @@ describe('NotableMembers', () => {
 
   it('shows loading until the data is there, and an error if it could not be loaded', () => {
     expect(mountWith({ status: 'loading' }).get('[role="status"]').text()).toBe('Loading…')
-    expect(mountWith({ status: 'error' }).get('[role="alert"]').text()).toBe('The records could not be loaded. Try again.')
+    expect(mountWith({ status: 'error' }).get('[role="alert"]').text()).toMatch(/^The records could not be loaded\.\s*Try again$/)
+  })
+
+  it('loads the records again from the button after an error', async () => {
+    getData.mockRejectedValueOnce(new Error('down'))
+    const w = mountWith({ status: 'error' })
+    await flushPromises()
+    vi.clearAllMocks()
+    await w.get('[role="alert"] button').trigger('click')
+    await flushPromises()
+    expect(getData).toHaveBeenCalledTimes(1)
+    expect(w.find('[role="alert"]').exists()).toBe(false)
   })
 
   it('loads the data once when it is not there yet, and not again when it is', async () => {

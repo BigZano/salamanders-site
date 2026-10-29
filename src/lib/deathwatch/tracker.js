@@ -31,7 +31,7 @@ export const DEFAULT_EVENT_NAME = 'Deathwatch Tour'
 
 // Class hierarchy rank; an unknown class or none sorts last.
 export const classRank = (c) => (CLASSES.includes(c) ? CLASSES.indexOf(c) : 99)
-export const sum = (rows, i) => rows.reduce((a, r) => a + (+r[i] || 0), 0)
+export const sum = (rows, i) => (rows ?? []).reduce((a, r) => a + (+r[i] || 0), 0)
 const isPlayed = (m) => m[2] && m[0] >= 1 && m[0] <= 4
 
 /** A deep copy. JSON, not structuredClone: the documents are plain JSON, and a store proxy cannot be structured-cloned. */
@@ -55,17 +55,19 @@ export const rowMvp = (r, S) => r[3] / S.mk + r[4] * S.ms + r[10] * S.mr - r[9] 
 export function calc(teams, custom) {
   const S = weightsOf(custom)
   const src = Object.values(teams ?? {})
-  const home = {}
+  // Keyed by names and classes from the data, so without a prototype (here, in P, and in each p.c and t.cc): a
+  // player named "constructor" or "__proto__" must find nothing there until counted, not a built-in.
+  const home = Object.create(null)
   for (const t of src) for (const p of t.ro ?? []) home[p] = t.id
   const ME = []
   const CK = { nd: [], sg: 0 }
   const dupes = {}
-  const P = {}
+  const P = Object.create(null)
   const C = Object.fromEntries(CLASSES.map((c) => [c, { n: 0, k: 0, kn: 0, g: 0 }]))
   let none = 0
   let cur = 1
   const ts = src
-    .map((t) => ({ ...t, ro: t.ro ?? [], m: t.m ?? [], wk: [0, 0, 0, 0], pl: 0, sg: 0, sa: 0, sr: 0, sx: 0, cl: 0, cc: {} }))
+    .map((t) => ({ ...t, ro: t.ro ?? [], m: t.m ?? [], wk: [0, 0, 0, 0], pl: 0, sg: 0, sa: 0, sr: 0, sx: 0, cl: 0, cc: Object.create(null) }))
     .sort((a, b) => a.id - b.id)
   for (const t of ts) {
     for (const m of t.m) {
@@ -89,7 +91,7 @@ export function calc(teams, custom) {
       else (dupes[[w, o, ks, sum(rows, 5), sum(rows, 6)].join()] ??= []).push(t.n)
       for (const r of rows) {
         if (!r[0]) continue
-        const p = (P[r[0]] ??= { n: r[0], t: home[r[0]], o: 0, k: 0, s: 0, me: 0, ra: 0, it: 0, i: 0, v: 0, g: 0, c: {} })
+        const p = (P[r[0]] ??= { n: r[0], t: home[r[0]], o: 0, k: 0, s: 0, me: 0, ra: 0, it: 0, i: 0, v: 0, g: 0, c: Object.create(null) })
         const g = +r[2] || 0
         if (r[1]) {
           p.c[r[1]] = (p.c[r[1]] || 0) + 1
@@ -122,13 +124,13 @@ export function calc(teams, custom) {
     t.avg = t.pl ? t.tot / t.pl : 0
   }
   for (const t of ts) t.prev = t.wk.slice(0, cur - 1).reduce((a, b) => a + b, 0)
-  const rank = (k) => Object.fromEntries([...ts].sort((a, b) => b[k] - a[k] || a.id - b.id).map((t, i) => [t.id, i + 1]))
-  const R = rank('tot')
-  const R0 = rank('prev')
+  // Equal points share a rank and the next team takes the place after them, as in progression().
+  const rank = (t, k) => 1 + ts.filter((x) => x[k] > t[k]).length
   const top = Math.max(0, ...ts.map((t) => t.tot))
   for (const t of ts) {
-    t.r = R[t.id]
-    t.mv = R0[t.id] - t.r
+    t.r = rank(t, 'tot')
+    // Before a second week there is no earlier ranking to move from.
+    t.mv = cur > 1 ? rank(t, 'prev') - t.r : 0
     t.gap = top - t.tot
   }
   const pl = Object.values(P)
@@ -370,6 +372,8 @@ export function renamePlan(teams, archive, a, b) {
   return plan
 }
 
+const toNum = (x) => +x || 0
+
 /**
  * A backup file (as "Download backup" writes it) checked and cleaned: → { teams, scoring (or null), exported }.
  * Throws a message for the Watch Commander when the file is not a usable backup.
@@ -389,7 +393,15 @@ export function parseBackup(x) {
       }
     }
     const kw = t.kw && typeof t.kw === 'object' && !Array.isArray(t.kw) ? Object.fromEntries(Object.entries(t.kw).map(([n, w]) => [n, +w || 0])) : {}
-    return { id: t.id, n: t.n, co: typeof t.co === 'string' ? t.co : COMPANIES[0], ro: t.ro.map(String), ki: Array.isArray(t.ki) ? t.ki.map(String) : [], kw, m: t.m }
+    // Every number as a number: a hand-edited "1" would otherwise join as text where the tracker adds.
+    const m = t.m.map(([w, o, played, score, gs, ar, rl, rk, rows]) => [
+      ...[w, o].map(toNum),
+      played,
+      ...[score, gs, ar, rl].map(toNum),
+      rk,
+      rows.map(([name, cls, ...nums]) => [name, cls, ...nums.map(toNum)]),
+    ])
+    return { id: t.id, n: t.n, co: typeof t.co === 'string' ? t.co : COMPANIES[0], ro: t.ro.map(String), ki: Array.isArray(t.ki) ? t.ki.map(String) : [], kw, m }
   })
   let scoring = null
   if (x.scoring && typeof x.scoring === 'object') {

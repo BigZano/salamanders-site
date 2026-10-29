@@ -79,6 +79,57 @@ describe('calc', () => {
     expect(calc(undefined).ts).toEqual([])
     expect(progression(calc({}), 'tot')).toBeNull()
   })
+
+  // A name is data: one that matches a built-in property of a plain object must count like any other.
+  it.each(['constructor', 'toString', 'hasOwnProperty', '__proto__'])('counts a player named %s like any other', (name) => {
+    const kw = JSON.parse(`{"${name}": 3}`)
+    const t = { 1: { id: 1, n: 'Alpha', co: 'Primus', ro: [name], ki: [name], kw, m: [[1, 1, 1, 0, 0, 0, 0, '', [row(name, { c: 'Sniper' }), row('a1', { c: name })]]] } }
+    const R = calc(t)
+    const p = R.pl.find((x) => x.n === name)
+    expect(p).toMatchObject({ n: name, t: 1, o: 1, k: 50 })
+    expect(Object.entries(p.c)).toEqual([['Sniper', 1]])
+    expect(R.home[name]).toBe(1)
+    expect(Object.keys(R.home)).toEqual([name])
+    expect(R.names).toEqual([name, 'a1'])
+    expect(Object.entries(R.ts[0].cc)).toEqual([['Sniper', 1], [name, 1]])
+    expect(R.none).toBe(1)
+    expect(R.kia.get(name)).toBe(3)
+    expect(Object.prototype).not.toHaveProperty('o')
+  })
+
+  it('shows no movement in the first week: there is no earlier ranking yet', () => {
+    const t = teams()
+    t[1].m = [[1, 1, 1, 0, 0, 0, 0, '', [row('a1')]]]
+    t[2].m = [[1, 1, 1, 0, 1, 0, 0, '', [row('b1')]]]
+    t[3] = { id: 3, n: 'Gamma', ro: [], m: [[1, 1, 1, 0, 2, 0, 0, '', [row('c1')]]] }
+    expect(calc(t).ts.map((x) => [x.n, x.mv])).toEqual([
+      ['Gamma', 0],
+      ['Beta', 0],
+      ['Alpha', 0],
+    ])
+  })
+
+  it('gives tied teams one rank, as the progression chart does, and the next team the place after them', () => {
+    const t = teams()
+    t[1].m = [[1, 1, 1, 0, 0, 0, 0, '', [row('a1')]], [2, 1, 1, 0, 0, 0, 0, '', [row('a1')]]]
+    t[2].m = [[1, 1, 1, 0, 0, 0, 0, '', [row('b1')]], [2, 1, 1, 0, 0, 0, 0, '', [row('b1')]]]
+    t[3] = { id: 3, n: 'Gamma', ro: [], m: [[1, 1, 1, 0, 1, 0, 0, '', [row('c1')]], [2, 1, 1, 0, 0, 0, 0, '', [row('c1')]]] }
+    t[4] = { id: 4, n: 'Delta', ro: [], m: [[1, 1, 1, 0, 0, 0, 0, '', [row('d1', { i: 1 })]]] }
+    const R = calc(t)
+    // Gamma 1200; Alpha and Beta 1000 each; Delta 425. After week 1 Alpha and Beta shared second as well.
+    expect(R.ts.map((x) => [x.n, x.r, x.mv])).toEqual([
+      ['Gamma', 1, 0],
+      ['Alpha', 2, 0],
+      ['Beta', 2, 0],
+      ['Delta', 4, 0],
+    ])
+    expect(progression(R, 'rk').ts.map((x) => [x.n, x.v.at(-1)])).toEqual([
+      ['Alpha', 2],
+      ['Beta', 2],
+      ['Gamma', 1],
+      ['Delta', 4],
+    ])
+  })
 })
 
 describe('the views', () => {
@@ -145,6 +196,16 @@ describe('Manage', () => {
     expect(() => parseBackup({ teams: [] })).toThrow('No Kill Teams')
     expect(() => parseBackup({ teams: [{ id: 1, n: 'A', ro: [], m: [[1, 1]] }] })).toThrow('damaged mission')
     expect(() => parseBackup({ teams: [{ id: 1, n: 'A', ro: [], m: [] }, { id: 1, n: 'B', ro: [], m: [] }] })).toThrow('appears twice')
+  })
+
+  // A hand-edited file may hold "1" where a number belongs; added as text it would join ("01") instead of adding.
+  it('reads the numbers of a backup as numbers, and anything else as 0', () => {
+    const m = ['1', '2', 1, '900', '1', 'x', null, 'A', [['a1', 'Tactical', '1', '50', '2', '1000', '2000', '1', '500', '', '2']]]
+    const P = parseBackup({ teams: [{ id: 1, n: 'Alpha', ro: ['a1'], m: [m] }] })
+    expect(P.teams[0].m).toEqual([[1, 2, 1, 900, 1, 0, 0, 'A', [['a1', 'Tactical', 1, 50, 2, 1000, 2000, 1, 500, 0, 2]]]])
+    const R = calc({ 1: P.teams[0] })
+    expect(R.ts[0].sg).toBe(1)
+    expect(R.ts[0].tot).toBe(500 + 200 + 100 + 2 * 25)
   })
 
   it('archives the event with its champion and counts', () => {
