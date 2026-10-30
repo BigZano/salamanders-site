@@ -1,12 +1,20 @@
 <script setup>
 // Armouring Hall → Restricted Wargear: Deathwatch wargear that combatants not on deployment may not wear, and how
-// each piece is unlocked for good. The text is the old site's (its rw_* page texts).
-// shortcut: the text is fixed here until Page Texts is ported; then it becomes editable like the other pages.
+// each piece is unlocked for good. The texts are page texts (rw_*, lib/deathwatch/armourTexts.js), the old site's by
+// default, which the Watch Commander can edit from the page.
+import { computed, onMounted } from 'vue'
+import Inline from '../../../../components/deathwatch/Inline'
+import { restrictedWargear } from '../../../../lib/deathwatch/armourTexts'
+import { useAuth } from '../../../../stores/auth'
+import { useDeathwatchData } from '../../../../stores/deathwatchData'
 
-const PIECES = [
-  { set: 'Mark VIII Errant Deathwatch', part: 'L. Pauldron', unlock: 'one (1) Tour of Duty', proof: 'you retain the Discord role awarded for a completed Tour.' },
-  { set: 'Deathwatch', part: 'L. Gauntlet (Heroic)', unlock: 'two (2) Tours of Duty', proof: 'two (2) mentions.' },
-]
+const auth = useAuth()
+const data = useDeathwatchData()
+// Once: the defaults show at once, and what the data holds replaces them when it arrives.
+onMounted(() => {
+  if (data.status !== 'ready') data.load(auth.token)
+})
+const rw = computed(() => restrictedWargear(data.cfg.tx))
 </script>
 
 <template>
@@ -16,22 +24,19 @@ const PIECES = [
       <h2 class="rw-title">Restricted Wargear</h2>
     </header>
     <section class="rw">
-      <h3>Restricted / Locked Wargear</h3>
-      <p class="rw-f">Wargear that is Restricted or completely Locked from being worn.</p>
-      <h4>Non-Active Deployment</h4>
-      <p>
-        The following Deathwatch wargear may <b>not</b> be worn by combatants who are not currently deployed with the Watch, unless explicit authorization has
-        been granted:
-      </p>
-      <div class="rw-grid">
-        <div v-for="p in PIECES" :key="p.part" class="rw-card">
+      <h3 v-if="rw.title.length"><Inline :segs="rw.title" /></h3>
+      <p v-if="rw.sub.length" class="rw-f"><Inline :segs="rw.sub" /></p>
+      <h4 v-if="rw.heading.length"><Inline :segs="rw.heading" /></h4>
+      <p v-if="rw.intro.length"><Inline :segs="rw.intro" /></p>
+      <div v-if="rw.cards.length" class="rw-grid">
+        <div v-for="(p, i) in rw.cards" :key="i" class="rw-card">
           <span class="rw-set">{{ p.set }}</span>
           <b>{{ p.part }}</b>
-          <p>Permanently unlocked by completing <b>{{ p.unlock }}</b>.</p>
-          <p class="rw-proof">Proof: {{ p.proof }}</p>
+          <p v-if="p.unlock.length"><Inline :segs="p.unlock" /></p>
+          <p v-if="p.proof.length" class="rw-proof"><Inline :segs="p.proof" /></p>
         </div>
       </div>
-      <p class="rw-f">A Tour of Duty is a four-week Deathwatch Tour. <b>Previous Tours of Duty also count</b> toward the required number.</p>
+      <p v-if="rw.footnote.length" class="rw-f"><Inline :segs="rw.footnote" /></p>
     </section>
   </div>
 </template>
@@ -79,7 +84,8 @@ const PIECES = [
   margin: 0;
   line-height: 1.55;
 }
-.rw b {
+/* Bold in a page text: its elements carry no scope id (Inline.js). */
+.rw :deep(b) {
   color: var(--dw-ink);
 }
 .rw-f {

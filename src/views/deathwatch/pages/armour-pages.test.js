@@ -3,17 +3,25 @@
 // notes; the picker and the Company Heraldry links keep a dev ?scene=; a part card and its hotspot light up together.
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import { flushPromises, mount } from '@vue/test-utils'
+import { createPinia, setActivePinia } from 'pinia'
 import { createMemoryHistory, createRouter } from 'vue-router'
+vi.mock('../../../lib/deathwatch/api', () => ({ getData: vi.fn(async () => null), writeDoc: vi.fn() }))
+import { getData } from '../../../lib/deathwatch/api'
+import { useDeathwatchData } from '../../../stores/deathwatchData'
 
 const PAGES = import.meta.glob('./armouringhall/*.vue', { eager: true })
 
-async function mountPage(tab, sub = '', query = {}) {
+// The page texts (cfg.tx) are already loaded unless `status` says otherwise; `tx` holds what the data has.
+async function mountPage(tab, sub = '', query = {}, { tx, status = 'ready' } = {}) {
+  const pinia = createPinia()
+  setActivePinia(pinia)
+  useDeathwatchData().$patch({ status, cfg: { tx } })
   const router = createRouter({
     history: createMemoryHistory(),
     routes: [{ path: '/deathwatch/:area/:tab?/:sub?', component: { render: () => null } }],
   })
   await router.push({ path: `/deathwatch/armouringhall/${tab}${sub ? `/${sub}` : ''}`, query })
-  const w = mount(PAGES[`./armouringhall/${tab}.vue`].default, { global: { plugins: [router] }, attachTo: document.body })
+  const w = mount(PAGES[`./armouringhall/${tab}.vue`].default, { global: { plugins: [pinia, router] }, attachTo: document.body })
   await flushPromises()
   return w
 }
@@ -167,5 +175,88 @@ describe('Armouring Hall', () => {
     expect(w.text()).toContain('Previous Tours of Duty also count')
     // No Discord link: its ids may not be in the repo.
     expect(w.find('a').exists()).toBe(false)
+  })
+})
+
+// What the Watch Commander wrote under "Edit page" (cfg.tx) in place of the texts the pages ship with. Invented texts.
+describe('Armouring Hall page texts', () => {
+  it('shows a uniform’s introduction from the page texts, its marks and area links included', async () => {
+    const tx = { ah_librarium_lead: 'Only **Librarians** may wear this; see the [Watch Brother](/deathwatch/armouringhall/standard/watchbrother).' }
+    const w = await mountPage('specialist', 'librarium', {}, { tx })
+    expect(w.get('.ah-lead').text()).toBe('Only Librarians may wear this; see the Watch Brother.')
+    expect(w.get('.ah-lead b').text()).toBe('Librarians')
+    expect(w.get('.ah-lead a').attributes('href')).toBe('/deathwatch/armouringhall/standard/watchbrother')
+  })
+
+  it('hides an emptied introduction', async () => {
+    const w = await mountPage('specialist', 'librarium', {}, { tx: { ah_librarium_lead: ' ' } })
+    expect(w.find('.ah-lead').exists()).toBe(false)
+  })
+
+  it('shows a part’s notes from the page texts, one a line, with their marks and the Company Heraldry link', async () => {
+    const tx = { ah_watchbrother_greaves: 'Left: a *new* marking.\n\nA plain note (see Company Heraldry).' }
+    const w = await mountPage('standard', '', {}, { tx })
+    const greaves = card(w, 'Greaves')
+    expect(texts(greaves, '.ah-nt b')).toEqual(['Left'])
+    expect(greaves.get('.ah-nt i').text()).toBe('new')
+    expect(greaves.text()).toContain('A plain note')
+    expect(greaves.text()).not.toContain('(see Company Heraldry)')
+    expect(greaves.find('.ah-chl').exists()).toBe(true)
+    // The other parts keep the notes they ship with.
+    expect(card(w, 'Helm').text()).toContain('Mask Pattern.')
+  })
+
+  it('loads the page texts when they are not there yet, and not again when they are', async () => {
+    vi.mocked(getData).mockClear()
+    await mountPage('specialist')
+    expect(getData).not.toHaveBeenCalled()
+    await mountPage('specialist', '', {}, { status: 'idle' })
+    expect(getData).toHaveBeenCalled()
+  })
+
+  it('Company Heraldry: a note under each section from the page texts, the defaults elsewhere', async () => {
+    const tx = { ah_companyheraldry_companies1: 'First *note*\nSecond note', ah_companyheraldry_markings: '' }
+    const w = await mountPage('standard', 'companyheraldry', {}, { tx })
+    const section = (title) => w.findAll('.ah-part').find((s) => s.get('h4').text() === title)
+    expect(texts(section('Battle Companies I–IV'), ':scope > p')).toEqual(['First note', 'Second note'])
+    expect(section('Battle Companies I–IV').get('p i').text()).toBe('note')
+    expect(section('Watch Company Markings').findAll(':scope > p')).toHaveLength(0)
+    expect(section('Battle Companies V–VII').text()).toContain("own Company and also appear in the regular uniform guidelines")
+    expect(section('Alternative Colors').findAll(':scope > p')).toHaveLength(0)
+  })
+
+  it('Company Heraldry: loads the page texts when they are not there yet, and not again when they are', async () => {
+    vi.mocked(getData).mockClear()
+    await mountPage('standard', 'companyheraldry')
+    expect(getData).not.toHaveBeenCalled()
+    await mountPage('standard', 'companyheraldry', {}, { status: 'idle' })
+    expect(getData).toHaveBeenCalled()
+  })
+
+  it('Restricted Wargear: shows the page texts, drops an emptied card, and hides emptied lines', async () => {
+    const tx = { rw_h: 'Locked Gear', rw_i: 'Ask the **Watch Commander**.', rw_c1: '', rw_c2: 'A Set\nA Piece\nEarned by a tour.\nProof: a role.', rw_f: '' }
+    const w = await mountPage('restricted-wargear', '', {}, { tx })
+    expect(w.get('.rw h3').text()).toBe('Locked Gear')
+    expect(w.find('.rw h4').exists()).toBe(false)
+    expect(w.findAll('.rw > .rw-f')).toHaveLength(0)
+    expect(w.get('.rw > p b').text()).toBe('Watch Commander')
+    expect(texts(w, '.rw-card > b')).toEqual(['A Piece'])
+    expect(w.get('.rw-proof').text()).toBe('Proof: a role.')
+  })
+
+  it('Restricted Wargear: no cards, no grid; a card of two lines has no unlock or proof', async () => {
+    const none = await mountPage('restricted-wargear', '', {}, { tx: { rw_c1: '', rw_c2: '' } })
+    expect(none.find('.rw-grid').exists()).toBe(false)
+    const short = await mountPage('restricted-wargear', '', {}, { tx: { rw_c1: 'A Set\nA Piece', rw_c2: '', rw_i: '' } })
+    expect(short.get('.rw-card').findAll('p')).toHaveLength(0)
+    expect(short.find('.rw > p:not(.rw-f)').exists()).toBe(false)
+  })
+
+  it('Restricted Wargear: loads the page texts when they are not there yet, and not again when they are', async () => {
+    vi.mocked(getData).mockClear()
+    await mountPage('restricted-wargear')
+    expect(getData).not.toHaveBeenCalled()
+    await mountPage('restricted-wargear', '', {}, { status: 'idle' })
+    expect(getData).toHaveBeenCalled()
   })
 })

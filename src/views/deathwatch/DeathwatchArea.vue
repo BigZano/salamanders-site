@@ -8,12 +8,14 @@ import { computed, defineAsyncComponent, h, nextTick, ref, watch } from 'vue'
 import { useRoute } from 'vue-router'
 import { AREAS, resolveArea } from '../../lib/deathwatch/areas'
 import { pageLoader } from '../../lib/deathwatch/pages'
+import { pageTexts } from '../../lib/deathwatch/pageTexts'
 import { useDeathwatch } from '../../stores/deathwatch'
 import crest from '../../components/deathwatch/img/crest.webp'
 import crestGold from '../../components/deathwatch/img/crest-gold.webp'
 import DeathwatchAreaBar from '../../components/deathwatch/DeathwatchAreaBar.vue'
 import DeathwatchNav from '../../components/deathwatch/DeathwatchNav.vue'
 import DeathwatchNavSheet from '../../components/deathwatch/DeathwatchNavSheet.vue'
+import PageEditor from '../../components/deathwatch/PageEditor.vue'
 import { SkNote } from '../../components/deathwatch/skeleton'
 
 const route = useRoute()
@@ -29,6 +31,8 @@ const currentTab = computed(() => area.value.tabs.find((t) => t.slug === page.va
 const tabLabel = computed(() => currentTab.value.label)
 // A single tab may be Deathwatch Command's (Watch Command): the rest of the area stays open. Hidden only, as above.
 const locked = computed(() => currentTab.value.command === true && !store.command)
+// The texts the open view reads, which the Watch Commander can edit in place ("Edit page"). Hidden only, as above.
+const texts = computed(() => (store.commander ? pageTexts(page.value.area, page.value.tab, page.value.sub) : []))
 
 // While a view's chunk is on its way (after a short delay, so a fast one never flashes it), and if it fails.
 const Loading = { render: () => h('p', { class: 'dw-area-loading', role: 'status' }, 'Loading…') }
@@ -93,6 +97,8 @@ watch(viewKey, async (key) => {
           <component :is="view" v-else :key="viewKey" />
         </div>
       </div>
+      <!-- Keyed on the address: an Armouring Hall uniform has texts of its own. -->
+      <PageEditor v-if="texts.length" :key="page.canonical" :fields="texts" />
     </template>
   </section>
 </template>
