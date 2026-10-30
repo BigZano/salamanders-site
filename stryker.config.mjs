@@ -29,6 +29,7 @@ export default {
     'server/src/deathwatchValidate.js',
     'server/src/deathwatchAccess.js',
     'server/src/deathwatchHandler.js',
+    'server/src/membership.js',
   ],
   coverageAnalysis: 'perTest',
   thresholds: { high: 100, low: 100, break: 100 },
