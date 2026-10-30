@@ -80,6 +80,10 @@ milestones.
   what the area has so far. No `v-html` anywhere in the Deathwatch code: text from the database is shown by normal
   Vue interpolation.
 
+  The **Download backup** button on the Manage pages saves a file full of real names. Keep it out of your repository
+  folder. The commit hook and the PR check refuse backup and data files, `config.php`, `.7z` archives, and any file
+  whose contents look like a tracker dump, so if one of them stops you, delete the file; do not rename it.
+
 ## Running and checking it
 
 ```
@@ -93,7 +97,9 @@ bun run dev:lan    # the site on your network, to open on your phone
 - To work on the Deathwatch pages without the real server or a sign-in, create a file named `.env.local` in the
   project folder containing `VITE_DEATHWATCH_FIXTURE=1` (Git ignores it), then run `bun run dev`. The site then
   pretends the sign-in check answered. Add `?scene=` to the page address, followed by `allowed`, `commander`,
-  `denied`, `signin`, `checking` or `unavailable`, to pick which state you see.
+  `command` (the Deathwatch Command role, not the Watch Commander), `denied`, `signin`, `checking` or `unavailable`,
+  to pick which state you see. `empty` (no Kill Teams yet, as on the first day) and `active-event` (a running event and
+  one archived tour) pick the data instead; they are seen as the Watch Commander, so Manage is open too.
 
 ## Code style
 
@@ -116,8 +122,8 @@ request is squashed (see Review and merge), so get it right. Small branches are 
 
 `bun install` sets up Git hooks on your machine:
 
-- **On `git commit`** the hook checks that no archive files or raw Discord exports are staged, and runs the tests. It
-  is quick. Do not skip it: it is the only local check that stops archive files and raw Discord exports being
+- **On `git commit`** the hook checks that no archive files, raw Discord exports or Deathwatch tracker backups are
+  staged, and runs the tests. It is quick. Do not skip it: it is the only local check that stops them being
   committed.
 - **On `git push`** the hook also runs coverage and mutation testing, which the maintainers call the full gate. That
   can take several minutes. Passing it is **not** required to merge, and CI does not run it. If it is too slow, fails
@@ -145,7 +151,7 @@ contribute, GitHub holds your first check until a maintainer lets it run, which 
 
 | Rule | Checked by |
 |---|---|
-| No archive files or raw Discord exports committed | The commit hook and **PR check** |
+| No archive files, raw Discord exports or Deathwatch tracker backups committed | The commit hook and **PR check** |
 | The tests pass | The commit hook and **PR check** |
 | The production build works | **PR check** |
 | 100% coverage and mutation testing on the gated units | The push hook on your machine, and nowhere else. Optional: not part of CI, not required to merge, skippable with `--no-verify` |
