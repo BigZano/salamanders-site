@@ -20,21 +20,21 @@ It is idempotent. Tables added later by `schema.sql` are covered automatically.
 ## Archive key (`GET /archive/key`)
 
 Hands the Legion Archive decryption key to a caller whose Discord token is
-valid and who is on the XVIIIth Legion member list — the same
-`src/data/discord-members.json` that ranks builds, kept current by the
-`discord-members.yml` workflow (every 8 hours and on build submission). The
-server reads it from `main` and caches it for 5 minutes. Anything uncertain
-fails closed: 401 (sign in), 403 (not on the list), 503 (misconfigured, list
-for another guild/role, or upstream unreachable).
+valid and who holds the `ARCHIVE_ROLE_ID` role in the guild. Both are checked
+live against Discord on every request: there is no member list and no cache, so
+a role granted or removed takes effect at once. Anything uncertain fails closed:
+401 (no or invalid token, sign in), 403 (signed in but without the role), 503
+(`ARCHIVE_KEY`, the role id, the guild or the bot token not set, or Discord could
+not be reached).
 
 | Variable | Value |
 |---|---|
 | `ARCHIVE_KEY` | base64 key from `archive-export/.env` (also stored in a password manager) |
 | `ARCHIVE_ROLE_ID` | `1377787723976409211` (XVIIIth Legion) |
-| `DISCORD_GUILD_ID` | required — must match the member list's `guildId` |
-| `ARCHIVE_MEMBERS_URL` | optional — defaults to the raw `discord-members.json` on `main` |
+| `DISCORD_GUILD_ID` | required |
+| `DISCORD_BOT_TOKEN` | required — the caller's roles are read with it |
 
-No bot token is needed. Until the required values are set the endpoint answers 503 and the site shows
+Until the required values are set the endpoint answers 503 and the site shows
 "couldn't be reached". Rotating the key (`bun run archive keygen --rotate`,
 then `seal --publish`) requires updating `ARCHIVE_KEY` here and redeploying.
 

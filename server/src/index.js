@@ -44,23 +44,14 @@ const DISCORD_API_BASE = process.env.DISCORD_API_BASE || 'https://discord.com/ap
 
 const pool = new Pool({ connectionString: process.env.DATABASE_URL })
 
-// Legion Archive key: fail-closed, gated on the same synced member list that
-// ranks builds (src/data/discord-members.json on main). See archiveKey.js.
-const archiveKey = createArchiveKeyHandler({
-  discordApiBase: DISCORD_API_BASE,
-  guildId: GUILD_ID,
-  roleId: process.env.ARCHIVE_ROLE_ID,
-  membersUrl:
-    process.env.ARCHIVE_MEMBERS_URL ||
-    'https://raw.githubusercontent.com/BigZano/salamanders-site/main/src/data/discord-members.json',
-  archiveKey: process.env.ARCHIVE_KEY,
-})
-
 const roles = createDiscordRoles({ apiBase: DISCORD_API_BASE, guildId: GUILD_ID, botToken: BOT_TOKEN })
 // GET /membership: is the caller a guild member? Answered live from Discord
 // against the member role — see membership.js and membershipHandler.js.
 const membership = createMembership({ roles, roleId: process.env.ARCHIVE_ROLE_ID })
 const membershipRoutes = createMembershipHandler({ membership })
+// Legion Archive key: fail-closed, gated on the same live membership check
+// (the member role, asked of Discord on every call). See archiveKey.js.
+const archiveKey = createArchiveKeyHandler({ membership, archiveKey: process.env.ARCHIVE_KEY })
 // Build authors are shown by Discord display name, from an in-memory
 // directory of the guild — see displayNames.js.
 const displayNames = createDisplayNames({ apiBase: DISCORD_API_BASE, guildId: GUILD_ID, botToken: BOT_TOKEN })

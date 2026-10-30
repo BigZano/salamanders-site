@@ -39,6 +39,49 @@ describe('identify', () => {
     expect(await roles.identify(req('Bearer tok'))).toBeNull()
   })
 
+  // A header value handed to identify exactly as given. A real Request would trim a trailing newline
+  // (and refuse an embedded one) before identify ever saw it, so the value is faked at headers.get.
+  const rawAuth = (value) => ({ headers: { get: () => value } })
+  const DISCORD_MUST_NOT_BE_ASKED = () => {
+    throw new Error('Discord was asked about a malformed Authorization header')
+  }
+
+  it.each([
+    ['empty', ''],
+    ['absent', null],
+    ['the Basic scheme', 'Basic abc'],
+    ['no token and no space', 'Bearer'],
+    ['no token after the space', 'Bearer '],
+    ['a lower-case scheme', 'bearer abc'],
+    ['an upper-case scheme', 'BEARER abc'],
+    ['a token with a space in it', 'Bearer a b'],
+    ['a leading space', ' Bearer abc'],
+    ['two spaces after the scheme', 'Bearer  abc'],
+    ['a trailing space', 'Bearer abc '],
+    ['a token over 512 characters', `Bearer ${'a'.repeat(513)}`],
+    ['a trailing newline', 'Bearer abc\n'],
+    ['a trailing carriage return', 'Bearer abc\r'],
+    ['a newline inside the token', 'Bearer a\nb'],
+    ['a tab inside the token', 'Bearer a\tb'],
+    ['a quote inside the token', 'Bearer a"b'],
+    ['a second Bearer token', 'Bearer abc, Bearer def'],
+  ])('is null, and Discord is never asked, for an Authorization header that is %s', async (_, value) => {
+    const roles = createDiscordRoles({
+      fetchImpl: DISCORD_MUST_NOT_BE_ASKED,
+      apiBase: 'https://d.test/api',
+      guildId: GUILD,
+      botToken: 'bot',
+    })
+    await expect(roles.identify(rawAuth(value))).resolves.toBeNull()
+  })
+
+  it('does ask Discord at the longest token the check allows (512 characters)', async () => {
+    const { roles, d } = make({ '/users/@me': { status: 200, body: { id: USER, username: 'u' } } })
+    const token = 'a'.repeat(512)
+    expect(await roles.identify(rawAuth(`Bearer ${token}`))).toEqual({ id: USER, username: 'u' })
+    expect(d.seen[0][1]).toBe(`Bearer ${token}`)
+  })
+
   it('throws Upstream on odd answers and when unconfigured', async () => {
     await expect(make({ '/users/@me': { status: 500, body: {} } }).roles.identify(req('Bearer t'))).rejects.toBeInstanceOf(Upstream)
     await expect(make({ '/users/@me': { status: 200, body: { id: 'x' } } }).roles.identify(req('Bearer t'))).rejects.toBeInstanceOf(Upstream)
