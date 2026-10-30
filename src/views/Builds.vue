@@ -24,7 +24,8 @@ async function load() {
   try {
     builds.value = await buildsApi.listBuilds()
   } catch (err) {
-    loadError.value = err.message || 'Could not reach the builds server.'
+    // The browser's own "Failed to fetch" or the API's "Request failed (500)" tells a member nothing.
+    loadError.value = 'The builds server did not answer. Check your connection, then retry.'
   } finally {
     loading.value = false
   }
@@ -132,7 +133,10 @@ async function remove(b) {
     </header>
 
     <p v-if="loading" class="b-none">Loading builds…</p>
-    <p v-else-if="loadError" class="b-none b-error">{{ loadError }}</p>
+    <div v-else-if="loadError" class="b-none b-error" role="alert">
+      <p>{{ loadError }}</p>
+      <button type="button" class="btn-drake btn-sm" @click="load">Retry</button>
+    </div>
 
     <!-- Search + filter -->
     <div v-if="!loading && !loadError && builds.length" class="b-tools">
@@ -265,7 +269,7 @@ async function remove(b) {
   font-size: 0.92rem;
 }
 .b-search::placeholder {
-  color: #5f6f66;
+  color: var(--color-faint);
 }
 .b-filters {
   display: flex;
@@ -299,7 +303,7 @@ async function remove(b) {
 }
 .b-chip-n {
   font-family: var(--font-mono);
-  font-size: 0.66rem;
+  font-size: max(0.66rem, var(--text-floor));
   opacity: 0.75;
 }
 .b-none {
@@ -308,6 +312,9 @@ async function remove(b) {
 }
 .b-error {
   color: var(--color-ember);
+}
+.b-error p {
+  margin: 0 0 0.8rem;
 }
 
 /* sections + grid */

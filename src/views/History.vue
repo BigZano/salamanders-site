@@ -94,7 +94,10 @@ const when = (d) => new Date(d).toLocaleString()
       <p class="hist-intro">Every perk correction, deleted build and privilege change. Nothing here is ever removed.</p>
     </header>
 
-    <p v-if="!auth.signedIn" class="hist-empty">Sign in with Discord to view the history.</p>
+    <div v-if="!auth.signedIn" class="hist-empty">
+      <p>Sign in with Discord to view the history.</p>
+      <button type="button" class="btn-ember btn-sm" @click="auth.signIn()">Sign in with Discord</button>
+    </div>
     <template v-else>
       <div class="hist-tools">
         <button v-for="f in FILTERS" :key="f.label" type="button" class="hist-filter" :class="{ on: subject === f.key }" @click="subject = f.key">
@@ -163,6 +166,9 @@ const when = (d) => new Date(d).toLocaleString()
 .hist-empty,
 .hist-meta {
   color: var(--color-smoke);
+}
+.hist-empty > p {
+  margin: 0 0 0.8rem;
 }
 .hist-tools {
   display: flex;

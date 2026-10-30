@@ -38,7 +38,7 @@ async function copy() {
 <template>
   <h2 class="dw-plaque">Standings</h2>
   <ol v-if="podium.length" class="pod" aria-label="Top three">
-    <li v-for="(t, i) in podium" :key="t.id" class="pod-card" :class="`p${i + 1}`">
+    <li v-for="t in podium" :key="t.id" class="pod-card" :class="`p${t.r}`">
       <div class="pod-head">
         <span class="pod-rank">{{ t.r }}</span>
         <div>

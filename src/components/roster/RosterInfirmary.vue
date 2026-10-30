@@ -64,7 +64,7 @@ defineProps({
 }
 .rs-warn {
   font-family: var(--font-mono);
-  font-size: 0.6rem;
+  font-size: max(0.6rem, var(--text-floor));
   letter-spacing: 0.08em;
   text-transform: uppercase;
   padding: 0.06rem 0.38rem;

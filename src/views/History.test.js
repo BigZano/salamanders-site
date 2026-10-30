@@ -170,3 +170,20 @@ describe('History.vue', () => {
     expect(wrapper.find('.hist-snap').exists()).toBe(true)
   })
 })
+
+describe('History.vue when signed out', () => {
+  beforeEach(() => {
+    setActivePinia(createPinia())
+  })
+
+  it('offers a Sign in button, not just the instruction', async () => {
+    const signIn = vi.fn()
+    const { useAuth } = await import('../stores/auth')
+    useAuth.mockReturnValueOnce({ token: null, signedIn: false, member: null, signIn })
+    const wrapper = mount(History)
+    expect(wrapper.find('.hist-empty').text()).toContain('Sign in with Discord to view the history.')
+    await wrapper.find('.hist-empty button').trigger('click')
+    expect(signIn).toHaveBeenCalledOnce()
+    expect(wrapper.find('.hist-tools').exists()).toBe(false)
+  })
+})

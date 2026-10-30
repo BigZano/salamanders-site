@@ -21,6 +21,8 @@ export const HEADS = ['CORE', 'CORE', 'CORE', 'TEAM', 'GEAR', 'GEAR', 'GEAR', 'S
 export const SLOTS = ['CORE 1', 'CORE 2', 'CORE 3', 'TEAM', 'GEAR 1', 'GEAR 2', 'GEAR 3', 'SIGNATURE']
 
 const STORAGE_KEY = 'salamanders-planner-v1'
+// The per-class state a reset clears, and an undo puts back.
+const RESET_FIELDS = ['selectedPerks', 'justifications', 'weapons', 'prestigePicks']
 
 /**
  * Run the patch migration (see lib/patchMigration.js) over one class's saved
@@ -87,6 +89,8 @@ export const usePlanner = defineStore('planner', {
     // Perks the Patch 15.0 migration dropped or flagged in the build just loaded,
     // shown until dismissed. See lib/patchMigration.js.
     staleNotices: [],
+    // What the last reset cleared, kept in memory only so the Planner can offer an Undo.
+    undoReset: null,
   }),
 
   getters: {
@@ -217,11 +221,27 @@ export const usePlanner = defineStore('planner', {
       this.persist()
     },
     resetClass() {
-      delete this.selectedPerks[this.activeClass]
-      delete this.justifications[this.activeClass]
-      delete this.weapons[this.activeClass]
-      delete this.prestigePicks[this.activeClass]
+      const cls = this.activeClass
+      const cleared = RESET_FIELDS.filter((f) => this[f][cls] !== undefined)
+      // Deleting drops the reference, not the object, so the cleared picks stay intact for an undo.
+      if (cleared.length) {
+        this.undoReset = { className: cls, at: Date.now(), ...Object.fromEntries(cleared.map((f) => [f, this[f][cls]])) }
+      }
+      for (const f of RESET_FIELDS) delete this[f][cls]
       this.persist()
+    },
+    /** Bring back what the last reset cleared, on the class it cleared. False if there is nothing. */
+    restoreReset() {
+      const undo = this.undoReset
+      if (!undo || !isClass(undo.className)) return false
+      this.activeClass = undo.className
+      for (const f of RESET_FIELDS) if (undo[f] !== undefined) this[f][undo.className] = undo[f]
+      this.undoReset = null
+      this.persist()
+      return true
+    },
+    discardUndo() {
+      this.undoReset = null
     },
 
     // ---- shared builds gallery (server-backed — see src/lib/buildsApi.js) ----

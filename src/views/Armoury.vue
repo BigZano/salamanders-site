@@ -1,5 +1,5 @@
 <script setup>
-import { ref, computed, onMounted, watch } from 'vue'
+import { ref, computed, onMounted, watch, nextTick } from 'vue'
 import { useRoute } from 'vue-router'
 import weapons from '../data/weapons.json'
 import classes from '../data/classes.json'
@@ -47,10 +47,21 @@ function flash(m) {
   tt = setTimeout(() => (toast.value = ''), 1800)
 }
 
+const detail = ref(null)
+// Stacked on a phone the detail starts a full screen below the list, so a tap would look like
+// it did nothing. Side by side (desktop) both are already in view.
+function revealDetail() {
+  if (!detail.value?.scrollIntoView || !window.matchMedia) return
+  if (window.matchMedia('(min-width: 900px)').matches) return
+  const calm = window.matchMedia('(prefers-reduced-motion: reduce)').matches
+  detail.value.scrollIntoView({ behavior: calm ? 'auto' : 'smooth', block: 'start' })
+}
+
 async function selectWeapon(name) {
   activeWeapon.value = name
   status.value = 'loading'
   data.value = null
+  nextTick(revealDetail)
   const resolved = await resolveWeapon(name)
   if (resolved) {
     data.value = resolved
@@ -177,7 +188,7 @@ watch(() => route.query.w, openFromQuery)
       </nav>
 
       <!-- Weapon detail -->
-      <div class="w-detail">
+      <div ref="detail" class="w-detail">
         <div v-if="status === 'idle'" class="w-prompt">
           <span class="w-prompt-mark">⚒</span>
           <p>Select a weapon to plan its perk tree.</p>
@@ -338,6 +349,7 @@ watch(() => route.query.w, openFromQuery)
   padding: 0.5rem 0.9rem;
   border-radius: 2px;
   cursor: pointer;
+  min-height: var(--tap);
 }
 .cat-tab.on {
   color: #1a0d06;
@@ -358,19 +370,20 @@ watch(() => route.query.w, openFromQuery)
   border-radius: 3px;
   color: var(--color-bone);
   font-size: 0.9rem;
+  min-height: var(--tap);
 }
 .w-search::placeholder {
-  color: #5f6f66;
+  color: var(--color-faint);
 }
 
 .a-layout {
   display: grid;
-  grid-template-columns: 1fr;
+  grid-template-columns: minmax(0, 1fr);
   gap: 1.2rem;
 }
 @media (min-width: 900px) {
   .a-layout {
-    grid-template-columns: 15rem 1fr;
+    grid-template-columns: 15rem minmax(0, 1fr);
     align-items: start;
   }
   .w-list {
@@ -398,6 +411,7 @@ watch(() => route.query.w, openFromQuery)
   color: var(--color-bone);
   font-size: 0.85rem;
   cursor: pointer;
+  min-height: var(--tap);
   transition: 0.12s;
 }
 .w-item:hover {
@@ -410,7 +424,7 @@ watch(() => route.query.w, openFromQuery)
 .w-item-users {
   flex: none;
   font-family: var(--font-mono);
-  font-size: 0.62rem;
+  font-size: max(0.62rem, var(--text-floor));
   color: var(--color-drake);
 }
 .w-empty {
@@ -425,6 +439,8 @@ watch(() => route.query.w, openFromQuery)
   background: rgba(7, 17, 13, 0.4);
   padding: 1.4rem;
   min-height: 16rem;
+  min-width: 0;
+  scroll-margin-top: 5rem;
 }
 .w-prompt,
 .w-loading,
@@ -486,7 +502,7 @@ watch(() => route.query.w, openFromQuery)
   font-family: var(--font-mono);
   text-transform: uppercase;
   letter-spacing: 0.1em;
-  font-size: 0.58rem;
+  font-size: max(0.58rem, var(--text-floor));
   padding: 2px 7px;
   border-radius: 2px;
   border: 1px solid var(--color-ash);
@@ -519,7 +535,7 @@ watch(() => route.query.w, openFromQuery)
   font-family: var(--font-mono);
   text-transform: uppercase;
   letter-spacing: 0.14em;
-  font-size: 0.54rem;
+  font-size: max(0.54rem, var(--text-floor));
   color: var(--color-smoke);
 }
 .w-tags dd {
@@ -560,7 +576,7 @@ watch(() => route.query.w, openFromQuery)
   font-family: var(--font-mono);
   text-transform: uppercase;
   letter-spacing: 0.1em;
-  font-size: 0.62rem;
+  font-size: max(0.62rem, var(--text-floor));
   padding: 2px 8px;
   border: 1px solid currentColor;
   border-radius: 2px;
@@ -587,12 +603,14 @@ watch(() => route.query.w, openFromQuery)
   display: flex;
   align-items: center;
   gap: 0.5rem;
+  min-width: 0;
+  max-width: 100%;
 }
 .stats-version span {
   font-family: var(--font-mono);
   text-transform: uppercase;
   letter-spacing: 0.14em;
-  font-size: 0.54rem;
+  font-size: max(0.54rem, var(--text-floor));
   color: var(--color-smoke);
 }
 .stats-version select {
@@ -603,6 +621,7 @@ watch(() => route.query.w, openFromQuery)
   padding: 0.35rem 0.5rem;
   font-size: 0.82rem;
   max-width: 16rem;
+  min-width: 0;
 }
 
 .gauges {
@@ -623,7 +642,7 @@ watch(() => route.query.w, openFromQuery)
   font-family: var(--font-mono);
   text-transform: uppercase;
   letter-spacing: 0.1em;
-  font-size: 0.58rem;
+  font-size: max(0.58rem, var(--text-floor));
   color: var(--color-smoke);
 }
 /* Track is notched into ten segments, like a gauge struck on the anvil. */
@@ -667,7 +686,7 @@ watch(() => route.query.w, openFromQuery)
 }
 .gauge-delta {
   font-family: var(--font-mono);
-  font-size: 0.66rem;
+  font-size: max(0.66rem, var(--text-floor));
   text-align: right;
 }
 .gauge-delta.over {
@@ -698,7 +717,7 @@ watch(() => route.query.w, openFromQuery)
   font-family: var(--font-mono);
   text-transform: uppercase;
   letter-spacing: 0.14em;
-  font-size: 0.54rem;
+  font-size: max(0.54rem, var(--text-floor));
   color: var(--color-smoke);
 }
 .figures dd {
@@ -730,31 +749,9 @@ watch(() => route.query.w, openFromQuery)
   margin: 0.8rem 0 1.4rem;
   flex-wrap: wrap;
 }
-.btn-sm {
-  padding: 0.5rem 0.9rem;
-  border-radius: 2px;
-  font-size: 0.78rem;
-  cursor: pointer;
-}
 .btn-ember:disabled {
   filter: grayscale(0.6) brightness(0.7);
   cursor: not-allowed;
-}
-.btn-ghost {
-  display: inline-flex;
-  align-items: center;
-  font-family: var(--font-display);
-  text-transform: uppercase;
-  letter-spacing: 0.06em;
-  font-weight: 700;
-  color: var(--color-smoke);
-  background: transparent;
-  border: 1px solid var(--color-ash);
-  text-decoration: none;
-}
-.btn-ghost:hover {
-  color: var(--color-bone);
-  border-color: var(--color-ash-2);
 }
 
 .toast {

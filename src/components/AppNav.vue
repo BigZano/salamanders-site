@@ -138,6 +138,7 @@ function freshPlanner() {
   align-items: center;
   gap: 0.6rem;
   margin-right: auto;
+  min-height: var(--tap);
 }
 .brand-text {
   font-family: var(--font-display);
@@ -157,7 +158,7 @@ function freshPlanner() {
 }
 .brand-legion {
   font-family: var(--font-mono);
-  font-size: 0.6rem;
+  font-size: max(0.6rem, var(--text-floor));
   letter-spacing: 0.2em;
   color: var(--color-gold);
   border: 1px solid rgba(223, 184, 91, 0.4);
@@ -253,8 +254,8 @@ function freshPlanner() {
   flex-direction: column;
   justify-content: center;
   gap: 5px;
-  width: 42px;
-  height: 42px;
+  width: 44px;
+  height: 44px;
   background: transparent;
   border: 1px solid var(--color-ash);
   border-radius: 3px;

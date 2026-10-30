@@ -22,6 +22,10 @@ const PORTED = [
   'armouringhall/specialist',
   'armouringhall/watch-command',
   'armouringhall/restricted-wargear',
+  'hallofrelics/notable-members',
+  'hallofrelics/fortress-lore',
+  'recruitment/terms-of-service',
+  'recruitment/requirements',
 ]
 const ALL = import.meta.glob('./*/*.vue', { eager: true })
 const MODULES = Object.fromEntries(Object.entries(ALL).filter(([k]) => !PORTED.includes(k.slice(2, -4))))

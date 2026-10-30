@@ -56,3 +56,12 @@ config.php
 coverage/
 .stryker-tmp/
 reports/
+
+# New development notes (specs, plans, handoffs, ideas) stay on the maintainers' machines.
+# Files already tracked in these folders stay tracked.
+docs/superpowers/
+docs/handoff/
+docs/ideas/
+
+# A local export of the guild's roles
+roles_list.txt

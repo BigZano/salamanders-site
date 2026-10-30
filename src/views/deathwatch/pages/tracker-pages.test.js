@@ -44,6 +44,22 @@ describe('Event Tracker', () => {
     expect(w.find('tbody a').attributes('href')).toMatch(/^\/deathwatch\/eventtracker\/kill-teams\?scene=commander&t=\d+$/)
   })
 
+  it('Standings: tied teams share a rank, on the podium and in the table', async () => {
+    const m = (gs) => [[1, 1, 1, 0, gs, 0, 0, '', [['x', 'Tactical', 0, 1, 0, 0, 0, 0, 0, 0, 0]]]]
+    useDeathwatchData().teams = {
+      1: { id: 1, n: 'Alpha', ro: [], m: m(0) },
+      2: { id: 2, n: 'Beta', ro: [], m: m(1) },
+      3: { id: 3, n: 'Gamma', ro: [], m: m(1) },
+    }
+    const { w } = await mountPage('eventtracker/standings')
+    expect(w.findAll('.pod-card').map((c) => [c.get('.pod-name').text(), c.get('.pod-rank').text(), c.classes().at(-1)])).toEqual([
+      ['Beta', '1', 'p1'],
+      ['Gamma', '1', 'p1'],
+      ['Alpha', '3', 'p3'],
+    ])
+    expect(w.findAll('tbody .rank').map((d) => d.text()).slice(0, 3)).toEqual(['1', '1', '3'])
+  })
+
   it('Standings: the chart turns into a table', async () => {
     const { w } = await mountPage('eventtracker/standings')
     await w.findAll('.pc-modes button').at(3).trigger('click')
@@ -83,6 +99,46 @@ describe('Event Tracker', () => {
     const { w: p } = await mountPage('eventtracker/players', { p: name })
     expect(p.find('.ppn').text()).toBe(name)
     expect(h2(p)).toEqual(['Player profile', 'Missions'])
+  })
+
+  // A name or a class that matches a built-in property, and a played mission stored without its rows.
+  describe('with awkward data', () => {
+    const row = (name, cls, k) => [name, cls, 0, k, 0, 0, 0, 0, 0, 0, 0]
+    beforeEach(() => {
+      useDeathwatchData().teams = {
+        1: {
+          id: 1,
+          n: 'Alpha',
+          co: 'Primus',
+          ro: ['constructor', '__proto__'],
+          m: [
+            [1, 1, 1, 0, 0, 0, 0, '', [row('constructor', 'toString', 40), row('__proto__', 'Sniper', 10)]],
+            [1, 2, 1, 0, 0, 0, 0, '', [row('constructor', 'toString', 2), row('hasOwnProperty', 'Sniper', 5)]],
+            [1, 3, 1, 0, 0, 0, 0, ''],
+          ],
+        },
+      }
+    })
+
+    it('Kill Teams: counts each player under their own name, guests after the roster', async () => {
+      const { w } = await mountPage('eventtracker/kill-teams', { t: '1' })
+      const rows = w.findAll('tbody')[0].findAll('tr').map((r) => r.findAll('td').map((d) => d.text()))
+      expect(rows.map((r) => [r[0], r[1], r[2]])).toEqual([
+        ['constructor', '2', '42'],
+        ['__proto__', '1', '10'],
+        ['hasOwnPropertyGuest', '1', '5'],
+      ])
+      expect(Object.prototype).not.toHaveProperty('o')
+    })
+
+    it('Players: a profile counts every mission, and its classes by name', async () => {
+      const { w } = await mountPage('eventtracker/players', { p: 'constructor' })
+      expect(w.find('.ppn').text()).toBe('constructor')
+      expect(w.text()).toContain('toString')
+      const { w: p } = await mountPage('eventtracker/players', { p: '__proto__' })
+      expect(p.find('.ppn').text()).toBe('__proto__')
+      expect(p.text()).toContain('Sniper')
+    })
   })
 
   it('Players: a fallen player carries the KIA tag', async () => {
