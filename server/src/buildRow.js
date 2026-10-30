@@ -20,8 +20,15 @@ export const rowToBuild = (r) => ({
 /**
  * A build as the public API sends it: the author is named by their Discord
  * display name (see displayNames.js), never the username stored with the row.
+ * isMember, when it is a function, adds author.member: true only when it
+ * answers exactly true (anything else is false). Leave it out for a viewer who
+ * must not learn who the members are: the key is then absent, not false.
  */
-export const publicBuild = (build, nameFor) => ({
+export const publicBuild = (build, nameFor, isMember = null) => ({
   ...build,
-  author: { id: build.author.id, displayName: nameFor(build.author.id) },
+  author: {
+    id: build.author.id,
+    displayName: nameFor(build.author.id),
+    ...(typeof isMember === 'function' && { member: isMember(build.author.id) === true }),
+  },
 })
