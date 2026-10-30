@@ -1,5 +1,8 @@
 # Contributing to the Deathwatch area
 
+> **Superseded by [CONTRIBUTING.md](../../CONTRIBUTING.md).** Where the two disagree, that file wins. This page is kept
+> for history; it was written for the Deathwatch area alone.
+
 For anyone building the Watch Fortress Ebonhold pages (`/deathwatch`) who is new to GitHub. The repo is public,
 so the rule that matters most comes first.
 
