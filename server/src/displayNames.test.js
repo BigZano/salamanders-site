@@ -3,8 +3,8 @@ import { createDisplayNames, nameOf, COMMUNITY_MEMBER } from './displayNames'
 
 const GUILD = '1322056087792521269'
 const BASE = 'https://d.test/api'
-const A = '75633559351595008'
-const B = '87082170719408128'
+const A = '300000000000000001'
+const B = '300000000000000002'
 const C = '100000000000000002'
 const member = (id, { nick = null, global_name = null, username = `user${id.slice(-3)}` } = {}) => ({
   nick,

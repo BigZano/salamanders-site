@@ -1633,7 +1633,7 @@ import { deriveKeys, keyFromBase64 } from '../../src/lib/archive/crypto'
 const KEY = Buffer.alloc(32, 7).toString('base64')
 const ROLE = '1377787723976409211'
 const GUILD = '1322056087792521269'
-const USER = '75633559351595008'
+const USER = '300000000000000004'
 const TOKEN = 'good.token-value_1'
 
 function discord({ me = { status: 200, body: { id: USER, username: 'u' } }, member = { status: 200, body: { roles: [ROLE] } }, throws } = {}) {
@@ -4157,18 +4157,18 @@ as it is. Add `contents: read` if it's missing (it's already there).
 
 ```js
 const USERS = {
-  // Real id from src/data/discord-members.json's memberIds.
-  'test-member-token': { id: '75633559351595008', username: 'member-tester' },
+  // Invented id for a member of the guild.
+  'test-member-token': { id: '300000000000000004', username: 'member-tester' },
   // Well-formed but deliberately absent from that list.
   'test-nonmember-token': { id: '999999999999999999', username: 'nonmember-tester' },
   // In the guild (and the member bake) but without the Legion role.
-  'test-norole-token': { id: '87082170719408128', username: 'norole-tester' },
+  'test-norole-token': { id: '300000000000000005', username: 'norole-tester' },
 }
 const LEGION_ROLE = '1377787723976409211'
 // Guild membership as Discord's bot endpoint would report it.
 const MEMBERS = {
-  '75633559351595008': { roles: [LEGION_ROLE] },
-  '87082170719408128': { roles: [] },
+  '300000000000000004': { roles: [LEGION_ROLE] },
+  '300000000000000005': { roles: [] },
 }
 ```
 
@@ -4180,8 +4180,8 @@ const MEMBERS = {
     }
 ```
 
-Check that `87082170719408128` is in `src/data/discord-members.json`'s
-`memberIds` (it is: the second entry), so the nav shows the archive links
+Check that `300000000000000005` is an id the client treats as a guild member
+(the mock lists it as one), so the nav shows the archive links
 for this user and the *server* is what refuses them.
 
 - [ ] **Step 6: e2e compose.** In `e2e/docker-compose.yml`:

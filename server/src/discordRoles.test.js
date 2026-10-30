@@ -2,7 +2,7 @@ import { describe, it, expect } from 'vitest'
 import { createDiscordRoles, Upstream } from './discordRoles'
 
 const GUILD = '1322056087792521269'
-const USER = '75633559351595008'
+const USER = '300000000000000001'
 const ADMIN_ROLE = '111111111111111111'
 const PLAIN_ROLE = '222222222222222222'
 
