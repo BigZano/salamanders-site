@@ -31,6 +31,7 @@ const GATED = [
   'server/src/membership.js',
   'server/src/membershipHandler.js',
   'server/src/buildsView.js',
+  'server/src/buildRow.js',
 ]
 
 export default defineConfig({

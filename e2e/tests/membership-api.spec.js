@@ -65,6 +65,7 @@ test.describe('GET /builds flags members, for signed-in viewers only', () => {
     expect(res.status()).toBe(200)
     expect(res.headers()['vary']).toContain('Authorization')
     // Nothing marks it private: this one is what a shared cache may keep, and it says nothing about membership.
+    expect(res.headers()['cache-control'] ?? '').not.toContain('private')
     expect(res.headers()['cache-control'] ?? '').not.toContain('no-store')
     const builds = await res.json()
     expect(authorOf(builds, memberTitle)).toBeDefined()
@@ -96,6 +97,7 @@ test.describe('GET /builds flags members, for signed-in viewers only', () => {
     expect(res.status()).toBe(200)
     expect(res.headers()['vary']).toContain('Authorization')
     expect(res.headers()['cache-control'] ?? '').not.toContain('private')
+    expect(res.headers()['cache-control'] ?? '').not.toContain('no-store')
     const builds = await res.json()
     expect(authorOf(builds, memberTitle)).toBeDefined()
     for (const b of builds) expect('member' in b.author, b.title).toBe(false)

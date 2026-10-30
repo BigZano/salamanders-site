@@ -11,7 +11,8 @@ function discord(routes) {
   const fetchImpl = async (url, init) => {
     seen.push([url, init.headers.Authorization])
     const r = routes[url.replace('https://d.test/api', '')] || { status: 404, body: {} }
-    return new Response(JSON.stringify(r.body), { status: r.status })
+    // `raw` hands back a body as given (to model a reply that is not JSON); otherwise `body` is serialised.
+    return new Response(r.raw ?? JSON.stringify(r.body), { status: r.status })
   }
   return { fetchImpl, seen }
 }
@@ -87,6 +88,49 @@ describe('identify', () => {
     await expect(make({ '/users/@me': { status: 200, body: { id: 'x' } } }).roles.identify(req('Bearer t'))).rejects.toBeInstanceOf(Upstream)
     await expect(make({}, { botToken: '' }).roles.identify(req('Bearer t'))).rejects.toBeInstanceOf(Upstream)
   })
+
+  // What Discord's answer to GET /users/@me means. These are the only checks standing between a
+  // token and a user id on the archive key and on /membership, so each odd answer is pinned alone.
+  const me = (route) => make({ '/users/@me': route }).roles.identify(req('Bearer tok'))
+
+  it('is null when Discord says the token is not accepted (401 or 403)', async () => {
+    await expect(me({ status: 401, body: { message: '401: Unauthorized' } })).resolves.toBeNull()
+    await expect(me({ status: 403, body: { message: 'Missing Access' } })).resolves.toBeNull()
+  })
+
+  it.each([
+    ['rate limited (429)', { status: 429, body: { message: 'You are being rate limited.' } }],
+    ['a server error (500) that still carries a valid user id', { status: 500, body: { id: USER, username: 'u' } }],
+    ['a server error (502)', { status: 502, body: {} }],
+    ['an accepted-but-not-ready answer (202) with a valid user id', { status: 202, body: { id: USER, username: 'u' } }],
+    ['a redirect-range status (301) with a valid user id', { status: 301, body: { id: USER, username: 'u' } }],
+    ['a body that is not JSON', { status: 200, raw: '<html>bad gateway</html>' }],
+    ['an empty body', { status: 200, raw: '' }],
+    ['a JSON null body', { status: 200, raw: 'null' }],
+    ['a JSON body with no id', { status: 200, body: { username: 'u' } }],
+    ['an id that is null', { status: 200, body: { id: null, username: 'u' } }],
+    ['an empty-string id', { status: 200, body: { id: '', username: 'u' } }],
+    ['an id that is not digits', { status: 200, body: { id: 'x', username: 'u' } }],
+    ['an id with a non-digit character in it', { status: 200, body: { id: '30000000000000000a', username: 'u' } }],
+    ['an id with a trailing newline', { status: 200, body: { id: `${USER}\n`, username: 'u' } }],
+    ['an id that is too short (16 digits)', { status: 200, body: { id: '3000000000000001', username: 'u' } }],
+    ['an id that is too long (21 digits)', { status: 200, body: { id: '300000000000000000001', username: 'u' } }],
+    ['an id sent as a short number', { status: 200, body: { id: 12345, username: 'u' } }],
+    ['an id sent as a number too large to be a snowflake', { status: 200, body: { id: 3e20, username: 'u' } }],
+  ])('throws Upstream, not null and not a user, on %s', async (_, route) => {
+    await expect(me(route)).rejects.toBeInstanceOf(Upstream)
+  })
+
+  it.each([
+    ['17 digits', '30000000000000001'],
+    ['20 digits', '30000000000000000001'],
+  ])('accepts a snowflake of %s, the edges of the allowed length', async (_, id) => {
+    await expect(me({ status: 200, body: { id, username: 'u' } })).resolves.toEqual({ id, username: 'u' })
+  })
+
+  it('names the user by id when Discord sends no username', async () => {
+    await expect(me({ status: 200, body: { id: USER } })).resolves.toEqual({ id: USER, username: USER })
+  })
 })
 
 describe('rolesOf', () => {
@@ -95,6 +139,32 @@ describe('rolesOf', () => {
     expect(await roles.rolesOf(USER)).toEqual([PLAIN_ROLE])
     expect(d.seen[0][1]).toBe('Bot bot')
     expect(await roles.rolesOf('1')).toBeNull()
+  })
+
+  // What the bot's answer about one member means. Only a 200 with a roles array is a member;
+  // only a 404 is a non-member; anything else must not read as either.
+  const member = (route) => make({ [`/v10/guilds/${GUILD}/members/${USER}`]: route }).roles.rolesOf(USER)
+
+  it('returns the roles array unchanged, including an empty one', async () => {
+    await expect(member({ status: 200, body: { roles: [PLAIN_ROLE, ADMIN_ROLE] } })).resolves.toEqual([PLAIN_ROLE, ADMIN_ROLE])
+    await expect(member({ status: 200, body: { roles: [] } })).resolves.toEqual([])
+  })
+
+  it.each([
+    ['403 (the bot cannot see the guild)', { status: 403, body: { message: 'Missing Access' } }],
+    ['403 with a roles array in the body', { status: 403, body: { roles: [PLAIN_ROLE] } }],
+    ['429 (rate limited)', { status: 429, body: { message: 'You are being rate limited.' } }],
+    ['500 with a roles array in the body', { status: 500, body: { roles: [PLAIN_ROLE] } }],
+    ['202 with a roles array in the body', { status: 202, body: { roles: [PLAIN_ROLE] } }],
+    ['401 (the bot token is rejected)', { status: 401, body: {} }],
+    ['200 with a body that is not JSON', { status: 200, raw: '<html>bad gateway</html>' }],
+    ['200 with a JSON null body', { status: 200, raw: 'null' }],
+    ['200 with no roles key', { status: 200, body: { user: { id: USER } } }],
+    ['200 with roles null', { status: 200, body: { roles: null } }],
+    ['200 with roles a string', { status: 200, body: { roles: PLAIN_ROLE } }],
+    ['200 with roles an object', { status: 200, body: { roles: { 0: PLAIN_ROLE, length: 1 } } }],
+  ])('throws Upstream, not null and not a role list, on %s', async (_, route) => {
+    await expect(member(route)).rejects.toBeInstanceOf(Upstream)
   })
 })
 

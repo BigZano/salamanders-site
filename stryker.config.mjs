@@ -32,6 +32,7 @@ export default {
     'server/src/membership.js',
     'server/src/membershipHandler.js',
     'server/src/buildsView.js',
+    'server/src/buildRow.js',
   ],
   coverageAnalysis: 'perTest',
   thresholds: { high: 100, low: 100, break: 100 },
