@@ -1,0 +1,193 @@
+#!/usr/bin/env bash
+# salamanders-db-backup: weekly logical backup of the builds API database.
+#
+# Dumps $DB_NAME from the running $CONTAINER with pg_dump (custom format), proves the dump
+# restores (a throwaway container of the same image restores it, and every table must match the
+# live row counts and content hashes), then keeps the newest $KEEP weekly dumps.
+#
+# A file named salamanders_builds-weekly-<UTC stamp>.dump therefore always means "dumped, listed,
+# restored and compared". Retention only runs after a fully verified new dump, so a failing week
+# never shrinks the set of proven backups. A dump that fails its restore is renamed
+# *.dump.failed-drill so it can never be counted as, or restored as, a good one.
+#
+# Configuration (environment; the defaults are the production values):
+#   CONTAINER      database container                 (server-db-1)
+#   DB_USER        owner/superuser used for pg_dump   (salamanders)
+#   DB_NAME        database                           (salamanders_builds)
+#   DEST           backup directory                   (/mnt/bretpc/salamanders-db-backups)
+#   REQUIRE_MOUNT  DEST must live on this mounted filesystem; empty disables (/mnt/bretpc)
+#   KEEP           weekly dumps to keep, 1-999        (8)
+#   DRILL          1 = restore-test each dump, 0 = skip (1)
+#   APP_ROLE       role the dump's GRANTs refer to; the drill creates it first, because roles live in
+#                  the cluster and are not in a database dump (salamanders_app; empty = none)
+#   STATE_DIR      status file + log                  (~/.local/state/salamanders-db-backup)
+#
+# Exit codes: 0 ok | 2 bad config | 3 backup drive not mounted/usable | 4 database container not
+# running | 5 dump failed | 6 dump unusable | 7 database kept changing | 8 restore drill failed |
+# 9 another run in progress. STATE_DIR/last-run always holds the latest result.
+#
+# Restore into a fresh volume: create the app role FIRST (server/app-role.sql), then
+#   pg_restore -U salamanders -d salamanders_builds --exit-on-error < the .dump
+# The dump's GRANTs name that role; restoring before it exists fails at the first GRANT.
+
+set -uo pipefail
+umask 077
+PATH="$PATH:/usr/local/bin:/usr/bin:/bin"
+
+# "-" not ":-": a variable that is set but empty is a configuration mistake to reject below, never a
+# silent fall back to the production default.
+CONTAINER=${CONTAINER-server-db-1}
+DB_USER=${DB_USER-salamanders}
+DB_NAME=${DB_NAME-salamanders_builds}
+DEST=${DEST-/mnt/bretpc/salamanders-db-backups}
+REQUIRE_MOUNT=${REQUIRE_MOUNT-/mnt/bretpc}
+KEEP=${KEEP-8}
+DRILL=${DRILL-1}
+APP_ROLE=${APP_ROLE-salamanders_app}
+DRILL_READY_TRIES=${DRILL_READY_TRIES:-60}
+DRILL_READY_DELAY=${DRILL_READY_DELAY:-1}
+STATE_DIR=${STATE_DIR:-$HOME/.local/state/salamanders-db-backup}
+STAMP=${BACKUP_STAMP:-$(date -u +%Y%m%dT%H%M%SZ)}
+
+SCRATCH=""
+REASON="unknown"
+SUMMARY=""
+NO_STATUS=0
+OWN_PARTIAL=0
+DEST_REAL=""
+NAME="salamanders_builds-weekly-$STAMP"
+
+mkdir -p -m 700 "$STATE_DIR" 2>/dev/null || { echo "cannot create $STATE_DIR" >&2; exit 2; }
+
+log() { printf '%s\n' "$*"; printf '%s %s\n' "$(date -u +%FT%TZ)" "$*" >> "$STATE_DIR/backup.log" 2>/dev/null; return 0; }
+
+cleanup() {
+  local code=$?
+  if [ -n "$SCRATCH" ]; then docker rm -f "$SCRATCH" >/dev/null 2>&1; fi
+  if [ "$OWN_PARTIAL" = 1 ] && [ -n "$DEST_REAL" ]; then rm -f -- "$DEST_REAL/$NAME.dump.partial"; fi
+  if [ "$NO_STATUS" != 1 ]; then
+    local line
+    if [ "$code" -eq 0 ]; then line="OK $SUMMARY"; else line="FAILED exit=$code reason=$REASON"; fi
+    printf '%s %s\n' "$(date -u +%FT%TZ)" "$line" > "$STATE_DIR/last-run"
+    log "$line"
+  fi
+}
+trap cleanup EXIT
+
+fail() { local code=$1; shift; REASON="$*"; exit "$code"; }
+
+# One run at a time. Must come first so a losing run touches nothing, not even the status file.
+exec 9> "$STATE_DIR/lock"
+flock -n 9 || { NO_STATUS=1; echo "another backup run is in progress" >&2; exit 9; }
+
+# ---- validate at the boundary: nothing below runs on bad configuration -------------------------
+[[ $KEEP =~ ^[1-9][0-9]{0,2}$ ]]  || fail 2 "KEEP must be an integer from 1 to 999 (got '$KEEP')"
+[[ $DRILL =~ ^[01]$ ]]            || fail 2 "DRILL must be 0 or 1 (got '$DRILL')"
+[[ -z $APP_ROLE || $APP_ROLE =~ ^[A-Za-z_][A-Za-z0-9_]*$ ]] || fail 2 "APP_ROLE must be a plain role name (got '$APP_ROLE')"
+[[ $STAMP =~ ^[0-9]{8}T[0-9]{6}Z$ ]] || fail 2 "BACKUP_STAMP must look like 20261024T164921Z"
+for v in CONTAINER DB_USER DB_NAME; do   # names that docker/psql would read as options are refused
+  [[ ${!v} =~ ^[A-Za-z0-9][A-Za-z0-9_.-]*$ ]] || fail 2 "$v must be a plain name (got '${!v}')"
+done
+[ -n "$DEST" ]                    || fail 2 "DEST is empty"
+DEST_REAL=$(realpath -m -- "$DEST") || fail 2 "cannot resolve DEST"
+if [ -n "$REQUIRE_MOUNT" ]; then
+  mount_real=$(realpath -m -- "$REQUIRE_MOUNT") || fail 2 "cannot resolve REQUIRE_MOUNT"
+  mount_base=${mount_real%/}   # "" for a root mount; a separate variable because "${x%/}"/* mis-matches in case
+  case "$DEST_REAL/" in
+    "$mount_base"/*) ;;
+    *) fail 2 "DEST ($DEST_REAL) is not inside REQUIRE_MOUNT ($mount_real)" ;;
+  esac
+  mountpoint -q -- "$mount_real" || fail 3 "$mount_real is not a mounted filesystem; refusing to write onto the system disk"
+fi
+
+running=$(docker inspect -f '{{.State.Running}}' "$CONTAINER" 2>/dev/null) || fail 4 "container $CONTAINER not found"
+[ "$running" = true ] || fail 4 "container $CONTAINER is not running"
+IMAGE=$(docker inspect -f '{{.Config.Image}}' "$CONTAINER" 2>/dev/null) || fail 4 "cannot read the image of $CONTAINER"
+[ -n "$IMAGE" ] || fail 4 "empty image for $CONTAINER"
+
+mkdir -p -m 700 -- "$DEST_REAL" 2>/dev/null || fail 3 "cannot create $DEST_REAL"
+PARTIAL="$DEST_REAL/$NAME.dump.partial"
+FINAL="$DEST_REAL/$NAME.dump"
+
+# ---- per-table fingerprint: name|rows|md5 of every row's text -----------------------------------
+read -r -d '' FP_SQL <<'SQL' || true
+select t.tablename || '|' ||
+  (xpath('/row/c/text()', query_to_xml(format('select count(*) as c from %I', t.tablename), false, true, '')))[1]::text || '|' ||
+  (xpath('/row/m/text()', query_to_xml(format('select md5(coalesce(string_agg(x::text, ''|'' order by x::text), '''')) as m from %I x', t.tablename), false, true, '')))[1]::text
+from pg_tables t where t.schemaname = 'public' order by t.tablename
+SQL
+ACL_SQL="select c.relname || '|' || coalesce(c.relacl::text, '') from pg_class c where c.relnamespace = 'public'::regnamespace and c.relkind in ('r', 'S') order by c.relname"
+acls() { docker exec "$1" psql -U "$DB_USER" -d "$DB_NAME" -X -w -A -t -c "$ACL_SQL" < /dev/null; }
+fingerprint() { docker exec "$1" psql -U "$DB_USER" -d "$DB_NAME" -X -w -A -t -c "$FP_SQL" < /dev/null; }
+
+# ---- dump, retrying if the database changed underneath it ---------------------------------------
+attempt=0
+while :; do
+  attempt=$((attempt + 1))
+  fp_before=$(fingerprint "$CONTAINER") || fail 5 "could not read table fingerprints from $CONTAINER"
+  [ -n "$fp_before" ] || fail 6 "no tables found in $DB_NAME; nothing to back up"
+  OWN_PARTIAL=1
+  docker exec "$CONTAINER" pg_dump -U "$DB_USER" -d "$DB_NAME" -Fc > "$PARTIAL" || fail 5 "pg_dump failed"
+  fp_after=$(fingerprint "$CONTAINER") || fail 5 "could not read table fingerprints after the dump"
+  [ "$fp_before" = "$fp_after" ] && break
+  [ "$attempt" -lt 3 ] || fail 7 "the database changed during all 3 dump attempts"
+done
+
+# ---- the dump must be a readable archive with contents ------------------------------------------
+[ -s "$PARTIAL" ] || fail 6 "the dump is empty"
+toc=$(docker exec -i "$CONTAINER" pg_restore -l < "$PARTIAL") || fail 6 "pg_restore cannot read the dump"
+printf '%s\n' "$toc" | grep -qE '^[^;[:space:]]' || fail 6 "the dump has no table of contents entries"
+
+# ---- restore drill: a throwaway server of the same image must rebuild identical data ------------
+if [ "$DRILL" = 1 ]; then
+  SCRATCH="bkpdrill-$STAMP-$$"
+  drill_fail() {
+    mv -f -- "$PARTIAL" "$FINAL.failed-drill" 2>/dev/null && OWN_PARTIAL=0
+    fail 8 "$1 (the dump was kept as $NAME.dump.failed-drill)"
+  }
+  docker run -d --name "$SCRATCH" --tmpfs /var/lib/postgresql/data \
+    -e POSTGRES_USER="$DB_USER" -e POSTGRES_PASSWORD=drill-throwaway -e POSTGRES_DB="$DB_NAME" \
+    "$IMAGE" > /dev/null 2>&1 || drill_fail "could not start the drill container from $IMAGE"
+  ready=0
+  for _ in $(seq 1 "$DRILL_READY_TRIES"); do
+    if docker exec "$SCRATCH" pg_isready -q -h 127.0.0.1 -U "$DB_USER" -d "$DB_NAME" > /dev/null 2>&1; then ready=1; break; fi
+    sleep "$DRILL_READY_DELAY"
+  done
+  [ "$ready" = 1 ] || drill_fail "the drill container never became ready"
+  if [ -n "$APP_ROLE" ]; then
+    docker exec "$SCRATCH" psql -U "$DB_USER" -d "$DB_NAME" -X -w -q -c "create role \"$APP_ROLE\" nologin" < /dev/null > /dev/null 2>&1 \
+      || drill_fail "could not create role $APP_ROLE in the drill container"
+  fi
+  restore_err=$(docker exec -i "$SCRATCH" pg_restore -U "$DB_USER" -d "$DB_NAME" --exit-on-error < "$PARTIAL" 2>&1 > /dev/null) \
+    || drill_fail "the restore into the drill container failed: $(printf '%s\n' "$restore_err" | grep -m1 -iE 'error' | cut -c1-200)"
+  fp_drill=$(fingerprint "$SCRATCH") || drill_fail "could not read fingerprints from the drill container"
+  [ "$fp_drill" = "$fp_after" ] || drill_fail "restored data differs from the live database"
+  acl_live=$(acls "$CONTAINER") || drill_fail "could not read privileges from $CONTAINER"
+  acl_drill=$(acls "$SCRATCH") || drill_fail "could not read privileges from the drill container"
+  [ "$acl_live" = "$acl_drill" ] || drill_fail "restored privileges differ from the live database"
+fi
+
+# ---- publish: sidecars first, the .dump name last -----------------------------------------------
+sha=$(sha256sum < "$PARTIAL" | cut -d' ' -f1) || fail 5 "could not checksum the dump"
+printf '%s\n' "$fp_after" > "$DEST_REAL/$NAME.fingerprint" || fail 5 "could not write the fingerprint"
+printf '%s  %s\n' "$sha" "$NAME.dump" > "$DEST_REAL/$NAME.sha256" || fail 5 "could not write the checksum"
+mv -- "$PARTIAL" "$FINAL" || fail 5 "could not publish the dump"
+OWN_PARTIAL=0
+
+# ---- retention: only verified weekly dumps count; nothing else is ever touched -------------------
+shopt -s nullglob
+weekly=()
+for f in "$DEST_REAL"/salamanders_builds-weekly-*.dump; do
+  base=${f##*/}
+  [[ $base =~ ^salamanders_builds-weekly-[0-9]{8}T[0-9]{6}Z\.dump$ ]] || continue
+  [ -f "$f" ] || continue
+  weekly+=("$base")
+done
+kept=${#weekly[@]}
+while IFS= read -r old; do   # newest first; everything after the first $KEEP goes (nothing, if <= $KEEP)
+  rm -f -- "$DEST_REAL/$old" "$DEST_REAL/${old%.dump}.sha256" "$DEST_REAL/${old%.dump}.fingerprint"
+  kept=$((kept - 1))
+done < <(printf '%s\n' "${weekly[@]}" | sort -r | tail -n +"$((KEEP + 1))")
+
+SUMMARY="$NAME.dump drilled=$([ "$DRILL" = 1 ] && echo yes || echo no) kept=$kept"
+exit 0

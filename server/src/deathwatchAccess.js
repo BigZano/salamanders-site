@@ -1,9 +1,14 @@
 /**
  * Who may use the Deathwatch area, asked of Discord live (discordRoles.js) and
  * of the grants table. Access is the Watch Commander role, any one of the
- * Deathwatch roles, or an active grant; Watch Commander status comes only from the role, never
- * from a grant. Someone who is not in the guild holds no roles, and can still
- * have a grant. Any Discord failure throws Upstream: callers fail closed.
+ * Deathwatch roles, an active grant, or being the guild owner or an
+ * Administrator (discordRoles.isAdmin). Watch Commander status comes only from
+ * the Commander role, never from a grant and never from being an administrator.
+ * Deathwatch Command standing (a different role from the Watch Commander) comes
+ * only from its own role, and only for someone who has access: it opens nothing
+ * by itself. Its id is optional; unset or malformed, nobody holds it.
+ * Someone who is not in the guild holds no roles, and can still have a grant.
+ * Any Discord failure throws Upstream: callers fail closed.
  *
  * Reads may reuse a verdict for a short while, keyed by a hash of the whole
  * Authorization header, so a polling page does not cost two Discord calls per
@@ -29,6 +34,7 @@ export function createDeathwatchAccess({
   store,
   deathwatchRoleId,
   commanderRoleId,
+  deathwatchCommandRoleId,
   ttlMs = 30_000,
   maxEntries = 1000,
   now = Date.now,
@@ -36,6 +42,9 @@ export function createDeathwatchAccess({
   // No defaults for the ids: until both are set the handler answers 503.
   const deathwatchRoleIds = parseRoleIds(deathwatchRoleId)
   const configured = deathwatchRoleIds.length > 0 && isSnowflake(commanderRoleId)
+  // Unlike those two, this one never decides `configured`: left out, the area works and nobody is Deathwatch Command.
+  // One snowflake or nothing, so a stray null or undefined in a role list can never match it.
+  const commandRoleId = isSnowflake(deathwatchCommandRoleId) ? deathwatchCommandRoleId : null
   const cache = new Map() // sha256 of the Authorization header -> { verdict, until }
   // Replaced by forget(). A lookup that began under an earlier epoch may be telling a story forget() has
   // since made false (a grant revoked mid-lookup), so its verdict is returned but not remembered.
@@ -47,8 +56,14 @@ export function createDeathwatchAccess({
     // Stryker disable next-line ArrayDeclaration: a stray element is never a role id, so it grants nothing
     const held = (await roles.rolesOf(user.id)) ?? []
     const watchCommander = held.includes(commanderRoleId)
-    const access = watchCommander || deathwatchRoleIds.some((id) => held.includes(id)) || (await store.isGranted(user.id))
-    return { user, access, watchCommander }
+    // Cheapest first: the guild lookup is only made for someone nothing else admits.
+    const access =
+      watchCommander ||
+      deathwatchRoleIds.some((id) => held.includes(id)) ||
+      (await store.isGranted(user.id)) ||
+      (await roles.isAdmin(user.id, held))
+    const deathwatchCommand = access && commandRoleId !== null && held.includes(commandRoleId)
+    return { user, access, watchCommander, deathwatchCommand }
   }
 
   function remember(key, verdict) {
@@ -56,7 +71,7 @@ export function createDeathwatchAccess({
     cache.set(key, { verdict, until: now() + ttlMs })
   }
 
-  /** → { user, access, watchCommander }, or null when there is no valid Discord identity. */
+  /** → { user, access, watchCommander, deathwatchCommand }, or null when there is no valid Discord identity. */
   async function resolve(request, { fresh = false } = {}) {
     const header = request.headers.get('Authorization')
     if (fresh || !header) return lookup(request)

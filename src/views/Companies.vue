@@ -204,7 +204,7 @@ function backToIndex() {
   font-size: 0.95rem;
 }
 .c-search::placeholder {
-  color: #5f6f66;
+  color: var(--color-faint);
 }
 .rs-dev-scenes {
   display: flex;
@@ -254,6 +254,7 @@ function backToIndex() {
   background: rgba(5, 10, 8, 0.6);
   font-family: inherit;
   cursor: pointer;
+  min-height: var(--tap);
   transition: border-color 0.15s ease, color 0.15s ease;
 }
 .c-chip:hover {

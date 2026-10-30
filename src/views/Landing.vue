@@ -89,7 +89,7 @@ const ops = [
   font-family: var(--font-mono);
   text-transform: uppercase;
   letter-spacing: 0.22em;
-  font-size: 0.64rem;
+  font-size: max(0.64rem, var(--text-floor));
   color: var(--color-gold);
 }
 .ops-card-title {

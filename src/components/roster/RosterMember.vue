@@ -76,7 +76,7 @@ const ORDINALS = ['', '1st', '2nd', '3rd', '4th', '5th', '6th', '7th']
   border-radius: 50%;
   font-family: var(--font-display);
   font-weight: 600;
-  font-size: 0.62rem;
+  font-size: max(0.62rem, var(--text-floor));
   letter-spacing: 0.02em;
   color: #cfe0d4;
   background: linear-gradient(180deg, #2c4137, #1a2a22);
@@ -97,7 +97,7 @@ const ORDINALS = ['', '1st', '2nd', '3rd', '4th', '5th', '6th', '7th']
 }
 .rs-tag {
   font-family: var(--font-mono);
-  font-size: 0.62rem;
+  font-size: max(0.62rem, var(--text-floor));
   color: var(--color-smoke);
   border: 1px solid var(--color-ash);
   border-radius: 3px;
@@ -106,7 +106,7 @@ const ORDINALS = ['', '1st', '2nd', '3rd', '4th', '5th', '6th', '7th']
 .rs-badge,
 .rs-you {
   font-family: var(--font-mono);
-  font-size: 0.6rem;
+  font-size: max(0.6rem, var(--text-floor));
   letter-spacing: 0.08em;
   text-transform: uppercase;
   padding: 0.06rem 0.38rem;

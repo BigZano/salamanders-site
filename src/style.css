@@ -15,6 +15,8 @@
   --color-ash-2: #3a5246;
   --color-bone: #e8efe9;
   --color-smoke: #96a59c;
+  /* The quiet tier under smoke: placeholders, empty states, hints. 4.8:1 on the lightest panel. */
+  --color-faint: #7a8a81;
   --color-drake: #59d66c;
   --color-drake-deep: #173c23;
   --color-gold: #dfb85b;
@@ -34,6 +36,28 @@
     'Arial Narrow', system-ui, sans-serif;
   --font-sans: system-ui, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
   --font-mono: 'Cascadia Code', 'Cascadia Mono', ui-monospace, Consolas, monospace;
+}
+
+/* Smallest text on a phone. Micro-labels write their size as max(<size>, var(--text-floor)), so
+   desktop keeps the small plate lettering and a phone never drops under 11px. */
+:root {
+  --text-floor: 0rem;
+}
+@media (max-width: 768px) {
+  :root {
+    --text-floor: 0.6875rem;
+  }
+}
+
+/* Smallest tap target. A control writes min-height: var(--tap): its own size on desktop, 44px on
+   phones and touch screens (PRODUCT.md). */
+:root {
+  --tap: auto;
+}
+@media (pointer: coarse), (max-width: 768px) {
+  :root {
+    --tap: 44px;
+  }
 }
 
 /* ------------------------------------------------------------------ *
@@ -233,6 +257,43 @@
   }
   .btn-drake:active {
     transform: scale(0.97);
+  }
+
+  /* Quiet outline button, for the second action beside an ember or drake one */
+  .btn-ghost {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.5rem;
+    font-family: var(--font-display);
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    font-weight: 700;
+    color: var(--color-smoke);
+    background: transparent;
+    border: 1px solid var(--color-ash);
+    text-decoration: none;
+    transition:
+      transform 0.15s ease,
+      color 0.2s ease,
+      border-color 0.2s ease;
+  }
+  @media (hover: hover) and (pointer: fine) {
+    .btn-ghost:hover {
+      color: var(--color-bone);
+      border-color: var(--color-ash-2);
+    }
+  }
+  .btn-ghost:active {
+    transform: scale(0.97);
+  }
+
+  /* The small size, shared by every page that sets buttons in a row or a card */
+  .btn-sm {
+    padding: 0.5rem 0.85rem;
+    border-radius: 2px;
+    font-size: 0.78rem;
+    cursor: pointer;
+    min-height: var(--tap);
   }
 }
 

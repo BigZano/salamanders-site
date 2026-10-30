@@ -1,6 +1,6 @@
 services:
   db:
-    image: postgres:16-alpine
+    image: postgres:16.15-alpine
     restart: unless-stopped
     environment:
       POSTGRES_DB: salamanders_builds
@@ -25,7 +25,9 @@ services:
         condition: service_healthy
     environment:
       PORT: 8787
-      DATABASE_URL: postgres://salamanders:${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in server/.env}@db:5432/salamanders_builds
+      # The API connects as the data-only role, never the owner. Create it once
+      # with app-role.sql (see README, "Database roles").
+      DATABASE_URL: postgres://salamanders_app:${APP_DB_PASSWORD:?set APP_DB_PASSWORD in server/.env, then run app-role.sql}@db:5432/salamanders_builds
       ALLOWED_ORIGIN: ${ALLOWED_ORIGIN:-http://localhost:5173}
       DISCORD_GUILD_ID: ${DISCORD_GUILD_ID:-}
       DISCORD_BOT_TOKEN: ${DISCORD_BOT_TOKEN:-}
@@ -50,6 +52,8 @@ services:
       # Deathwatch area. No defaults anywhere: until both are set it answers 503.
       DEATHWATCH_ROLE_ID: ${DEATHWATCH_ROLE_ID:-}
       WATCH_COMMANDER_ROLE_ID: ${WATCH_COMMANDER_ROLE_ID:-}
+      # Optional: the Deathwatch Command role (it shows the Watch Command tab). Unset, nobody is Deathwatch Command.
+      DEATHWATCH_COMMAND_ROLE_ID: ${DEATHWATCH_COMMAND_ROLE_ID:-}
     ports:
       - '8787:8787'
 

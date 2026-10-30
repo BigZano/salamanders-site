@@ -269,7 +269,7 @@ const changed = (group, key) => fireTuning[group][key] !== DEFAULTS[group][key]
   font-family: var(--font-mono);
   text-transform: uppercase;
   letter-spacing: 0.14em;
-  font-size: 0.54rem;
+  font-size: max(0.54rem, var(--text-floor));
   color: var(--color-smoke);
   margin: 0.5rem 0 0.45rem;
 }
@@ -281,7 +281,7 @@ const changed = (group, key) => fireTuning[group][key] !== DEFAULTS[group][key]
 }
 .tuner-hint {
   color: #728078;
-  font-size: 0.6rem;
+  font-size: max(0.6rem, var(--text-floor));
   line-height: 1.4;
   margin-bottom: 0.4rem;
 }
@@ -305,7 +305,7 @@ const changed = (group, key) => fireTuning[group][key] !== DEFAULTS[group][key]
 }
 .row-val {
   font-family: var(--font-mono);
-  font-size: 0.68rem;
+  font-size: max(0.68rem, var(--text-floor));
   color: var(--color-bone);
   text-align: right;
 }
@@ -331,8 +331,8 @@ const changed = (group, key) => fireTuning[group][key] !== DEFAULTS[group][key]
 }
 .check-hint {
   display: block;
-  font-size: 0.58rem;
-  color: #5f6f66;
+  font-size: max(0.58rem, var(--text-floor));
+  color: var(--color-faint);
   line-height: 1.3;
 }
 .tuner-actions {
@@ -358,7 +358,7 @@ const changed = (group, key) => fireTuning[group][key] !== DEFAULTS[group][key]
 .tuner-note {
   margin-top: 0.6rem;
   color: #728078;
-  font-size: 0.62rem;
+  font-size: max(0.62rem, var(--text-floor));
   line-height: 1.45;
 }
 .tuner.closed {

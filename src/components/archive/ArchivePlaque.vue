@@ -12,12 +12,35 @@ import { drakeSkull } from './drakeSkull'
 
 defineProps({ narrow: { type: Boolean, default: false } })
 
-const wrap = ref(null)
+// The heat goes to the glow layers themselves, never to the wrapper: a custom property inherits, so one
+// write on an ancestor of the thread restyles every node in it, every frame (about two thirds of a
+// throttled phone's main thread). A layer with no children costs next to nothing.
+const halo = ref(null)
+const glow = ref(null)
+const inlayGlow = ref(null)
+const skull = ref(null)
 let raf = 0
-function tick() {
+let lastHeat = ''
+
+// The skull is the one glow with children (some 200 paths inherit its --heat, and its drop-shadow is
+// redrawn with it), so following the volcano every frame still cost about a fifth of a throttled
+// phone's main thread. It is a faint ember glow: ten updates a second look the same and cost a sixth.
+// Returns the heat to write on it this frame, or null to leave it be.
+let lastSkull = -Infinity
+function skullHeat(heat, now) {
+  if (now - lastSkull < 100) return null
+  lastSkull = now
+  return heat
+}
+
+function tick(now) {
   raf = requestAnimationFrame(tick)
-  const heat = 0.55 + deathfireHeat.breathe * 0.3 + deathfireHeat.flare * 0.7
-  wrap.value?.style.setProperty('--heat', heat.toFixed(3))
+  const heat = (0.55 + deathfireHeat.breathe * 0.3 + deathfireHeat.flare * 0.7).toFixed(3)
+  if (heat === lastHeat) return
+  lastHeat = heat
+  for (const el of [halo.value, glow.value, inlayGlow.value]) el?.style.setProperty('--heat', heat)
+  const skullValue = skullHeat(heat, now)
+  if (skullValue !== null) skull.value?.style.setProperty('--heat', skullValue)
 }
 onMounted(() => { if (motionAllowed()) raf = requestAnimationFrame(tick) })
 onBeforeUnmount(() => cancelAnimationFrame(raf))
@@ -65,16 +88,17 @@ const EDGES = ['top-l', 'top-r', 'bottom-l', 'bottom-r', 'left', 'right']
 </script>
 
 <template>
-  <div ref="wrap" :class="['plaque-wrap', { 'plaque-narrow': narrow }]">
-    <div class="plaque-halo" aria-hidden="true" />
+  <div :class="['plaque-wrap', { 'plaque-narrow': narrow }]">
+    <div ref="halo" class="plaque-halo" aria-hidden="true" />
     <div class="plaque">
+      <div ref="glow" class="plaque-glow" aria-hidden="true" />
       <div class="plaque-filigree" :style="runnerStyle" aria-hidden="true">
         <span v-for="e in EDGES" :key="e" :class="['run', `run-${e}`]" />
         <Engraving v-for="c in CORNERS" :key="c" :piece="CORNER_PIECES[c]" box="0 0 160 160" :class="`scroll scroll-${c}`" />
         <Engraving :piece="CREST" box="0 0 200 40" class="crest crest-bottom" />
       </div>
-      <div class="plaque-inlay"><slot /></div>
-      <svg class="skull" viewBox="0 0 200 200" aria-hidden="true">
+      <div class="plaque-inlay"><div ref="inlayGlow" class="inlay-glow" aria-hidden="true" /><slot /></div>
+      <svg ref="skull" class="skull" viewBox="0 0 200 200" aria-hidden="true">
         <defs>
           <!-- One light for the whole trophy: dark ivory above, soot-stained toward the jaw. -->
           <linearGradient id="skull-bone" gradientUnits="userSpaceOnUse" x1="0" y1="0" x2="30" y2="155">
@@ -106,12 +130,13 @@ const EDGES = ['top-l', 'top-r', 'bottom-l', 'bottom-r', 'left', 'right']
 </template>
 
 <style scoped>
-.plaque-wrap { --heat: 0.8; --rim: clamp(24px, 4.6vw, 56px); position: relative; max-width: 62rem; margin: calc(1.25rem + var(--rim) * 3.3) auto 5rem; padding: 0 1rem; isolation: isolate; }
+.plaque-wrap { --rim: clamp(24px, 4.6vw, 56px); position: relative; max-width: 62rem; margin: calc(1.25rem + var(--rim) * 3.3) auto 5rem; padding: 0 1rem; isolation: isolate; }
 .plaque-narrow { max-width: 38rem; margin-top: calc(3rem + var(--rim) * 3.3); }
 
 /* Deathfire's light spilling round the plaque, strongest from below where
    the mountain is. Follows the volcano's breathing and eruptions. */
 .plaque-halo {
+  --heat: 0.8; will-change: opacity, transform;
   position: absolute; inset: -1.5rem -0.5rem -3rem; z-index: -1; pointer-events: none; filter: blur(32px);
   opacity: calc(var(--heat) * 0.95);
   transform: scale(calc(0.97 + var(--heat) * 0.04));
@@ -146,8 +171,16 @@ const EDGES = ['top-l', 'top-r', 'bottom-l', 'bottom-r', 'left', 'right']
     0 0 0 1px #0a0501,
     inset 0 1px 0 rgba(255, 220, 150, 0.35),
     inset 0 -2px 0 rgba(0, 0, 0, 0.55),
-    0 30px 60px -22px rgba(0, 0, 0, 0.95),
-    0 12px 50px -12px rgba(255, 106, 43, calc(var(--heat) * 0.55));
+    0 30px 60px -22px rgba(0, 0, 0, 0.95);
+}
+
+/* The ember light under the plaque, on a layer of its own. Its shadow is painted once at peak heat
+   (0.55 × 1.55) and the heat only fades the layer, so nothing repaints as the volcano breathes. */
+.plaque-glow {
+  --heat: 0.8; will-change: opacity;
+  position: absolute; inset: 0; z-index: -1; border-radius: inherit; pointer-events: none;
+  box-shadow: 0 12px 50px -12px rgba(255, 106, 43, 0.8525);
+  opacity: calc(var(--heat) / 1.55);
 }
 
 /* ---- engraving ---- */
@@ -188,6 +221,7 @@ const EDGES = ['top-l', 'top-r', 'bottom-l', 'bottom-r', 'left', 'right']
 
 /* The drake-skull trophy on its bronze mount: the mount sits on the rim, the skull rises above the plaque. */
 .skull {
+  --heat: 0.8;
   position: absolute; z-index: 2; left: 50%; top: calc(var(--rim) * -3.3); width: calc(var(--rim) * 4.4); height: calc(var(--rim) * 4.4);
   transform: translateX(-50%); overflow: visible; pointer-events: none;
   filter: drop-shadow(0 4px 5px rgba(0, 0, 0, 0.75)) drop-shadow(0 0 14px rgba(255, 106, 43, calc(var(--heat) * 0.25)));
@@ -197,7 +231,7 @@ const EDGES = ['top-l', 'top-r', 'bottom-l', 'bottom-r', 'left', 'right']
 
 /* ---- the iron inlay ---- */
 .plaque-inlay {
-  position: relative; border-radius: 3px; padding: clamp(2rem, 5vw, 3.25rem) clamp(1.25rem, 5vw, 3.5rem) clamp(2.25rem, 5vw, 3.5rem);
+  position: relative; isolation: isolate; border-radius: 3px; padding: clamp(2rem, 5vw, 3.25rem) clamp(1.25rem, 5vw, 3.5rem) clamp(2.25rem, 5vw, 3.5rem);
   background:
     url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='220' height='220'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='.9' numOctaves='2' stitchTiles='stitch'/%3E%3CfeColorMatrix values='0 0 0 0 .9 0 0 0 0 .88 0 0 0 0 .86 0 0 0 .05 0'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E"),
     radial-gradient(90% 30% at 50% 100%, rgba(255, 106, 43, 0.05), transparent 70%),
@@ -209,8 +243,23 @@ const EDGES = ['top-l', 'top-r', 'bottom-l', 'bottom-r', 'left', 'right']
     0 0 0 3px #5a3a10,
     0 0 0 4px rgba(10, 5, 0, 0.9),
     inset 0 3px 10px rgba(0, 0, 0, 0.85),
-    inset 0 -30px 60px -30px rgba(255, 106, 43, calc(var(--heat) * 0.14)),
     inset 0 0 90px rgba(0, 0, 0, 0.5);
+}
+
+/* Forge light pooling at the foot of the inlay: above its iron, below the text (the inlay isolates, so
+   z-index -1 lands between the two). Painted once at peak heat (0.14 × 1.55); the heat fades the layer. */
+.inlay-glow {
+  --heat: 0.8; will-change: opacity;
+  position: absolute; inset: 0; z-index: -1; border-radius: inherit; pointer-events: none;
+  box-shadow: inset 0 -30px 60px -30px rgba(255, 106, 43, 0.217);
+  opacity: calc(var(--heat) / 1.55);
+}
+
+/* The halo and its swell reach past the plaque. Where the page is no wider than the plaque that widens
+   the page: phones shrink it to fit and let it pan sideways. Clip across only; the glow still spills
+   above and below. */
+@media (max-width: 64rem) {
+  .plaque-wrap { overflow-x: clip; }
 }
 
 @media (max-width: 640px) {

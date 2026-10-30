@@ -84,6 +84,7 @@ const reports = createReportsHandler({
 
 // The Deathwatch area — see deathwatchHandler.js. Its two role ids have no
 // defaults: until both are set in the environment every route answers 503.
+// The Deathwatch Command role id is optional: unset, nobody is Deathwatch Command.
 const deathwatchStore = createDeathwatchStore(pool)
 const deathwatch = createDeathwatchHandler({
   access: createDeathwatchAccess({
@@ -91,6 +92,7 @@ const deathwatch = createDeathwatchHandler({
     store: deathwatchStore,
     deathwatchRoleId: process.env.DEATHWATCH_ROLE_ID,
     commanderRoleId: process.env.WATCH_COMMANDER_ROLE_ID,
+    deathwatchCommandRoleId: process.env.DEATHWATCH_COMMAND_ROLE_ID,
   }),
   store: deathwatchStore,
 })

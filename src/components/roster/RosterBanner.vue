@@ -60,7 +60,7 @@ defineProps({
 .rs-dais-label {
   margin: 0 0 0.9rem;
   font-family: var(--font-mono);
-  font-size: 0.68rem;
+  font-size: max(0.68rem, var(--text-floor));
   letter-spacing: 0.22em;
   text-transform: uppercase;
   color: var(--color-gold);

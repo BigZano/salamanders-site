@@ -1,12 +1,13 @@
 import { describe, it, expect, vi } from 'vitest'
 import * as fc from 'fast-check'
 import { createDeathwatchAccess } from './deathwatchAccess'
-import { Upstream } from './discordRoles'
+import { Upstream, createDiscordRoles } from './discordRoles'
 
 // Invented ids only: the real role and user ids never enter the repo.
 const DW = '200000000000000101'
 const WC = '200000000000000102'
 const LEGION = '200000000000000199'
+const CMD = '200000000000000110' // the Deathwatch Command role: a different role from the Watch Commander
 
 const USERS = {
   commander: { id: '300000000000000001', username: 'commander', roles: [WC] },
@@ -35,6 +36,7 @@ function setup({ granted = [], ...opts } = {}) {
       if (fail.roles) throw new Upstream()
       return Object.values(USERS).find((u) => u.id === id).roles
     }),
+    isAdmin: async () => false, // nobody here is an administrator; the last describe runs the real seam
   }
   const grants = new Set(granted)
   const store = { isGranted: vi.fn(async (id) => grants.has(id)) }
@@ -43,6 +45,7 @@ function setup({ granted = [], ...opts } = {}) {
     store,
     deathwatchRoleId: DW,
     commanderRoleId: WC,
+    deathwatchCommandRoleId: CMD,
     now: () => clock.t,
     ...opts,
   })
@@ -75,6 +78,7 @@ describe('the verdict', () => {
       user: { id: USERS.commander.id, username: 'commander' },
       access: true,
       watchCommander: true,
+      deathwatchCommand: false,
     })
   })
 
@@ -127,6 +131,93 @@ describe('the verdict', () => {
     const { access, store } = setup()
     await access.resolve(req('plain'))
     expect(store.isGranted).toHaveBeenCalledWith(USERS.plain.id)
+  })
+})
+
+describe('the Deathwatch Command role', () => {
+  const ME = '300000000000000021'
+  // `deathwatchCommandRoleId` is passed through as given, `undefined` included (a default would swallow it); CMD when absent.
+  const verdictHolding = ({ held, granted = false, ...rest }) =>
+    createDeathwatchAccess({
+      roles: { identify: async () => ({ id: ME, username: 'me' }), rolesOf: async () => held, isAdmin: async () => false },
+      store: { isGranted: async () => granted },
+      deathwatchRoleId: DW,
+      commanderRoleId: WC,
+      deathwatchCommandRoleId: 'deathwatchCommandRoleId' in rest ? rest.deathwatchCommandRoleId : CMD,
+    }).resolve(req('any'))
+  const standing = (v) => [v.access, v.watchCommander, v.deathwatchCommand]
+
+  it('is held by a member who has access, and gives no Commander status', async () => {
+    expect(standing(await verdictHolding({ held: [DW, CMD] }))).toEqual([true, false, true])
+    expect(standing(await verdictHolding({ held: [LEGION, CMD, DW] }))).toEqual([true, false, true])
+  })
+
+  it('opens nothing by itself: a holder with no other way in has no access and no standing', async () => {
+    expect(standing(await verdictHolding({ held: [CMD] }))).toEqual([false, false, false])
+    expect(standing(await verdictHolding({ held: [LEGION, CMD] }))).toEqual([false, false, false])
+  })
+
+  it('stands beside a grant, which supplies the access', async () => {
+    expect(standing(await verdictHolding({ held: [CMD], granted: true }))).toEqual([true, false, true])
+    expect(standing(await verdictHolding({ held: [], granted: true }))).toEqual([true, false, false])
+  })
+
+  it('is earned by the role alone, never by any other way in', async () => {
+    expect(standing(await verdictHolding({ held: [DW] }))).toEqual([true, false, false])
+    expect(standing(await verdictHolding({ held: [WC] }))).toEqual([true, true, false])
+    expect(standing(await verdictHolding({ held: [], granted: true }))).toEqual([true, false, false])
+  })
+
+  it('leaves Commander status to the Commander role, whatever else is held', async () => {
+    expect(standing(await verdictHolding({ held: [WC, CMD] }))).toEqual([true, true, true])
+    expect(standing(await verdictHolding({ held: [CMD, DW] }))).toEqual([true, false, true])
+  })
+
+  it('is off when its id is not set or not a single snowflake, even for a holder of the role itself', async () => {
+    // A bad id that is also literally in the user's role list must still open nothing: it is validated, not matched.
+    const bad = [undefined, null, '', ' ', 'abc', ` ${CMD}`, `${CMD} `, '1'.repeat(16), '1'.repeat(21), `${CMD},${CMD}`, `${DW},${CMD}`, 7, 200000000000000110, true, [CMD], {}]
+    for (const id of bad) {
+      const held = [DW, CMD, ...(typeof id === 'string' ? [id] : [])]
+      expect(standing(await verdictHolding({ held, deathwatchCommandRoleId: id })), String(id)).toEqual([true, false, false])
+    }
+  })
+
+  it('does not take a stray entry in the role list for the role when none is set', async () => {
+    const held = [DW, undefined, null, '', 'undefined', 'null']
+    for (const id of [undefined, null, '']) {
+      expect(standing(await verdictHolding({ held, deathwatchCommandRoleId: id })), String(id)).toEqual([true, false, false])
+    }
+  })
+
+  it('neither configures the area nor is needed to', () => {
+    const configured = (opts) => createDeathwatchAccess({ roles: {}, store: {}, ...opts }).configured
+    expect(configured({ deathwatchRoleId: DW, commanderRoleId: WC })).toBe(true)
+    expect(configured({ deathwatchRoleId: DW, commanderRoleId: WC, deathwatchCommandRoleId: CMD })).toBe(true)
+    expect(configured({ commanderRoleId: WC, deathwatchCommandRoleId: CMD })).toBe(false)
+    expect(configured({ deathwatchRoleId: DW, deathwatchCommandRoleId: CMD })).toBe(false)
+  })
+
+  const snowflake = fc.stringMatching(/^[1-9]\d{16,19}$/)
+
+  it('property: any snowflake id is held by exactly those who hold that role', async () => {
+    await fc.assert(
+      fc.asyncProperty(snowflake, snowflake, async (id, other) => {
+        fc.pre(id !== other && ![DW, WC].includes(id) && ![DW, WC].includes(other))
+        const mine = await verdictHolding({ held: [DW, id], deathwatchCommandRoleId: id })
+        const theirs = await verdictHolding({ held: [DW, other], deathwatchCommandRoleId: id })
+        return mine.deathwatchCommand === true && theirs.deathwatchCommand === false
+      }),
+    )
+  })
+
+  it('property: a string that is not a snowflake switches the role off, even as an exact match', async () => {
+    const notSnowflake = fc.string().filter((s) => !/^\d{17,20}$/.test(s))
+    await fc.assert(
+      fc.asyncProperty(notSnowflake, async (id) => {
+        const v = await verdictHolding({ held: [DW, id], deathwatchCommandRoleId: id })
+        return v.access === true && v.deathwatchCommand === false
+      }),
+    )
   })
 })
 
@@ -256,7 +347,11 @@ describe('several Deathwatch roles', () => {
 
   async function verdictHolding(deathwatchRoleId, held) {
     const access = createDeathwatchAccess({
-      roles: { identify: async () => ({ id: '300000000000000009', username: 'u' }), rolesOf: async () => held },
+      roles: {
+        identify: async () => ({ id: '300000000000000009', username: 'u' }),
+        rolesOf: async () => held,
+        isAdmin: async () => false,
+      },
       store: { isGranted: async () => false },
       deathwatchRoleId,
       commanderRoleId: WC,
@@ -360,5 +455,115 @@ describe('several Deathwatch roles', () => {
         return true
       }),
     )
+  })
+})
+
+// The guild owner and anyone holding a role that grants Administrator are let in as well, without Commander
+// status. "Administrator" is the repo's own definition (discordRoles.isAdmin), so these tests run the real
+// seam over a fake Discord instead of a stub that decides for itself.
+describe('administrators and the guild owner', () => {
+  const GUILD = '1322056087792521269'
+  const ADMIN_ROLE = '200000000000000201' // Administrator among other bits
+  const PLAIN_ROLE = '200000000000000202' // Manage Server and more, but not Administrator
+  const ME = '300000000000000011'
+  const OWNER = '300000000000000099' // somebody else, unless a test says otherwise
+
+  function verdictFor({ held = [], owner = OWNER, guildStatus = 200, granted = false, deathwatchRoleId = DW } = {}) {
+    const guild = {
+      owner_id: owner,
+      roles: [
+        { id: GUILD, permissions: '0' },
+        { id: ADMIN_ROLE, permissions: String(0x8 | 0x20) },
+        { id: PLAIN_ROLE, permissions: String(0x20 | 0x10 | 0x800) },
+        { id: DW, permissions: '0' },
+        { id: WC, permissions: '0' },
+        { id: CMD, permissions: '0' },
+      ],
+    }
+    const routes = {
+      '/users/@me': { status: 200, body: { id: ME, username: 'me' } },
+      [`/v10/guilds/${GUILD}/members/${ME}`]: { status: 200, body: { roles: held } },
+      [`/v10/guilds/${GUILD}`]: { status: guildStatus, body: guild },
+    }
+    const fetchImpl = async (url) => {
+      const r = routes[url.replace('https://d.test/api', '')] ?? { status: 404, body: {} }
+      return new Response(JSON.stringify(r.body), { status: r.status })
+    }
+    const roles = createDiscordRoles({ fetchImpl, apiBase: 'https://d.test/api', guildId: GUILD, botToken: 'bot' })
+    const access = createDeathwatchAccess({
+      roles,
+      store: { isGranted: async () => granted },
+      deathwatchRoleId,
+      commanderRoleId: WC,
+      deathwatchCommandRoleId: CMD,
+    })
+    return access.resolve(req('any'))
+  }
+  const standing = (v) => [v.access, v.watchCommander]
+
+  it('admits the guild owner, who holds no role at all, without Commander status', async () => {
+    expect(standing(await verdictFor({ owner: ME, held: [] }))).toEqual([true, false])
+  })
+
+  it('admits the holder of a role that grants Administrator, without Commander status', async () => {
+    expect(standing(await verdictFor({ held: [ADMIN_ROLE] }))).toEqual([true, false])
+    expect(standing(await verdictFor({ held: [PLAIN_ROLE, ADMIN_ROLE] }))).toEqual([true, false])
+  })
+
+  it('denies a role with other powers but not Administrator, and a member with no roles', async () => {
+    expect(standing(await verdictFor({ held: [PLAIN_ROLE] }))).toEqual([false, false])
+    expect(standing(await verdictFor({ held: [] }))).toEqual([false, false])
+  })
+
+  it('does not take somebody else for the owner', async () => {
+    expect(standing(await verdictFor({ owner: '300000000000000012', held: [] }))).toEqual([false, false])
+  })
+
+  it('leaves Commander status to the Commander role alone', async () => {
+    expect(standing(await verdictFor({ owner: ME, held: [WC] }))).toEqual([true, true])
+    expect(standing(await verdictFor({ held: [ADMIN_ROLE, WC] }))).toEqual([true, true])
+    expect(standing(await verdictFor({ owner: ME, held: [ADMIN_ROLE] }))).toEqual([true, false])
+  })
+
+  it('still admits whoever a role or a grant already admits while the guild lookup is down', async () => {
+    const down = { guildStatus: 500 }
+    expect(standing(await verdictFor({ ...down, held: [DW] }))).toEqual([true, false])
+    expect(standing(await verdictFor({ ...down, held: [WC] }))).toEqual([true, true])
+    expect(standing(await verdictFor({ ...down, held: [], granted: true }))).toEqual([true, false])
+  })
+
+  it('fails closed when the guild lookup is down and nothing else admits the user', async () => {
+    await expect(verdictFor({ guildStatus: 500, held: [PLAIN_ROLE] })).rejects.toBeInstanceOf(Upstream)
+    await expect(verdictFor({ guildStatus: 500, owner: ME, held: [] })).rejects.toBeInstanceOf(Upstream)
+  })
+
+  it('admits exactly those who qualify one way or another, whatever the mix', async () => {
+    const ways = ['owner', 'admin', 'reader', 'commander', 'granted']
+    for (let mask = 0; mask < 1 << ways.length; mask++) {
+      const has = Object.fromEntries(ways.map((w, i) => [w, Boolean(mask & (1 << i))]))
+      const held = [has.admin && ADMIN_ROLE, has.reader && DW, has.commander && WC].filter(Boolean)
+      const v = await verdictFor({ owner: has.owner ? ME : OWNER, held, granted: has.granted })
+      expect(standing(v), JSON.stringify(has)).toEqual([ways.some((w) => has[w]), has.commander])
+    }
+  })
+
+  it('gives the Deathwatch Command standing to its holders alone, however else they got in', async () => {
+    const ways = ['owner', 'admin', 'reader', 'commander', 'granted', 'command']
+    const admits = ways.filter((w) => w !== 'command')
+    for (let mask = 0; mask < 1 << ways.length; mask++) {
+      const has = Object.fromEntries(ways.map((w, i) => [w, Boolean(mask & (1 << i))]))
+      const held = [has.admin && ADMIN_ROLE, has.reader && DW, has.commander && WC, has.command && CMD].filter(Boolean)
+      const v = await verdictFor({ owner: has.owner ? ME : OWNER, held, granted: has.granted })
+      const admitted = admits.some((w) => has[w])
+      expect(v.deathwatchCommand, JSON.stringify(has)).toBe(has.command && admitted)
+      expect(standing(v), JSON.stringify(has)).toEqual([admitted, has.commander])
+    }
+  })
+
+  it('answers the Deathwatch Command standing without the guild lookup once something else admits, and fails closed otherwise', async () => {
+    const down = { guildStatus: 500 }
+    expect((await verdictFor({ ...down, held: [DW, CMD] })).deathwatchCommand).toBe(true)
+    expect((await verdictFor({ ...down, held: [], granted: true })).deathwatchCommand).toBe(false)
+    await expect(verdictFor({ guildStatus: 500, held: [CMD] })).rejects.toBeInstanceOf(Upstream)
   })
 })

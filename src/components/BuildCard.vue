@@ -110,7 +110,7 @@ const slots = [
   font-family: var(--font-mono);
   text-transform: uppercase;
   letter-spacing: 0.1em;
-  font-size: 0.6rem;
+  font-size: max(0.6rem, var(--text-floor));
   color: var(--color-drake);
   border: 1px solid rgba(89, 214, 108, 0.35);
   border-radius: 2px;
@@ -127,7 +127,7 @@ const slots = [
   margin: 0.35rem 0 0.6rem;
 }
 .b-author {
-  color: #5f6f66;
+  color: var(--color-faint);
   font-size: 0.72rem;
   font-style: italic;
   margin: -0.3rem 0 0.6rem;
@@ -140,7 +140,7 @@ const slots = [
   font-style: normal;
   text-transform: uppercase;
   letter-spacing: 0.06em;
-  font-size: 0.6rem;
+  font-size: max(0.6rem, var(--text-floor));
   color: var(--color-drake);
   border: 1px solid rgba(89, 214, 108, 0.4);
   border-radius: 2px;
@@ -168,7 +168,7 @@ const slots = [
   font-family: var(--font-mono);
   text-transform: uppercase;
   letter-spacing: 0.1em;
-  font-size: 0.62rem;
+  font-size: max(0.62rem, var(--text-floor));
   color: var(--color-smoke);
 }
 .b-load dd {
@@ -202,7 +202,7 @@ const slots = [
 }
 .b-perk-none {
   font-size: 0.76rem;
-  color: #5f6f66;
+  color: var(--color-faint);
   font-style: italic;
 }
 .b-actions {
@@ -210,27 +210,8 @@ const slots = [
   gap: 0.4rem;
   margin-top: 1rem;
 }
-.btn-sm {
-  padding: 0.5rem 0.85rem;
-  border-radius: 2px;
-  font-size: 0.78rem;
-  cursor: pointer;
-}
 .btn-sm:disabled {
   cursor: not-allowed;
   opacity: 0.6;
-}
-.btn-ghost {
-  font-family: var(--font-display);
-  text-transform: uppercase;
-  letter-spacing: 0.06em;
-  font-weight: 700;
-  color: var(--color-smoke);
-  background: transparent;
-  border: 1px solid var(--color-ash);
-}
-.btn-ghost:hover {
-  color: var(--color-bone);
-  border-color: var(--color-ash-2);
 }
 </style>
