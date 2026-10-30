@@ -29,6 +29,7 @@ const GATED = [
   'server/src/deathwatchAccess.js',
   'server/src/deathwatchHandler.js',
   'server/src/membership.js',
+  'server/src/membershipHandler.js',
 ]
 
 export default defineConfig({

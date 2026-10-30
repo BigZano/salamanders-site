@@ -23,6 +23,8 @@ import { createDeathwatchStore } from './deathwatchStore.js'
 import { createDiscordRoles } from './discordRoles.js'
 import { createDisplayNames } from './displayNames.js'
 import { createHistoryStore } from './historyStore.js'
+import { createMembership } from './membership.js'
+import { createMembershipHandler } from './membershipHandler.js'
 import { createPerksHandler } from './perks.js'
 import { createPrivileges } from './privileges.js'
 import { createReportsHandler } from './reports.js'
@@ -55,6 +57,10 @@ const archiveKey = createArchiveKeyHandler({
 })
 
 const roles = createDiscordRoles({ apiBase: DISCORD_API_BASE, guildId: GUILD_ID, botToken: BOT_TOKEN })
+// GET /membership: is the caller a guild member? Answered live from Discord
+// against the member role — see membership.js and membershipHandler.js.
+const membership = createMembership({ roles, roleId: process.env.ARCHIVE_ROLE_ID })
+const membershipRoutes = createMembershipHandler({ membership })
 // Build authors are shown by Discord display name, from an in-memory
 // directory of the guild — see displayNames.js.
 const displayNames = createDisplayNames({ apiBase: DISCORD_API_BASE, guildId: GUILD_ID, botToken: BOT_TOKEN })
@@ -205,6 +211,8 @@ Bun.serve({
       if (rosterPublicRes) return cors(rosterPublicRes)
       const rosterRes = await rosterRoutes(request, url)
       if (rosterRes) return cors(rosterRes)
+      const membershipRes = await membershipRoutes(request, url)
+      if (membershipRes) return cors(membershipRes)
       if (url.pathname === '/health') return json({ ok: true })
       if (url.pathname === '/archive/key' && request.method === 'GET') return cors(await archiveKey(request))
       if (url.pathname === '/builds/moderator' && request.method === 'GET') return cors(await moderation.status(request))

@@ -30,6 +30,7 @@ export default {
     'server/src/deathwatchAccess.js',
     'server/src/deathwatchHandler.js',
     'server/src/membership.js',
+    'server/src/membershipHandler.js',
   ],
   coverageAnalysis: 'perTest',
   thresholds: { high: 100, low: 100, break: 100 },
