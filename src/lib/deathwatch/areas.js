@@ -25,9 +25,9 @@ export const AREAS = {
     // address always names the one shown.
     tabs: [
       { slug: 'standard', label: 'Standard', items: ['watchbrother', 'companyheraldry'] },
-      { slug: 'specialist', label: 'Specialist', items: ['apothecarion', 'librarium', 'mechanicus', 'reclusiarc'] },
+      { slug: 'specialist', label: 'Specialist', items: ['reclusiarc', 'librarium', 'apothecarion', 'mechanicus'] },
       // Only Deathwatch Command (and the Watch Commander) see this tab (DeathwatchNav, DeathwatchArea).
-      { slug: 'watch-command', label: 'Watch Command', command: true, items: ['watchsergeant', 'watchspecialist'] },
+      { slug: 'watch-command', label: 'Watch Command', command: true, items: ['watchsergeant', 'watchchaplain', 'watchlibrarian', 'watchapothecary', 'watchtechmarine'] },
       tab('restricted-wargear', 'Restricted Wargear'),
     ],
   },

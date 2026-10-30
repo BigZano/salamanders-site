@@ -14,6 +14,14 @@ import brother from '../../components/deathwatch/img/armour/spec-battlebrother.j
 import brotherParts from '../../components/deathwatch/img/armour/spec-battlebrother-parts.jpg'
 import sergeant from '../../components/deathwatch/img/armour/wc-sergeant.jpg'
 import sergeantParts from '../../components/deathwatch/img/armour/wc-sergeant-parts.jpg'
+import apothecary from '../../components/deathwatch/img/armour/wc-apothecary.jpg'
+import apothecaryParts from '../../components/deathwatch/img/armour/wc-apothecary-parts.jpg'
+import librarian from '../../components/deathwatch/img/armour/wc-librarian.jpg'
+import librarianParts from '../../components/deathwatch/img/armour/wc-librarian-parts.jpg'
+import chaplain from '../../components/deathwatch/img/armour/wc-chaplain.jpg'
+import chaplainParts from '../../components/deathwatch/img/armour/wc-chaplain-parts.jpg'
+import techmarine from '../../components/deathwatch/img/armour/wc-techmarine.jpg'
+import techmarineParts from '../../components/deathwatch/img/armour/wc-techmarine-parts.jpg'
 import heraldryParts from '../../components/deathwatch/img/armour/heraldry-parts.jpg'
 import icoApothecarion from '../../components/deathwatch/img/armour/ico-apothecarion.png'
 import icoLibrarium from '../../components/deathwatch/img/armour/ico-librarium.png'
@@ -34,19 +42,22 @@ export const PAINT = {
   Wraithbone: '#dbd1b2',
   Silver: '#b9bec4',
   'Averland Sunset': '#e3a92e',
+  'Khorne Red': '#b3141b',
+  'Warpstone Glow': '#1f7a34',
 }
 
 const HM = [0.909, 3.9, 0.91, 4.54]
 const PAUL = ['Pauldrons', [], ['Left: the Deathwatch Pauldron.', 'Right: the color scheme of your Company of origin (see Company Heraldry).'], [1, 2], [13, 20]]
 const WAR = ['Wargear', [], ['///CLASSIFIED///'], [3, 4], [47, 43]]
 const RG = 'Right: Watch Company Marking, depending on your Watch Company.'
-const helm = (a, b, t = 'Liberator Gold') => ['Helm', [['Primary', a], ['Secondary', b], ['Tertiary', t], ['Lenses', 'Mephiston Red']], ['Pattern: Mask Pattern.'], [0], [50, 7]]
+const helm = (a, b, t = 'Liberator Gold', lens = 'Mephiston Red') => ['Helm', [['Primary', a], ['Secondary', b], ['Tertiary', t], ['Lenses', lens]], ['Pattern: Mask Pattern.'], [0], [50, 7]]
 const chest = (bp, t = 'Liberator Gold') => ['Breastplate', [['Chest primary', 'Abaddon Black'], ['Chest tertiary', t], ['Backpack primary', bp]], [], [5, 6], [47, 20]]
 const hand = (c) => ['Gauntlets', [['Right primary', c], ['Right secondary', c]], ['Left: the Deathwatch Gauntlet.'], [7, 8], [7, 50]]
 const greave = (rows, left) => ['Greaves', rows, [left, RG], [9, 10], [74, 69]]
 
-// A specialist's armour: the helm and gauntlet in its own colour (wear), the backpack in its role colour (pack).
-const specialist = ({ name, who, img, spr, ico, t, wear, pack, greaves, left }) => ({
+// A specialist's armour: the helm and gauntlet in its own colour (wear), the backpack in its role colour (pack), the
+// helm's tertiary Silver and its lenses Mephiston Red unless it says otherwise (tert, lens).
+const specialist = ({ name, who, img, spr, ico, t, wear, pack, greaves, left, tert = 'Silver', lens }) => ({
   name,
   who,
   img,
@@ -54,22 +65,23 @@ const specialist = ({ name, who, img, spr, ico, t, wear, pack, greaves, left }) 
   ico,
   t,
   hm: HM,
-  L: [helm(wear, 'Abaddon Black', 'Silver'), PAUL, WAR],
+  L: [helm(wear, 'Abaddon Black', tert, lens), PAUL, WAR],
   R: [chest(pack, 'Silver'), hand(wear), greave(greaves, left)],
 })
 
 export const SPECIALIST = [
   specialist({
-    name: 'Apothecarion',
-    who: 'Apothecaries and higher-ranking members of the Apothecarion',
-    img: apothecarion,
-    spr: apothecarionParts,
-    ico: icoApothecarion,
-    t: ['#ffffff', '#ecebe6', '#a9aca6'],
-    wear: 'White Scar',
-    pack: 'White Scar',
-    greaves: [['Fire Support Marking primary', 'White Scar'], ['Fire Support Marking secondary', 'Red']],
-    left: 'Left: the Fire Support Marking (plain pattern), a red chevron on White Scar.',
+    name: 'Reclusiarc',
+    who: 'Chaplains and higher-ranking members of the Reclusiarc',
+    img: reclusiarc,
+    spr: reclusiarcParts,
+    ico: icoReclusiarc,
+    t: ['#ffe9a8', '#d6b05c', '#7a5317'],
+    wear: 'Wraithbone',
+    tert: 'Liberator Gold',
+    pack: 'Abaddon Black',
+    greaves: [['Veteran Icon primary', 'Abaddon Black'], ['Veteran Icon secondary', 'Wraithbone'], ['Veteran Icon tertiary', 'Wraithbone']],
+    left: 'Left: the Veteran Icon (plain pattern), skull and laurel in Wraithbone on Abaddon Black.',
   }),
   specialist({
     name: 'Librarium',
@@ -79,9 +91,23 @@ export const SPECIALIST = [
     ico: icoLibrarium,
     t: ['#a9c4ff', '#4f78d6', '#1c3477'],
     wear: 'Alaitoc Blue',
+    tert: 'Liberator Gold',
     pack: 'Alaitoc Blue',
     greaves: [['Veteran Icon primary', 'Alaitoc Blue'], ['Veteran Icon secondary', 'Averland Sunset'], ['Veteran Icon tertiary', 'Averland Sunset']],
     left: 'Left: the Veteran Icon (plain pattern), skull and laurel in Averland Sunset on Alaitoc Blue.',
+  }),
+  specialist({
+    name: 'Apothecarion',
+    who: 'Apothecaries and higher-ranking members of the Apothecarion',
+    img: apothecarion,
+    spr: apothecarionParts,
+    ico: icoApothecarion,
+    t: ['#ffffff', '#ecebe6', '#a9aca6'],
+    wear: 'White Scar',
+    tert: 'Liberator Gold',
+    pack: 'White Scar',
+    greaves: [['Fire Support Marking primary', 'White Scar'], ['Fire Support Marking secondary', 'Red']],
+    left: 'Left: the Fire Support Marking (plain pattern), a red chevron on White Scar.',
   }),
   specialist({
     name: 'Mechanicus',
@@ -90,22 +116,12 @@ export const SPECIALIST = [
     spr: mechanicusParts,
     ico: icoMechanicus,
     t: ['#ff6a4f', '#d4342c', '#7d0f0c'],
-    wear: 'Mephiston Red',
-    pack: 'Mephiston Red',
-    greaves: [['Blank Knee Decal', 'Mephiston Red']],
-    left: 'Left: the Blank Knee Decal (plain pattern) in Mephiston Red.',
-  }),
-  specialist({
-    name: 'Reclusiarc',
-    who: 'Chaplains and higher-ranking members of the Reclusiarc',
-    img: reclusiarc,
-    spr: reclusiarcParts,
-    ico: icoReclusiarc,
-    t: ['#ffe9a8', '#d6b05c', '#7a5317'],
-    wear: 'Wraithbone',
-    pack: 'Abaddon Black',
-    greaves: [['Veteran Icon primary', 'Abaddon Black'], ['Veteran Icon secondary', 'Wraithbone'], ['Veteran Icon tertiary', 'Wraithbone']],
-    left: 'Left: the Veteran Icon (plain pattern), skull and laurel in Wraithbone on Abaddon Black.',
+    wear: 'Red',
+    tert: 'Liberator Gold',
+    pack: 'Red',
+    lens: 'Liberator Gold',
+    greaves: [['Blank Knee Decal', 'Red']],
+    left: 'Left: the Blank Knee Decal (plain pattern) in Red.',
   }),
 ]
 
@@ -125,7 +141,16 @@ export const STANDARD = [
     R: [
       ['Breastplate', [['Chest primary', 'Abaddon Black'], ['Chest tertiary', 'Silver'], ['Backpack primary', 'Abaddon Black']], [], [5, 6], [47, 20]],
       ['Gauntlets', [['Right primary', 'Abaddon Black']], ['Left: the Deathwatch Gauntlet.'], [7, 8], [7, 50]],
-      ['Greaves', [['Primary', 'Abaddon Black']], ['Both greave icon slots follow your company scheme or your specialist role (see Company Heraldry).'], [9, 10], [74, 69]],
+      [
+        'Greaves',
+        [['Primary', 'Abaddon Black'], ['Right secondary', 'Warpstone Glow']],
+        [
+          'Right: Greaves Pattern, Warpstone Glow flames on Abaddon Black.',
+          'Both greave icon slots follow your company scheme or your specialist role (see Company Heraldry).',
+        ],
+        [9, 10],
+        [74, 69],
+      ],
     ],
   },
   { name: 'Company Heraldry', heraldry: true, img: brother, spr: heraldryParts, ico: icoHeraldry, t: ['#e2ffd2', '#8fe068', '#2e6b1d'] },
@@ -135,15 +160,21 @@ const SERGEANT = {
   name: 'Watch Sergeant',
   command: true,
   who: 'Watch Sergeants',
-  wip: true,
   img: sergeant,
   spr: sergeantParts,
   ico: icoCommand,
   t: ['#fff1c4', '#d8b25a', '#7a5317'],
   hm: HM,
-  // From the in-game Heraldry Editor (screenshots of 19 Oct 2026).
+  // From the in-game Heraldry Editor (screenshots of 19 Oct 2026; the helm and the greaves of 30 Oct 2026).
+  // shortcut: the helm's lenses keep the 19 Oct name; the 30 Oct screenshots do not name them.
   L: [
-    ['Helm', [['Primary', 'Abaddon Black'], ['Tertiary', 'Liberator Gold'], ['Lenses', 'Liberator Gold']], ['Pattern: Plain, no secondary color.'], [0], [50, 7]],
+    [
+      'Helm',
+      [['Primary', 'Khorne Red'], ['Secondary', 'White Scar'], ['Tertiary', 'Liberator Gold'], ['Lenses', 'Liberator Gold']],
+      ['Pattern: Mask Pattern.'],
+      [0],
+      [50, 7],
+    ],
     PAUL,
     WAR,
   ],
@@ -152,18 +183,88 @@ const SERGEANT = {
     hand('Abaddon Black'),
     [
       'Greaves',
-      [['Right primary', 'Abaddon Black'], ['Right secondary', 'Averland Sunset']],
+      [
+        ['Right primary', 'Abaddon Black'],
+        ['Right secondary', 'Averland Sunset'],
+        ['Veteran Icon primary', 'Khorne Red'],
+        ['Veteran Icon secondary', 'White Scar'],
+        ['Veteran Icon tertiary', 'Warpstone Glow'],
+      ],
       [
         'Right: Greaves Pattern, Averland Sunset flames on Abaddon Black; the knee carries your Watch Company Marking (see Company Heraldry).',
-        'Left: the knee carries the marking of your Company of origin (see Company Heraldry).',
+        'Left: the Veteran Icon on the knee (plain pattern), a White Scar skull on Khorne Red, ringed in Warpstone Glow.',
       ],
       [9, 10],
       [27, 69],
     ],
   ],
 }
-// shortcut: the Watch Specialist wears the Sergeant's armour until its own screenshots exist; give it its own data then.
-export const WATCH_COMMAND = [SERGEANT, { ...SERGEANT, name: 'Watch Specialist', who: 'Watch Specialists', specialistOnly: true }]
+// The Watch Command specialists wear the Sergeant's armour with their role's helm (screenshots of 31 Oct 2026), over
+// their Specialist uniform (`onSpecialist`, the slug of the Specialist page the introduction links). The screenshots
+// have one Wargear tile; the sprite's tile 4 is the Sergeant's and unused.
+// shortcut: the paint names are read off the swatches (the screenshots do not name them), matched to the Sergeant's.
+// The backpack and the right gauntlet wear the colours of the specialist's own Specialist uniform.
+const watchSpecialist = ({ name, who, onSpecialist, img, spr, ico, t, primary, secondary = 'Khorne Red' }) => {
+  const own = `in the colours of your [Specialist Uniform](/deathwatch/armouringhall/specialist/${onSpecialist}).`
+  return {
+    ...SERGEANT,
+    name,
+    who,
+    onSpecialist,
+    img,
+    spr,
+    ico,
+    t,
+    L: [helm(primary, secondary, 'Liberator Gold', 'Liberator Gold'), PAUL, ['Wargear', [], ['///CLASSIFIED///'], [3], [47, 43]]],
+    R: [
+      ['Breastplate', [['Chest primary', 'Abaddon Black'], ['Chest tertiary', 'Liberator Gold']], [`Backpack: ${own}`], [5, 6], [47, 20]],
+      ['Gauntlets', [], [`Right: ${own}`, 'Left: the Deathwatch Gauntlet.'], [7, 8], [7, 50]],
+      SERGEANT.R[2],
+    ],
+  }
+}
+const APOTHECARY = watchSpecialist({
+  name: 'Watch Apothecary',
+  who: 'Watch Apothecaries',
+  onSpecialist: 'apothecarion',
+  img: apothecary,
+  spr: apothecaryParts,
+  ico: icoApothecarion,
+  t: ['#ffffff', '#ecebe6', '#a9aca6'],
+  primary: 'White Scar',
+})
+const LIBRARIAN = watchSpecialist({
+  name: 'Watch Librarian',
+  who: 'Watch Librarians',
+  onSpecialist: 'librarium',
+  img: librarian,
+  spr: librarianParts,
+  ico: icoLibrarium,
+  t: ['#a9c4ff', '#4f78d6', '#1c3477'],
+  primary: 'Alaitoc Blue',
+})
+const CHAPLAIN = watchSpecialist({
+  name: 'Watch Chaplain',
+  who: 'Watch Chaplains',
+  onSpecialist: 'reclusiarc',
+  img: chaplain,
+  spr: chaplainParts,
+  ico: icoReclusiarc,
+  t: ['#ffe9a8', '#d6b05c', '#7a5317'],
+  primary: 'Wraithbone',
+})
+const TECHMARINE = watchSpecialist({
+  name: 'Watch Techmarine',
+  who: 'Watch Techmarines',
+  onSpecialist: 'mechanicus',
+  img: techmarine,
+  spr: techmarineParts,
+  ico: icoMechanicus,
+  t: ['#ff6a4f', '#d4342c', '#7d0f0c'],
+  primary: 'Red',
+  secondary: 'White Scar',
+})
+export const WATCH_COMMAND = [SERGEANT, CHAPLAIN, LIBRARIAN, APOTHECARY, TECHMARINE]
 
 /** The uniforms of each Armouring Hall tab. */
 export const UNIFORMS = { standard: STANDARD, specialist: SPECIALIST, 'watch-command': WATCH_COMMAND }
@@ -182,6 +283,6 @@ export const hotspot = (u, [x, y]) => (u.hm ? [u.hm[0] * x + u.hm[1], u.hm[2] * 
 
 /** A note split into its lead word and text ("Left: …" → ['Left', '…']), or null for a plain note. */
 export function noteParts(n) {
-  const m = n.match(/^(Left|Right|Pattern|Both[^:]*):\s*(.*)$/)
+  const m = n.match(/^(Left|Right|Pattern|Backpack|Both[^:]*):\s*(.*)$/)
   return m ? [m[1], m[2]] : null
 }

@@ -1,5 +1,5 @@
 <script setup>
-// Armouring Hall → Watch Command: the Watch Sergeant and Watch Specialist.
+// Armouring Hall → Watch Command: the Watch Sergeant and the Watch Command specialists.
 import ArmourPage from '../../../../components/deathwatch/armour/ArmourPage.vue'
 </script>
 

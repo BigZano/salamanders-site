@@ -133,6 +133,50 @@ describe('DeathwatchArea', () => {
     expect(w.find('aside nav [aria-current="page"]').text()).toBe('Players')
   })
 
+  // From 900px the hall has no rail, so where no view heads it the area does (review of #53: no dead end).
+  describe('the Armouring Hall heads itself where no view does', () => {
+    const head = (w) => w.find('.dw-area-sheet .hh')
+
+    it('over the lock on Watch Command, with the way back and the open tabs', async () => {
+      const { w } = await mountAt('/deathwatch/armouringhall/watch-command', { commander: false })
+      expect(head(w).find('a.hh-back').attributes('href')).toBe('/deathwatch')
+      expect(head(w).findAll('a.hh-tab').map((a) => a.text())).toEqual(['Standard', 'Specialist', 'Restricted Wargear'])
+      expect(w.find('.dw-area-sheet .dw-area-restricted').text()).toBe('Reserved for the Deathwatch Command.')
+    })
+
+    it('over the error when its view cannot be loaded, and nowhere else', async () => {
+      override.loader = () => Promise.reject(new Error('chunk failed'))
+      vi.spyOn(console, 'error').mockImplementation(() => {})
+      const hall = (await mountAt('/deathwatch/armouringhall/specialist')).w
+      expect(head(hall).find('[aria-current="page"]').text()).toBe('Specialist')
+      expect(hall.find('.dw-area-sheet [role="alert"]').exists()).toBe(true)
+      const tracker = (await mountAt('/deathwatch/eventtracker/players')).w
+      expect(tracker.find('.dw-area-sheet [role="alert"]').exists()).toBe(true)
+      expect(head(tracker).exists()).toBe(false)
+    })
+
+    it('over "Loading…" while its view is on its way, and nowhere else', async () => {
+      override.loader = () => new Promise(() => {})
+      vi.useFakeTimers()
+      try {
+        const hall = (await mountAt('/deathwatch/armouringhall/standard')).w
+        const tracker = (await mountAt('/deathwatch/eventtracker/players')).w
+        await vi.advanceTimersByTimeAsync(250) // past the loading view's delay
+        expect(hall.find('.dw-area-sheet [role="status"]').text()).toBe('Loading…')
+        expect(head(hall).exists()).toBe(true)
+        expect(tracker.find('.dw-area-sheet [role="status"]').text()).toBe('Loading…')
+        expect(head(tracker).exists()).toBe(false)
+      } finally {
+        vi.useRealTimers()
+      }
+    })
+
+    it('leaves it to the view when the view is there', async () => {
+      const { w } = await mountAt('/deathwatch/armouringhall/standard')
+      expect(w.findAll('.dw-area-sheet .hh')).toHaveLength(1)
+    })
+  })
+
   it('says the view is being rebuilt when the registry has none for the address', async () => {
     override.loader = null
     const { w } = await mountAt('/deathwatch/eventtracker/players')
@@ -192,7 +236,7 @@ describe('DeathwatchArea', () => {
     expect(w.get('.pe textarea').attributes('name')).toBe('ah_mechanicus_lead')
     await router.push('/deathwatch/armouringhall/standard/companyheraldry')
     await settle()
-    expect(w.get('.pe textarea').attributes('name')).toBe('ah_companyheraldry_companies1')
+    expect(w.get('.pe textarea').attributes('name')).toBe('ah_companyheraldry_companies')
   })
 
   it('offers "Edit page" to nobody but the Watch Commander', async () => {
@@ -228,7 +272,7 @@ describe('DeathwatchArea', () => {
 
   it('shows the Watch Command tab to Deathwatch Command only, and anyone else a notice in its place', async () => {
     const other = (await mountAt('/deathwatch/armouringhall/watch-command', { commander: false })).w
-    expect(other.find('.dw-area-sheet').text()).toBe('Reserved for the Deathwatch Command.')
+    expect(other.find('.dw-area-sheet .dw-area-restricted').text()).toBe('Reserved for the Deathwatch Command.')
     expect(other.find('nav').text()).not.toContain('Watch Command')
     expect(other.find('nav').text()).toContain('Specialist')
     const command = (await mountAt('/deathwatch/armouringhall/watch-command', { command: true })).w
@@ -252,9 +296,10 @@ describe('DeathwatchArea', () => {
     expect(w.find('dialog').exists()).toBe(false)
   })
 
-  it('shows the gold crest in the Hall of Relics, as the old site did, and the plain one elsewhere', async () => {
+  it('shows the gold crest in the Hall of Relics, as the old site did, the Armouring Hall its own emblem, and the plain one elsewhere', async () => {
     expect((await mountAt('/deathwatch/hallofrelics/notable-members')).w.get('img.dw-area-crest').attributes('src')).toContain('crest-gold')
     expect((await mountAt('/deathwatch/eventtracker/players')).w.get('img.dw-area-crest').attributes('src')).not.toContain('crest-gold')
+    expect((await mountAt('/deathwatch/armouringhall/standard')).w.get('img.dw-area-crest').attributes('src')).toContain('crest-armouringhall')
   })
 
   // Following a link inside a view rebuilds the sheet; the keyboard's focus must not fall back to the top.
