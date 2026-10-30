@@ -9,6 +9,11 @@
  * directory yet) is "Community Member". The public builds API sends these
  * names, never the username stored with a build.
  *
+ * The same directory also records which members hold the one configured role
+ * (memberRoleId), swapped in together with the names, and answers "is this
+ * person a guild member?" through memberResolver(). With no memberRoleId, or
+ * no directory yet, nobody is.
+ *
  * Listing members needs the bot's GUILD_MEMBERS privileged intent, same as
  * scripts/fetch-discord-members.mjs.
  */
@@ -40,20 +45,22 @@ export function createDisplayNames({
   retryMs = 60_000,
   timeoutMs = 10_000,
   maxPages = 20,
+  memberRoleId,
 }) {
   for (const [key, v] of Object.entries({ ttlMs, retryMs, timeoutMs, maxPages })) {
     if (!Number.isFinite(v) || v <= 0) throw new RangeError(`${key} must be a positive number`)
   }
   const configured = [apiBase, guildId, botToken].every((v) => typeof v === 'string' && v !== '')
+  const roleConfigured = typeof memberRoleId === 'string' && memberRoleId !== ''
 
-  let names = new Map()
+  let directory = { names: new Map(), holders: new Set() }
   let loaded = false
   let nextRefreshAt = -Infinity
   let inflight = null
 
-  /** → the full directory, or null if any page fails (the caller keeps the old one). */
+  /** → the full directory { names, holders }, or null if any page fails (the caller keeps the old one). */
   async function load() {
-    const next = new Map()
+    const next = { names: new Map(), holders: new Set() }
     let after = '0'
     for (let i = 0; i < maxPages; i++) {
       const res = await fetchImpl(`${apiBase}/v10/guilds/${guildId}/members?limit=${PAGE}&after=${after}`, {
@@ -65,7 +72,9 @@ export function createDisplayNames({
       if (!Array.isArray(members)) return null
       for (const m of members) {
         const id = idOf(m)
-        if (id) next.set(id, nameOf(m)) // a null name reads as Community Member
+        if (!id) continue
+        next.names.set(id, nameOf(m)) // a null name reads as Community Member
+        if (roleConfigured && Array.isArray(m.roles) && m.roles.includes(memberRoleId)) next.holders.add(id)
       }
       if (members.length < PAGE) return next
       after = idOf(members[PAGE - 1])
@@ -76,7 +85,7 @@ export function createDisplayNames({
 
   function settle(next) {
     if (next) {
-      names = next
+      directory = next
       loaded = true
     }
     nextRefreshAt = now() + (next ? ttlMs : retryMs)
@@ -90,15 +99,26 @@ export function createDisplayNames({
     return inflight
   }
 
-  /** → (discordId) => display name. Waits only for the very first directory. */
-  async function resolver() {
+  /** → the directory to answer from, refreshed if due. Waits only for the very first one. */
+  async function current() {
     if (configured && now() >= nextRefreshAt) {
       const pending = refresh()
       if (!loaded) await pending
     }
-    const current = names
-    return (id) => current.get(id) ?? COMMUNITY_MEMBER
+    return directory
   }
 
-  return { resolver }
+  /** → (discordId) => display name. */
+  async function resolver() {
+    const { names } = await current()
+    return (id) => names.get(id) ?? COMMUNITY_MEMBER
+  }
+
+  /** → (discordId) => holds the member role. False for everyone until a directory has loaded. */
+  async function memberResolver() {
+    const { holders } = await current()
+    return (id) => holders.has(id)
+  }
+
+  return { resolver, memberResolver }
 }
