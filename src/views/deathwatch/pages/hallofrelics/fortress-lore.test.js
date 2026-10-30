@@ -1,7 +1,8 @@
 // @vitest-environment jsdom
 import { describe, it, expect, afterEach, vi } from 'vitest'
-import { mount } from '@vue/test-utils'
+import { flushPromises, mount } from '@vue/test-utils'
 import { createPinia, setActivePinia } from 'pinia'
+import { getData } from '../../../../lib/deathwatch/api'
 import { useDeathwatchData } from '../../../../stores/deathwatchData'
 import FortressLore from './fortress-lore.vue'
 
@@ -12,10 +13,10 @@ afterEach(() => {
   Element.prototype.scrollIntoView = scrollIntoView
 })
 
-function mountLore(tx) {
+function mountLore(tx, status = 'ready') {
   const pinia = createPinia()
   setActivePinia(pinia)
-  useDeathwatchData().$patch({ status: 'ready', cfg: { tx } })
+  useDeathwatchData().$patch({ status, cfg: { tx } })
   return mount(FortressLore, { global: { plugins: [pinia] }, attachTo: document.body })
 }
 
@@ -46,5 +47,22 @@ describe('Fortress Lore', () => {
   it('shows what the data holds in place of the default', () => {
     const w = mountLore({ lo1: 'Our Own Title\nA line.' })
     expect(w.get('.lo-c .lo-h').text()).toBe('Our Own Title')
+  })
+
+  it('keeps the default chapters after a failed load, and offers to load the texts again', async () => {
+    getData.mockRejectedValueOnce(new Error('down'))
+    const w = mountLore(undefined, 'error')
+    await flushPromises()
+    expect(w.get('[role="alert"]').text()).toMatch(/^The latest texts could not be loaded\.\s*Try again$/)
+    expect(w.findAll('.lo-c')).toHaveLength(6)
+    vi.clearAllMocks()
+    await w.get('[role="alert"] button').trigger('click')
+    await flushPromises()
+    expect(getData).toHaveBeenCalledTimes(1)
+    expect(w.find('[role="alert"]').exists()).toBe(false)
+  })
+
+  it('shows no note once the texts are in', () => {
+    expect(mountLore().find('[role="alert"]').exists()).toBe(false)
   })
 })

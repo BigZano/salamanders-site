@@ -22,12 +22,12 @@ const profile = computed(() => {
   const n = props.player
   if (!n) return null
   const A = { o: 0, k: 0, s: 0, me: 0, ra: 0, it: 0, i: 0, v: 0, g: 0 }
-  const cl = {}
+  const cl = Object.create(null) // keyed by class names from the data
   const L = []
   for (const t of props.R.ts) {
     for (const m of t.m) {
       if (!m[2] || m[0] < 1 || m[0] > 4) continue
-      for (const r of m[8]) {
+      for (const r of m[8] ?? []) {
         if (r[0] !== n) continue
         L.push({ t, m, r, guest: !t.ro.includes(n) })
         A.o++

@@ -4,6 +4,7 @@
 // each replaced by what the area's data holds for it.
 import { computed, onMounted } from 'vue'
 import Inline from '../../../../components/deathwatch/Inline'
+import LoadRetry from '../../../../components/deathwatch/LoadRetry.vue'
 import { requirements } from '../../../../lib/deathwatch/recruitment'
 import { useAuth } from '../../../../stores/auth'
 import { useDeathwatchData } from '../../../../stores/deathwatchData'
@@ -20,6 +21,7 @@ const rq = computed(() => requirements(data.cfg.tx))
 
 <template>
   <div class="dw-page rc">
+    <LoadRetry v-if="data.status === 'error'">The latest texts could not be loaded.</LoadRetry>
     <header class="rc-head">
       <p class="rc-cls">XVIIIth Legion · The Salamanders</p>
       <h2 class="rc-title">Deathwatch Requirements</h2>

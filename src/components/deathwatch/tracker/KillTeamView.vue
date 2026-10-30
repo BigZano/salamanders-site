@@ -20,9 +20,9 @@ const played = computed(() => t.value.m.filter((m) => m[2] && m[0] >= 1 && m[0] 
 
 // Home roster first, then the guests who played for this team.
 const players = computed(() => {
-  const A = {}
+  const A = Object.create(null) // keyed by player names: "constructor" must not find a built-in
   for (const m of played.value) {
-    for (const r of m[8]) {
+    for (const r of m[8] ?? []) {
       if (!r[0]) continue
       const a = (A[r[0]] ??= { o: 0, k: 0, s: 0, me: 0, ra: 0, it: 0, dt: 0, i: 0, v: 0 })
       a.o++
