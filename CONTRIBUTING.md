@@ -1,8 +1,9 @@
 # Contributing to the Salamanders site
 
-This page is for the invited group of contributors. The repo is public so the work is visible, but it is not an open
-call for pull requests: reach out by email to a maintainer or the owner before you start anything big, so nobody
-builds the same thing twice. It assumes you are new to GitHub.
+This page is for the invited group of contributors. The repo is public so the work is visible, but only invited people
+send pull requests. For anything big, reach out by email to a maintainer or the owner first (use the address you were
+invited from), so nobody builds the same thing twice. Below, "the maintainers" means the owner together with any other
+maintainers. This page assumes you are new to GitHub.
 
 ## The one rule
 
@@ -18,8 +19,8 @@ Two files already hold real member data: `src/data/discord-members.json` (kept i
 of them. Moving that data out of the repo is tracked in
 [#42](https://github.com/BigZano/salamanders-site/issues/42), and this paragraph goes when that is done.
 
-If you find a real value somewhere else in the repo, email a maintainer or the owner directly. Do not open a public
-issue or pull request about it, because that would publish it again.
+If you find a real value somewhere else in the repo, email a maintainer or the owner directly, as above. Do not open a
+public issue or pull request about it, because that would publish it again.
 
 ## One-time setup
 
@@ -42,8 +43,8 @@ issue or pull request about it, because that would publish it again.
 
 ## Starting a piece of work
 
-Branch from `main`, unless your work belongs to an area branch (see below). Give your branch a prefix that says what
-it is:
+Branch from `main`, unless your work belongs to an area branch (see below). Give your branch a prefix from this table,
+unless the area branch names its own:
 
 ```
 git fetch upstream
@@ -54,18 +55,20 @@ git switch -c fix/nav-overflow upstream/main
 |---|---|
 | `feat/` | a new feature |
 | `fix/` | a bug fix |
-| `chore/` | upkeep and things that need fixing: dependencies, tooling, clean-up |
+| `chore/` | upkeep: dependencies, tooling, clean-up |
 | `docs/` | documentation |
 | `data/` | game data or content |
 | `design/` | visual design work |
 
 ### Area branches
 
-Big pieces of work get their own long-lived branch, named `feat/<area>` (or `chore/<area>` for a large clean-up). If
-your work belongs to one, branch from it and open your pull request into it instead of `main`. The maintainers bring
-an area branch into `main` at milestones. The current ones are listed here:
+Big pieces of work get their own long-lived branch, named `feat/<area>`. Only the branches listed here are area
+branches: never open a pull request into any other `feat/` branch. If your work belongs to an area, branch from its
+branch and open your pull request into it instead of `main`. The maintainers bring an area branch into `main` at
+milestones.
 
-- **`feat/deathwatch`**: the Deathwatch pages (`/deathwatch`). Name your branch `dw/<topic>`:
+- **`feat/deathwatch`**: the Deathwatch pages (`/deathwatch`). Name your branches `dw/<topic>` instead of using the
+  table above:
 
   ```
   git switch -c dw/standings upstream/feat/deathwatch
@@ -103,21 +106,23 @@ Follow what the code already does. It is not enforced by a tool yet, so a review
 
 ## Commits and pull request titles
 
-Write commit messages and pull request titles as `type(scope): subject`, for example `fix(roster): keep the filter
-on reload`. The types in use are `feat`, `fix`, `docs`, `test`, `data`, `chore`, `refactor`, `ci`, `perf` and
-`build`, plus `archive` for Legion Archive work. The pull request title becomes the commit subject when a pull request
-is squashed (see Review and merge), so get it right. Small branches are easier to review.
+Write commit messages and pull request titles as `type(scope): subject`, using the page or area as the scope, for
+example `fix(roster): keep the filter on reload` or `feat(deathwatch): standings table`. The types in use are `feat`,
+`fix`, `docs`, `test`, `data`, `chore`, `refactor`, `ci`, `perf` and `build`, plus `archive` for Legion Archive work.
+A branch prefix and a commit type do not have to match. The pull request title becomes the commit subject when a pull
+request is squashed (see Review and merge), so get it right. Small branches are easier to review.
 
 ## What happens when you commit and push
 
 `bun install` sets up Git hooks on your machine:
 
-- **On `git commit`** the hook checks that no archive files or raw Discord exports are staged, and runs the tests.
-- **On `git push`** the hook runs the maintainers' full gate: the tests, then 100% test coverage on the gated units,
-  then mutation testing. Mutation testing can take several minutes. CI does not run this gate.
-
-If the push hook is too slow, fails on code you did not touch, or you are pushing work in progress, push with
-`git push --no-verify` and say so in the pull request.
+- **On `git commit`** the hook checks that no archive files or raw Discord exports are staged, and runs the tests. It
+  is quick. Do not skip it: it is the only local check that stops archive files and raw Discord exports being
+  committed.
+- **On `git push`** the hook also runs coverage and mutation testing, which the maintainers call the full gate. That
+  can take several minutes. Passing it is **not** required to merge, and CI does not run it. If it is too slow, fails
+  on code you did not touch, or you are pushing work in progress, push with `git push --no-verify` and say so in the
+  pull request.
 
 ## Opening a pull request
 
@@ -135,16 +140,15 @@ values.
 
 ## What a machine checks, and what it does not
 
-A check called **PR check** runs on every pull request into `main` and into `feat/` branches. A pull request into any
-other branch gets no automatic check. The first time you contribute, GitHub waits for a maintainer to approve that
-run, which is expected.
+A check called **PR check** runs on every pull request into `main` and into the area branches. The first time you
+contribute, GitHub holds your first check until a maintainer lets it run, which is expected.
 
 | Rule | Checked by |
 |---|---|
 | No archive files or raw Discord exports committed | The commit hook and **PR check** |
 | The tests pass | The commit hook and **PR check** |
 | The production build works | **PR check** |
-| 100% coverage and mutation testing on the gated units | The push hook on your machine, and nowhere else. It is not part of CI and you can skip it with `--no-verify` |
+| 100% coverage and mutation testing on the gated units | The push hook on your machine, and nowhere else. Optional: not part of CI, not required to merge, skippable with `--no-verify` |
 | `main` cannot be deleted or force-pushed, except by an admin | A repository rule |
 | Only the maintainers merge | You have no write access to the original repo |
 | No real names, handles or ids | **Review only**: a maintainer reads the diff |
@@ -152,15 +156,16 @@ run, which is expected.
 | Branch prefix, `type(scope): subject` titles, code style | **Review only** |
 | Phone check, `DESIGN.md` rules | **Review only** |
 
-A green check does not mean your pull request is free of real values. Nothing automatic looks for them, so that part
-is on you.
+A green check does not mean your pull request is free of real values. Nothing automatic looks for real names, handles
+or ids in your code or text, so that part is on you.
 
 ## Review and merge
 
-The maintainers review and merge every pull request. Merging into `main` publishes the live site within minutes, so
-expect questions and small changes. The default is a squash merge; a branch that carries a stack of commits worth
-keeping may be merged as it is. A failing check is yours to fix on your own branch, and the maintainers do not merge a
-pull request with a red check.
+A maintainer or the owner reviews every pull request before it is approved and merged; nothing is merged unreviewed.
+That is the maintainers' practice, not a repository rule. A failing check is yours to fix on your own branch, and the
+maintainers do not merge a pull request with a red check. Merging into `main` publishes the live site within minutes,
+so expect questions and small changes. The default is a squash merge; a branch that carries a stack of commits worth
+keeping may be merged as it is.
 
 ## Keeping your fork current
 
@@ -175,6 +180,7 @@ If you branched from an area branch, merge that one instead (for example `upstre
 ## Other rules
 
 - Do not edit `.github/` or `server/` without asking first.
+- Do not add development notes (specs, plans, handoffs) to the repo. The ones already in `docs/` are there to read.
 - Your fork never holds secrets and you should never add one. Nothing here needs one.
 - If you use an AI coding assistant, it follows the same rules. Give it the box at the top of this page, and check the
   base branch of the pull request yourself before you create it.

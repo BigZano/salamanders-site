@@ -19,8 +19,8 @@ The site is then at http://localhost:5173. `bun run test` runs the tests and `bu
 
 ## Contributing
 
-Contributions are by invitation, from a fork. Read [CONTRIBUTING.md](CONTRIBUTING.md) first. The rule that matters
-most: a pull request never adds real names, handles, Discord ids, role ids, secrets or Legion Archive content.
+Contributions come from invited people, working from a fork. Read [CONTRIBUTING.md](CONTRIBUTING.md) before you
+start; the rule that matters most is in the box at the top.
 
 ## Fan site
 
