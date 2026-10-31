@@ -44,6 +44,7 @@ const emit = defineEmits(['update:page'])
   transition:
     color var(--dur-state) var(--ease-forge),
     border-color var(--dur-state) var(--ease-forge),
+    opacity var(--dur-state) var(--ease-forge),
     transform var(--dur-press) var(--ease-forge);
 }
 @media (hover: hover) and (pointer: fine) {
