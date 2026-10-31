@@ -26,7 +26,7 @@
 
 ## Direction and memorable moment
 - Memorable moment: the forge itself, the volcano and the FireText title (the authored list in DESIGN.md, Motion). Warm light stays on that fire and the primary action (the Molten Core Rule).
-- Refuses: a generic three-column feature grid of icon, heading and blurb as the argument for the clan. The proof is the tools; the cards are doors into them.
+- Refuses: a generic three-column feature grid of icon, heading and blurb as the argument for the clan. The proof is the tools; the cards are doors into them. Today's page still has a grid of four equal cards (kicker, title, blurb, "Enter →") under the hero; that is the arrangement this direction moves away from.
 
 ## Unresolved
 - divider marks (flame, anvil, hammer) and the cold-armour material
