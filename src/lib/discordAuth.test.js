@@ -418,9 +418,10 @@ describe('finishSignIn: a slow membership answer', () => {
   const failsAfter = (ms, error) => () => new Promise((_, reject) => setTimeout(() => reject(error), ms))
   const neverAnswers = () => new Promise(() => {})
   // jsdom queues zero-delay timers of its own (a hashchange event for the callback hash, a storage event for
-  // each write). Let those run, then count what is left: anything still pending is a timer sign-in forgot.
+  // each write); the fake clock puts one queued mid-advance 1 ms out. Let those run, then count what is left:
+  // anything still pending is a timer sign-in forgot.
   const timersLeft = () => {
-    vi.advanceTimersByTime(0)
+    vi.advanceTimersByTime(1)
     return vi.getTimerCount()
   }
   const watch = (promise) => {
@@ -454,7 +455,8 @@ describe('finishSignIn: a slow membership answer', () => {
 
     await vi.advanceTimersByTimeAsync(MEMBERSHIP_WAIT_MS - 101)
     expect(seen.settled).toBe(false)
-    await vi.advanceTimersByTimeAsync(101)
+    // The answer lands at 100 ms short of the limit; a timer sign-in forgot to clear would still be pending here.
+    await vi.advanceTimersByTimeAsync(1)
     expect(seen.settled).toBe(true)
     expect(stored().isMember).toBe(true)
     expect(timersLeft()).toBe(0)

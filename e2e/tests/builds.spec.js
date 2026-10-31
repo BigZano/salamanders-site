@@ -75,6 +75,13 @@ test.describe('create + save a build', () => {
     const title = `E2E Signed-out View ${Date.now()}`
     await createAndSaveBuild(page, title)
 
+    // Precondition: signed in, the same build is badged under Verified Members. Without it the
+    // signed-out half below would also pass if member flags never worked at all.
+    await goToBuilds(page)
+    const flagged = page.locator('.b-section', { hasText: 'Verified Members' }).locator('.b-card', { hasText: title })
+    await expect(flagged).toBeVisible()
+    await expect(flagged.locator('.b-member-badge')).toBeVisible()
+
     // A fresh context carries no sign-in, so the server has no caller to flag members for.
     const visitor = await (await browser.newContext()).newPage()
     await visitor.goto('/builds')

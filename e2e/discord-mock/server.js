@@ -5,9 +5,10 @@
  * canned identities for a fixed set of test tokens so the whole sign-in →
  * save → see-it-listed flow can be driven without a real Discord account.
  * Membership (member vs. non-member) is decided by the role table below
- * (MEMBERS): the API asks this mock for a caller's roles and checks them
- * against its configured member role (ARCHIVE_ROLE_ID), same as prod, which
- * asks Discord.
+ * (MEMBERS), checked against the API's configured member role
+ * (ARCHIVE_ROLE_ID), same as prod, which asks Discord. The API reads it two
+ * ways: a caller's own roles (/membership) and the guild member directory
+ * (/v10/guilds/:id/members), which flags each author on the builds list.
  */
 const PORT = Number(process.env.PORT || 4400)
 

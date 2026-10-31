@@ -1,7 +1,9 @@
 /**
- * Client for the shared builds API (see server/). GET is public; POST/DELETE
- * need a live Discord access token (src/lib/discordAuth.js), which the server
- * verifies itself against Discord rather than trusting anything sent here.
+ * Client for the shared builds API (see server/). GET /builds is public and
+ * takes an optional Discord access token, which adds the member flag for a
+ * signed-in viewer; GET /membership and POST/DELETE need a live token
+ * (src/lib/discordAuth.js), which the server verifies itself against Discord
+ * rather than trusting anything sent here.
  */
 export const API_BASE = import.meta.env.VITE_BUILDS_API_URL || 'http://localhost:8787'
 

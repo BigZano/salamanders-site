@@ -261,10 +261,11 @@ describe('buildsView.view — a viewer is not kept waiting on Discord', () => {
     const seen = watch(view.view(req('tok-me')))
     await vi.advanceTimersByTimeAsync(50)
     expect(seen.settled).toBe(true)
-    await vi.runAllTimersAsync()
     const out = await seen.result
     expect(out.isMember).toBeNull()
     expect(out.headers).toStrictEqual(SIGNED_OUT_HEADERS)
+    // Lets the late answer arrive, so an error thrown by it would fail the run.
+    await vi.runAllTimersAsync()
   })
 
   it('a lookup that fails after the wait is not an unhandled rejection', async () => {
@@ -355,7 +356,7 @@ describe('buildsView.view — a viewer is not kept waiting on Discord', () => {
   it('property: a lookup is flagged exactly when it answers before the wait is over', async () => {
     await fc.assert(
       fc.asyncProperty(fc.integer({ min: 1, max: 300 }), fc.integer({ min: 0, max: 300 }), async (wait, delay) => {
-        fc.pre(delay !== wait)
+        fc.pre(delay !== wait) // a tie is decided by timer registration order, and is deliberately not pinned
         const roles = { identify: answersAfter(delay, ME_CALLER) }
         const view = createBuildsView({ roles, displayNames: fakeNames(), identifyWaitMs: wait })
         const seen = watch(view.view(req('tok-me')))

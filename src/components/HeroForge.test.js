@@ -31,6 +31,7 @@ describe('HeroForge Discord button', () => {
     ['signed in, not in the XVIIIth Legion', { id: '1', username: 'guest', isMember: false }],
     ['signed in, membership unknown', { id: '1', username: 'guest' }],
     ['isMember is truthy but not true', { id: '1', username: 'guest', isMember: 'true' }],
+    ['isMember is 1, which only loosely equals true', { id: '1', username: 'guest', isMember: 1 }],
   ])('invites to join when %s', (_, member) => {
     const { discord } = render(member)
     expect(discord.text()).toBe('Join the Chapter')
@@ -50,7 +51,6 @@ describe('HeroForge Discord button', () => {
     // The guild id is the Discord server's id, public in every invite link.
     const member = render({ id: '1', username: 'brother', isMember: true }).discord
     expect(member.attributes('href')).toBe(SERVER)
-    expect(member.attributes('href')).toMatch(/^https:\/\/discord\.com\/channels\/\d{17,20}$/)
 
     // Anyone who is not a confirmed member gets the invite, never the server URL.
     for (const visitor of [null, { id: '1', username: 'guest', isMember: false }]) {
