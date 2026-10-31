@@ -17,6 +17,8 @@ import { rowToBuild, publicBuild } from './buildRow.js'
 import { createBuildModeration } from './buildModeration.js'
 import { createBuildsView } from './buildsView.js'
 import { validateBuildText } from './buildText.js'
+import { createCompanyNotablesHandler } from './companyNotablesHandler.js'
+import { createCompanyNotablesStore } from './companyNotablesStore.js'
 import { applyCors } from './cors.js'
 import { createDeathwatchAccess } from './deathwatchAccess.js'
 import { createDeathwatchHandler } from './deathwatchHandler.js'
@@ -50,6 +52,9 @@ const roles = createDiscordRoles({ apiBase: DISCORD_API_BASE, guildId: GUILD_ID,
 // against the member role — see membership.js and membershipHandler.js.
 const membership = createMembership({ roles, roleId: process.env.ARCHIVE_ROLE_ID })
 const membershipRoutes = createMembershipHandler({ membership })
+// GET /company-notables: the Companies page's notable members (real names), guild members only — see
+// companyNotablesHandler.js. They are stored in the database and filled by src/seedNotables.js.
+const companyNotablesRoutes = createCompanyNotablesHandler({ membership, store: createCompanyNotablesStore(pool) })
 // Legion Archive key: fail-closed, gated on the same live membership check
 // (the member role, asked of Discord on every call). See archiveKey.js.
 const archiveKey = createArchiveKeyHandler({ membership, archiveKey: process.env.ARCHIVE_KEY })
@@ -220,6 +225,8 @@ Bun.serve({
       if (rosterRes) return cors(rosterRes)
       const membershipRes = await membershipRoutes(request, url)
       if (membershipRes) return cors(membershipRes)
+      const companyNotablesRes = await companyNotablesRoutes(request, url)
+      if (companyNotablesRes) return cors(companyNotablesRes)
       if (url.pathname === '/health') return json({ ok: true })
       if (url.pathname === '/archive/key' && request.method === 'GET') return cors(await archiveKey(request))
       if (url.pathname === '/builds/moderator' && request.method === 'GET') return cors(await moderation.status(request))
