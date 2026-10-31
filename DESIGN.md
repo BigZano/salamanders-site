@@ -314,7 +314,7 @@ These keep their own numbers and curves. Everything not listed here is functiona
 |---|---|---|
 | `src/components/MountDeathfire.vue`, `src/components/FireText.vue`, `src/components/FireTuner.vue` | the volcano canvas, the title fire and its dev tuner | everything; the policy test skips them |
 | `src/components/archive/ArchiveThread.vue` | `brand-cool`, 1.7s `cubic-bezier(0.2, 0.7, 0.3, 1)` | duration and curve |
-| `src/components/archive/ArchiveGate.vue` | `gate-glow`, the unsealing | duration and curve |
+| `src/components/archive/ArchiveGate.vue` | `gate-glow`, the unsealing: 1.6s `ease-in-out`, infinite while the gate is unsealing | duration and curve |
 | `src/components/deathwatch/deathwatch.css` | `dw-drift` 40s and `dw-flicker` 5s, `ease-in-out` with `infinite alternate` and `infinite` | as is |
 | `src/components/roster/RosterBranch.vue`, `src/components/roster/RosterMember.vue` | the attention flash that finds a member: `rs-flash` 1.4s and `rs-ping` 1.4s, twice | duration and iteration count; the easing is `var(--ease-forge)` |
 
@@ -323,9 +323,11 @@ The Deathwatch skeleton shimmer (`dw-pulse`, in `deathwatch.css`) and the gate p
 
 ### Loops
 
-A loop is bounded by the life of what it shows, or by visibility. `infinite` is allowed for `dw-drift`, `dw-flicker`
-and the spinner, and nowhere else. The skeleton shimmer (`dw-pulse`) and the gate's `dw-gate-pulse` run three
-iterations, then rest. The canvas pauses when the tab is hidden and when it is offscreen.
+A loop is bounded by the life of what it shows, or by visibility. The lifetime-bounded loops are the spinner and the
+Archive gate's unsealing glow (`gate-glow`), which runs only while the "Unsealing the archive…" line shows.
+`infinite` is allowed only for the Deathwatch drift and flicker (`dw-drift`, `dw-flicker`), the spinner, and that
+glow. The skeleton shimmer (`dw-pulse`) and the gate's `dw-gate-pulse` run three iterations, then rest. The canvas
+pauses when the tab is hidden and when it is offscreen.
 
 There is one spinner: `@keyframes spin` in `src/style.css`, unscoped. A component writes
 `animation: spin 0.8s linear infinite;` and never defines its own `@keyframes spin`.
@@ -393,7 +395,7 @@ fails the build on:
 - R2: a stray easing: `ease`, `ease-in` or `ease-out` anywhere; `ease-in-out` outside `deathwatch.css` and
   `DeathwatchGate.vue`; `cubic-bezier(` outside the two Archive files.
 - R3: a literal duration in a transition, or in an animation outside the authored files and the spinner.
-- R4: `infinite` outside `deathwatch.css` and the spinner.
+- R4: `infinite` outside `deathwatch.css`, `ArchiveGate.vue` and the spinner.
 - R5: a `:hover` outside the `(hover: hover) and (pointer: fine)` block.
 - R6: a second `@keyframes spin`.
 
