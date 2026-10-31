@@ -79,6 +79,14 @@ describe('Companies: the notable members', () => {
     expect(w.find('.member').exists()).toBe(false)
   })
 
+  it('a token with no member behind it is not asked either', async () => {
+    auth = reactive({ token: 'tok', member: null, signedIn: false, signIn: vi.fn() })
+    const w = await render()
+    expect(getCompanyNotables).not.toHaveBeenCalled()
+    expect(w.findAll('.notables-note')).toHaveLength(withCards.length)
+    expect(w.find('.member').exists()).toBe(false)
+  })
+
   it('a member the server refuses gets the same note, with no names', async () => {
     getCompanyNotables.mockRejectedValue(refused(403))
     const w = await render()

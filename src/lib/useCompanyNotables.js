@@ -15,12 +15,12 @@ import { getCompanyNotables } from './buildsApi'
  */
 export function useCompanyNotables() {
   const auth = useAuth()
-  const state = ref('denied')
+  const state = ref(null) // undecided: the immediate watch below decides it before anything can read it
   const byCompany = shallowRef(null)
-  let latest = 0 // a slow answer must not overwrite a newer decision (signing out, signing in as someone else)
+  let current // the load that may still answer: a slow one must not overwrite a newer decision (signing out)
 
   async function load() {
-    const mine = ++latest
+    const mine = (current = Symbol())
     byCompany.value = null
     if (!auth.token || auth.member?.isMember !== true) {
       state.value = 'denied'
@@ -29,11 +29,11 @@ export function useCompanyNotables() {
     state.value = 'loading'
     try {
       const companies = await getCompanyNotables(auth.token)
-      if (mine !== latest) return
+      if (mine !== current) return
       byCompany.value = companies
       state.value = 'ready'
     } catch (err) {
-      if (mine !== latest) return
+      if (mine !== current) return
       state.value = err?.status === 401 || err?.status === 403 ? 'denied' : 'error'
     }
   }
