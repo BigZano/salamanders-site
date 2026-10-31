@@ -2,13 +2,13 @@
  * The roster feed: pages the guild's member list on a TTL, builds the order of
  * battle and the Infirmary list from it, and keeps the last good copy in this
  * process's memory only (never the database, the repo or logs). Own cache and
- * timer, separate from displayNames.js and the discord-members.json bake.
+ * timer, separate from displayNames.js.
  *
  * Once stale, the old copy keeps answering while a refresh runs; a failed or
  * partial refresh (any page failing, a non-array body, more than maxPages)
  * keeps the last good copy and retries after retryMs. Members who left drop
  * out on the next good refresh. Listing members needs the bot's GUILD_MEMBERS
- * intent, same as displayNames.js and scripts/fetch-discord-members.mjs.
+ * intent, same as displayNames.js.
  */
 import { buildInfirmary, buildRoster } from './rosterCore.js'
 

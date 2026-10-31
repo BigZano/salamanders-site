@@ -52,6 +52,10 @@ data-backup/
 config.php
 *.7z
 
+# The guild's member list: the server asks Discord for it live. A copy must never be committed
+# (scripts/archive-leak-guard.mjs refuses it too, ignored or not).
+discord-members*.json
+
 # Test tooling output
 coverage/
 .stryker-tmp/

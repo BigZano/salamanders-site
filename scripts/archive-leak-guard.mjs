@@ -26,6 +26,9 @@ const DEATHWATCH_BLOCKED = [
   /(^|\/)config\.php$/i,
   /\.7z$/i,
 ]
+// The guild's member list (who holds the member role). The server asks Discord for it live; a copy of it must
+// never be committed again, from the sync that used to write it or by hand.
+const MEMBER_LIST_BLOCKED = [/(^|\/)discord-members[^/]*\.json$/i]
 // JSON-key signatures of a raw Discord export, assembled so this file never
 // contains them literally.
 const SIGNATURES = ['guild' + '_id', 'mention' + '_roles', 'available' + '_tags', 'applied' + '_tags', 'permission' + '_overwrites'].map(
@@ -41,6 +44,7 @@ export function checkPath(p) {
   const norm = p.replace(/\\/g, '/')
   if (BLOCKED.some((re) => re.test(norm))) return `archive path must never be committed: ${p}`
   if (DEATHWATCH_BLOCKED.some((re) => re.test(norm))) return `Deathwatch data file must never be committed: ${p}`
+  if (MEMBER_LIST_BLOCKED.some((re) => re.test(norm))) return `member list must never be committed (the server asks Discord for it): ${p}`
   return null
 }
 
