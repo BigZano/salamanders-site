@@ -27,6 +27,7 @@ const [A, B, C] = withCards
 const refused = (status) => Object.assign(new Error('refused'), { status })
 const ANSWER = { [A.id]: [['Test Member One', 'A line about them.']], [C.id]: [['Test Member Two', 'Another line.', 'And one more.']] }
 const NOTE = 'Notable server members are shown to signed-in guild members.'
+const AGAIN = 'Sign in again to see the notable server members.'
 const heading = (c) => c.sections.find((s) => s.notables).h
 
 const mounted = []
@@ -71,11 +72,34 @@ describe('Companies: the notable members', () => {
     expect(article(w, A).text()).toContain(heading(A))
   })
 
-  it('a signed-in visitor who is not a guild member is not asked either', async () => {
+  it('a signed-in visitor the server says is not a guild member sees the note, with no names', async () => {
+    auth = nonMember()
+    getCompanyNotables.mockRejectedValue(refused(403))
+    const w = await render()
+    expect(w.findAll('.notables-note')).toHaveLength(withCards.length)
+    expect(w.get('.notables-note').text()).toBe(NOTE)
+    expect(w.find('.member').exists()).toBe(false)
+  })
+
+  it('a stored flag of false does not hide the cards from someone the server says is a member', async () => {
     auth = nonMember()
     const w = await render()
-    expect(getCompanyNotables).not.toHaveBeenCalled()
+    expect(w.findAll('.member')).toHaveLength(2)
+    expect(w.find('.notables-note').exists()).toBe(false)
+  })
+
+  it('someone who still looks signed in but whose token has run out is told to sign in again', async () => {
+    auth = reactive({ token: null, member: { id: '200000000000000001', isMember: true }, signedIn: true, signIn: vi.fn() })
+    const w = await render()
     expect(w.findAll('.notables-note')).toHaveLength(withCards.length)
+    expect(w.get('.notables-note').text()).toBe(AGAIN)
+    expect(w.find('.member').exists()).toBe(false)
+  })
+
+  it('a token the server no longer takes is told the same', async () => {
+    getCompanyNotables.mockRejectedValue(refused(401))
+    const w = await render()
+    expect(w.get('.notables-note').text()).toBe(AGAIN)
     expect(w.find('.member').exists()).toBe(false)
   })
 

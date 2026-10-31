@@ -12,7 +12,7 @@ const props = defineProps({
   // to a signed-in guild member (useCompanyNotables). A section marked `notables: true` is where they go.
   // `notables` is this company's cards, [name, ...lines] lists; `notablesState` says what the page knows.
   notables: { type: Array, default: null },
-  notablesState: { type: String, default: 'denied', validator: (s) => ['denied', 'loading', 'ready', 'error'].includes(s) },
+  notablesState: { type: String, default: 'denied', validator: (s) => ['denied', 'expired', 'loading', 'ready', 'error'].includes(s) },
 })
 defineEmits(['index'])
 
@@ -20,6 +20,7 @@ const NOTES = {
   loading: 'Loading the notable server members…',
   error: 'The notable server members could not be loaded. Try again later.',
   denied: 'Notable server members are shown to signed-in guild members.',
+  expired: 'Sign in again to see the notable server members.',
 }
 // Once the server has answered, a section of cards it had none for is left out, not shown as a heading over nothing.
 const sections = computed(() =>

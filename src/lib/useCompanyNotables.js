@@ -7,11 +7,14 @@ import { getCompanyNotables } from './buildsApi'
  * server sends them to a signed-in guild member and to nobody else. They are held in memory only (never in
  * localStorage or sessionStorage) and dropped the moment the member signs out.
  *
- * state: 'denied'  signed out, or signed in but not a guild member: nothing is asked
+ * state: 'denied'  signed out (nothing is asked), or the server says this person is not a guild member (403)
+ *        'expired' still looks signed in, but the Discord token has run out (nothing is asked) or the server no
+ *                  longer takes it (401): only signing in again helps
  *        'loading' asking the server
  *        'ready'   the answer is in; entriesFor(id) gives a company's cards
- *        'error'   the server could not be reached or refused something it should not
- * A 401 or 403 is 'denied' too: the token went stale or the membership changed since the page knew.
+ *        'error'   the server could not be reached or failed
+ * The membership flag stored at sign-in decides nothing here: it can be days old, and a slow answer at sign-in stores
+ * false. Anyone with a live token is asked about, and the server's live check is the only gate.
  */
 export function useCompanyNotables() {
   const auth = useAuth()
@@ -22,8 +25,12 @@ export function useCompanyNotables() {
   async function load() {
     const mine = (current = Symbol())
     byCompany.value = null
-    if (!auth.token || auth.member?.isMember !== true) {
+    if (!auth.member) {
       state.value = 'denied'
+      return
+    }
+    if (!auth.token) {
+      state.value = 'expired'
       return
     }
     state.value = 'loading'
@@ -34,12 +41,13 @@ export function useCompanyNotables() {
       state.value = 'ready'
     } catch (err) {
       if (mine !== current) return
-      state.value = err?.status === 401 || err?.status === 403 ? 'denied' : 'error'
+      const status = err?.status
+      state.value = status === 401 ? 'expired' : status === 403 ? 'denied' : 'error'
     }
   }
 
   // Signing in is a full-page redirect, so this runs once on load; signing out is the same-page change.
-  watch(() => [auth.token, auth.member?.isMember], load, { immediate: true })
+  watch(() => [auth.token, auth.member], load, { immediate: true })
 
   /** A company's cards as [name, ...lines] lists, or null when there are none to show. */
   function entriesFor(id) {

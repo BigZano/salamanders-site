@@ -66,7 +66,7 @@ describe('a signed-in guild member', () => {
   })
 })
 
-describe('everyone else is not asked', () => {
+describe('without a live sign-in the server is not asked', () => {
   it('signed out: denied, and the server is never called', async () => {
     discord.stored = null
     const n = host()
@@ -76,33 +76,48 @@ describe('everyone else is not asked', () => {
     expect(n.entriesFor('alpha')).toBeNull()
   })
 
-  it('signed in but not a guild member: denied, and the server is never called', async () => {
-    discord.isMember = false
+  it('still looks signed in but the token has run out: expired, and the server is never called', async () => {
+    discord.stored = { accessToken: null }
     const n = host()
     await flushPromises()
-    expect(n.state.value).toBe('denied')
+    expect(n.state.value).toBe('expired')
     expect(getCompanyNotables).not.toHaveBeenCalled()
+    expect(n.entriesFor('alpha')).toBeNull()
   })
+})
 
+describe('a stored membership flag decides nothing', () => {
   it.each([
+    ['false', false],
     ['the string "true"', 'true'],
     ['the number 1', 1],
     ['undefined', undefined],
-  ])('a membership flag of %s is not membership', async (_label, flag) => {
+  ])('a flag of %s and a server that says yes: the cards', async (_label, flag) => {
     discord.isMember = flag
     const n = host()
     await flushPromises()
+    expect(n.state.value).toBe('ready')
+    expect(n.entriesFor('alpha')).toStrictEqual([ONE, TWO])
+  })
+
+  it('a flag of true and a server that says no: no names', async () => {
+    getCompanyNotables.mockRejectedValue(refused(403))
+    const n = host()
+    await flushPromises()
     expect(n.state.value).toBe('denied')
-    expect(getCompanyNotables).not.toHaveBeenCalled()
+    expect(n.entriesFor('alpha')).toBeNull()
   })
 })
 
 describe('when the server does not give them', () => {
-  it.each([401, 403])('a %i is denied, not an error: the token went stale or the membership changed', async (status) => {
+  it.each([
+    [401, 'expired', 'the token is no longer good'],
+    [403, 'denied', 'this person is not a guild member'],
+  ])('a %i is %s, not an error: %s', async (status, state) => {
     getCompanyNotables.mockRejectedValue(refused(status))
     const n = host()
     await flushPromises()
-    expect(n.state.value).toBe('denied')
+    expect(n.state.value).toBe(state)
     expect(n.entriesFor('alpha')).toBeNull()
   })
 

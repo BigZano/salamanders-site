@@ -98,8 +98,14 @@ describe('CompanyArticle: the notable members', () => {
     expect(note.attributes('role')).toBeUndefined()
   })
 
+  it('asks for a new sign-in when the old one has run out', () => {
+    const note = renderCards(marked, null, 'expired').get('.notables-note')
+    expect(note.text()).toBe('Sign in again to see the notable server members.')
+    expect(note.attributes('role')).toBeUndefined()
+  })
+
   it('shows no name unless the page says they are ready, whatever it was handed', () => {
-    for (const state of ['denied', 'loading', 'error']) {
+    for (const state of ['denied', 'expired', 'loading', 'error']) {
       const w = renderCards(marked, CARDS, state)
       expect(w.find('.member').exists(), state).toBe(false)
       expect(w.text(), state).not.toContain('Test Member One')
@@ -117,7 +123,7 @@ describe('CompanyArticle: the notable members', () => {
 
   it('keeps a section that is not marked whatever the state', () => {
     const plain = { ...marked, sections: [{ h: 'Story', p: ['Prose.'] }] }
-    for (const state of ['denied', 'loading', 'ready', 'error']) expect(renderCards(plain, CARDS, state).findAll('.block'), state).toHaveLength(1)
+    for (const state of ['denied', 'expired', 'loading', 'ready', 'error']) expect(renderCards(plain, CARDS, state).findAll('.block'), state).toHaveLength(1)
     expect(renderCards(plain, CARDS, 'ready').find('.member').exists()).toBe(false)
   })
 })
