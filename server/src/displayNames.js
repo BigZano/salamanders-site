@@ -14,8 +14,7 @@
  * person a guild member?" through memberResolver(). With no memberRoleId, or
  * no directory yet, nobody is.
  *
- * Listing members needs the bot's GUILD_MEMBERS privileged intent, same as
- * scripts/fetch-discord-members.mjs.
+ * Listing members needs the bot's GUILD_MEMBERS privileged intent.
  */
 import { sanitizeText } from './perkCorrectionsCore.js'
 

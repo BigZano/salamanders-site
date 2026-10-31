@@ -10,7 +10,7 @@
  * entry. A new role gets an empty blurb, which the seal audit rejects until it is written.
  * Once archive.lock.json says the legacy accolades were published, a run with no snapshot file to add to is refused
  * (restore it with `seal-archive unseal`), unless --fresh says starting over is meant.
- * Needs the bot's GUILD_MEMBERS intent, like scripts/fetch-discord-members.mjs.
+ * Needs the bot's GUILD_MEMBERS intent.
  * Prints ids and counts only; the file itself holds names and must never be committed.
  */
 import { readFile, writeFile } from 'node:fs/promises'

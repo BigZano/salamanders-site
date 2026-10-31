@@ -1,5 +1,5 @@
 /**
- * Discord REST helpers for the maintenance scripts (fetch-discord-members, snapshot-legacy-accolades).
+ * Discord REST helpers for the maintenance scripts (snapshot-legacy-accolades).
  * Discord's rate-limit headers and 429 bodies are honoured; the member list is paginated.
  * Needs a bot token, and the GUILD_MEMBERS privileged intent for the member list.
  */
