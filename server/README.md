@@ -67,6 +67,26 @@ errors until the column exists. Then seed once with `docker compose exec -T api 
 run src/seed.js < ../src/data/perk-corrections.json`. `DISCORD_MOD_ROLE_ID` is
 no longer read; moderator roles live in `src/privileges.js`.
 
+## Notable server members (`GET /company-notables`)
+
+The Companies page's Notable Server Members cards are real members' names and write-ups, so they are kept in
+the database (`company_notables`, one row per company) and never in the repo or the site's bundle. The route
+answers 200 `{ companies: { <companyId>: [[name, ...lines], ...] } }` to a signed-in guild member (the same live
+check as `/membership`), 401 with no or an invalid token, 403 to a signed-in non-member and 503 when Discord
+cannot answer. Every answer is `private, no-store`.
+
+To put the entries in, apply the new table once (the command under "Existing databases" above), then, from this
+folder, seed from the Companies data while it still holds them:
+
+```sh
+docker compose exec -T api bun run src/seedNotables.js < ../src/data/companies.json
+```
+
+It prints counts only, never a name, and is safe to re-run: each company in the file gets its entries replaced.
+The file may instead be a JSON object of `companyId` → `[[name, ...lines], ...]`, which is how the entries are
+changed later. A document it cannot store is refused with the position of the fault (`company 3, entry 2`),
+not the text.
+
 ## Deathwatch (`/deathwatch/*`)
 
 The Discord-role-gated Deathwatch area ("Watch Fortress Ebonhold"). Design:

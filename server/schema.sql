@@ -160,3 +160,12 @@ create table if not exists deathwatch_grant_events (
   action            text not null check (action in ('granted', 'revoked')),
   created_at        timestamptz not null default now()
 );
+
+-- The Companies page's Notable Server Members: real members' names and short write-ups. They live here and nowhere
+-- in the repo or the client bundle; GET /company-notables sends them to signed-in guild members only. One row per
+-- company, entries = [[name, ...blurb lines], ...]. Filled by src/seedNotables.js.
+create table if not exists company_notables (
+  company_id  text primary key check (company_id ~ '^[A-Za-z0-9_-]{1,64}$'),
+  entries     jsonb not null check (jsonb_typeof(entries) = 'array'),
+  updated_at  timestamptz not null default now()
+);
