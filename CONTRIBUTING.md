@@ -14,9 +14,8 @@ anything from the sealed Legion Archive, whether in code, tests, fixtures, scree
 invented values, and make invented ids obviously fake, like `111111111111111111`. Links to the guild's Discord server
 and Discord channel ids are fine; user ids and role ids are not.
 
-Two files already hold real member data: `src/data/discord-members.json` (kept in sync by a bot) and
-`src/data/companies.json` (extracted by hand). The owner maintains them. Do not edit them and do not copy values out
-of them. Moving that data out of the repo is tracked in
+One file still holds real member data: `src/data/companies.json` (extracted by hand). The owner maintains it. Do not
+edit it and do not copy values out of it. Moving that data out of the repo is tracked in
 [#42](https://github.com/BigZano/salamanders-site/issues/42), and this paragraph goes when that is done.
 
 If you find a real value somewhere else in the repo, email a maintainer or the owner directly, as above. Do not open a
@@ -122,8 +121,8 @@ request is squashed (see Review and merge), so get it right. Small branches are 
 
 `bun install` sets up Git hooks on your machine:
 
-- **On `git commit`** the hook checks that no archive files, raw Discord exports or Deathwatch tracker backups are
-  staged, and runs the tests. It is quick. Do not skip it: it is the only local check that stops them being
+- **On `git commit`** the hook checks that no archive files, raw Discord exports, Deathwatch tracker backups or copies
+  of the guild's member list are staged, and runs the tests. It is quick. Do not skip it: it is the only local check that stops them being
   committed.
 - **On `git push`** the hook also runs coverage and mutation testing, which the maintainers call the full gate. That
   can take several minutes. Passing it is **not** required to merge, and CI does not run it. If it is too slow, fails
@@ -151,14 +150,14 @@ contribute, GitHub holds your first check until a maintainer lets it run, which 
 
 | Rule | Checked by |
 |---|---|
-| No archive files, raw Discord exports or Deathwatch tracker backups committed | The commit hook and **PR check** |
+| No archive files, raw Discord exports, Deathwatch tracker backups or copies of the member list committed | The commit hook and **PR check** |
 | The tests pass | The commit hook and **PR check** |
 | The production build works | **PR check** |
 | 100% coverage and mutation testing on the gated units | The push hook on your machine, and nowhere else. Optional: not part of CI, not required to merge, skippable with `--no-verify` |
 | `main` cannot be deleted or force-pushed, except by an admin | A repository rule |
 | Only the maintainers merge | You have no write access to the original repo |
 | No real names, handles or ids | **Review only**: a maintainer reads the diff |
-| You did not edit the two member data files | **Review only** |
+| You did not edit the member data file | **Review only** |
 | Branch prefix, `type(scope): subject` titles, code style | **Review only** |
 | Phone check, `DESIGN.md` rules | **Review only** |
 
