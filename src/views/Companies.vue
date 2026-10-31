@@ -11,6 +11,7 @@ import { useAuth } from '../stores/auth'
 import { HIGH_COMMAND_ENTRY, MUSTER_ENTRY } from '../lib/companyKeys'
 import { ROSTER_VIEWER } from '../lib/rosterContext'
 import { SCENES } from '../lib/rosterScenes'
+import { useCompanyNotables } from '../lib/useCompanyNotables'
 import { useCompanyRoster } from '../lib/useCompanyRoster'
 import { useOpenBranches } from '../lib/useOpenBranches'
 import { useRosterActions } from '../lib/useRosterActions'
@@ -46,6 +47,8 @@ const infirmaryOpen = ref(false)
 const { mode, loading, view, store, note, updated, stale, start, loadInfirmary } = useCompanyRoster({ infirmaryOpen })
 const viewerId = computed(() => auth.member?.id ?? null)
 provide(ROSTER_VIEWER, viewerId)
+// The Notable Server Members cards are real names: the server sends them to a signed-in guild member only.
+const { state: notablesState, entriesFor } = useCompanyNotables()
 const { findMessage, openableKeys, allOpen, toggleAll, toggleInfirmary, jumpToBranch, findMe, scrollToArticle, applyHash } = useRosterActions({
   root,
   view,
@@ -159,7 +162,14 @@ function backToIndex() {
     <RosterInfirmary v-if="infirmaryOpen && mode === 'full'" :status="store.infirmaryStatus" :infirmary="store.infirmary" />
     <template v-else>
       <!-- Companies -->
-      <CompanyArticle v-for="c in filtered" :key="c.id" :company="c" @index="backToIndex">
+      <CompanyArticle
+        v-for="c in filtered"
+        :key="c.id"
+        :company="c"
+        :notables="entriesFor(c.id)"
+        :notables-state="notablesState"
+        @index="backToIndex"
+      >
         <template #ranks>
           <CompanyRanks
             :branch="branchByKey.get(c.branch) ?? null"

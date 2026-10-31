@@ -58,4 +58,14 @@ export const getModeratorStatus = async (token) =>
 export const getMembership = async (token) =>
   (await request('/membership', { token, cache: 'no-store' }))?.member === true
 
+/**
+ * The Companies page's Notable Server Members, { companyId: [[name, ...lines], ...] }: real members' names, kept
+ * on the server and sent to a signed-in guild member only. A refusal (401, 403), an outage or a network failure
+ * rejects, and the caller decides what that means; an answer of any other shape is no entries.
+ */
+export const getCompanyNotables = async (token) => {
+  const companies = (await request('/company-notables', { token, cache: 'no-store' }))?.companies
+  return companies !== null && typeof companies === 'object' && !Array.isArray(companies) ? companies : {}
+}
+
 export { BuildsApiError }

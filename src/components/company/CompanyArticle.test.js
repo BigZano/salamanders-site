@@ -34,23 +34,91 @@ describe('CompanyArticle: the story', () => {
     expect(items.map((i) => i.text())).toContain(section.list[0])
   })
 
-  it('renders notable members as cards with initials, a name and blurbs, sized by their text', () => {
-    const section = withNotables.sections.find((s) => s.notables)
-    const w = render(withNotables)
+  it('never carries a member in the data: a notables section is only a marker for where the cards go', () => {
+    for (const c of companies) for (const s of c.sections) expect(s.notables === undefined || s.notables === true, `${c.id}: ${s.h}`).toBe(true)
+  })
+})
+
+// The Notable Server Members are real names, kept on the server and passed in once it has sent them
+// (useCompanyNotables). Invented names only.
+const CARDS = [['Test Member One', 'First line.', 'Second line.'], ['Solo Tester', 'Only line.']]
+const marked = { id: 'x', sigil: 'X', title: 'X', subtitle: '', sections: [{ h: 'Story', p: ['Prose.'] }, { h: 'Notable Server Members', notables: true }] }
+const renderCards = (company, notables, notablesState) => mount(CompanyArticle, { props: { company, notables, notablesState } })
+
+describe('CompanyArticle: the notable members', () => {
+  it('is marked in the data by a section with `notables: true`, and nothing else', () => {
+    expect(withNotables.sections.find((s) => s.notables).notables).toBe(true)
+  })
+
+  it('renders them as cards with initials, a name and blurbs, sized by their text', () => {
+    const w = renderCards(marked, CARDS, 'ready')
     const cards = w.findAll('.member')
-    expect(cards.length).toBeGreaterThanOrEqual(section.notables.length)
-    const card = cards[0]
-    expect(card.find('.member-name').text()).toBe(section.notables[0][0])
-    expect(card.find('.avatar').text()).toMatch(/^[A-Z]{1,2}$/)
-    expect(card.findAll('.member-blurb')).toHaveLength(section.notables[0].length - 1)
-    expect(card.attributes('style')).toContain('--bio')
-    expect(w.find('.notables').attributes('data-count')).toBe(String(section.notables.length))
+    expect(cards).toHaveLength(2)
+    expect(cards[0].find('.member-name').text()).toBe('Test Member One')
+    expect(cards[0].find('.avatar').text()).toBe('TO')
+    expect(cards[0].findAll('.member-blurb').map((b) => b.text())).toEqual(['First line.', 'Second line.'])
+    expect(cards[0].attributes('style')).toContain('--bio: 23')
+    expect(cards[1].findAll('.member-blurb')).toHaveLength(1)
+    expect(w.find('.notables').attributes('data-count')).toBe('2')
+    expect(w.find('.notables-note').exists()).toBe(false)
   })
 
   it('takes the first and last word of a name for the initials, ignoring quotes and commas', () => {
-    const company = { id: 'x', sigil: 'X', title: 'X', subtitle: '', sections: [{ h: 'H', notables: [['Chapter "Big" Master, Jones', 'A line.'], ['Solo', 'Another line.']] }] }
-    const avatars = render(company).findAll('.avatar').map((a) => a.text())
-    expect(avatars).toEqual(['CJ', 'S'])
+    const w = renderCards(marked, [['Chapter "Big" Master, Jones', 'A line.'], ['Solo', 'Another line.']], 'ready')
+    expect(w.findAll('.avatar').map((a) => a.text())).toEqual(['CJ', 'S'])
+  })
+
+  it('puts them in the marked section only, with the rest of the story untouched', () => {
+    const w = renderCards(marked, CARDS, 'ready')
+    const blocks = w.findAll('.block')
+    expect(blocks).toHaveLength(2)
+    expect(blocks[0].findAll('.member')).toHaveLength(0)
+    expect(blocks[1].find('.block-h').text()).toBe('Notable Server Members')
+    expect(blocks[1].findAll('.member')).toHaveLength(2)
+  })
+
+  it('says they are for signed-in guild members when the page is not allowed them (the default)', () => {
+    const w = render(marked)
+    expect(w.find('.notables-note').text()).toBe('Notable server members are shown to signed-in guild members.')
+    expect(w.find('.notables-note').attributes('role')).toBeUndefined()
+    expect(w.find('.member').exists()).toBe(false)
+    expect(w.find('.notables').exists()).toBe(false)
+    expect(w.findAll('.block')).toHaveLength(2)
+  })
+
+  it('says they are loading, announced politely', () => {
+    const note = renderCards(marked, null, 'loading').get('.notables-note')
+    expect(note.text()).toBe('Loading the notable server members…')
+    expect(note.attributes('role')).toBe('status')
+  })
+
+  it('says they could not be loaded', () => {
+    const note = renderCards(marked, null, 'error').get('.notables-note')
+    expect(note.text()).toBe('The notable server members could not be loaded. Try again later.')
+    expect(note.attributes('role')).toBeUndefined()
+  })
+
+  it('shows no name unless the page says they are ready, whatever it was handed', () => {
+    for (const state of ['denied', 'loading', 'error']) {
+      const w = renderCards(marked, CARDS, state)
+      expect(w.find('.member').exists(), state).toBe(false)
+      expect(w.text(), state).not.toContain('Test Member One')
+    }
+  })
+
+  it('leaves the section out once the server has none for this company, rather than a heading over nothing', () => {
+    for (const none of [null, []]) {
+      const w = renderCards(marked, none, 'ready')
+      expect(w.findAll('.block')).toHaveLength(1)
+      expect(w.text()).not.toContain('Notable Server Members')
+      expect(w.find('.notables-note').exists()).toBe(false)
+    }
+  })
+
+  it('keeps a section that is not marked whatever the state', () => {
+    const plain = { ...marked, sections: [{ h: 'Story', p: ['Prose.'] }] }
+    for (const state of ['denied', 'loading', 'ready', 'error']) expect(renderCards(plain, CARDS, state).findAll('.block'), state).toHaveLength(1)
+    expect(renderCards(plain, CARDS, 'ready').find('.member').exists()).toBe(false)
   })
 })
 

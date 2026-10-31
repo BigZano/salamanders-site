@@ -6,6 +6,7 @@ import {
   deleteBuild,
   getModeratorStatus,
   getMembership,
+  getCompanyNotables,
   BuildsApiError,
 } from './buildsApi'
 import { getCorrections } from './perksApi'
@@ -244,6 +245,45 @@ describe('getMembership', () => {
   it('rejects when fetch itself rejects (network down)', async () => {
     vi.stubGlobal('fetch', vi.fn().mockRejectedValue(new Error('network down')))
     await expect(getMembership('tok')).rejects.toThrow('network down')
+  })
+})
+
+describe('getCompanyNotables', () => {
+  // Invented names only.
+  const COMPANIES = { alpha: [['Test Member One', 'A line about them.']], beta: [['Test Member Two']] }
+  const answerFor = async (body) => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(mockResponse({ body })))
+    return getCompanyNotables('tok')
+  }
+
+  it('asks for the notables as the caller, never from a cached answer, and returns the companies', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(mockResponse({ body: { companies: COMPANIES } }))
+    vi.stubGlobal('fetch', fetchMock)
+    await expect(getCompanyNotables('tok-abc')).resolves.toStrictEqual(COMPANIES)
+    const [url, opts] = fetchMock.mock.calls[0]
+    expect(url).toBe('http://localhost:8787/company-notables')
+    expect(opts.method).toBe('GET')
+    expect(opts.headers.Authorization).toBe('Bearer tok-abc')
+    expect(opts.cache).toBe('no-store')
+  })
+
+  it('is an empty set for an answer that is not an object of companies', async () => {
+    const bodies = [{}, { companies: null }, { companies: 'text' }, { companies: 5 }, { companies: [COMPANIES] }, { company: COMPANIES }, null, 'text', []]
+    const answers = []
+    for (const body of bodies) answers.push(await answerFor(body))
+    expect(answers).toStrictEqual(bodies.map(() => ({})))
+  })
+
+  it('rejects with BuildsApiError on a refusal or an outage, so the caller can tell them apart', async () => {
+    for (const status of [401, 403, 503]) {
+      vi.stubGlobal('fetch', vi.fn().mockResolvedValue(mockResponse({ ok: false, status, body: { error: 'No.' } })))
+      await expect(getCompanyNotables('tok')).rejects.toMatchObject({ name: 'BuildsApiError', status, message: 'No.' })
+    }
+  })
+
+  it('rejects when fetch itself rejects (network down)', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockRejectedValue(new Error('network down')))
+    await expect(getCompanyNotables('tok')).rejects.toThrow('network down')
   })
 })
 
