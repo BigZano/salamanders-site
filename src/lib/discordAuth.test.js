@@ -10,12 +10,12 @@ import {
   sanitizeReturnPath,
   RETURN_FALLBACK_MS,
 } from './discordAuth'
+import { API_BASE } from './buildsApi'
 
 const STORAGE_KEY = 'salamanders-discord-member'
-// Real ids from src/data/discord-members.json, so isMember exercises the
-// actual membership list rather than a stubbed one.
-const A_MEMBER_ID = '75633559351595008'
-const NOT_A_MEMBER_ID = '1'
+// Invented ids. Whether a person is a member is the server's answer to /membership, not a property of the id.
+const A_MEMBER_ID = '300000000000000001'
+const NOT_A_MEMBER_ID = '300000000000000002'
 
 function setHash(hash) {
   window.location.hash = hash
@@ -157,20 +157,47 @@ describe('beginSignIn', () => {
   })
 })
 
-describe('scrubCallbackHash + finishSignIn', () => {
-  function stubIdentify(user, ok = true) {
-    vi.stubGlobal(
-      'fetch',
-      vi.fn().mockResolvedValue({ ok, json: () => Promise.resolve(user) }),
-    )
-  }
+const USER_URL = 'https://discord.com/api/users/@me'
+const MEMBERSHIP_URL = `${API_BASE}/membership`
+// The longest sign-in waits to learn whether the person is a member: 3 s, spelled out here so a change to it is seen.
+const MEMBERSHIP_WAIT_MS = 3000
 
+const answer = (body, status = 200) => ({ ok: status < 400, status, json: () => Promise.resolve(body) })
+
+/**
+ * A fetch stub that tells the two servers apart by address. Discord's user lookup answers `user` (or a 401 when
+ * `userOk` is false); the membership call answers whatever `membership(options)` returns, a promise of a response.
+ * Any other address answers { member: true }, so asking the wrong one can never read as "not a member".
+ * `sent[url]` is the options each address was last handed.
+ */
+function stubServer({
+  user = { id: A_MEMBER_ID, username: 'salamander' },
+  userOk = true,
+  membership = () => Promise.resolve(answer({ member: false })),
+} = {}) {
+  const sent = {}
+  const fetchMock = vi.fn((url, options) => {
+    sent[url] = options
+    if (url === USER_URL) return Promise.resolve(answer(user, userOk ? 200 : 401))
+    if (url === MEMBERSHIP_URL) return membership(options)
+    return Promise.resolve(answer({ member: true }))
+  })
+  vi.stubGlobal('fetch', fetchMock)
+  return { fetchMock, sent }
+}
+
+const stored = () => JSON.parse(localStorage.getItem(STORAGE_KEY))
+
+// Discord's bounce with a token, then the sign-in itself. Not awaited, for the tests that watch it wait.
+function beginFinish(token = 'tok', expiresIn = 3600) {
+  setHash(`#access_token=${token}&expires_in=${expiresIn}`)
+  scrubCallbackHash()
+  return finishSignIn()
+}
+
+describe('scrubCallbackHash + finishSignIn', () => {
   it('stores id, username, isMember, accessToken and an expiresAt derived from expires_in', async () => {
-    const fetchMock = vi.fn().mockResolvedValue({
-      ok: true,
-      json: () => Promise.resolve({ id: A_MEMBER_ID, username: 'salamander' }),
-    })
-    vi.stubGlobal('fetch', fetchMock)
+    const { fetchMock } = stubServer({ membership: () => Promise.resolve(answer({ member: true })) })
     setHash('#access_token=tok-1&token_type=Bearer&expires_in=604800&scope=identify')
     scrubCallbackHash()
     const before = Date.now()
@@ -180,25 +207,72 @@ describe('scrubCallbackHash + finishSignIn', () => {
       headers: { Authorization: 'Bearer tok-1' },
     })
 
-    const stored = JSON.parse(localStorage.getItem(STORAGE_KEY))
-    expect(stored.id).toBe(A_MEMBER_ID)
-    expect(stored.username).toBe('salamander')
-    expect(stored.isMember).toBe(true)
-    expect(stored.accessToken).toBe('tok-1')
-    expect(stored.expiresAt).toBeGreaterThanOrEqual(before + 604800 * 1000)
+    expect(stored().id).toBe(A_MEMBER_ID)
+    expect(stored().username).toBe('salamander')
+    expect(stored().isMember).toBe(true)
+    expect(stored().accessToken).toBe('tok-1')
+    expect(stored().expiresAt).toBeGreaterThanOrEqual(before + 604800 * 1000)
+    expect(stored().checkedAt).toBeGreaterThanOrEqual(before)
   })
 
-  it('marks isMember false for a real, non-member id', async () => {
-    stubIdentify({ id: NOT_A_MEMBER_ID, username: 'outsider' })
-    setHash('#access_token=tok-2&expires_in=3600')
-    scrubCallbackHash()
-    await finishSignIn()
+  it('stores isMember true when the server says member', async () => {
+    stubServer({ membership: () => Promise.resolve(answer({ member: true })) })
+    await beginFinish('tok-2')
 
-    expect(JSON.parse(localStorage.getItem(STORAGE_KEY)).isMember).toBe(false)
+    expect(stored().isMember).toBe(true)
+    expect(currentMember()).toMatchObject({ id: A_MEMBER_ID, username: 'salamander', isMember: true })
+  })
+
+  it('false when the server says not a member', async () => {
+    stubServer({
+      user: { id: NOT_A_MEMBER_ID, username: 'outsider' },
+      membership: () => Promise.resolve(answer({ member: false })),
+    })
+    await beginFinish('tok-2')
+
+    expect(stored().isMember).toBe(false)
+    expect(currentMember()).toMatchObject({ id: NOT_A_MEMBER_ID, username: 'outsider', isMember: false })
+  })
+
+  it('a failed or non-boolean answer stores false and still signs the person in', async () => {
+    const answers = {
+      'the request is refused (fetch rejects)': () => Promise.reject(new Error('offline')),
+      'a 503 because Discord cannot be reached': () =>
+        Promise.resolve(answer({ error: 'Discord is unreachable.' }, 503)),
+      'a 401 because the token was refused': () => Promise.resolve(answer({ error: 'Sign in again.' }, 401)),
+      "a string 'yes'": () => Promise.resolve(answer({ member: 'yes' })),
+      "a string 'true'": () => Promise.resolve(answer({ member: 'true' })),
+      'the number 1': () => Promise.resolve(answer({ member: 1 })),
+      'a missing key': () => Promise.resolve(answer({})),
+      'null': () => Promise.resolve(answer({ member: null })),
+      'a body that is not JSON': () => Promise.resolve({ ok: true, status: 200, json: () => Promise.reject(new Error('bad json')) }),
+    }
+    for (const [label, membership] of Object.entries(answers)) {
+      localStorage.clear()
+      stubServer({ membership })
+      const before = Date.now()
+      await expect(beginFinish('tok-fail'), label).resolves.toBeUndefined()
+
+      // Signed in, as a person who is not (known to be) a member; everything else as it always was.
+      expect(stored().isMember, label).toBe(false)
+      expect(stored().id, label).toBe(A_MEMBER_ID)
+      expect(stored().username, label).toBe('salamander')
+      expect(stored().accessToken, label).toBe('tok-fail')
+      expect(stored().expiresAt, label).toBeGreaterThanOrEqual(before + 3600 * 1000)
+      expect(getAccessToken(), label).toBe('tok-fail')
+    }
+  })
+
+  it('the membership call carries the same token', async () => {
+    const { sent } = stubServer({ membership: () => Promise.resolve(answer({ member: true })) })
+    await beginFinish('tok-same')
+
+    expect(sent[USER_URL].headers.Authorization).toBe('Bearer tok-same')
+    expect(sent[MEMBERSHIP_URL].headers.Authorization).toBe('Bearer tok-same')
   })
 
   it('falls back to a 1-hour expiry when expires_in is missing from the callback', async () => {
-    stubIdentify({ id: A_MEMBER_ID, username: 'x' })
+    stubServer({ user: { id: A_MEMBER_ID, username: 'x' } })
     setHash('#access_token=tok-3')
     scrubCallbackHash()
     const before = Date.now()
@@ -213,7 +287,7 @@ describe('scrubCallbackHash + finishSignIn', () => {
     // A real 401 body has no id/username but still parses fine — using it
     // (rather than null) proves the early-return actually fires, instead of
     // this only passing because reading .id off a null body happens to throw.
-    stubIdentify({ message: '401: Unauthorized', code: 0 }, false)
+    stubServer({ user: { message: '401: Unauthorized', code: 0 }, userOk: false })
     setHash('#access_token=bad-tok&expires_in=3600')
     scrubCallbackHash()
     await finishSignIn()
@@ -326,6 +400,117 @@ describe('scrubCallbackHash + finishSignIn', () => {
     setHash('#access_token=tok2&expires_in=3600')
     scrubCallbackHash()
     expect(window.location.pathname).toBe('/armoury')
+  })
+})
+
+// The membership answer is only a display hint, so sign-in never waits long for it: a slow answer reads as "not a member".
+describe('finishSignIn: a slow membership answer', () => {
+  beforeEach(() => {
+    vi.useFakeTimers()
+  })
+
+  afterEach(() => {
+    vi.useRealTimers()
+  })
+
+  // Answers `body` once `ms` have passed on the (fake) clock.
+  const answersAfter = (ms, body) => () => new Promise((resolve) => setTimeout(() => resolve(answer(body)), ms))
+  const failsAfter = (ms, error) => () => new Promise((_, reject) => setTimeout(() => reject(error), ms))
+  const neverAnswers = () => new Promise(() => {})
+  // jsdom queues zero-delay timers of its own (a hashchange event for the callback hash, a storage event for
+  // each write). Let those run, then count what is left: anything still pending is a timer sign-in forgot.
+  const timersLeft = () => {
+    vi.advanceTimersByTime(0)
+    return vi.getTimerCount()
+  }
+  const watch = (promise) => {
+    const seen = { settled: false }
+    promise.then(() => {
+      seen.settled = true
+    })
+    return seen
+  }
+
+  it('waits for the answer up to the 3 s limit, and not a millisecond beyond it', async () => {
+    stubServer({ membership: neverAnswers })
+    const seen = watch(beginFinish('tok-slow'))
+
+    await vi.advanceTimersByTimeAsync(MEMBERSHIP_WAIT_MS - 1)
+    expect(seen.settled).toBe(false)
+    expect(localStorage.getItem(STORAGE_KEY)).toBeNull()
+
+    await vi.advanceTimersByTimeAsync(1)
+    expect(seen.settled).toBe(true)
+    expect(stored().isMember).toBe(false)
+    expect(stored().id).toBe(A_MEMBER_ID)
+    expect(stored().username).toBe('salamander')
+    expect(stored().accessToken).toBe('tok-slow')
+    expect(getAccessToken()).toBe('tok-slow')
+  })
+
+  it('counts an answer that arrives just inside the limit, and leaves no timer behind', async () => {
+    stubServer({ membership: answersAfter(MEMBERSHIP_WAIT_MS - 100, { member: true }) })
+    const seen = watch(beginFinish())
+
+    await vi.advanceTimersByTimeAsync(MEMBERSHIP_WAIT_MS - 101)
+    expect(seen.settled).toBe(false)
+    await vi.advanceTimersByTimeAsync(101)
+    expect(seen.settled).toBe(true)
+    expect(stored().isMember).toBe(true)
+    expect(timersLeft()).toBe(0)
+  })
+
+  it('a fast answer stores it and leaves no timer behind', async () => {
+    stubServer({ membership: () => Promise.resolve(answer({ member: true })) })
+    await beginFinish()
+    expect(stored().isMember).toBe(true)
+    expect(timersLeft()).toBe(0)
+  })
+
+  it('a fast failure stores false and leaves no timer behind', async () => {
+    stubServer({ membership: () => Promise.resolve(answer({ error: 'Discord is unreachable.' }, 503)) })
+    await beginFinish()
+    expect(stored().isMember).toBe(false)
+    expect(timersLeft()).toBe(0)
+  })
+
+  it('an answer that comes after the limit changes nothing', async () => {
+    stubServer({ membership: answersAfter(MEMBERSHIP_WAIT_MS + 2000, { member: true }) })
+    const seen = watch(beginFinish())
+    await vi.advanceTimersByTimeAsync(MEMBERSHIP_WAIT_MS)
+    expect(seen.settled).toBe(true)
+    expect(stored().isMember).toBe(false)
+
+    await vi.advanceTimersByTimeAsync(2000)
+    await vi.runAllTimersAsync()
+    expect(stored().isMember).toBe(false)
+    expect(currentMember()).toMatchObject({ id: A_MEMBER_ID, isMember: false })
+    expect(timersLeft()).toBe(0)
+  })
+
+  it('a failure that comes after the limit is not an unhandled rejection', async () => {
+    // Vitest fails the run on an unhandled rejection; this also listens, so that the test itself fails
+    // rather than only the run.
+    const escaped = []
+    const onEscape = (reason) => escaped.push(reason)
+    process.on('unhandledRejection', onEscape)
+    try {
+      stubServer({ membership: failsAfter(MEMBERSHIP_WAIT_MS + 2000, new Error('Discord answered too late')) })
+      const seen = watch(beginFinish())
+      await vi.advanceTimersByTimeAsync(MEMBERSHIP_WAIT_MS)
+      expect(seen.settled).toBe(true)
+      expect(stored().isMember).toBe(false)
+
+      await vi.runAllTimersAsync()
+      expect(stored().isMember).toBe(false)
+      // Unhandled rejections are reported once the microtask queue has drained and a turn of the real
+      // event loop has passed.
+      vi.useRealTimers()
+      await new Promise((resolve) => setTimeout(resolve, 20))
+    } finally {
+      process.off('unhandledRejection', onEscape)
+    }
+    expect(escaped).toEqual([])
   })
 })
 
