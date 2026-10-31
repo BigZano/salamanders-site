@@ -1,5 +1,13 @@
 import { describe, it, expect, vi, afterEach } from 'vitest'
-import { request, listBuilds, createBuild, deleteBuild, getModeratorStatus, BuildsApiError } from './buildsApi'
+import {
+  request,
+  listBuilds,
+  createBuild,
+  deleteBuild,
+  getModeratorStatus,
+  getMembership,
+  BuildsApiError,
+} from './buildsApi'
 import { getCorrections } from './perksApi'
 
 function mockResponse({ ok = true, status = 200, body = null, jsonThrows = false } = {}) {
@@ -51,6 +59,23 @@ describe('listBuilds', () => {
     await listBuilds()
     expect(fetchMock.mock.calls[0][1].headers).not.toHaveProperty('Content-Type')
     expect(fetchMock.mock.calls[0][1].body).toBeUndefined()
+  })
+
+  it('listBuilds sends the bearer token when given one and none when not', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(mockResponse({ body: [] }))
+    vi.stubGlobal('fetch', fetchMock)
+    await listBuilds(undefined, 'tok-abc')
+    await listBuilds('Heavy', 'tok-xyz')
+    await listBuilds('Heavy')
+    await listBuilds()
+    const [withToken, withTokenAndClass, withClassOnly, bare] = fetchMock.mock.calls
+    expect(withToken[1].headers.Authorization).toBe('Bearer tok-abc')
+    expect(withTokenAndClass[1].headers.Authorization).toBe('Bearer tok-xyz')
+    // The token must not displace the class filter, nor leak into the URL.
+    expect(withTokenAndClass[0]).toBe('http://localhost:8787/builds?class=Heavy')
+    expect(withToken[0]).toBe('http://localhost:8787/builds')
+    expect(withClassOnly[1].headers).not.toHaveProperty('Authorization')
+    expect(bare[1].headers).not.toHaveProperty('Authorization')
   })
 })
 
@@ -143,6 +168,82 @@ describe('getModeratorStatus', () => {
   it('is false unless the server says exactly true', async () => {
     vi.stubGlobal('fetch', vi.fn().mockResolvedValue(mockResponse({ body: { moderator: 'yes' } })))
     await expect(getModeratorStatus('tok')).resolves.toBe(false)
+  })
+})
+
+describe('getMembership', () => {
+  const answerFor = async (body) => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(mockResponse({ body })))
+    return getMembership('tok')
+  }
+
+  it('is true only for { member: true }', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(mockResponse({ body: { member: true } }))
+    vi.stubGlobal('fetch', fetchMock)
+    await expect(getMembership('tok-abc')).resolves.toBe(true)
+    // It asks the right question, as the caller, and never from a cached answer.
+    const [url, opts] = fetchMock.mock.calls[0]
+    expect(url).toBe('http://localhost:8787/membership')
+    expect(opts.method).toBe('GET')
+    expect(opts.headers.Authorization).toBe('Bearer tok-abc')
+    expect(opts.cache).toBe('no-store')
+  })
+
+  it('is false for { member: false }', async () => {
+    await expect(answerFor({ member: false })).resolves.toBe(false)
+  })
+
+  it('is false for "true", 1, null and a missing key', async () => {
+    const bodies = [{ member: 'true' }, { member: 1 }, { member: null }, {}]
+    const answers = []
+    for (const body of bodies) answers.push(await answerFor(body))
+    expect(answers).toEqual([false, false, false, false])
+  })
+
+  it('is false for other truthy lookalikes and for a body that is not an object', async () => {
+    const bodies = [
+      { member: [true] },
+      { member: {} },
+      { member: 'yes' },
+      { Member: true },
+      { nested: { member: true } },
+      null,
+      true,
+      'member',
+      1,
+      [true],
+      [],
+    ]
+    const answers = []
+    for (const body of bodies) answers.push(await answerFor(body))
+    expect(answers).toEqual(bodies.map(() => false))
+  })
+
+  it('rejects with BuildsApiError on a 401', async () => {
+    // Callers decide what a failed lookup means; it must not be quietly "false".
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockResolvedValue(mockResponse({ ok: false, status: 401, body: { error: 'Sign in again.' } })),
+    )
+    await expect(getMembership('stale')).rejects.toMatchObject({
+      name: 'BuildsApiError',
+      status: 401,
+      message: 'Sign in again.',
+    })
+    await expect(getMembership('stale')).rejects.toBeInstanceOf(BuildsApiError)
+  })
+
+  it('rejects with BuildsApiError on a 503 when Discord cannot be reached', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockResolvedValue(mockResponse({ ok: false, status: 503, body: { error: 'Discord is unreachable.' } })),
+    )
+    await expect(getMembership('tok')).rejects.toMatchObject({ name: 'BuildsApiError', status: 503 })
+  })
+
+  it('rejects when fetch itself rejects (network down)', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockRejectedValue(new Error('network down')))
+    await expect(getMembership('tok')).rejects.toThrow('network down')
   })
 })
 

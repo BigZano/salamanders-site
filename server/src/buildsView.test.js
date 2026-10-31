@@ -1,4 +1,4 @@
-import { describe, it, expect } from 'vitest'
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import * as fc from 'fast-check'
 import { createBuildsView } from './buildsView'
 import { Upstream } from './discordRoles'
@@ -189,6 +189,183 @@ describe('buildsView.view — signed in or out, and what the list may say', () =
           expect(out.headers).toStrictEqual(SIGNED_IN_HEADERS)
         },
       ),
+    )
+  })
+})
+
+// The wait for Discord is bounded, so these tests drive it with fake timers.
+describe('buildsView.view — a viewer is not kept waiting on Discord', () => {
+  beforeEach(() => {
+    vi.useFakeTimers()
+  })
+  afterEach(() => {
+    vi.useRealTimers()
+  })
+
+  const NEVER = () => new Promise(() => {})
+  // A lookup that settles after `ms` of (fake) time.
+  const answersAfter = (ms, caller) => () => new Promise((resolve) => setTimeout(resolve, ms, caller))
+  const failsAfter = (ms, failure) => () => new Promise((_, reject) => setTimeout(reject, ms, failure))
+  const ME_CALLER = { id: ME, username: 'invented-name' }
+  // Tells whether a promise has settled yet, without waiting for it.
+  const watch = (promise) => {
+    const seen = { settled: false }
+    seen.result = promise.then((out) => {
+      seen.settled = true
+      return out
+    })
+    return seen
+  }
+
+  it('a lookup that never answers: the plain list comes back once the wait is over, not before', async () => {
+    const view = createBuildsView({ roles: { identify: NEVER }, displayNames: signedOutNames(), identifyWaitMs: 50 })
+    const seen = watch(view.view(req('tok-me')))
+    await vi.advanceTimersByTimeAsync(49)
+    expect(seen.settled).toBe(false)
+    await vi.advanceTimersByTimeAsync(1)
+    expect(seen.settled).toBe(true)
+    const out = await seen.result
+    expect(out.isMember).toBeNull()
+    expect(out.headers).toStrictEqual(SIGNED_OUT_HEADERS)
+    expect(out.nameFor).toBe(nameFor)
+  })
+
+  it('the default wait is 1500 ms', async () => {
+    const view = createBuildsView({ roles: { identify: NEVER }, displayNames: signedOutNames() })
+    const seen = watch(view.view(req('tok-me')))
+    await vi.advanceTimersByTimeAsync(1499)
+    expect(seen.settled).toBe(false)
+    await vi.advanceTimersByTimeAsync(1)
+    expect(seen.settled).toBe(true)
+    const out = await seen.result
+    expect(out.isMember).toBeNull()
+    expect(out.headers).toStrictEqual(SIGNED_OUT_HEADERS)
+  })
+
+  it('a lookup that answers within the wait is flagged', async () => {
+    const roles = { identify: answersAfter(10, ME_CALLER) }
+    const view = createBuildsView({ roles, displayNames: fakeNames(), identifyWaitMs: 50 })
+    const seen = watch(view.view(req('tok-me')))
+    await vi.advanceTimersByTimeAsync(10)
+    expect(seen.settled).toBe(true)
+    const out = await seen.result
+    expect(out.isMember).toBe(isMember)
+    expect(out.isMember(HOLDER)).toBe(true)
+    expect(out.isMember(OTHER)).toBe(false)
+    expect(out.headers).toStrictEqual(SIGNED_IN_HEADERS)
+  })
+
+  it('a lookup that answers after the wait is ignored', async () => {
+    const roles = { identify: answersAfter(100, ME_CALLER) }
+    const view = createBuildsView({ roles, displayNames: signedOutNames(), identifyWaitMs: 50 })
+    const seen = watch(view.view(req('tok-me')))
+    await vi.advanceTimersByTimeAsync(50)
+    expect(seen.settled).toBe(true)
+    const out = await seen.result
+    expect(out.isMember).toBeNull()
+    expect(out.headers).toStrictEqual(SIGNED_OUT_HEADERS)
+    // Lets the late answer arrive, so an error thrown by it would fail the run.
+    await vi.runAllTimersAsync()
+  })
+
+  it('a lookup that fails after the wait is not an unhandled rejection', async () => {
+    // Vitest fails the run on an unhandled rejection; this also listens, so
+    // that the test itself fails rather than only the run.
+    const escaped = []
+    const onEscape = (reason) => escaped.push(reason)
+    process.on('unhandledRejection', onEscape)
+    try {
+      const roles = { identify: failsAfter(100, new Error('Discord answered too late')) }
+      const view = createBuildsView({ roles, displayNames: signedOutNames(), identifyWaitMs: 50 })
+      const seen = watch(view.view(req('tok-me')))
+      await vi.runAllTimersAsync()
+      const out = await seen.result
+      expect(out.isMember).toBeNull()
+      expect(out.headers).toStrictEqual(SIGNED_OUT_HEADERS)
+      // Unhandled rejections are reported once the microtask queue has drained
+      // and a turn of the real event loop has passed.
+      vi.useRealTimers()
+      await new Promise((resolve) => setTimeout(resolve, 20))
+    } finally {
+      process.off('unhandledRejection', onEscape)
+    }
+    expect(escaped).toEqual([])
+  })
+
+  it('a lookup that rejects within the wait is signed out, as before', async () => {
+    const roles = { identify: failsAfter(10, new Upstream('Discord is unreachable.')) }
+    const view = createBuildsView({ roles, displayNames: signedOutNames(), identifyWaitMs: 50 })
+    const seen = watch(view.view(req('tok-me')))
+    await vi.advanceTimersByTimeAsync(10)
+    expect(seen.settled).toBe(true)
+    const out = await seen.result
+    expect(out.isMember).toBeNull()
+    expect(out.headers).toStrictEqual(SIGNED_OUT_HEADERS)
+  })
+
+  it('a lookup that answers null is signed out, as before', async () => {
+    const roles = { identify: answersAfter(10, null) }
+    const view = createBuildsView({ roles, displayNames: signedOutNames(), identifyWaitMs: 50 })
+    const seen = watch(view.view(req('tok-me')))
+    await vi.advanceTimersByTimeAsync(10)
+    expect(seen.settled).toBe(true)
+    const out = await seen.result
+    expect(out.isMember).toBeNull()
+    expect(out.headers).toStrictEqual(SIGNED_OUT_HEADERS)
+  })
+
+  it('a request with no token does not wait for the timer', async () => {
+    const view = createBuildsView({ roles: { identify: identifies }, displayNames: signedOutNames() })
+    const seen = watch(view.view(req()))
+    await vi.advanceTimersByTimeAsync(0)
+    expect(seen.settled).toBe(true)
+    const out = await seen.result
+    expect(out.isMember).toBeNull()
+    expect(out.headers).toStrictEqual(SIGNED_OUT_HEADERS)
+  })
+
+  it('a fast lookup leaves no timer running', async () => {
+    const view = createBuildsView({ roles: { identify: identifies }, displayNames: fakeNames() })
+    const out = await view.view(req('tok-me'))
+    expect(out.isMember).toBe(isMember)
+    // Pins the cleared timer: it has no other observable effect.
+    expect(vi.getTimerCount()).toBe(0)
+  })
+
+  it.each([
+    ['answers nobody', async () => null],
+    [
+      'fails',
+      async () => {
+        throw new Upstream('Discord is unreachable.')
+      },
+    ],
+    [
+      'throws before returning a promise',
+      () => {
+        throw new Error('thrown before any promise')
+      },
+    ],
+  ])('a lookup that %s leaves no timer running either', async (_label, identify) => {
+    const view = createBuildsView({ roles: { identify }, displayNames: fakeNames() })
+    const out = await view.view(req('tok-me'))
+    expect(out.isMember).toBeNull()
+    expect(vi.getTimerCount()).toBe(0)
+  })
+
+  it('property: a lookup is flagged exactly when it answers before the wait is over', async () => {
+    await fc.assert(
+      fc.asyncProperty(fc.integer({ min: 1, max: 300 }), fc.integer({ min: 0, max: 300 }), async (wait, delay) => {
+        fc.pre(delay !== wait) // a tie is decided by timer registration order, and is deliberately not pinned
+        const roles = { identify: answersAfter(delay, ME_CALLER) }
+        const view = createBuildsView({ roles, displayNames: fakeNames(), identifyWaitMs: wait })
+        const seen = watch(view.view(req('tok-me')))
+        await vi.runAllTimersAsync()
+        const out = await seen.result
+        const inTime = delay < wait
+        expect(out.isMember === null).toBe(!inTime)
+        expect(out.headers).toStrictEqual(inTime ? SIGNED_IN_HEADERS : SIGNED_OUT_HEADERS)
+      }),
     )
   })
 })

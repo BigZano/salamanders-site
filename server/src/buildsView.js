@@ -10,19 +10,28 @@
  *             body differs by token). A flagged response is also
  *             Cache-Control: private, no-store, so no shared cache can hand one
  *             viewer's flagged list to another or to a signed-out one.
- * Signed out means no token, an invalid or expired one, or Discord unable to
- * answer (any error from identify): the plain list is still public, so the
- * view falls back to it, unflagged, rather than failing. Only identify is
- * forgiven; a failure of the directory itself is not hidden.
+ * Signed out means no token, an invalid or expired one, Discord unable to
+ * answer (any error from identify), or Discord slower than identifyWaitMs: the
+ * plain list is still public, so the view falls back to it, unflagged, rather
+ * than failing or keeping the page waiting. Only identify is forgiven; a
+ * failure of the directory itself is not hidden.
  */
-export function createBuildsView({ roles, displayNames }) {
+export function createBuildsView({ roles, displayNames, identifyWaitMs = 1500 }) {
   async function view(request) {
     const nameFor = await displayNames.resolver()
-    let caller = null // stays null when identify fails: signed out
+    let caller = null // stays null when identify fails or is slow: signed out
+    let timer
     try {
-      caller = await roles.identify(request)
+      const tooSlow = new Promise((resolve) => {
+        timer = setTimeout(resolve, identifyWaitMs, null)
+      })
+      // The race keeps listening to the lookup, so a rejection after the timer
+      // has won is handled, not an unhandled rejection.
+      caller = await Promise.race([roles.identify(request), tooSlow])
     } catch {
       // Discord down or anything else: the public list is still served, unflagged.
+    } finally {
+      clearTimeout(timer) // a fast lookup leaves nothing pending
     }
     if (!caller) return { nameFor, isMember: null, headers: { Vary: 'Authorization' } }
     return {

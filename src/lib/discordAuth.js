@@ -6,7 +6,7 @@
  * doesn't need one. Swap to Authorization Code (secret held in a Cloudflare
  * Pages Function) once migrated off GitHub Pages.
  */
-import members from '../data/discord-members.json'
+import { getMembership } from './buildsApi'
 
 const CLIENT_ID = '1538255597810483210'
 const STORAGE_KEY = 'salamanders-discord-member'
@@ -18,6 +18,10 @@ const RETURN_PATH_KEY = 'salamanders-discord-return-path'
 const RETURN_FALLBACK_KEY = 'salamanders-discord-return-fallback'
 export const RETURN_FALLBACK_MS = 10 * 60 * 1000
 const RETURN_PATH_MAX = 512
+// How long sign-in waits to learn whether the person is a member. The answer only decides a display hint (nav
+// links, the Join / Open Discord button); the server enforces every real gate itself. So a slow answer is
+// treated like a failed one (not a member) instead of holding sign-in open.
+const MEMBERSHIP_WAIT_MS = 3000
 // Overridable so E2E runs can point identify checks at a local fixture
 // instead of the real Discord API — see e2e/discord-mock.
 const DISCORD_API_BASE = import.meta.env.VITE_DISCORD_API_BASE || 'https://discord.com/api'
@@ -135,6 +139,26 @@ export function scrubCallbackHash() {
   history.replaceState(null, '', returnPath || window.location.pathname + window.location.search)
 }
 
+/**
+ * Whether the server says this token's owner is a chapter member: true or false, never a throw. A failed answer
+ * (refused token, Discord unreachable, network down) and one that takes longer than MEMBERSHIP_WAIT_MS both read
+ * as false. A late answer is ignored; Promise.race has already subscribed to the call, so a late failure is
+ * handled too.
+ */
+async function askMembership(token) {
+  let timer
+  const tooSlow = new Promise((resolve) => {
+    timer = setTimeout(resolve, MEMBERSHIP_WAIT_MS, false)
+  })
+  try {
+    return await Promise.race([getMembership(token), tooSlow])
+  } catch {
+    return false
+  } finally {
+    clearTimeout(timer)
+  }
+}
+
 /** Runs after scrubCallbackHash — does the actual identify + membership check. */
 export async function finishSignIn() {
   if (!pendingToken) return
@@ -149,12 +173,13 @@ export async function finishSignIn() {
     })
     if (!res.ok) return
     const user = await res.json()
+    const isMember = await askMembership(token)
     localStorage.setItem(
       STORAGE_KEY,
       JSON.stringify({
         id: user.id,
         username: user.username,
-        isMember: members.memberIds.includes(user.id),
+        isMember,
         checkedAt: Date.now(),
         accessToken: token,
         // Discord always sends expires_in on an implicit-grant callback; the
