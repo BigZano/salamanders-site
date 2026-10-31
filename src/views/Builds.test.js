@@ -241,3 +241,42 @@ describe('Builds when answers arrive out of order', () => {
     expect(w.text()).not.toContain('Verified Members')
   })
 })
+
+// A list that carries member flags must not outlive the sign-out that made the flags stale.
+describe('Builds while the list reloads after a sign-out', () => {
+  async function flaggedListOnScreen() {
+    signInAs()
+    const refetch = deferred()
+    buildsApi.listBuilds.mockResolvedValueOnce(signedInList()).mockReturnValueOnce(refetch.promise)
+    const w = await open()
+    expect(headings(w)).toEqual(['Verified Members', 'Community Builds'])
+    expect(w.find('.b-member-badge').exists()).toBe(true)
+    return { w, refetch }
+  }
+
+  it('signing out clears the flagged list at once, before the refetch answers', async () => {
+    const { w } = await flaggedListOnScreen()
+
+    useAuth().signOut()
+    await flushPromises() // the refetch is still pending
+
+    expect(w.find('.b-member-badge').exists()).toBe(false)
+    expect(w.text()).not.toContain('Verified Members')
+    expect(w.findAll('.b-section')).toHaveLength(0)
+    expect(w.findAll('.b-name')).toHaveLength(0)
+    expect(w.text()).toContain('Loading builds')
+  })
+
+  it('signing out when the refetch fails shows the error and none of the old flagged list', async () => {
+    const { w, refetch } = await flaggedListOnScreen()
+
+    useAuth().signOut()
+    refetch.reject(new TypeError('Failed to fetch'))
+    await flushPromises()
+
+    expect(w.find('.b-error').exists()).toBe(true)
+    expect(w.findAll('.b-name')).toHaveLength(0)
+    expect(w.find('.b-member-badge').exists()).toBe(false)
+    expect(w.text()).not.toContain('Verified Members')
+  })
+})

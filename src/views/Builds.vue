@@ -18,13 +18,16 @@ const loading = ref(true)
 const loadError = ref('')
 
 // Requests can finish in any order (a list asked for with a token may still be in flight when the visitor
-// signs out and a newer one is sent). Only the most recent call may touch the page, whether it succeeds or
-// fails, or an old answer carrying member flags could land on a signed-out page.
+// signs out and a newer one is sent). Only the most recent call may touch the page, whether it starts,
+// succeeds or fails, or an old answer carrying member flags could land on a signed-out page.
 let latestLoad = 0
 async function load() {
   const mine = ++latestLoad
   loading.value = true
   loadError.value = ''
+  // The list on screen came from a request made under the old sign-in state, and its member flags go stale
+  // with it: drop it, so a signed-out page never shows badges while it waits, or beside an error banner.
+  builds.value = []
   try {
     const list = await buildsApi.listBuilds(undefined, auth.token)
     if (mine !== latestLoad) return
