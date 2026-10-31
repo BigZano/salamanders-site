@@ -3,11 +3,28 @@
 // (prose, lists and the Notable Server Members cards). The story's markup and
 // styles moved here unchanged from the Companies page, including the wide-screen
 // scrim that keeps text readable over the volcano (Companies.test.js checks it).
-defineProps({
+import { computed } from 'vue'
+
+const props = defineProps({
   // an entry of src/data/companies.json
   company: { type: Object, required: true },
+  // The Notable Server Members are real members' names, so they are not in companies.json: the server sends them
+  // to a signed-in guild member (useCompanyNotables). A section marked `notables: true` is where they go.
+  // `notables` is this company's cards, [name, ...lines] lists; `notablesState` says what the page knows.
+  notables: { type: Array, default: null },
+  notablesState: { type: String, default: 'denied', validator: (s) => ['denied', 'loading', 'ready', 'error'].includes(s) },
 })
 defineEmits(['index'])
+
+const NOTES = {
+  loading: 'Loading the notable server members…',
+  error: 'The notable server members could not be loaded. Try again later.',
+  denied: 'Notable server members are shown to signed-in guild members.',
+}
+// Once the server has answered, a section of cards it had none for is left out, not shown as a heading over nothing.
+const sections = computed(() =>
+  props.company.sections.filter((s) => !s.notables || props.notablesState !== 'ready' || props.notables?.length),
+)
 
 // Characters in a member's write-up (everything after the name). Sets the
 // card's share of its row (--bio), so longer bios get more width instead of
@@ -41,7 +58,7 @@ function initials(name) {
     </div>
 
     <div class="company-body">
-      <section v-for="(s, i) in company.sections" :key="i" class="block surface">
+      <section v-for="(s, i) in sections" :key="i" class="block surface">
         <h3 class="block-h">{{ s.h }}</h3>
 
         <template v-if="s.p">
@@ -52,20 +69,23 @@ function initials(name) {
           <li v-for="(item, j) in s.list" :key="j">{{ item }}</li>
         </ul>
 
-        <div v-if="s.notables" class="notables" :data-count="s.notables.length">
-          <div
-            v-for="(m, j) in s.notables"
-            :key="j"
-            class="member panel-forge"
-            :style="{ '--bio': bioLength(m) }"
-          >
-            <div class="member-head">
-              <span class="avatar">{{ initials(m[0]) }}</span>
-              <p class="member-name">{{ m[0] }}</p>
+        <template v-if="s.notables">
+          <div v-if="notablesState === 'ready'" class="notables" :data-count="notables.length">
+            <div
+              v-for="(m, j) in notables"
+              :key="j"
+              class="member panel-forge"
+              :style="{ '--bio': bioLength(m) }"
+            >
+              <div class="member-head">
+                <span class="avatar">{{ initials(m[0]) }}</span>
+                <p class="member-name">{{ m[0] }}</p>
+              </div>
+              <p v-for="(line, k) in m.slice(1)" :key="k" class="member-blurb">{{ line }}</p>
             </div>
-            <p v-for="(line, k) in m.slice(1)" :key="k" class="member-blurb">{{ line }}</p>
           </div>
-        </div>
+          <p v-else class="block-p notables-note" :role="notablesState === 'loading' ? 'status' : undefined">{{ NOTES[notablesState] }}</p>
+        </template>
       </section>
     </div>
   </article>
@@ -220,6 +240,11 @@ function initials(name) {
 }
 .notables:not([data-count='1']):not([data-count='2']):not([data-count='3']) {
   --member-min: 22rem;
+}
+.notables-note {
+  margin-top: 0.4rem;
+  color: var(--color-smoke);
+  font-style: italic;
 }
 .member {
   flex: var(--bio, 300) 1 0;

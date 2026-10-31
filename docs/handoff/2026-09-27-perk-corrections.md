@@ -17,7 +17,7 @@ input-sanitization amendment). Plan:
   live at once, layered over the wiki bake; each one pings `REPORTS_WEBHOOK_URL`.
 - The **Version History** page (`/history`) lists every perk correction,
   deleted build and privilege change. Nothing is ever purged.
-- Master of the Forge can revoke Techmarines and Mechadendrite Experts;
+- Master of the Forge can revoke Techmarines and a member;
   Administrators can revoke anyone below them. Revoked means normal member.
 - Techmarines can now delete other people's builds. Deletes are soft deletes
   and show up in the history.
