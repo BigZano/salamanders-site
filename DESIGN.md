@@ -11,6 +11,7 @@ colors:
   ash-2: "#3a5246"
   bone: "#e8efe9"
   smoke: "#96a59c"
+  faint: "#7a8a81"
   drake: "#59d66c"
   drake-deep: "#173c23"
   ember: "#ff6a2b"
@@ -157,7 +158,8 @@ A near-black green ground with grey-green armour, one living green, and a furnac
 - **Obsidian** (#050a08): the page ground. **Pitch** (#07110d): the end of the ground gradient.
 - **Basalt** (#0b1511), **Basalt 2** (#0e1c16, the panel colour) and **Basalt 3** (#111b18): layered surfaces.
 - **Ash** (#26372f) and **Ash 2** (#3a5246): borders and dividers.
-- **Bone** (#e8efe9): text. **Smoke** (#96a59c): secondary text.
+- **Bone** (#e8efe9): text. **Smoke** (#96a59c): secondary text. **Faint** (#7a8a81): the quietest text that still
+  reaches 4.5:1, for placeholders, empty states and hints.
 
 ### Deathwatch (`dw-*`)
 Ground **dw-bg** (#060906), panels **dw-surface** (#0b110c) and **dw-surface-2** (#111a12), text **dw-ink**
@@ -194,6 +196,9 @@ labels, like stamped plates on armour. Fonts are self-hosted: no third-party fon
 ### Named Rules
 **The Forged Caps Rule.** Display type is uppercase and condensed. A title in sentence case is a bug.
 
+**The Text Floor Rule.** No text goes under `--text-floor`: 11px on a phone (0 on desktop, where the small plate
+lettering keeps its size). A micro-label writes its size as `max(<size>, var(--text-floor))`.
+
 ## Layout
 
 Mobile first, single column, with a left-aligned reading column and the volcano placed in the empty half
@@ -228,7 +233,13 @@ pills (999px); the Deathwatch bottom sheet rounds only its top corners (14px). B
 - **Primary (ember):** a vertical ember-to-magma gradient with a dark label (#1a0d06) in uppercase display type, a
   one-pixel warm border, and a glow. Padding about 0.7rem 1.4rem, and at least 44px tall on a phone.
 - **Secondary (drake):** a faint drake tint with a drake outline and drake uppercase label.
-- **Press:** `scale(0.97)` on every pressable thing, 150ms. **Hover:** only inside `@media (hover: hover) and (pointer: fine)`.
+- **Quiet (ghost, `.btn-ghost`):** the second action beside an ember or drake one: transparent fill, a one-pixel ash
+  border, a smoke label that turns bone on hover, in the same uppercase display type.
+- **Small (`.btn-sm`):** the shared small size for buttons set in a row or a card, used with any of the three above
+  (0.5rem 0.85rem padding, 2px corners, 0.78rem type). Its height is `--tap`: its own size on desktop, 44px on a phone.
+- **Tap targets:** every tap target is at least `--tap` (44px) on touch screens and phones.
+- **Press:** `scale(0.97)` on every pressable thing, at `--dur-press` (120ms). **Hover:** only inside
+  `@media (hover: hover) and (pointer: fine)`. See Motion.
 
 ### Chips
 - **Style:** pill (999px), one-pixel ash border, smoke text on a dark backing (`rgba(5, 10, 8, 0.6)`) so it
@@ -262,6 +273,130 @@ pills (999px); the Deathwatch bottom sheet rounds only its top corners (14px). B
 - **Gate card:** a dw-surface panel with a dw-line-2 border, a Cinzel title, an accent in dw-accent.
 - **REDACTED strip:** a black striped bar with spaced mono text, on `/companies`, the way into the area.
 
+## Motion
+
+The forge burns slowly and everything else answers a touch. Motion here is feedback, state and continuity; the few
+things allowed to put on a show are named below, and every other duration and easing is a token.
+
+**The Molten Motion Rule.** Spectacle is allowed exactly where the Molten Core Rule allows warm light: the forge (the
+volcano canvas and the FireText title), an honour (the Archive's `brand-cool` and gate glow), and one backdrop per
+sub-theme (the Deathwatch drift and flicker). Everything else is functional: feedback, state, continuity. A new
+decorative animation is wrong by default.
+
+### Durations
+
+Four tokens, set in `src/style.css`. A component writes the token, never a literal.
+
+| Token | Value | Use |
+|---|---|---|
+| `--dur-press` | 120ms | the press squeeze and the focus ring |
+| `--dur-state` | 180ms | colour, background, border, chips, tabs, toggles, hover |
+| `--dur-view` | 240ms | the route fade, a panel or card entering or leaving, a popover, expand and collapse |
+| `--dur-sheet` | 320ms | the bottom sheet and overlays |
+
+An exit uses the next stop down: a sheet closes at `--dur-view`, a view leaves at `--dur-state`. The Deathwatch bottom
+sheet opens at `--dur-sheet` and slides out at `--dur-view`. The route fade (`view-in` in `src/App.vue`) is opacity
+only, at `--dur-view`.
+
+The canvas and the authored list below are exempt.
+
+### Easing
+
+One curve: `var(--ease-forge)`, which is `cubic-bezier(0.2, 0.8, 0.2, 1)`. `linear` is for spinners and progress.
+`ease-in-out` appears only inside the authored loops below. The keywords `ease`, `ease-in` and `ease-out`, and
+`cubic-bezier(` literals, do not appear outside the authored list. Nothing bounces.
+
+### The authored list
+
+These keep their own numbers and curves. Everything not listed here is functional and follows the tokens.
+
+| File | What | Keeps |
+|---|---|---|
+| `src/components/MountDeathfire.vue`, `src/components/FireText.vue`, `src/components/FireTuner.vue` | the volcano canvas, the title fire and its dev tuner | everything; the policy test skips them |
+| `src/components/archive/ArchiveThread.vue` | `brand-cool`, 1.7s `cubic-bezier(0.2, 0.7, 0.3, 1)` | duration and curve |
+| `src/components/archive/ArchiveGate.vue` | `gate-glow`, the unsealing | duration and curve |
+| `src/components/deathwatch/deathwatch.css` | `dw-drift` 40s and `dw-flicker` 5s, `ease-in-out` with `infinite alternate` and `infinite` | as is |
+| `src/components/roster/RosterBranch.vue`, `src/components/roster/RosterMember.vue` | the attention flash that finds a member: `rs-flash` 1.4s and `rs-ping` 1.4s, twice | duration and iteration count; the easing is `var(--ease-forge)` |
+
+The Deathwatch skeleton shimmer (`dw-pulse`, in `deathwatch.css`) and the gate pulse (`dw-gate-pulse`, in
+`DeathwatchGate.vue`) also keep their own durations and `ease-in-out`, but run three times (see Loops).
+
+### Loops
+
+A loop is bounded by the life of what it shows, or by visibility. `infinite` is allowed for `dw-drift`, `dw-flicker`
+and the spinner, and nowhere else. The skeleton shimmer (`dw-pulse`) and the gate's `dw-gate-pulse` run three
+iterations, then rest. The canvas pauses when the tab is hidden and when it is offscreen.
+
+There is one spinner: `@keyframes spin` in `src/style.css`, unscoped. A component writes
+`animation: spin 0.8s linear infinite;` and never defines its own `@keyframes spin`.
+
+### Reduced motion
+
+Nothing moves. Opacity and colour still change, so feedback survives.
+
+The blanket switch sits in `src/style.css` inside `@layer base`, under `@media (prefers-reduced-motion: reduce)`.
+Every animation and transition drops to 0.01ms with no delay and one iteration, and smooth scrolling is off. It is
+0.01ms rather than `none` so Vue `<Transition>` hooks and `animationend` handlers still fire. The volcano shows a
+still frame.
+
+Every declaration in that block is `!important`. Under cascade-layer rules an important declaration in a layer beats
+an important declaration in unlayered CSS, and Vue scoped styles are unlayered. So a component's own
+`@media (prefers-reduced-motion: reduce)` block cannot restore a duration. Feedback under reduced motion comes only
+two ways:
+
+- Put `class="rm-fade"` on an element whose animation or transition is opacity or colour only.
+- Add a selector to the allowlist rule in `src/style.css`.
+
+The allowlist gives `.rm-fade`, `.btn-ember`, `.btn-drake`, `.btn-ghost` and `.btn-sm` a `--dur-state` transition on
+`opacity`, `color`, `background-color`, `border-color`, `box-shadow` and `outline-color` only, and `.rm-fade` a
+`--dur-state` animation duration. No transform, translate or scale is ever on it. A component may still switch a
+transform-bearing animation off with `animation: none` or `transition: none`; the blanket does not touch the name.
+
+### Press and hover
+
+**Press:** every pressable thing gets `:active { transform: scale(0.97); }` and
+`transform var(--dur-press) var(--ease-forge)` merged into its one `transition:` list. Pressables are buttons
+(`<button>`, `[role="button"]`, `.btn*`), chips, tabs, and tiles or cards that are links. Table rows, list rows and
+text links in prose or navigation are not pressable and do not squeeze. A pressable that already scales on hover keeps
+that scale and still gets the active one.
+
+**Hover:** every `:hover` rule sits inside `@media (hover: hover) and (pointer: fine) {`, written at the top level of
+the style block and never nested inside a rule. A touch screen fakes a hover on the first tap and keeps it.
+
+### Properties
+
+Functional motion animates `transform`, `opacity`, `visibility` (paired with opacity), `color`, `background-color`,
+`border-color`, `outline-color`, `box-shadow`, `text-shadow`, `text-decoration-color` and `filter`. The one layout
+exception is `grid-template-rows` from `0fr` to `1fr` for an expand or collapse, at `--dur-view`.
+
+`transition: all` never: name the properties that change. The shorthand form is
+`transition: <property> var(--dur-x) var(--ease-forge)[, ...]`; the longhands (`transition-duration`,
+`animation-duration`) take the same tokens.
+
+### Vue
+
+A swap of one view or panel for another is a `<Transition>` with a `key` and `mode="out-in"`. A list that gains and
+loses items is a `<TransitionGroup>`. There is no `@starting-style` yet, because the floor for phone browsers is not
+established.
+
+### Canvas budget
+
+The budget is under 6ms of draw per frame at 390px with 4x CPU throttle, measured headless, with the dragon
+engine lazy-loaded and at most 25 KB gzipped.
+
+### Enforcement
+
+`src/motionPolicy.test.js` sweeps the `.vue` and `.css` files under `src/` (skipping the three canvas files) and
+fails the build on:
+
+- R1: `transition: all`.
+- R2: a stray easing: `ease`, `ease-in` or `ease-out` anywhere; `ease-in-out` outside `deathwatch.css` and
+  `DeathwatchGate.vue`; `cubic-bezier(` outside the two Archive files.
+- R3: a literal duration in a transition, or in an animation outside the authored files and the spinner.
+- R4: `infinite` outside `deathwatch.css` and the spinner.
+- R5: a `:hover` outside the `(hover: hover) and (pointer: fine)` block.
+- R6: a second `@keyframes spin`.
+
 ## Do's and Don'ts
 
 ### Do:
@@ -269,8 +404,7 @@ pills (999px); the Deathwatch bottom sheet rounds only its top corners (14px). B
 - **Do** put text on dense panels and keep it at 4.5:1 over the brightest lava.
 - **Do** make every pressable thing squeeze on press, and gate every hover behind `(hover: hover) and (pointer: fine)`.
 - **Do** keep tap targets at 44px or more on a phone, and pad the safe areas.
-- **Do** animate `transform` and `opacity` only, under 300ms, with the forge easing (`cubic-bezier(0.2, 0.8, 0.2, 1)`),
-  and give every animation a reduced-motion variant.
+- **Do** take every duration and easing from the Motion section's tokens; see Motion for what may be authored.
 - **Do** self-host fonts and keep the Deathwatch area dark only.
 
 ### Don't:
