@@ -117,6 +117,9 @@ describe('identify', () => {
     ['an id that is too long (21 digits)', { status: 200, body: { id: '300000000000000000001', username: 'u' } }],
     ['an id sent as a short number', { status: 200, body: { id: 12345, username: 'u' } }],
     ['an id sent as a number too large to be a snowflake', { status: 200, body: { id: 3e20, username: 'u' } }],
+    // JavaScript rounds an 18-digit JSON number, so the digits that survive name a different person.
+    ['an 18-digit id sent as a number, which JavaScript rounds', { status: 200, raw: '{"id": 300000000000000001, "username": "u"}' }],
+    ['an 18-digit id sent as a number that happens to be exact', { status: 200, raw: '{"id": 300000000000000000, "username": "u"}' }],
   ])('throws Upstream, not null and not a user, on %s', async (_, route) => {
     await expect(me(route)).rejects.toBeInstanceOf(Upstream)
   })
