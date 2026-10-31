@@ -11,9 +11,9 @@
 - Reports: a Legion member reports conduct that breaks the Chapter's code and follows its status. Review: a Reclusiarch works the queue (administrators read only).
 
 ## Action or task
-- Planner: choose a class, one perk per column ("Your Build", n / 8), pick weapons, name it, "Save to library".
+- Planner: choose a class, one perk per column ("Your Build", n / 8), pick weapons, name it, "Save to library"; "Copy build" or "Share link" to pass it on.
 - Armoury: choose a slot, search, open a weapon, read its statistics, "Equip for <class>".
-- Builds: search, filter by class, open a card; apply or share it in a click. Verified Members' builds come first.
+- Builds: search, filter by class, "Open in builder" on a card ("Delete" shows only to those allowed). Verified Members' builds come first.
 - Companies: search, jump by the company index.
 - Reports: fill the form (required fields are starred), "File report", then follow "My reports".
 - Review: open a report, "Claim" it, then resolve or escalate to the official form.
@@ -27,7 +27,7 @@
 - Phone first, single column; 44px tap targets; fields are 16px on touch so the page never zooms.
 - Touch has no hover: the Planner's perk preview opens by press and hold, so nothing may need hover alone.
 - Every pressable squeezes on press; hover only for fine pointers (DESIGN.md, Motion).
-- Long pages of tables get a quieter volcano (DESIGN.md, Layout). Text sits on dense panels.
+- Long pages of tables get a quieter volcano (DESIGN.md, Layout); /reports and /reports/review have no profile of their own today. Text sits on dense panels.
 - Reports and Review wall on Discord sign-in, then a role check ("Checking your roles…"); a refusal has short plain copy.
 
 ## Direction and memorable moment
