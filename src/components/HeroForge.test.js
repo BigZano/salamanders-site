@@ -41,9 +41,21 @@ describe('HeroForge Discord button', () => {
     const { discord } = render({ id: '1', username: 'brother', isMember: true })
     expect(discord.text()).toBe('Open the Discord')
     expect(discord.text()).not.toMatch(/join/i)
-    expect(discord.attributes('href')).toBe(SERVER)
+    expect(discord.attributes('href')).not.toBe(INVITE)
     expect(discord.attributes('target')).toBe('_blank')
     expect(discord.attributes('rel')).toContain('noopener')
+  })
+
+  it('the member button links to the Discord server channel URL built from the guild id', () => {
+    // The guild id is the Discord server's id, public in every invite link.
+    const member = render({ id: '1', username: 'brother', isMember: true }).discord
+    expect(member.attributes('href')).toBe(SERVER)
+    expect(member.attributes('href')).toMatch(/^https:\/\/discord\.com\/channels\/\d{17,20}$/)
+
+    // Anyone who is not a confirmed member gets the invite, never the server URL.
+    for (const visitor of [null, { id: '1', username: 'guest', isMember: false }]) {
+      expect(render(visitor).discord.attributes('href')).toBe(INVITE)
+    }
   })
 })
 
