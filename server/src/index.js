@@ -15,6 +15,7 @@ import { createArchiveKeyHandler } from './archiveKey.js'
 import { createBakeLoader, DEFAULT_BAKE_BASE_URL } from './bake.js'
 import { rowToBuild, publicBuild } from './buildRow.js'
 import { createBuildModeration } from './buildModeration.js'
+import { createBuildsView } from './buildsView.js'
 import { validateBuildText } from './buildText.js'
 import { applyCors } from './cors.js'
 import { createDeathwatchAccess } from './deathwatchAccess.js'
@@ -23,6 +24,8 @@ import { createDeathwatchStore } from './deathwatchStore.js'
 import { createDiscordRoles } from './discordRoles.js'
 import { createDisplayNames } from './displayNames.js'
 import { createHistoryStore } from './historyStore.js'
+import { createMembership } from './membership.js'
+import { createMembershipHandler } from './membershipHandler.js'
 import { createPerksHandler } from './perks.js'
 import { createPrivileges } from './privileges.js'
 import { createReportsHandler } from './reports.js'
@@ -42,22 +45,26 @@ const DISCORD_API_BASE = process.env.DISCORD_API_BASE || 'https://discord.com/ap
 
 const pool = new Pool({ connectionString: process.env.DATABASE_URL })
 
-// Legion Archive key: fail-closed, gated on the same synced member list that
-// ranks builds (src/data/discord-members.json on main). See archiveKey.js.
-const archiveKey = createArchiveKeyHandler({
-  discordApiBase: DISCORD_API_BASE,
-  guildId: GUILD_ID,
-  roleId: process.env.ARCHIVE_ROLE_ID,
-  membersUrl:
-    process.env.ARCHIVE_MEMBERS_URL ||
-    'https://raw.githubusercontent.com/BigZano/salamanders-site/main/src/data/discord-members.json',
-  archiveKey: process.env.ARCHIVE_KEY,
-})
-
 const roles = createDiscordRoles({ apiBase: DISCORD_API_BASE, guildId: GUILD_ID, botToken: BOT_TOKEN })
+// GET /membership: is the caller a guild member? Answered live from Discord
+// against the member role — see membership.js and membershipHandler.js.
+const membership = createMembership({ roles, roleId: process.env.ARCHIVE_ROLE_ID })
+const membershipRoutes = createMembershipHandler({ membership })
+// Legion Archive key: fail-closed, gated on the same live membership check
+// (the member role, asked of Discord on every call). See archiveKey.js.
+const archiveKey = createArchiveKeyHandler({ membership, archiveKey: process.env.ARCHIVE_KEY })
 // Build authors are shown by Discord display name, from an in-memory
-// directory of the guild — see displayNames.js.
-const displayNames = createDisplayNames({ apiBase: DISCORD_API_BASE, guildId: GUILD_ID, botToken: BOT_TOKEN })
+// directory of the guild — see displayNames.js. The same directory knows who
+// holds the member role, so the builds list can flag members.
+const displayNames = createDisplayNames({
+  apiBase: DISCORD_API_BASE,
+  guildId: GUILD_ID,
+  botToken: BOT_TOKEN,
+  memberRoleId: process.env.ARCHIVE_ROLE_ID,
+  ttlMs: 5 * 60_000,
+})
+// GET /builds: names for everyone, the member flag only for a signed-in viewer — see buildsView.js.
+const buildsView = createBuildsView({ roles, displayNames })
 
 // The Legion roster and Infirmary list — see roster.js and rosterHandler.js.
 // Its own guild-member cache, never written to disk.
@@ -117,8 +124,10 @@ function cors(res) {
   return applyCors(res, ALLOWED_ORIGIN)
 }
 
-function json(body, status = 200) {
-  return cors(new Response(JSON.stringify(body), { status, headers: { 'Content-Type': 'application/json' } }))
+function json(body, status = 200, headers = {}) {
+  return cors(
+    new Response(JSON.stringify(body), { status, headers: { 'Content-Type': 'application/json', ...headers } }),
+  )
 }
 
 /** Who is this, really? Never trust an id the client hands us directly. */
@@ -140,8 +149,12 @@ async function listBuilds(request) {
   const { rows } = className
     ? await pool.query('select * from builds where deleted_at is null and class_name = $1 order by created_at desc', [className])
     : await pool.query('select * from builds where deleted_at is null order by created_at desc')
-  const nameFor = await displayNames.resolver()
-  return json(rows.map((r) => publicBuild(rowToBuild(r), nameFor)))
+  const { nameFor, isMember, headers } = await buildsView.view(request)
+  return json(
+    rows.map((r) => publicBuild(rowToBuild(r), nameFor, isMember)),
+    200,
+    headers,
+  )
 }
 
 async function createBuild(request) {
@@ -205,6 +218,8 @@ Bun.serve({
       if (rosterPublicRes) return cors(rosterPublicRes)
       const rosterRes = await rosterRoutes(request, url)
       if (rosterRes) return cors(rosterRes)
+      const membershipRes = await membershipRoutes(request, url)
+      if (membershipRes) return cors(membershipRes)
       if (url.pathname === '/health') return json({ ok: true })
       if (url.pathname === '/archive/key' && request.method === 'GET') return cors(await archiveKey(request))
       if (url.pathname === '/builds/moderator' && request.method === 'GET') return cors(await moderation.status(request))

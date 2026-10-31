@@ -39,9 +39,10 @@ services:
       # Legion Archive gate. ARCHIVE_KEY is the base64 key from
       # archive-export/.env (keep a copy in a password manager).
       ARCHIVE_KEY: ${ARCHIVE_KEY:-}
+      # The guild's member role, not only the archive's: it gates the archive key,
+      # answers GET /membership and sets the member flag on the builds list, so
+      # narrowing it changes who counts as a member across the site.
       ARCHIVE_ROLE_ID: ${ARCHIVE_ROLE_ID:-1377787723976409211}
-      # Optional override; defaults to src/data/discord-members.json on main.
-      ARCHIVE_MEMBERS_URL: ${ARCHIVE_MEMBERS_URL:-}
       # Perk corrections: wiki bake location and editor/moderator role
       # overrides; empty means the built-in defaults (bake.js, privileges.js).
       BAKE_BASE_URL: ${BAKE_BASE_URL:-}

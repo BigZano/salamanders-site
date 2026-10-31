@@ -113,13 +113,6 @@ Bun.serve({
       return withCors(Response.json(user))
     }
 
-    // Legion Archive member list, shaped like src/data/discord-members.json.
-    // Only the Legion role holder is on it (unlike the real bake, which also
-    // lists the no-role tester) so the refusal path is exercised.
-    if (url.pathname === '/members.json') {
-      return withCors(Response.json({ fetched: new Date(0).toISOString(), guildId: GUILD_ID, roleId: LEGION_ROLE, memberIds: ['75633559351595008'] }))
-    }
-
     // Guild role table (Administrator checks). Nobody is an admin except the Deathwatch-area owner and
     // Administrator testers; everyone else, the Legion testers included, is not.
     if (url.pathname === `/v10/guilds/${GUILD_ID}`) {

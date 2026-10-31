@@ -40,7 +40,8 @@ export function createDiscordRoles({ fetchImpl = fetch, apiBase, guildId, botTok
     if (!m) return null
     const me = await get('/users/@me', `Bearer ${m[1]}`)
     if (me.status === 401 || me.status === 403) return null
-    if (me.status !== 200 || !SNOWFLAKE.test(String(me.body?.id))) throw new Upstream()
+    // A string only: JavaScript rounds an 18-digit JSON number, and the digits left would name someone else.
+    if (me.status !== 200 || typeof me.body?.id !== 'string' || !SNOWFLAKE.test(me.body.id)) throw new Upstream()
     return { id: me.body.id, username: String(me.body.username || me.body.id) }
   }
 

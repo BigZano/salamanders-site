@@ -1,192 +1,241 @@
 import { describe, it, expect } from 'vitest'
+import * as fc from 'fast-check'
 import { createArchiveKeyHandler } from './archiveKey'
+import { Upstream } from './discordRoles'
 import { deriveKeys, keyFromBase64 } from '../../src/lib/archive/crypto'
 
+// Invented ids only: real member and role ids never enter the repo.
+const ME = '300000000000000001'
 const KEY = Buffer.alloc(32, 7).toString('base64')
-const ROLE = '1377787723976409211'
-const GUILD = '1322056087792521269'
-const USER = '75633559351595008'
-const OTHER = '87082170719408128'
 const TOKEN = 'good.token-value_1'
-const MEMBERS_URL = 'https://raw.test/discord-members.json'
-const LIST = { fetched: '2026-09-25T00:00:00.000Z', guildId: GUILD, roleId: ROLE, memberIds: [USER] }
 
-// Stand-in for Discord's /users/@me and the baked member list (the same
-// discord-members.json that ranks builds). raw → non-JSON body.
-function upstream({ me = { status: 200, body: { id: USER, username: 'u' } }, list = { status: 200, body: LIST }, throws, seen } = {}) {
-  return async (url, init) => {
-    seen?.push([url, init?.headers?.Authorization])
-    if (throws) throw throws
-    const r = url === MEMBERS_URL ? list : me
-    if (r.raw !== undefined) return new Response(r.raw, { status: r.status })
-    return new Response(JSON.stringify(r.body), { status: r.status })
-  }
-}
-const cfg = (over = {}) => ({
-  fetchImpl: upstream(), discordApiBase: 'https://d.test/api', guildId: GUILD, roleId: ROLE, membersUrl: MEMBERS_URL, archiveKey: KEY, ...over,
+const req = (token = TOKEN) =>
+  new Request('https://api.test/archive/key', { headers: token === null ? {} : { Authorization: `Bearer ${token}` } })
+
+// A fake membership seam. `check` is whatever the test scripts: it resolves a
+// value or throws (so a test can make Discord "fail" with anything).
+const fake = (check) => ({ check: async (request) => check(request) })
+const answers = (value) => fake(() => value)
+const fails = (thrown) =>
+  fake(() => {
+    throw thrown
+  })
+// Reaching the membership check at all is the failure being tested.
+const NEVER_ASKED = fake(() => {
+  throw new Error('membership was asked although the archive key is not usable')
 })
-const NONE = Symbol('no Authorization header')
-const DEFAULT = `Bearer ${TOKEN}`
-const req = (auth) => new Request('https://api.test/archive/key', { headers: auth === NONE ? {} : { Authorization: auth } })
 
-async function call(configOrHandler, auth = DEFAULT) {
-  const handle = typeof configOrHandler === 'function' ? configOrHandler : createArchiveKeyHandler(configOrHandler)
-  const res = await handle(req(auth))
-  const text = await res.text()
-  return { status: res.status, text, headers: res.headers }
+async function askWithKey(membership, archiveKey, request = req()) {
+  const res = await createArchiveKeyHandler({ membership, archiveKey })(request)
+  return { res, text: await res.text() }
 }
-const MESSAGES = {
-  401: ['Sign in with Discord.'],
-  403: ['Restricted to the XVIIIth Legion.'],
-  503: ['Archive unavailable.', 'Discord could not be reached. Try again.'],
+const ask = (membership, request) => askWithKey(membership, KEY, request)
+const body = ({ text }) => JSON.parse(text)
+
+const SIGN_IN = { error: 'Sign in with Discord.' }
+const LEGION_ONLY = { error: 'Restricted to the XVIIIth Legion.' }
+const UNREACHABLE = { error: 'Discord could not be reached. Try again.' }
+const UNAVAILABLE = { error: 'Archive unavailable.' }
+
+function expectAnswer(r, status, expected) {
+  expect(r.res.status).toBe(status)
+  expect(r.res.headers.get('Content-Type')).toBe('application/json')
+  expect(r.res.headers.get('Cache-Control')).toBe('no-store')
+  expect(body(r)).toStrictEqual(expected)
 }
-function assertNoKey({ text, headers }) {
-  expect(text).not.toContain(KEY)
-  for (const [, v] of headers) expect(v).not.toContain(KEY)
+function expectNoKey(r) {
+  expect(r.text).not.toContain(KEY)
+  for (const [, v] of r.res.headers) expect(v).not.toContain(KEY)
 }
 
-describe('GET /archive/key', () => {
-  it('a listed role holder gets the key and the kid of that key', async () => {
-    const r = await call(cfg())
-    expect(r.status).toBe(200)
-    const body = JSON.parse(r.text)
-    expect(body.key).toBe(KEY)
-    expect(body.kid).toBe((await deriveKeys(keyFromBase64(KEY))).kid)
-    expect(r.headers.get('Cache-Control')).toBe('no-store')
+describe('GET /archive/key — a member gets the key', () => {
+  it('a member gets the key and the kid of that key', async () => {
+    // Decided by the caller's own request, so a handler that forgets to pass it on is caught.
+    const m = fake((request) =>
+      request.headers.get('Authorization') === `Bearer ${TOKEN}` ? { id: ME, member: true } : null,
+    )
+    const r = await ask(m)
+    expectAnswer(r, 200, { key: KEY, kid: (await deriveKeys(keyFromBase64(KEY))).kid })
   })
 
-  const list = (body, status = 200) => upstream({ list: { status, body } })
+  it('the same fake refuses a request that is not the member’s (the answer follows the request)', async () => {
+    const m = fake((request) =>
+      request.headers.get('Authorization') === `Bearer ${TOKEN}` ? { id: ME, member: true } : null,
+    )
+    expectAnswer(await ask(m, req('someone-else')), 401, SIGN_IN)
+    expectAnswer(await ask(m, req(null)), 401, SIGN_IN)
+  })
+
+  it('a key with + and / in it is accepted (all of the base64 alphabet is)', async () => {
+    const k = Buffer.alloc(32, 0xfb).toString('base64')
+    expect(k).toContain('+')
+    expect(k).toContain('/')
+    expectAnswer(await askWithKey(answers({ id: ME, member: true }), k), 200, {
+      key: k,
+      kid: (await deriveKeys(keyFromBase64(k))).kid,
+    })
+  })
+
+  it('extra fields on a membership answer do not matter, and are not echoed', async () => {
+    const r = await ask(answers({ id: ME, member: true, roles: ['x'], token: TOKEN }))
+    expect(Object.keys(body(r)).sort()).toStrictEqual(['key', 'kid'])
+    expect(r.text).not.toContain(TOKEN)
+  })
+})
+
+describe('GET /archive/key — every other answer withholds the key', () => {
   const denials = [
-    ['no Authorization header', cfg(), NONE, 401],
-    ['empty Authorization', cfg(), '', 401],
-    ['Basic scheme', cfg(), 'Basic abc', 401],
-    ['Bearer with no token', cfg(), 'Bearer ', 401],
-    ['token with a space (header smuggling)', cfg(), 'Bearer a b', 401],
-    ['token with a tab', cfg(), 'Bearer a\tb', 401],
-    ['token with a quote', cfg(), 'Bearer a"b', 401],
-    ['oversized token', cfg(), `Bearer ${'a'.repeat(600)}`, 401],
-    ['Discord rejects token (401)', cfg({ fetchImpl: upstream({ me: { status: 401, body: {} } }) }), DEFAULT, 401],
-    ['Discord forbids token (403)', cfg({ fetchImpl: upstream({ me: { status: 403, body: {} } }) }), DEFAULT, 401],
-    ['identify rate-limited (429)', cfg({ fetchImpl: upstream({ me: { status: 429, body: {} } }) }), DEFAULT, 503],
-    ['identify 5xx', cfg({ fetchImpl: upstream({ me: { status: 502, body: {} } }) }), DEFAULT, 503],
-    ['identify 5xx that still carries an id', cfg({ fetchImpl: upstream({ me: { status: 500, body: { id: USER } } }) }), DEFAULT, 503],
-    ['identify 202 with an id (not a clean 200)', cfg({ fetchImpl: upstream({ me: { status: 202, body: { id: USER } } }) }), DEFAULT, 503],
-    ['identify non-JSON', cfg({ fetchImpl: upstream({ me: { status: 200, raw: '<html>' } }) }), DEFAULT, 503],
-    ['identify body missing id', cfg({ fetchImpl: upstream({ me: { status: 200, body: { username: 'x' } } }) }), DEFAULT, 503],
-    ['identify id not a snowflake', cfg({ fetchImpl: upstream({ me: { status: 200, body: { id: '../x' } } }) }), DEFAULT, 503],
-    ['not on the member list', cfg({ fetchImpl: list({ ...LIST, memberIds: [OTHER] }) }), DEFAULT, 403],
-    ['empty member list', cfg({ fetchImpl: list({ ...LIST, memberIds: [] }) }), DEFAULT, 403],
-    ['list is for another role', cfg({ fetchImpl: list({ ...LIST, roleId: '1' }) }), DEFAULT, 503],
-    ['list is for another guild', cfg({ fetchImpl: list({ ...LIST, guildId: '1' }) }), DEFAULT, 503],
-    ['list memberIds not an array', cfg({ fetchImpl: list({ ...LIST, memberIds: USER }) }), DEFAULT, 503],
-    ['list fetch 404', cfg({ fetchImpl: list(LIST, 404) }), DEFAULT, 503],
-    ['list fetch 5xx', cfg({ fetchImpl: list(LIST, 500) }), DEFAULT, 503],
-    ['list not JSON', cfg({ fetchImpl: upstream({ list: { status: 200, raw: 'nope' } }) }), DEFAULT, 503],
-    ['network error', cfg({ fetchImpl: upstream({ throws: new TypeError('fetch failed') }) }), DEFAULT, 503],
-    ['missing ARCHIVE_KEY', cfg({ archiveKey: '' }), DEFAULT, 503],
-    ['malformed ARCHIVE_KEY', cfg({ archiveKey: 'short' }), DEFAULT, 503],
-    ['archive key that only stringifies to base64', cfg({ archiveKey: { toString: () => KEY } }), DEFAULT, 503],
-    ['missing role id', cfg({ roleId: undefined }), DEFAULT, 503],
-    ['missing members url', cfg({ membersUrl: '' }), DEFAULT, 503],
-    ['missing guild', cfg({ guildId: null }), DEFAULT, 503],
-    ['missing api base', cfg({ discordApiBase: '' }), DEFAULT, 503],
-    ['api base that only stringifies to a URL', cfg({ discordApiBase: { toString: () => 'https://d.test/api' } }), DEFAULT, 503],
+    ['no token', answers(null), 401, SIGN_IN],
+    ['not a member', answers({ id: ME, member: false }), 403, LEGION_ONLY],
+    ['Upstream', fails(new Upstream('Discord is unreachable.')), 503, UNREACHABLE],
+    ['plain Error', fails(new Error('boom')), 503, UNREACHABLE],
+    ['an Error that carries the key in its message', fails(new Error(`boom ${KEY}`)), 503, UNREACHABLE],
+    ['a rejection that is a string', fails('boom'), 503, UNREACHABLE],
+    ['a rejection that is undefined', fails(undefined), 503, UNREACHABLE],
+    ['a rejection that is null', fails(null), 503, UNREACHABLE],
+    ['a membership answer that is undefined', answers(undefined), 403, LEGION_ONLY],
+    ['a membership answer that is a string', answers('member'), 403, LEGION_ONLY],
+    ['a membership answer that is a number', answers(1), 403, LEGION_ONLY],
+    ['a membership answer with no member field', answers({ id: ME }), 403, LEGION_ONLY],
+    ['member: "true"', answers({ id: ME, member: 'true' }), 403, LEGION_ONLY],
+    ['member: 1', answers({ id: ME, member: 1 }), 403, LEGION_ONLY],
+    ['member: {}', answers({ id: ME, member: {} }), 403, LEGION_ONLY],
+    ['member: []', answers({ id: ME, member: [] }), 403, LEGION_ONLY],
+    ['member: null', answers({ id: ME, member: null }), 403, LEGION_ONLY],
+    ['member: Boolean object', answers({ id: ME, member: new Boolean(true) }), 403, LEGION_ONLY],
   ]
-  it.each(denials)('%s → %i, key never leaked', async (_, config, auth, status) => {
-    const r = await call(config, auth)
-    expect(r.status).toBe(status)
-    expect(r.headers.get('Cache-Control')).toBe('no-store')
-    expect(r.headers.get('Content-Type')).toBe('application/json')
-    expect(MESSAGES[status]).toContain(JSON.parse(r.text).error)
-    assertNoKey(r)
+  it.each(denials)('%s → %i, key never leaked', async (_, membership, status, expected) => {
+    const r = await ask(membership)
+    expectAnswer(r, status, expected)
+    expectNoKey(r)
   })
 
-  it('a member id given as a number in the list does not match (ids are strings)', async () => {
-    const r = await call(cfg({ fetchImpl: upstream({ list: { status: 200, body: { ...LIST, memberIds: [Number(USER)] } } }) }))
-    expect(r.status).toBe(403)
+  it('whatever the membership check resolves, the key is only for member: true', async () => {
+    await fc.assert(
+      fc.asyncProperty(
+        fc.anything().filter((v) => v !== null && v?.member !== true),
+        async (resolved) => {
+          const r = await ask(answers(resolved))
+          expectAnswer(r, 403, LEGION_ONLY)
+          expectNoKey(r)
+        },
+      ),
+      { numRuns: 200 },
+    )
   })
 
-  it('does not ask anyone anything when no token is present', async () => {
-    const seen = []
-    const r = await call(cfg({ fetchImpl: upstream({ seen }) }), '')
-    expect(r.status).toBe(401)
-    expect(seen).toEqual([])
+  it('whatever the member field holds, only the boolean true is a member', async () => {
+    await fc.assert(
+      fc.asyncProperty(
+        fc.anything().filter((v) => v !== true),
+        async (member) => {
+          const r = await ask(answers({ id: ME, member }))
+          expectAnswer(r, 403, LEGION_ONLY)
+          expectNoKey(r)
+        },
+      ),
+      { numRuns: 200 },
+    )
   })
 
-  it('never fetches the member list for a token Discord rejects', async () => {
-    const seen = []
-    await call(cfg({ fetchImpl: upstream({ me: { status: 401, body: {} }, seen }) }))
-    expect(seen.map(([u]) => u)).toEqual(['https://d.test/api/users/@me'])
-  })
-
-  it('times out a hung upstream as 503', async () => {
-    const hang = (url, init) => new Promise((_, reject) => init.signal.addEventListener('abort', () => reject(init.signal.reason)))
-    const r = await call(cfg({ fetchImpl: hang, timeoutMs: 20 }))
-    expect(r.status).toBe(503)
-  })
-
-  it("identifies the caller with the caller's own token, and fetches the list without credentials", async () => {
-    const seen = []
-    await call(cfg({ fetchImpl: upstream({ seen }) }))
-    expect(seen).toEqual([
-      ['https://d.test/api/users/@me', `Bearer ${TOKEN}`],
-      [MEMBERS_URL, undefined],
-    ])
+  it('whatever the membership check rejects with, the answer is 503 and says nothing of it', async () => {
+    await fc.assert(
+      fc.asyncProperty(fc.anything(), async (thrown) => {
+        const r = await ask(fails(thrown))
+        expectAnswer(r, 503, UNREACHABLE)
+        expectNoKey(r)
+      }),
+      { numRuns: 200 },
+    )
   })
 })
 
-describe('member list cache', () => {
-  function counting(bodies) {
-    let listFetches = 0
-    const fetchImpl = async (url) => {
-      if (url !== MEMBERS_URL) return new Response(JSON.stringify({ id: USER }))
-      const b = bodies[Math.min(listFetches++, bodies.length - 1)]
-      return b instanceof Response ? b : new Response(JSON.stringify(b))
-    }
-    return { fetchImpl, count: () => listFetches }
-  }
-
-  it('reuses the list for cacheMs, then refetches (role changes land within one window)', async () => {
-    let t = 1_000_000
-    const c = counting([LIST, { ...LIST, memberIds: [] }])
-    const handle = createArchiveKeyHandler(cfg({ fetchImpl: c.fetchImpl, cacheMs: 60_000, now: () => t }))
-    expect((await call(handle)).status).toBe(200)
-    t += 59_999
-    expect((await call(handle)).status).toBe(200)
-    expect(c.count()).toBe(1)
-    t += 1
-    expect((await call(handle)).status).toBe(403)
-    expect(c.count()).toBe(2)
+describe('GET /archive/key — an unusable ARCHIVE_KEY', () => {
+  // Valid shape: 43 base64 characters and one "=" (32 bytes).
+  const bad = [
+    ['undefined', undefined],
+    ['null', null],
+    ['empty', ''],
+    ['a number', 42],
+    ['an object that only stringifies to a valid key', { toString: () => KEY }],
+    ['an array holding a valid key', [KEY]],
+    ['42 base64 characters', KEY.slice(0, 42)],
+    ['43 characters with no padding', KEY.slice(0, 43)],
+    ['padding twice', `${KEY}=`],
+    ['44 base64 characters', 'A'.repeat(44)],
+    ['two padding characters', `${KEY.slice(0, 42)}==`],
+    ['a leading space', ` ${KEY}`],
+    ['a trailing space', `${KEY} `],
+    ['a trailing newline', `${KEY}\n`],
+    ['a leading newline', `\n${KEY}`],
+    ['a trailing character after the padding', `${KEY}A`],
+    ['a leading character before a full key', `A${KEY}`],
+    ['two keys', `${KEY}${KEY}`],
+    ['the url-safe alphabet', Buffer.alloc(32, 0xfb).toString('base64url') + '='],
+    ['a non-base64 character at the start', `!${KEY.slice(1)}`],
+    ['a non-base64 character in the middle', `${KEY.slice(0, 20)}!${KEY.slice(21)}`],
+    ['a non-base64 character before the padding', `${KEY.slice(0, 42)}!=`],
+    ['a non-ASCII digit', `${KEY.slice(0, 20)}٣${KEY.slice(21)}`],
+  ]
+  it.each(bad)('%s → 503 Archive unavailable, and asks nobody', async (_, archiveKey) => {
+    const r = await askWithKey(NEVER_ASKED, archiveKey)
+    expectAnswer(r, 503, UNAVAILABLE)
   })
 
-  it('a failed refresh is not cached: the next request tries again', async () => {
-    const c = counting([new Response('down', { status: 500 }), LIST])
-    const handle = createArchiveKeyHandler(cfg({ fetchImpl: c.fetchImpl }))
-    expect((await call(handle)).status).toBe(503)
-    expect((await call(handle)).status).toBe(200)
-    expect(c.count()).toBe(2)
+  it('is unavailable to a member too: the key check comes first', async () => {
+    expectAnswer(await askWithKey(answers({ id: ME, member: true }), 'short'), 503, UNAVAILABLE)
   })
 
-  it('defaults to a 5 minute cache', async () => {
-    let t = 0
-    const c = counting([LIST])
-    const handle = createArchiveKeyHandler(cfg({ fetchImpl: c.fetchImpl, now: () => t }))
-    await call(handle)
-    t = 299_999
-    await call(handle)
-    expect(c.count()).toBe(1)
-    t = 300_000
-    await call(handle)
-    expect(c.count()).toBe(2)
+  it('for any string that is not exactly 43 base64 characters and "=", asks nobody', async () => {
+    const shaped = /^[A-Za-z0-9+/]{43}=$/
+    await fc.assert(
+      fc.asyncProperty(
+        fc.string({ maxLength: 60 }).filter((s) => !shaped.test(s)),
+        async (archiveKey) => {
+          expectAnswer(await askWithKey(NEVER_ASKED, archiveKey), 503, UNAVAILABLE)
+        },
+      ),
+      { numRuns: 200 },
+    )
+  })
+})
+
+describe('GET /archive/key — every answer is no-store', () => {
+  const member = answers({ id: ME, member: true })
+  const answersOf = [
+    ['200', () => ask(member), 200],
+    ['401', () => ask(answers(null)), 401],
+    ['403', () => ask(answers({ id: ME, member: false })), 403],
+    ['503 from Discord', () => ask(fails(new Upstream())), 503],
+    ['503 from the archive key', () => askWithKey(NEVER_ASKED, 'short'), 503],
+  ]
+  it.each(answersOf)('%s', async (_, run, status) => {
+    const r = await run()
+    expect(r.res.status).toBe(status)
+    expect(r.res.headers.get('Cache-Control')).toBe('no-store')
+    expect(r.res.headers.get('Content-Type')).toBe('application/json')
   })
 })
 
 describe('kid', () => {
+  const member = answers({ id: ME, member: true })
+
   it('matches the client crypto module for many keys (hex zero-padding included)', async () => {
     for (let i = 0; i < 32; i++) {
       const k = Buffer.alloc(32, i).toString('base64')
-      const r = await call(cfg({ archiveKey: k }))
-      expect(JSON.parse(r.text).kid).toBe((await deriveKeys(keyFromBase64(k))).kid)
+      const r = await askWithKey(member, k)
+      expect(body(r).kid).toBe((await deriveKeys(keyFromBase64(k))).kid)
     }
+  })
+
+  it('matches the client crypto module for any 32 bytes', async () => {
+    await fc.assert(
+      fc.asyncProperty(fc.uint8Array({ minLength: 32, maxLength: 32 }), async (bytes) => {
+        const k = Buffer.from(bytes).toString('base64')
+        const r = await askWithKey(member, k)
+        expectAnswer(r, 200, { key: k, kid: (await deriveKeys(keyFromBase64(k))).kid })
+      }),
+      { numRuns: 100 },
+    )
   })
 })
