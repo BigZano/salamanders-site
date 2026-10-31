@@ -67,6 +67,25 @@ test.describe('create + save a build', () => {
     await expect(memberSection.locator('.b-card', { hasText: title })).toHaveCount(0)
   })
 
+  test('a signed-out visitor sees the member build only under Community Builds, with no badge', async ({
+    page,
+    browser,
+  }) => {
+    await signIn(page, 'test-member-token')
+    const title = `E2E Signed-out View ${Date.now()}`
+    await createAndSaveBuild(page, title)
+
+    // A fresh context carries no sign-in, so the server has no caller to flag members for.
+    const visitor = await (await browser.newContext()).newPage()
+    await visitor.goto('/builds')
+
+    // The card first: the absences below only mean something once the list has loaded.
+    const communitySection = visitor.locator('.b-section', { hasText: 'Community Builds' })
+    await expect(communitySection.locator('.b-card', { hasText: title })).toBeVisible()
+    await expect(visitor.getByRole('heading', { name: 'Verified Members' })).toHaveCount(0)
+    await expect(visitor.locator('.b-member-badge')).toHaveCount(0)
+  })
+
   test('a signed-out visitor triggers Discord sign-in rather than saving silently', async ({ page }) => {
     // The real gate calls beginSignIn(), which navigates the whole page to
     // Discord's authorize URL — even aborted (route below), that navigation
