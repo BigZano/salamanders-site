@@ -1,8 +1,7 @@
 /**
  * Live Discord identity and role lookups, shared by builds (moderator delete)
- * and reports. Answers come straight from Discord on every call — never from
- * the 8-hourly discord-members.json bake — so a role granted or removed takes
- * effect immediately.
+ * and reports. Answers come straight from Discord on every call, so a role
+ * granted or removed takes effect immediately.
  *
  * identify()  → {id, username} | null (no/invalid token). Throws Upstream.
  * rolesOf()   → role id[] | null (not in the guild). Throws Upstream.

@@ -38,7 +38,6 @@ describe('checkPath', () => {
     'docs/superpowers/specs/2026-10-16-legacy-accolades-design.md',
     'docs/superpowers/specs/2026-09-24-legion-archive-design.md',
     'public/favicon.svg',
-    'src/data/discord-members.json',
     'src/components/archive/ArchiveGate.vue',
   ])('allows %s', (p) => expect(checkPath(p)).toBeNull())
 
@@ -110,6 +109,25 @@ describe('checkPath: Deathwatch tracker data', () => {
     'predeathwatch-backup-1.json', // the name must start the file name
     'src/metadata-backup/restore.js', // only a folder named exactly data-backup
     'docs/notes.7z.md', // only a file that ends in .7z
+  ])('allows %s', (p) => expect(checkPath(p)).toBeNull())
+})
+
+// The guild's member list is held by Discord and asked for live by the server; no copy of it belongs in the repo.
+describe('checkPath: the guild member list', () => {
+  it.each([
+    'src/data/discord-members.json', // where the role sync used to write it
+    'discord-members.json',
+    'public/data/discord-members.json',
+    'SRC/DATA/DISCORD-MEMBERS.JSON', // case-insensitive filesystems (Windows host)
+    'src/data/discord-members.2026-10-30.json', // a dated copy
+  ])('blocks %s', (p) => expect(checkPath(p)).toMatch(/^member list must never be committed/))
+
+  it.each([
+    'src/data/companies.json',
+    'server/src/membership.js',
+    'scripts/discord-members.mjs', // only a .json file is a list
+    'docs/discord-members.json.md',
+    'src/data/prediscord-members.json', // the name must start the file name
   ])('allows %s', (p) => expect(checkPath(p)).toBeNull())
 })
 
