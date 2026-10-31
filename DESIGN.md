@@ -236,7 +236,8 @@ pills (999px); the Deathwatch bottom sheet rounds only its top corners (14px). B
 - **Quiet (ghost, `.btn-ghost`):** the second action beside an ember or drake one: transparent fill, a one-pixel ash
   border, a smoke label that turns bone on hover, in the same uppercase display type.
 - **Small (`.btn-sm`):** the shared small size for buttons set in a row or a card, used with any of the three above
-  (0.5rem 0.85rem padding, 2px corners, 0.78rem type). Its height is `--tap`: its own size on desktop, 44px on a phone.
+  (0.5rem 0.85rem padding, 2px corners, 0.78rem type). Its minimum height is `--tap`: its own size on desktop, 44px
+  on a phone.
 - **Tap targets:** every tap target is at least `--tap` (44px) on touch screens and phones.
 - **Press:** `scale(0.97)` on every pressable thing, at `--dur-press` (120ms). **Hover:** only inside
   `@media (hover: hover) and (pointer: fine)`. See Motion.
@@ -316,10 +317,8 @@ These keep their own numbers and curves. Everything not listed here is functiona
 | `src/components/archive/ArchiveThread.vue` | `brand-cool`, 1.7s `cubic-bezier(0.2, 0.7, 0.3, 1)` | duration and curve |
 | `src/components/archive/ArchiveGate.vue` | `gate-glow`, the unsealing: 1.6s `ease-in-out`, infinite while the gate is unsealing | duration and curve |
 | `src/components/deathwatch/deathwatch.css` | `dw-drift` 40s and `dw-flicker` 5s, `ease-in-out` with `infinite alternate` and `infinite` | as is |
+| `src/components/deathwatch/deathwatch.css`, `src/components/deathwatch/DeathwatchGate.vue` | `dw-pulse` 1.8s (the skeleton shimmer) and `dw-gate-pulse` 1.6s (the gate pulse), `ease-in-out`, 3 iterations then rest | as is |
 | `src/components/roster/RosterBranch.vue`, `src/components/roster/RosterMember.vue` | the attention flash that finds a member: `rs-flash` 1.4s and `rs-ping` 1.4s, twice | duration and iteration count; the easing is `var(--ease-forge)` |
-
-The Deathwatch skeleton shimmer (`dw-pulse`, in `deathwatch.css`) and the gate pulse (`dw-gate-pulse`, in
-`DeathwatchGate.vue`) also keep their own durations and `ease-in-out`, but run three times (see Loops).
 
 ### Loops
 
@@ -349,10 +348,11 @@ two ways:
 - Put `class="rm-fade"` on an element whose animation or transition is opacity or colour only.
 - Add a selector to the allowlist rule in `src/style.css`.
 
-The allowlist gives `.rm-fade`, `.btn-ember`, `.btn-drake`, `.btn-ghost` and `.btn-sm` a `--dur-state` transition on
-`opacity`, `color`, `background-color`, `border-color`, `box-shadow` and `outline-color` only, and `.rm-fade` a
-`--dur-state` animation duration. No transform, translate or scale is ever on it. A component may still switch a
-transform-bearing animation off with `animation: none` or `transition: none`; the blanket does not touch the name.
+The allowlist gives `.rm-fade`, `.btn-ember`, `.btn-drake`, `.btn-ghost` and `.btn-sm` a `--dur-state` transition
+on `opacity`, `color`, `background-color`, `border-color`, `box-shadow` and `outline-color` only. A second rule,
+`.rm-fade, main > *`, gives `.rm-fade` and the route fade's `main > *` a `--dur-state` animation duration. No
+transform, translate or scale is ever on the allowlist. A component may still switch a transform-bearing animation
+off with `animation: none` or `transition: none`; the blanket does not touch the name.
 
 ### Press and hover
 
@@ -395,7 +395,8 @@ fails the build on:
 - R2: a stray easing: `ease`, `ease-in` or `ease-out` anywhere; `ease-in-out` outside `deathwatch.css`,
   `DeathwatchGate.vue` and `ArchiveGate.vue`; `cubic-bezier(` outside the two Archive files.
 - R3: a literal duration in a transition, or in an animation outside the authored files and the spinner.
-- R4: `infinite` outside `deathwatch.css`, `ArchiveGate.vue` and the spinner.
+- R4: `infinite` on a line that does not also name `dw-drift`, `dw-flicker`, `gate-glow` or `spin`. The test reads
+  line by line, so `dw-pulse` and `dw-gate-pulse` are caught.
 - R5: a `:hover` outside the `(hover: hover) and (pointer: fine)` block.
 - R6: a second `@keyframes spin`.
 
