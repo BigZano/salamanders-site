@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { describe, it, expect, vi, beforeEach, onTestFinished } from 'vitest'
 import { h } from 'vue'
 import { readFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
@@ -8,7 +8,12 @@ import { createPinia, setActivePinia } from 'pinia'
 import { createRouter, createMemoryHistory, RouterView } from 'vue-router'
 import { deathwatchRedirect } from '../../lib/deathwatch/redirect'
 import { useDeathwatch } from '../../stores/deathwatch'
+import { useDeathwatchData } from '../../stores/deathwatchData'
 import DeathwatchArea from './DeathwatchArea.vue'
+// The rebuilt views pull in the auth store, and with it the Legion Archive's modules. Load them here rather than
+// inside a test, where the lazy views would first import them: the mutation gate would then count the archive's
+// module-level code as covered by that test, and no longer as static.
+import '../../lib/deathwatch/useTracker'
 
 // A view is loaded lazily by the registry (lib/deathwatch/pages.js). A test can make the registry fail, or find
 // nothing, for the address it opens; otherwise this is the real registry.
@@ -26,10 +31,12 @@ async function settle() {
 }
 
 // The area route as production declares it (router.js): the view as the component, and the same global guard.
-async function mountAt(path, { commander = false } = {}) {
+async function mountAt(path, { commander = false, command = commander } = {}) {
   const pinia = createPinia()
   setActivePinia(pinia)
-  useDeathwatch().$patch({ status: 'allowed', commander })
+  useDeathwatch().$patch({ status: 'allowed', commander, command })
+  // The ported views read the area's data: an empty event, already loaded, so none of them asks a server.
+  useDeathwatchData().$patch({ status: 'ready', local: true })
   const router = createRouter({
     history: createMemoryHistory(),
     routes: [
@@ -65,7 +72,7 @@ describe('DeathwatchArea', () => {
     const { w } = await mountAt('/deathwatch/eventtracker/players')
     expect(w.find('h1').text()).toBe('Event Tracker')
     expect(w.find('h2').text()).toBe('Players')
-    expect(w.text()).toContain('This view is being rebuilt.')
+    expect(w.find('.dw-area-sheet .dw-page').exists()).toBe(true)
     const current = w.find('nav [aria-current="page"]')
     expect(current.text()).toBe('Players')
   })
@@ -113,7 +120,7 @@ describe('DeathwatchArea', () => {
     expect(rail).toContain('overflow-y: auto')
   })
 
-  it('leaves the fan-site disclaimer to the layout, which shows it on every screen', async () => {
+  it('leaves the fan-site disclaimer to the site footer', async () => {
     const { w } = await mountAt('/deathwatch/eventtracker/standings')
     expect(w.find('.dw-legal').exists()).toBe(false)
   })
@@ -190,6 +197,22 @@ describe('DeathwatchArea', () => {
     expect(w.find('button.dw-areabar').attributes('aria-expanded')).toBe('false')
   })
 
+  it('shows the Watch Command tab to Deathwatch Command only, and anyone else a notice in its place', async () => {
+    const other = (await mountAt('/deathwatch/armouringhall/watch-command', { commander: false })).w
+    expect(other.find('.dw-area-sheet').text()).toBe('Reserved for the Deathwatch Command.')
+    expect(other.find('nav').text()).not.toContain('Watch Command')
+    expect(other.find('nav').text()).toContain('Specialist')
+    const command = (await mountAt('/deathwatch/armouringhall/watch-command', { command: true })).w
+    expect(command.find('.dw-area-sheet').text()).not.toContain('Reserved for the Deathwatch Command.')
+    expect(command.find('nav').text()).toContain('Watch Command')
+  })
+
+  it('keeps Manage restricted for Deathwatch Command, who is not the Watch Commander', async () => {
+    const { w } = await mountAt('/deathwatch/manage/checks', { commander: false, command: true })
+    expect(w.text()).toContain('Restricted to the Watch Commander.')
+    expect(w.find('nav').exists()).toBe(false)
+  })
+
   it('shows anyone else a notice in place of the Manage area, with no way into its views', async () => {
     const { w } = await mountAt('/deathwatch/manage/checks', { commander: false })
     expect(w.text()).toContain('Restricted to the Watch Commander.')
@@ -198,5 +221,57 @@ describe('DeathwatchArea', () => {
     expect(w.text()).not.toContain('Checks')
     expect(w.find('button.dw-areabar').exists()).toBe(false)
     expect(w.find('dialog').exists()).toBe(false)
+  })
+
+  it('shows the gold crest in the Hall of Relics, as the old site did, and the plain one elsewhere', async () => {
+    expect((await mountAt('/deathwatch/hallofrelics/notable-members')).w.get('img.dw-area-crest').attributes('src')).toContain('crest-gold')
+    expect((await mountAt('/deathwatch/eventtracker/players')).w.get('img.dw-area-crest').attributes('src')).not.toContain('crest-gold')
+  })
+
+  // Following a link inside a view rebuilds the sheet; the keyboard's focus must not fall back to the top.
+  // jsdom only focuses an element in the document: the area is attached, and taken out again after each test.
+  const attached = async (path) => {
+    const at = await mountAt(path)
+    document.body.appendChild(at.w.element)
+    onTestFinished(() => {
+      at.w.unmount()
+      document.body.replaceChildren()
+    })
+    return at
+  }
+  const until = async (ok) => {
+    for (let i = 0; i < 60 && !ok(); i++) await new Promise((r) => setTimeout(r, 20))
+  }
+
+  it("moves the keyboard's focus to the new view's heading when the tab changes", async () => {
+    const { w, router } = await attached('/deathwatch/eventtracker/standings')
+    await router.push('/deathwatch/eventtracker/scoring')
+    await settle()
+    await until(() => document.activeElement?.tagName === 'H2')
+    const heading = document.activeElement
+    expect(heading.tagName).toBe('H2')
+    expect(heading.getAttribute('tabindex')).toBe('-1')
+    expect(w.get('.dw-area-sheet').element.contains(heading)).toBe(true)
+  })
+
+  it('gives the focus to the sheet when the new view has no heading', async () => {
+    const { w, router } = await attached('/deathwatch/eventtracker/standings')
+    override.loader = async () => ({ default: { render: () => h('p', 'nothing to head') } })
+    await router.push('/deathwatch/eventtracker/scoring')
+    await settle()
+    await until(() => document.activeElement?.classList.contains('dw-area-sheet'))
+    expect(document.activeElement).toBe(w.get('.dw-area-sheet').element)
+    expect(document.activeElement.getAttribute('tabindex')).toBe('-1')
+  })
+
+  it('moves the focus without requestAnimationFrame too', async () => {
+    vi.stubGlobal('requestAnimationFrame', undefined)
+    onTestFinished(() => vi.unstubAllGlobals())
+    const { router } = await attached('/deathwatch/eventtracker/standings')
+    override.loader = async () => ({ default: { render: () => h('p', 'nothing to head') } })
+    await router.push('/deathwatch/eventtracker/scoring')
+    await settle()
+    await until(() => document.activeElement?.classList.contains('dw-area-sheet'))
+    expect(document.activeElement.classList).toContain('dw-area-sheet')
   })
 })

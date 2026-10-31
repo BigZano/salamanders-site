@@ -1,26 +1,26 @@
 <script setup>
-// A skeleton: the original's headings and labels over shimmer, until this view is rebuilt. Replace this file
-// with the real view; nothing else needs to change (see src/lib/deathwatch/pages.js).
-import { SkForm, SkNote, SkTable, SkTiles } from '../../../../components/deathwatch/skeleton'
+// Event Tracker → Kill Teams: one Kill Team's profile in the running event (?t=<id> picks it).
+import { computed } from 'vue'
+import { useRoute, useRouter } from 'vue-router'
+import { useTracker } from '../../../../lib/deathwatch/useTracker'
+import { useDeathwatch } from '../../../../stores/deathwatch'
+import TrackerState from '../../../../components/deathwatch/tracker/TrackerState.vue'
+import KillTeamView from '../../../../components/deathwatch/tracker/KillTeamView.vue'
 
-const fields = ['Kill Team']
-const labels = ['Rank', 'Event points', 'Move', 'Gap to #1', 'Missions played', 'KIA']
-const columns = ['Player', 'Obj', 'Kills', 'Special', 'Melee', 'Ranged', 'Items', 'Dmg taken', 'Incaps', 'Revives', 'MVP']
-const columns2 = ['Week', 'Points', 'Total']
-const columns3 = ['Mission', 'Kills', 'Special', 'Melee', 'Ranged', 'Incaps', 'Revives', 'Seed', 'Armoury', 'Relic', 'Ext', 'Points', 'MVP']
+const route = useRoute()
+const router = useRouter()
+const { data, R, live, reload } = useTracker()
+const gate = useDeathwatch()
+const teamId = computed(() => +route.query.t || 0)
+const pick = (id) => router.replace({ query: { ...route.query, t: String(id) } })
 </script>
 
 <template>
-  <div class="dw-page">
-    <SkNote />
-    <h2 class="dw-plaque">Kill Team profile</h2>
-    <SkForm :fields="fields" />
-    <SkTiles :labels="labels" />
-    <h2 class="dw-plaque">Players</h2>
-    <SkTable :columns="columns" />
-    <h2 class="dw-plaque">Points per week</h2>
-    <SkTable :columns="columns2" :rows="4" />
-    <h2 class="dw-plaque">Missions</h2>
-    <SkTable :columns="columns3" />
-  </div>
+  <TrackerState :status="data.status" :error="data.error" @retry="reload">
+    <template v-if="!R.ts.length">
+      <h2 class="dw-plaque">Kill Team profile</h2>
+      <p class="dw-empty">No Kill Teams in the running event.</p>
+    </template>
+    <KillTeamView v-else :R="R" :team-id="teamId" :to="live" :notes="gate.commander" @pick="pick" />
+  </TrackerState>
 </template>

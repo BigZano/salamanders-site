@@ -4,8 +4,8 @@ import { AREAS, resolveArea } from './areas'
 const tabsOf = (area) => AREAS[area].tabs.map((t) => t.slug)
 
 describe('AREAS', () => {
-  it('lists the four areas in hub order', () => {
-    expect(Object.keys(AREAS)).toEqual(['eventtracker', 'armouringhall', 'chronicles', 'manage'])
+  it('lists the six areas in hub order', () => {
+    expect(Object.keys(AREAS)).toEqual(['eventtracker', 'armouringhall', 'chronicles', 'hallofrelics', 'recruitment', 'manage'])
   })
 
   it('lists the seven Event Tracker views in order', () => {
@@ -21,7 +21,7 @@ describe('AREAS', () => {
   })
 
   it("lists the other areas' tabs in order", () => {
-    expect(tabsOf('armouringhall')).toEqual(['standard', 'specialist', 'watch-command'])
+    expect(tabsOf('armouringhall')).toEqual(['standard', 'specialist', 'watch-command', 'restricted-wargear'])
     expect(tabsOf('chronicles')).toEqual([
       'hall-of-champions',
       'chamber-of-honor',
@@ -32,11 +32,11 @@ describe('AREAS', () => {
     expect(tabsOf('manage')).toEqual(['enter-mission', 'manage', 'checks', 'records', 'page-texts'])
   })
 
-  it("carries the archive's labels and blurbs verbatim", () => {
+  it("carries each area's label, blurb and tabs", () => {
     expect(AREAS).toEqual({
       eventtracker: {
         label: 'Event Tracker',
-        blurb: 'Standings, Kill Teams, players and honours',
+        blurb: 'Track events, standings, and your kill team’s progress.',
         tabs: [
           { slug: 'standings', label: 'Standings' },
           { slug: 'kill-teams', label: 'Kill Teams' },
@@ -49,22 +49,39 @@ describe('AREAS', () => {
       },
       armouringhall: {
         label: 'Armouring Hall',
-        blurb: 'Specialist armour, standard uniform and heraldry',
+        blurb: 'Explore armour sets, chapter colours, and heraldry.',
         tabs: [
-          { slug: 'standard', label: 'Standard' },
-          { slug: 'specialist', label: 'Specialist' },
-          { slug: 'watch-command', label: 'Watch Command' },
+          { slug: 'standard', label: 'Standard', items: ['watchbrother', 'companyheraldry'] },
+          { slug: 'specialist', label: 'Specialist', items: ['apothecarion', 'librarium', 'mechanicus', 'reclusiarc'] },
+          { slug: 'watch-command', label: 'Watch Command', command: true, items: ['watchsergeant', 'watchspecialist'] },
+          { slug: 'restricted-wargear', label: 'Restricted Wargear' },
         ],
       },
       chronicles: {
         label: 'Chronicles of Valor',
-        blurb: 'Deeds and honours of the Watch Fortress',
+        blurb: 'Discover the deeds, victories, and honours of the Watch.',
         tabs: [
           { slug: 'hall-of-champions', label: 'Hall of Champions' },
           { slug: 'chamber-of-honor', label: 'Chamber of Honor' },
           { slug: 'player-profiles', label: 'Player Profiles' },
           { slug: 'in-memoriam', label: 'In Memoriam' },
           { slug: 'operational-records', label: 'Operational Records' },
+        ],
+      },
+      hallofrelics: {
+        label: 'Hall of Relics',
+        blurb: 'Honour the warriors who shaped the history of Ebonhold.',
+        tabs: [
+          { slug: 'notable-members', label: 'Notable Members' },
+          { slug: 'fortress-lore', label: 'Fortress Lore' },
+        ],
+      },
+      recruitment: {
+        label: 'Recruitment',
+        blurb: 'Terms of Service and requirements for the Watch',
+        tabs: [
+          { slug: 'terms-of-service', label: 'Terms of Service' },
+          { slug: 'requirements', label: 'Requirements' },
         ],
       },
       manage: {
@@ -84,12 +101,24 @@ describe('AREAS', () => {
 
 describe('resolveArea', () => {
   it.each([
-    ['eventtracker', 'standings'],
-    ['armouringhall', 'standard'],
-    ['chronicles', 'hall-of-champions'],
-    ['manage', 'enter-mission'],
-  ])('defaults %s to its first tab, %s', (area, first) => {
-    expect(resolveArea({ area })).toEqual({ area, tab: first, sub: '', canonical: `/deathwatch/${area}/${first}` })
+    ['eventtracker', 'standings', ''],
+    ['armouringhall', 'standard', 'watchbrother'],
+    ['chronicles', 'hall-of-champions', ''],
+    ['manage', 'enter-mission', ''],
+  ])('defaults %s to its first tab, %s', (area, first, sub) => {
+    const canonical = `/deathwatch/${area}/${first}${sub ? `/${sub}` : ''}`
+    expect(resolveArea({ area })).toEqual({ area, tab: first, sub, canonical })
+  })
+
+  it('opens an Armouring Hall tab without an item on its first uniform, and one without uniforms on none', () => {
+    expect(resolveArea({ area: 'armouringhall', tab: 'specialist' }).canonical).toBe('/deathwatch/armouringhall/specialist/apothecarion')
+    expect(resolveArea({ area: 'armouringhall', tab: 'watch-command' }).canonical).toBe('/deathwatch/armouringhall/watch-command/watchsergeant')
+    expect(resolveArea({ area: 'armouringhall', tab: 'restricted-wargear' })).toEqual({
+      area: 'armouringhall',
+      tab: 'restricted-wargear',
+      sub: '',
+      canonical: '/deathwatch/armouringhall/restricted-wargear',
+    })
   })
 
   it('keeps a tab that exists, not only the first', () => {
@@ -131,35 +160,42 @@ describe('resolveArea', () => {
     for (const tab of ['__proto__', 'constructor', 'toString']) {
       expect(resolveArea({ area: 'eventtracker', tab }).tab, tab).toBe('standings')
     }
-    expect(resolveArea({ area: 'armouringhall', tab: 'standard', sub: '__proto__' }).sub).toBe('')
+    expect(resolveArea({ area: 'armouringhall', tab: 'standard', sub: '__proto__' }).sub).toBe('watchbrother')
   })
 
-  it('keeps a sub-slug only for the Armouring Hall', () => {
-    expect(resolveArea({ area: 'armouringhall', tab: 'standard', sub: 'battlebrother' })).toEqual({
+  it('keeps a sub-slug only when it is one of the tab\'s items', () => {
+    expect(resolveArea({ area: 'armouringhall', tab: 'specialist', sub: 'librarium' })).toEqual({
       area: 'armouringhall',
-      tab: 'standard',
-      sub: 'battlebrother',
-      canonical: '/deathwatch/armouringhall/standard/battlebrother',
+      tab: 'specialist',
+      sub: 'librarium',
+      canonical: '/deathwatch/armouringhall/specialist/librarium',
     })
     for (const area of ['eventtracker', 'chronicles', 'manage']) {
-      const r = resolveArea({ area, sub: 'battlebrother' })
+      const r = resolveArea({ area, sub: 'watchbrother' })
       expect(r.sub, area).toBe('')
-      expect(r.canonical, area).not.toContain('battlebrother')
+      expect(r.canonical, area).not.toContain('watchbrother')
     }
   })
 
-  it('accepts a sub-slug of one to forty lowercase letters and digits', () => {
-    for (const sub of ['a', '0', '0123456789', 'a'.repeat(40)]) {
-      expect(resolveArea({ area: 'armouringhall', sub }).sub, sub).toBe(sub)
+  // Every tab of the Armouring Hall, and what any address that does not name one of its items becomes.
+  const FIRST = { standard: 'watchbrother', specialist: 'apothecarion', 'watch-command': 'watchsergeant', 'restricted-wargear': '' }
+  const NOT_AN_ITEM = [
+    'nope', 'quatsch', 'a', 'a'.repeat(40), '../x', 'A B', '', 'a'.repeat(41), 'abc!', 'ABC', 'abc\n', 'a-b', 'a/b',
+    123, 0, true, ['watchbrother'], { toString: () => 'watchbrother' }, null, undefined,
+    '__proto__', 'constructor', 'toString', 'length',
+  ]
+
+  it.each(Object.entries(FIRST))('turns any sub-slug that is not one of %s\'s items into its first, %j', (tab, first) => {
+    for (const sub of NOT_AN_ITEM) {
+      const r = resolveArea({ area: 'armouringhall', tab, sub })
+      expect(r.sub, String(sub)).toBe(first)
+      expect(r.canonical, String(sub)).toBe(`/deathwatch/armouringhall/${tab}${first ? `/${first}` : ''}`)
     }
   })
 
-  it('drops a hostile sub-slug', () => {
-    const hostile = ['../x', 'A B', '', 'a'.repeat(41), 123, ['ab'], null, undefined, 'abc!', '!abc', 'ABC', 'abc\n', 'a-b', 'a/b']
-    for (const sub of hostile) {
-      const r = resolveArea({ area: 'armouringhall', tab: 'standard', sub })
-      expect(r.sub, String(sub)).toBe('')
-      expect(r.canonical, String(sub)).toBe('/deathwatch/armouringhall/standard')
-    }
+  it('takes an item of another tab for an unknown one', () => {
+    expect(resolveArea({ area: 'armouringhall', tab: 'standard', sub: 'librarium' }).sub).toBe('watchbrother')
+    expect(resolveArea({ area: 'armouringhall', tab: 'specialist', sub: 'watchbrother' }).sub).toBe('apothecarion')
+    expect(resolveArea({ area: 'armouringhall', tab: 'restricted-wargear', sub: 'watchbrother' }).sub).toBe('')
   })
 })

@@ -14,7 +14,7 @@ describe('deathwatchRedirect', () => {
   it('lets a canonical path through', () => {
     expect(deathwatchRedirect(to('/deathwatch/eventtracker/standings', { area: 'eventtracker', tab: 'standings' }))).toBeUndefined()
     expect(
-      deathwatchRedirect(to('/deathwatch/armouringhall/standard/battlebrother', { area: 'armouringhall', tab: 'standard', sub: 'battlebrother' })),
+      deathwatchRedirect(to('/deathwatch/armouringhall/standard/companyheraldry', { area: 'armouringhall', tab: 'standard', sub: 'companyheraldry' })),
     ).toBeUndefined()
   })
 
@@ -40,7 +40,7 @@ describe('deathwatchRedirect', () => {
 
   it('drops a hostile sub-slug', () => {
     const r = deathwatchRedirect(to('/deathwatch/armouringhall/standard/A%20B', { area: 'armouringhall', tab: 'standard', sub: 'A B' }))
-    expect(r).toMatchObject({ path: '/deathwatch/armouringhall/standard', replace: true })
+    expect(r).toMatchObject({ path: '/deathwatch/armouringhall/standard/watchbrother', replace: true })
   })
 
   it('sends an unknown area to the not-found page, keeping the address the visitor typed', () => {

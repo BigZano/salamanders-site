@@ -1,0 +1,171 @@
+// @vitest-environment jsdom
+// The rebuilt Armouring Hall: each tab shows the uniform its address names, with the old site's parts, paints and
+// notes; the picker and the Company Heraldry links keep a dev ?scene=; a part card and its hotspot light up together.
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
+import { flushPromises, mount } from '@vue/test-utils'
+import { createMemoryHistory, createRouter } from 'vue-router'
+
+const PAGES = import.meta.glob('./armouringhall/*.vue', { eager: true })
+
+async function mountPage(tab, sub = '', query = {}) {
+  const router = createRouter({
+    history: createMemoryHistory(),
+    routes: [{ path: '/deathwatch/:area/:tab?/:sub?', component: { render: () => null } }],
+  })
+  await router.push({ path: `/deathwatch/armouringhall/${tab}${sub ? `/${sub}` : ''}`, query })
+  const w = mount(PAGES[`./armouringhall/${tab}.vue`].default, { global: { plugins: [router] }, attachTo: document.body })
+  await flushPromises()
+  return w
+}
+const texts = (w, sel) => w.findAll(sel).map((e) => e.text())
+const card = (w, title) => w.findAll('.ah-part').find((c) => c.get('h4').text() === title)
+const spot = (w, title) => w.get(`.ah-hs[aria-label="Show ${title}"]`)
+// Which cards and hotspots are lit right now, by name.
+const lit = (w) => ({
+  cards: w.findAll('.ah-part.on').map((c) => c.get('h4').text()),
+  spots: w.findAll('.ah-hs.on').map((h) => h.attributes('aria-label')),
+})
+
+// jsdom has no scrollIntoView: stand one in for each test, and take it away again after.
+const scrollIntoView = Element.prototype.scrollIntoView
+beforeEach(() => {
+  document.body.innerHTML = ''
+  Element.prototype.scrollIntoView = vi.fn()
+})
+afterEach(() => {
+  Element.prototype.scrollIntoView = scrollIntoView
+  vi.unstubAllGlobals()
+})
+
+describe('Armouring Hall', () => {
+  it('Standard opens on the Watch Brother, with every part and the Armour Set to come', async () => {
+    const w = await mountPage('standard')
+    expect(w.get('h2').text()).toBe('Standard')
+    // The original had no heading here: kept for assistive technology, hidden on screen.
+    expect(w.get('h2').classes()).toContain('dw-sr-only')
+    expect(w.get('h2').classes()).not.toContain('dw-plaque')
+    expect(w.get('.ah-title').text()).toBe('Watch Brother')
+    expect(texts(w, '.ah-part h4')).toEqual(['Helm', 'Pauldrons', 'Wargear', 'Breastplate', 'Gauntlets', 'Greaves'])
+    expect(w.text()).toContain('Armour Set')
+    expect(w.findAll('.ah-hs')).toHaveLength(6)
+  })
+
+  it('shows the uniform the address names, and marks it in the picker', async () => {
+    const w = await mountPage('specialist', 'librarium', { scene: 'allowed' })
+    expect(w.get('.ah-title').text()).toBe('Librarium')
+    expect(w.get('.ah-pick [aria-current="page"]').text()).toBe('Librarium')
+    expect(w.findAll('.ah-pick a').map((a) => a.attributes('href'))).toEqual([
+      '/deathwatch/armouringhall/specialist/apothecarion?scene=allowed',
+      '/deathwatch/armouringhall/specialist/librarium?scene=allowed',
+      '/deathwatch/armouringhall/specialist/mechanicus?scene=allowed',
+      '/deathwatch/armouringhall/specialist/reclusiarc?scene=allowed',
+    ])
+    expect(w.text()).toContain('Librarians and higher-ranking members of the Librarium may use the following colors and markings')
+  })
+
+  it('lists each paint with its role, and leads each note with its side', async () => {
+    const w = await mountPage('specialist', 'mechanicus')
+    const helm = w.findAll('.ah-part')[0]
+    expect(texts(helm, '.ah-sw span')).toEqual(['PrimaryMephiston Red', 'SecondaryAbaddon Black', 'TertiarySilver', 'LensesMephiston Red'])
+    const greaves = w.findAll('.ah-part')[5]
+    expect(texts(greaves, '.ah-nt b')).toEqual(['Left', 'Right'])
+  })
+
+  it('links a note about Company Heraldry there, without the aside', async () => {
+    const w = await mountPage('standard')
+    const pauldrons = w.findAll('.ah-part')[1]
+    expect(pauldrons.text()).not.toContain('(see Company Heraldry)')
+    expect(pauldrons.get('.ah-chl').attributes('href')).toBe('/deathwatch/armouringhall/standard/companyheraldry')
+  })
+
+  it('lights a part card and its hotspot together under the pointer, and puts them out when it leaves', async () => {
+    const w = await mountPage('standard')
+    await spot(w, 'Breastplate').trigger('mouseenter')
+    expect(lit(w)).toEqual({ cards: ['Breastplate'], spots: ['Show Breastplate'] })
+    await spot(w, 'Breastplate').trigger('mouseleave')
+    expect(lit(w)).toEqual({ cards: [], spots: [] })
+    await card(w, 'Helm').trigger('mouseenter')
+    expect(lit(w)).toEqual({ cards: ['Helm'], spots: ['Show Helm'] })
+    await card(w, 'Helm').trigger('mouseleave')
+    expect(lit(w)).toEqual({ cards: [], spots: [] })
+  })
+
+  it('lights a card and its hotspot while either has focus, and puts them out when focus leaves', async () => {
+    const w = await mountPage('standard')
+    spot(w, 'Wargear').element.focus()
+    await w.vm.$nextTick()
+    expect(lit(w)).toEqual({ cards: ['Wargear'], spots: ['Show Wargear'] })
+    spot(w, 'Wargear').element.blur()
+    await w.vm.$nextTick()
+    expect(lit(w)).toEqual({ cards: [], spots: [] })
+    card(w, 'Gauntlets').element.focus()
+    await w.vm.$nextTick()
+    expect(lit(w)).toEqual({ cards: ['Gauntlets'], spots: ['Show Gauntlets'] })
+    card(w, 'Gauntlets').element.blur()
+    await w.vm.$nextTick()
+    expect(lit(w)).toEqual({ cards: [], spots: [] })
+  })
+
+  it('a hotspot scrolls to its card, moves focus to it and lights it, with no pointer ever over it', async () => {
+    const w = await mountPage('standard')
+    await spot(w, 'Greaves').trigger('click')
+    const greaves = card(w, 'Greaves').element
+    expect(Element.prototype.scrollIntoView).toHaveBeenCalledOnce()
+    expect(Element.prototype.scrollIntoView.mock.contexts[0]).toBe(greaves)
+    expect(document.activeElement).toBe(greaves)
+    await w.vm.$nextTick()
+    expect(lit(w)).toEqual({ cards: ['Greaves'], spots: ['Show Greaves'] })
+  })
+
+  it('flashes the card a hotspot scrolled to, afresh on each click, until its animation ends', async () => {
+    const frames = []
+    vi.stubGlobal('requestAnimationFrame', (run) => frames.push(run))
+    const nextFrame = async (w) => {
+      frames.splice(0).forEach((run) => run(0))
+      await w.vm.$nextTick()
+    }
+    const flashing = (w) => w.findAll('.ah-part.flash').map((c) => c.get('h4').text())
+    const w = await mountPage('standard')
+    await spot(w, 'Helm').trigger('click')
+    expect(flashing(w)).toEqual([])
+    await nextFrame(w)
+    expect(flashing(w)).toEqual(['Helm'])
+    // The same marker again: the flash goes out until the next frame, so the animation starts over.
+    await spot(w, 'Helm').trigger('click')
+    expect(flashing(w)).toEqual([])
+    await nextFrame(w)
+    expect(flashing(w)).toEqual(['Helm'])
+    await spot(w, 'Pauldrons').trigger('click')
+    await nextFrame(w)
+    expect(flashing(w)).toEqual(['Pauldrons'])
+    await card(w, 'Pauldrons').trigger('animationend')
+    expect(flashing(w)).toEqual([])
+  })
+
+  it('Company Heraldry shows every company, the Watch Company markings and the alternative colors', async () => {
+    const w = await mountPage('standard', 'companyheraldry')
+    expect(w.get('.ah-title').text()).toBe('Company Heraldry')
+    expect(texts(w, '.ah-part h4')).toEqual(['Battle Companies I–IV', 'Watch Company Markings', 'Battle Companies V–VII', 'Alternative Colors'])
+    expect(texts(w, '.co b')).toEqual(['1st Company', '2nd Company', '3rd Company', '4th Company', '5th Company', '6th Company', '7th Company', '5th Company', '6th Company'])
+    expect(w.findAll('.wm .ah-tile')).toHaveLength(5)
+  })
+
+  it('Watch Command: the Sergeant is still WIP; the Specialist links no Watch-Brother uniform', async () => {
+    const w = await mountPage('watch-command')
+    expect(w.get('.ah-title').text()).toBe('Watch Sergeant')
+    expect(w.text()).not.toContain('Reserved')
+    expect(w.find('.ah-head .ah-wip').exists()).toBe(true)
+    const s = await mountPage('watch-command', 'watchspecialist')
+    expect(s.get('.ah-lead').text()).not.toContain('Watch-Brother')
+    expect(s.get('.ah-lead a').attributes('href')).toBe('/deathwatch/armouringhall/specialist/apothecarion')
+  })
+
+  it('Restricted Wargear: the two locked pieces and how each is unlocked', async () => {
+    const w = await mountPage('restricted-wargear')
+    expect(w.get('h2').text()).toBe('Restricted Wargear')
+    expect(texts(w, '.rw-card > b')).toEqual(['L. Pauldron', 'L. Gauntlet (Heroic)'])
+    expect(w.text()).toContain('Previous Tours of Duty also count')
+    // No Discord link: its ids may not be in the repo.
+    expect(w.find('a').exists()).toBe(false)
+  })
+})

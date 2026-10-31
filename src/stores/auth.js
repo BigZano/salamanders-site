@@ -3,6 +3,7 @@ import * as discordAuth from '../lib/discordAuth'
 import { useArchive } from './archive'
 import { useRoster } from './roster'
 import { useDeathwatch } from './deathwatch'
+import { useDeathwatchData } from './deathwatchData'
 import { stashAnchor } from '../lib/archive/anchor'
 
 // Thin reactive wrapper around discordAuth.js. Sign-in itself is a full-page
@@ -38,6 +39,7 @@ export const useAuth = defineStore('auth', {
       useRoster().reset()
       // And the Deathwatch clearance: signed out means no access, even for a page that stays open.
       useDeathwatch().reset()
+      useDeathwatchData().reset()
     },
   },
 })

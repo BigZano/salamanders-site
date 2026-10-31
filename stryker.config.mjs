@@ -17,6 +17,7 @@ export default {
     'src/lib/deathwatch/areas.js',
     'src/lib/deathwatch/sheetDrag.js',
     'src/lib/deathwatch/icons.js',
+    'src/stores/deathwatch.js',
     'server/src/displayNames.js',
     'server/src/rosterMember.js',
     'server/src/rosterCore.js',

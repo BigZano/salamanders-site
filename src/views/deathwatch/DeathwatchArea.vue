@@ -4,12 +4,13 @@
 // views themselves are files under ./pages/<area>/<tab>.vue (found by lib/deathwatch/pages.js); each is a
 // skeleton until it is rebuilt. The address is already canonical by the time this renders: the router's guard
 // (redirect.js) sees to that.
-import { computed, defineAsyncComponent, h, ref } from 'vue'
+import { computed, defineAsyncComponent, h, nextTick, ref, watch } from 'vue'
 import { useRoute } from 'vue-router'
 import { AREAS, resolveArea } from '../../lib/deathwatch/areas'
 import { pageLoader } from '../../lib/deathwatch/pages'
 import { useDeathwatch } from '../../stores/deathwatch'
 import crest from '../../components/deathwatch/img/crest.webp'
+import crestGold from '../../components/deathwatch/img/crest-gold.webp'
 import DeathwatchAreaBar from '../../components/deathwatch/DeathwatchAreaBar.vue'
 import DeathwatchNav from '../../components/deathwatch/DeathwatchNav.vue'
 import DeathwatchNavSheet from '../../components/deathwatch/DeathwatchNavSheet.vue'
@@ -24,7 +25,10 @@ const page = computed(() => resolveArea(route.params))
 const area = computed(() => AREAS[page.value.area])
 // Manage is the Watch Commander's dashboard. Hiding it here only spares others a dead end: the server refuses them anyway.
 const restricted = computed(() => page.value.area === 'manage' && !store.commander)
-const tabLabel = computed(() => area.value.tabs.find((t) => t.slug === page.value.tab).label)
+const currentTab = computed(() => area.value.tabs.find((t) => t.slug === page.value.tab))
+const tabLabel = computed(() => currentTab.value.label)
+// A single tab may be Deathwatch Command's (Watch Command): the rest of the area stays open. Hidden only, as above.
+const locked = computed(() => currentTab.value.command === true && !store.command)
 
 // While a view's chunk is on its way (after a short delay, so a fast one never flashes it), and if it fails.
 const Loading = { render: () => h('p', { class: 'dw-area-loading', role: 'status' }, 'Loading…') }
@@ -37,6 +41,26 @@ const view = computed(() => {
   const loader = pageLoader(areaSlug, tabSlug)
   return loader ? defineAsyncComponent({ loader, loadingComponent: Loading, errorComponent: Failed, delay: 200 }) : SkNote
 })
+
+// A tab change rebuilds the sheet, which would drop the keyboard's focus back to the top of the document: move it to
+// the new view's heading instead, once the view has arrived (its chunk may still be on its way; a few frames at most).
+// A view with no heading yet (loading, empty, an error) gives the focus to the sheet itself. A later tab change wins.
+const sheet = ref(null)
+const frame = () => new Promise((r) => (typeof requestAnimationFrame === 'function' ? requestAnimationFrame(r) : setTimeout(r, 16)))
+const focusOn = (el) => {
+  el.setAttribute('tabindex', '-1')
+  el.focus({ preventScroll: true })
+}
+watch(viewKey, async (key) => {
+  for (let tries = 0; tries < 30; tries++) {
+    await nextTick()
+    if (viewKey.value !== key) return
+    const heading = sheet.value?.querySelector('h1, h2')
+    if (heading) return focusOn(heading)
+    await frame()
+  }
+  if (viewKey.value === key && sheet.value) focusOn(sheet.value)
+})
 </script>
 
 <template>
@@ -46,24 +70,27 @@ const view = computed(() => {
       <!-- The rail. On a phone only its head shows (the crest and the area's name); from 900px the list of views joins it. -->
       <aside class="dw-area-side dw-panel">
         <header class="dw-area-head">
-          <img class="dw-area-crest" :src="crest" alt="" width="120" height="120" />
+          <!-- The Hall of Relics shows the gold crest, as on the old site. -->
+          <img class="dw-area-crest" :src="page.area === 'hallofrelics' ? crestGold : crest" alt="" width="120" height="120" />
           <div>
             <p class="dw-area-eyebrow">Watch Fortress Ebonhold</p>
             <h1 class="dw-area-title">{{ area.label }}</h1>
           </div>
         </header>
         <div class="dw-area-navwrap">
-          <DeathwatchNav :area="page.area" :current="page.tab" />
+          <DeathwatchNav :area="page.area" :current="page.tab" :command="store.command" />
         </div>
       </aside>
       <!-- A phone: the bar says which view is open and opens the list of views from the foot of the screen. -->
       <DeathwatchAreaBar class="dw-area-bar" :area-label="area.label" :tab-label="tabLabel" :open="sheetOpen" @open="sheetOpen = true" />
       <DeathwatchNavSheet v-model="sheetOpen" :aria-label="`${area.label} views`">
-        <DeathwatchNav :area="page.area" :current="page.tab" @navigate="sheetOpen = false" />
+        <DeathwatchNav :area="page.area" :current="page.tab" :command="store.command" @navigate="sheetOpen = false" />
       </DeathwatchNavSheet>
       <div class="dw-area-main">
-        <div class="dw-area-sheet dw-panel">
-          <component :is="view" :key="viewKey" />
+        <!-- Keyed on the view, so the whole framed sheet opens again (deathwatch.css) when the tab changes. -->
+        <div :key="viewKey" ref="sheet" class="dw-area-sheet dw-panel">
+          <p v-if="locked" class="dw-area-restricted" role="status">Reserved for the Deathwatch Command.</p>
+          <component :is="view" v-else :key="viewKey" />
         </div>
       </div>
     </template>
@@ -130,9 +157,18 @@ const view = computed(() => {
 .dw-area-navwrap {
   display: none;
 }
+/* At least a screen tall: between one tab's view and the next (while its chunk loads) the sheet is empty, and it
+   would fold to a thin frame at the top before the new view opens it again. */
 .dw-area-sheet {
   min-width: 0;
+  /* svh, not dvh: the phone's address bar sliding away must not move the footer under a short page. */
+  min-height: calc(100svh - 9rem);
   padding: 1.2rem 1rem 1.6rem;
+}
+/* The heading the focus is moved to on a tab change: it is no control, so it shows no ring of its own. */
+.dw-area-sheet :deep(:is(h1, h2)[tabindex='-1']:focus),
+.dw-area-sheet[tabindex='-1']:focus {
+  outline: none;
 }
 .dw-area-restricted {
   grid-column: 1 / -1;
@@ -204,6 +240,22 @@ const view = computed(() => {
   }
   .dw-area-sheet {
     padding: 1.6rem 1.8rem 2rem;
+  }
+}
+/* A wide screen: the rail docks at the left edge and the view sits in the middle of the screen, balanced on the
+   right by an empty column the rail's width. The view keeps the width it has below (78rem less the padding, the
+   rail and the gap), so only the rail moves and the view never narrows or widens across the step; the step is where
+   the centre column first holds that width with a scrollbar taking its share of the window. */
+@media (min-width: 1640px) {
+  .dw-area {
+    grid-template-columns: 18.75rem minmax(0, 1fr) 18.75rem;
+    max-width: none;
+    padding-inline: 1.5rem;
+  }
+  .dw-area-main {
+    justify-self: center;
+    width: 100%;
+    max-width: calc(78rem - 2rem - 18.75rem - 1.5rem);
   }
 }
 </style>
