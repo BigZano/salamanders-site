@@ -1,7 +1,9 @@
 /**
- * Client for the shared builds API (see server/). GET is public; POST/DELETE
- * need a live Discord access token (src/lib/discordAuth.js), which the server
- * verifies itself against Discord rather than trusting anything sent here.
+ * Client for the shared builds API (see server/). GET /builds is public and
+ * takes an optional Discord access token, which adds the member flag for a
+ * signed-in viewer; GET /membership and POST/DELETE need a live token
+ * (src/lib/discordAuth.js), which the server verifies itself against Discord
+ * rather than trusting anything sent here.
  */
 export const API_BASE = import.meta.env.VITE_BUILDS_API_URL || 'http://localhost:8787'
 
@@ -34,8 +36,10 @@ export async function request(path, { method = 'GET', token, body, cache } = {})
   return res.json()
 }
 
-export const listBuilds = (className) =>
-  request(className ? `/builds?class=${encodeURIComponent(className)}` : '/builds')
+// The token is optional: signed in, the server also flags which authors are
+// members; without one the list is the same, just without that flag.
+export const listBuilds = (className, token) =>
+  request(className ? `/builds?class=${encodeURIComponent(className)}` : '/builds', { token })
 
 export const createBuild = (build, token) =>
   request('/builds', { method: 'POST', token, body: build })
@@ -45,5 +49,13 @@ export const deleteBuild = (id, token) => request(`/builds/${id}`, { method: 'DE
 /** Whether the signed-in caller may delete anyone's build. Advisory only. */
 export const getModeratorStatus = async (token) =>
   (await request('/builds/moderator', { token }))?.moderator === true
+
+/**
+ * Whether the signed-in caller is a chapter member, as the server sees it. True
+ * only for an answer of exactly `true`. A failed lookup (401, 503, network)
+ * rejects rather than reading as "not a member": the caller decides what that means.
+ */
+export const getMembership = async (token) =>
+  (await request('/membership', { token, cache: 'no-store' }))?.member === true
 
 export { BuildsApiError }

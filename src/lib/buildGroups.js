@@ -1,21 +1,23 @@
 /**
  * Splits the shared builds gallery into verified-member and other sections,
- * each independently paginated. Membership is read from the guild's baked
- * role list (src/data/discord-members.json) — the same static, no-live-check
- * source discordAuth.js uses for the signed-in user's own badge — so an
- * arbitrary build's author can be classified without a server round trip.
+ * each independently paginated. Who counts as a member is the server's call,
+ * made per viewer: GET /builds marks each build's author `member: true|false`
+ * only when the request carries a valid token, and leaves the field out for
+ * a signed-out visitor. Nothing here knows who the members are, so a
+ * signed-out page has no member section to show.
  */
 export const PAGE_SIZE = 10
 
-export function isMemberAuthor(build, memberIds) {
-  return !!build?.author?.id && memberIds.includes(build.author.id)
+/** True only for the boolean `true`: 'true', 1, a missing flag or a missing build are all "not a member". */
+export function isMemberAuthor(build) {
+  return build?.author?.member === true
 }
 
-export function splitByMembership(builds, memberIds) {
+export function splitByMembership(builds) {
   const member = []
   const other = []
   for (const b of builds) {
-    ;(isMemberAuthor(b, memberIds) ? member : other).push(b)
+    ;(isMemberAuthor(b) ? member : other).push(b)
   }
   return { member, other }
 }

@@ -3,13 +3,15 @@ import { computed } from 'vue'
 import FireText from './FireText.vue'
 import { fireTuning } from '../lib/fireTuning'
 import { useAuth } from '../stores/auth'
-import members from '../data/discord-members.json'
 
 const INVITE = 'https://discord.gg/salamanders'
+// The Salamanders Discord server's id. It is public (every invite link and
+// channel URL carries it), so it lives in source, not in the member list.
+const GUILD_ID = '1322056087792521269'
 // Signed-in XVIIIth Legion members are already in the server, where an invite
 // link only lands them on Discord's join screen. The channels URL opens the
-// guild directly — the same guild the member list is drawn from.
-const SERVER = `https://discord.com/channels/${members.guildId}`
+// guild directly.
+const SERVER = `https://discord.com/channels/${GUILD_ID}`
 const auth = useAuth()
 const isMember = computed(() => auth.member?.isMember === true)
 </script>

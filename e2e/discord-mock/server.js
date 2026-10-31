@@ -4,18 +4,21 @@
  * by POSTing their bearer token to Discord's own /users/@me — this returns
  * canned identities for a fixed set of test tokens so the whole sign-in →
  * save → see-it-listed flow can be driven without a real Discord account.
- * Membership (member vs. non-member) isn't decided here — that's read from
- * the real, unmodified src/data/discord-members.json bake, same as prod.
+ * Membership (member vs. non-member) is decided by the role table below
+ * (MEMBERS), checked against the API's configured member role
+ * (ARCHIVE_ROLE_ID), same as prod, which asks Discord. The API reads it two
+ * ways: a caller's own roles (/membership) and the guild member directory
+ * (/v10/guilds/:id/members), which flags each author on the builds list.
  */
 const PORT = Number(process.env.PORT || 4400)
 
 const USERS = {
-  // Real id from src/data/discord-members.json's memberIds.
-  'test-member-token': { id: '75633559351595008', username: 'member-tester' },
-  // Well-formed but deliberately absent from that list.
+  // In MEMBERS with the Legion role, so the API reports a member.
+  'test-member-token': { id: '300000000000000010', username: 'member-tester' },
+  // Well-formed but deliberately absent from MEMBERS: not in the guild at all.
   'test-nonmember-token': { id: '999999999999999999', username: 'nonmember-tester' },
-  // In the guild (and the member bake) but without the Legion role.
-  'test-norole-token': { id: '87082170719408128', username: 'norole-tester' },
+  // In the guild (in MEMBERS) but without the Legion role.
+  'test-norole-token': { id: '300000000000000014', username: 'norole-tester' },
   // Legion member who also holds Reclusiarch — reviews reports.
   'test-reclusiarch-token': { id: '100000000000000002', username: 'reclusiarch-tester' },
   // Techmarine — edits perks, sees history, moderates builds.
@@ -72,8 +75,8 @@ const DEATHWATCH_MEMBERS = {
 // Guild membership as Discord's bot endpoint would report it.
 const MEMBERS = {
   // Has a server nickname, so builds show it instead of the username.
-  '75633559351595008': { roles: [LEGION_ROLE], nick: 'Brother Tester' },
-  '87082170719408128': { roles: [] },
+  '300000000000000010': { roles: [LEGION_ROLE], nick: 'Brother Tester' },
+  '300000000000000014': { roles: [] },
   '100000000000000002': { roles: [LEGION_ROLE, RECLUSIARCH_ROLE] },
   '100000000000000010': { roles: [LEGION_ROLE, TECHMARINE_ROLE] },
   '100000000000000011': { roles: [LEGION_ROLE, FORGE_ROLE] },
@@ -111,13 +114,6 @@ Bun.serve({
         return withCors(Response.json({ message: '401: Unauthorized', code: 0 }, { status: 401 }))
       }
       return withCors(Response.json(user))
-    }
-
-    // Legion Archive member list, shaped like src/data/discord-members.json.
-    // Only the Legion role holder is on it (unlike the real bake, which also
-    // lists the no-role tester) so the refusal path is exercised.
-    if (url.pathname === '/members.json') {
-      return withCors(Response.json({ fetched: new Date(0).toISOString(), guildId: GUILD_ID, roleId: LEGION_ROLE, memberIds: ['75633559351595008'] }))
     }
 
     // Guild role table (Administrator checks). Nobody is an admin except the Deathwatch-area owner and
