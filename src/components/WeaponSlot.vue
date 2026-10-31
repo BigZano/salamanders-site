@@ -174,12 +174,18 @@ const wikiUrl = computed(() => WIKI + encodeURIComponent(weapon.value))
   border-radius: 2px;
   padding: 0.4rem 0.7rem;
   cursor: pointer;
+  transition: transform var(--dur-press) var(--ease-forge);
 }
-.slot-toggle:hover {
-  background: rgba(89, 214, 108, 0.12);
+@media (hover: hover) and (pointer: fine) {
+  .slot-toggle:hover {
+    background: rgba(89, 214, 108, 0.12);
+  }
+}
+.slot-toggle:active {
+  transform: scale(0.97);
 }
 .chev {
-  transition: transform 0.18s ease;
+  transition: transform var(--dur-state) var(--ease-forge);
 }
 .chev.up {
   transform: rotate(180deg);
@@ -218,11 +224,6 @@ const wikiUrl = computed(() => WIKI + encodeURIComponent(weapon.value))
   border-top-color: var(--color-ember);
   border-radius: 50%;
   animation: spin 0.8s linear infinite;
-}
-@keyframes spin {
-  to {
-    transform: rotate(360deg);
-  }
 }
 @media (prefers-reduced-motion: reduce) {
   .spinner {

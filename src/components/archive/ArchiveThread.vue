@@ -128,9 +128,11 @@ watch(() => [route.hash, props.threadId], scrollToHash)
 
 /* ---- header ---- */
 .arch-eyebrow { font-family: var(--font-mono); font-size: 0.7rem; letter-spacing: 0.28em; text-transform: uppercase; color: var(--color-smoke); margin: 0 0 0.9rem; }
-.arch-back { color: var(--color-smoke); transition: color 0.2s; }
+.arch-back { color: var(--color-smoke); transition: color var(--dur-state) var(--ease-forge); }
 .arch-back::before { content: '\2190\00a0\00a0'; }
-.arch-back:hover { color: var(--color-averland); }
+@media (hover: hover) and (pointer: fine) {
+  .arch-back:hover { color: var(--color-averland); }
+}
 .arch-title { font-family: var(--font-display); font-weight: 700; text-transform: uppercase; letter-spacing: 0.06em; line-height: 1.05; font-size: clamp(1.8rem, 4.5vw, 2.7rem); margin: 0; }
 .arch-tags { display: flex; flex-wrap: wrap; gap: 0.45rem; margin: 1rem 0 0; list-style: none; padding: 0; }
 .arch-tag {
@@ -205,9 +207,14 @@ watch(() => [route.hash, props.threadId], scrollToHash)
 /* links: bone, underscored in drake green */
 :deep(.md-link) {
   color: var(--color-bone); text-decoration: underline; text-decoration-color: rgba(89, 214, 108, 0.5);
-  text-decoration-thickness: 1px; text-underline-offset: 3px; transition: color 0.2s, text-decoration-color 0.2s, text-shadow 0.2s;
+  text-decoration-thickness: 1px; text-underline-offset: 3px; transition:
+    color var(--dur-state) var(--ease-forge),
+    text-decoration-color var(--dur-state) var(--ease-forge),
+    text-shadow var(--dur-state) var(--ease-forge);
 }
-:deep(.md-link:hover) { color: #fff; text-decoration-color: var(--color-drake); text-shadow: 0 0 14px rgba(89, 214, 108, 0.45); }
+@media (hover: hover) and (pointer: fine) {
+  :deep(.md-link:hover) { color: #fff; text-decoration-color: var(--color-drake); text-shadow: 0 0 14px rgba(89, 214, 108, 0.45); }
+}
 :deep(.md-ext)::after { content: '\2197'; font-size: 0.75em; margin-left: 0.15em; color: var(--color-smoke); }
 
 :deep(.md-code) { font-family: var(--font-mono); font-size: 0.85em; background: rgba(0, 0, 0, 0.45); border: 1px solid rgba(58, 82, 70, 0.6); padding: 0 0.3em; border-radius: 2px; }
@@ -220,7 +227,9 @@ watch(() => [route.hash, props.threadId], scrollToHash)
   background: repeating-linear-gradient(135deg, #1d1b18 0 5px, #28231d 5px 10px);
   box-shadow: inset 0 0 0 1px rgba(253, 184, 37, 0.22);
 }
-:deep(.md-spoiler:hover) { box-shadow: inset 0 0 0 1px rgba(253, 184, 37, 0.5); }
+@media (hover: hover) and (pointer: fine) {
+  :deep(.md-spoiler:hover) { box-shadow: inset 0 0 0 1px rgba(253, 184, 37, 0.5); }
+}
 :deep(.md-spoiler) * { visibility: hidden; }
 :deep(.md-spoiler.is-shown) { background: rgba(255, 255, 255, 0.06); box-shadow: none; color: inherit; cursor: auto; }
 :deep(.md-spoiler.is-shown) * { visibility: visible; }

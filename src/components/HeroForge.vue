@@ -135,20 +135,22 @@ const isMember = computed(() => auth.member?.isMember === true)
     inset 0 1px 0 rgba(89, 214, 108, 0.2);
   text-shadow: 0 0 12px rgba(89, 214, 108, 0.45);
   transition:
-    transform 0.15s ease,
-    box-shadow 0.25s ease,
-    background 0.2s ease;
+    transform var(--dur-press) var(--ease-forge),
+    box-shadow var(--dur-state) var(--ease-forge),
+    background-color var(--dur-state) var(--ease-forge);
 }
-.btn-planner:hover {
-  transform: translateY(-1px);
-  background: var(--color-pitch);
-  box-shadow:
-    0 0 0 1px rgba(0, 0, 0, 0.3),
-    0 12px 40px -8px rgba(89, 214, 108, 0.75),
-    inset 0 1px 0 rgba(89, 214, 108, 0.3);
+@media (hover: hover) and (pointer: fine) {
+  .btn-planner:hover {
+    transform: translateY(-1px);
+    background: var(--color-pitch);
+    box-shadow:
+      0 0 0 1px rgba(0, 0, 0, 0.3),
+      0 12px 40px -8px rgba(89, 214, 108, 0.75),
+      inset 0 1px 0 rgba(89, 214, 108, 0.3);
+  }
 }
 .btn-planner:active {
-  transform: translateY(0);
+  transform: scale(0.97);
 }
 .glyph {
   width: 20px;

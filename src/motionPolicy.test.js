@@ -10,7 +10,23 @@ import { withoutHoverMedia } from './test-utils/css'
 //
 // Paths are relative to src/, written with forward slashes. An entry is a file, or a folder (every .vue
 // and .css under it). Each sweep task adds its files here; the last one makes it the whole of src/.
-const SWEPT = ['style.css']
+const SWEPT = [
+  'style.css',
+  // Sweep A: the component styles.
+  'components/archive',
+  'components/company',
+  'components/roster',
+  'components/AppNav.vue',
+  'components/BuildCard.vue',
+  'components/BuildsPager.vue',
+  'components/HeroForge.vue',
+  'components/PageHeader.vue',
+  'components/PerkEditPanel.vue',
+  'components/SiteFooter.vue',
+  'components/StaleNotice.vue',
+  'components/WeaponSlot.vue',
+  'components/WeaponTree.vue',
+]
 
 // The canvas and its dev tuner keep their own numbers, so they are never scanned, even once swept.
 const SKIPPED = [
@@ -18,10 +34,12 @@ const SKIPPED = [
   'components/FireText.vue',
   'components/FireTuner.vue',
 ]
-// Files whose authored loops may use ease-in-out (the deathwatch drift and flicker).
+// Files whose authored loops may use ease-in-out (the deathwatch drift and flicker, the gate pulses, the
+// archive gate's unsealing glow).
 const EASE_IN_OUT_FILES = [
   'components/deathwatch/deathwatch.css',
   'components/deathwatch/DeathwatchGate.vue',
+  'components/archive/ArchiveGate.vue',
 ]
 // Files that keep their own cubic-bezier curve (the archive thread cooling and the gate unsealing).
 const CUBIC_BEZIER_FILES = ['components/archive/ArchiveThread.vue', 'components/archive/ArchiveGate.vue']
@@ -34,8 +52,10 @@ const AUTHORED_DURATION_FILES = [
   'components/roster/RosterBranch.vue',
   'components/roster/RosterMember.vue',
 ]
-// The one file allowed to loop forever (the ambient drift and flicker); a spinner line may loop anywhere.
-const INFINITE_FILES = ['components/deathwatch/deathwatch.css']
+// The only animations allowed to loop forever: the Deathwatch drift and flicker, the Archive gate's unsealing
+// glow, and a spinner. A line that says `infinite` must name one of them (so dw-pulse and dw-gate-pulse, which
+// run three times, are caught).
+const INFINITE_ANIMATIONS = ['dw-drift', 'dw-flicker', 'gate-glow', 'spin']
 // The one file that defines @keyframes spin; components reuse it.
 const SPINNER_FILE = 'style.css'
 // The reduced-motion guard collapses motion to this instant, which is not a design duration.
@@ -115,9 +135,10 @@ const checkFile = (file, text) => {
     }
   }
 
-  // R4: nothing loops forever except the deathwatch ambience and a spinner.
+  // R4: nothing loops forever except the Deathwatch ambience, the gate glow and a spinner (line-level).
   for (const m of text.matchAll(/\binfinite\b/g)) {
-    if (!INFINITE_FILES.includes(file) && !lineAt(text, m.index).text.includes('spin')) add('R4', m.index)
+    const { text: line } = lineAt(text, m.index)
+    if (!INFINITE_ANIMATIONS.some((name) => line.includes(name))) add('R4', m.index)
   }
 
   // R5: every :hover sits inside the real-pointer media query. The cut text has no line numbers to report.
@@ -170,12 +191,17 @@ describe('the motion rules check', () => {
   })
 
   it('R2 allows ease-in-out and cubic-bezier only in the files that author them', () => {
-    const loop = '.a { animation: drift 40s ease-in-out infinite alternate; }'
-    expect(rules('a.vue', loop)).toEqual(['R2', 'R3', 'R4'])
+    const loop = '.a { animation: dw-drift 40s ease-in-out infinite alternate; }'
+    // the loop itself is fine (it names dw-drift); the curve and the 40s are what a.vue may not use
+    expect(rules('a.vue', loop)).toEqual(['R2', 'R3'])
     expect(rules('components/deathwatch/deathwatch.css', loop)).toEqual([])
     const curve = '.a { animation: cool 1.7s cubic-bezier(0.2, 0.7, 0.3, 1); }'
     expect(rules('a.vue', curve)).toEqual(['R2', 'R3'])
     expect(rules('components/archive/ArchiveThread.vue', curve)).toEqual([])
+    // the archive gate's unsealing glow keeps ease-in-out, and may loop while the gate shows
+    const glow = '.a { animation: gate-glow 1.6s ease-in-out infinite; }'
+    expect(rules('a.vue', glow)).toEqual(['R2', 'R3'])
+    expect(rules('components/archive/ArchiveGate.vue', glow)).toEqual([])
     // ease-in-out is not read as ease-in or as ease
     expect(rules('components/deathwatch/DeathwatchGate.vue', '.a { animation: x var(--dur-view) ease-in-out; }')).toEqual([])
   })
@@ -210,10 +236,22 @@ describe('the motion rules check', () => {
     expect(rules('a.vue', '.a { transition-duration: 0.01ms !important; animation-duration: 0.01ms !important; }')).toEqual([])
   })
 
-  it('R4 catches infinite loops except the deathwatch ambience and spinners', () => {
+  it('R4 catches infinite loops except drift, flicker, the gate glow and spinners', () => {
     expect(rules('a.vue', '.a { animation: glow var(--dur-view) var(--ease-forge) infinite; }')).toEqual(['R4'])
     expect(rules('a.vue', '.a { animation-iteration-count: infinite; }')).toEqual(['R4'])
-    expect(rules('components/deathwatch/deathwatch.css', '.a { animation-iteration-count: infinite; }')).toEqual([])
+    // line-level: no file is exempt, so the three-iteration pulses cannot slip into an infinite loop
+    expect(rules('components/deathwatch/deathwatch.css', '.a { animation-iteration-count: infinite; }')).toEqual(['R4'])
+    expect(
+      rules('components/deathwatch/deathwatch.css', '.a { animation: dw-pulse 1.8s ease-in-out infinite; }'),
+    ).toEqual(['R4'])
+    expect(
+      rules('components/deathwatch/DeathwatchGate.vue', '.a { animation: dw-gate-pulse 1.6s ease-in-out infinite; }'),
+    ).toEqual(['R4'])
+    expect(
+      rules('components/deathwatch/deathwatch.css', '.a { animation: dw-drift 40s ease-in-out infinite alternate; }'),
+    ).toEqual([])
+    expect(rules('components/deathwatch/deathwatch.css', '.a { animation: dw-flicker 5s ease-in-out infinite; }')).toEqual([])
+    expect(rules('components/archive/ArchiveGate.vue', '.a { animation: gate-glow 1.6s ease-in-out infinite; }')).toEqual([])
     expect(rules('a.vue', '.a { animation: spin 0.8s linear infinite; }')).toEqual([])
   })
 

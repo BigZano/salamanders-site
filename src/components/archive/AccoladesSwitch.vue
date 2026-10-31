@@ -6,8 +6,8 @@
 
 <template>
   <nav class="acc-switch" aria-label="Accolades pages">
-    <RouterLink to="/accolades" class="acc-switch-link" exact-active-class="is-current">Accolades</RouterLink>
-    <RouterLink to="/accolades/legacy" class="acc-switch-link" exact-active-class="is-current">Legacy Accolades</RouterLink>
+    <RouterLink to="/accolades" class="acc-switch-link rm-fade" exact-active-class="is-current">Accolades</RouterLink>
+    <RouterLink to="/accolades/legacy" class="acc-switch-link rm-fade" exact-active-class="is-current">Legacy Accolades</RouterLink>
   </nav>
 </template>
 
@@ -16,9 +16,11 @@
 .acc-switch-link {
   font-family: var(--font-mono); font-size: 0.74rem; letter-spacing: 0.22em; text-transform: uppercase;
   color: var(--color-smoke); padding-bottom: 0.25rem; border-bottom: 2px solid transparent;
-  transition: color 0.2s, border-color 0.2s;
+  transition: color var(--dur-state) var(--ease-forge), border-color var(--dur-state) var(--ease-forge);
 }
-.acc-switch-link:hover { color: var(--color-bone); }
+@media (hover: hover) and (pointer: fine) {
+  .acc-switch-link:hover { color: var(--color-bone); }
+}
 .acc-switch-link:focus-visible { outline: 2px solid var(--color-drake); outline-offset: 3px; }
 .acc-switch-link.is-current { color: var(--color-averland); border-bottom-color: var(--color-averland); }
 </style>

@@ -103,10 +103,14 @@ const bodyId = `rs-body-${props.branch.key}`
 .rs-panel {
   border-radius: 3px;
   contain: layout style; /* an opening branch re-lays-out itself, not the whole document */
-  transition: border-color 0.25s, box-shadow 0.35s;
+  transition:
+    border-color var(--dur-state) var(--ease-forge),
+    box-shadow var(--dur-view) var(--ease-forge);
 }
-.rs-panel:not(.rs-static):hover {
-  border-color: rgba(89, 214, 108, 0.45);
+@media (hover: hover) and (pointer: fine) {
+  .rs-panel:not(.rs-static):hover {
+    border-color: rgba(89, 214, 108, 0.45);
+  }
 }
 .rs-panel[data-open] {
   border-color: rgba(255, 106, 43, 0.5);
@@ -114,7 +118,7 @@ const bodyId = `rs-body-${props.branch.key}`
 }
 /* added by the page when a status link or deep link lands here */
 .rs-flash {
-  animation: rs-flash 1.4s ease-out;
+  animation: rs-flash 1.4s var(--ease-forge);
 }
 @keyframes rs-flash {
   0% { box-shadow: 0 0 0 3px rgba(223, 184, 91, 0.7); }
@@ -239,14 +243,18 @@ const bodyId = `rs-body-${props.branch.key}`
 .rs-chev {
   width: 1rem;
   height: 1rem;
-  transition: transform 0.3s var(--ease-forge), color 0.2s;
+  transition:
+    transform var(--dur-view) var(--ease-forge),
+    color var(--dur-state) var(--ease-forge);
 }
 .rs-panel[data-open] .rs-chev {
   transform: rotate(180deg);
   color: var(--color-ember);
 }
-.rs-panel:hover .rs-chev {
-  color: var(--color-drake);
+@media (hover: hover) and (pointer: fine) {
+  .rs-panel:hover .rs-chev {
+    color: var(--color-drake);
+  }
 }
 
 /* Embedded under a company's own header: no sigil or title column, so the bar is label, head, count.
@@ -271,7 +279,7 @@ const bodyId = `rs-body-${props.branch.key}`
 .rs-body {
   display: grid;
   grid-template-rows: 0fr;
-  transition: grid-template-rows 0.34s var(--ease-forge);
+  transition: grid-template-rows var(--dur-view) var(--ease-forge);
 }
 .rs-panel[data-open] .rs-body {
   grid-template-rows: 1fr;
@@ -280,11 +288,12 @@ const bodyId = `rs-body-${props.branch.key}`
   min-height: 0;
   overflow: hidden;
   visibility: hidden;
-  transition: visibility 0s 0.34s;
+  /* Stays visible for the whole collapse, then hides: visibility flips at the end of a transition out of
+     visible, and at the start of one into it. */
+  transition: visibility var(--dur-view) var(--ease-forge);
 }
 .rs-panel[data-open] .rs-body-in {
   visibility: visible;
-  transition-delay: 0s;
 }
 
 @media (max-width: 760px) {

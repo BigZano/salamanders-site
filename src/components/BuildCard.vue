@@ -181,9 +181,11 @@ const slots = [
   color: var(--color-drake);
   border-bottom: 1px solid rgba(89, 214, 108, 0.35);
 }
-.b-weapon:hover {
-  color: var(--color-bone);
-  border-bottom-color: var(--color-bone);
+@media (hover: hover) and (pointer: fine) {
+  .b-weapon:hover {
+    color: var(--color-bone);
+    border-bottom-color: var(--color-bone);
+  }
 }
 .b-perks {
   display: flex;
