@@ -6,7 +6,6 @@ import { useAuth } from '../stores/auth'
 import * as buildsApi from '../lib/buildsApi'
 import { canDeleteBuild } from '../lib/permissions'
 import { splitByMembership, paginate } from '../lib/buildGroups'
-import discordMembers from '../data/discord-members.json'
 import BuildCard from '../components/BuildCard.vue'
 import BuildsPager from '../components/BuildsPager.vue'
 
@@ -18,19 +17,30 @@ const builds = ref([])
 const loading = ref(true)
 const loadError = ref('')
 
+// Requests can finish in any order (a list asked for with a token may still be in flight when the visitor
+// signs out and a newer one is sent). Only the most recent call may touch the page, whether it succeeds or
+// fails, or an old answer carrying member flags could land on a signed-out page.
+let latestLoad = 0
 async function load() {
+  const mine = ++latestLoad
   loading.value = true
   loadError.value = ''
   try {
-    builds.value = await buildsApi.listBuilds()
+    const list = await buildsApi.listBuilds(undefined, auth.token)
+    if (mine !== latestLoad) return
+    builds.value = list
   } catch (err) {
+    if (mine !== latestLoad) return
     // The browser's own "Failed to fetch" or the API's "Request failed (500)" tells a member nothing.
     loadError.value = 'The builds server did not answer. Check your connection, then retry.'
   } finally {
-    loading.value = false
+    if (mine === latestLoad) loading.value = false
   }
 }
 onMounted(load)
+// The server only marks who is a member for a request that carries a token, so a sign-out must ask again
+// or the old answer's flags would stay on screen.
+watch(() => auth.token, load)
 
 // Moderators (Administrator, Master of the Forge, Mechadendrite Expert) may
 // delete any build. The server decides; a failed check just hides the button.
@@ -77,8 +87,8 @@ const usedClasses = computed(() =>
   CLASS_NAMES.filter((c) => builds.value.some((b) => b.className === c)),
 )
 
-// Verified members first, everyone else below — see src/lib/buildGroups.js.
-const groups = computed(() => splitByMembership(filtered.value, discordMembers.memberIds))
+// Verified members first, everyone else below, by the server's per-viewer flag — see src/lib/buildGroups.js.
+const groups = computed(() => splitByMembership(filtered.value))
 const memberPage = ref(1)
 const otherPage = ref(1)
 // A new search/filter reshuffles which builds exist at all — stale page
