@@ -1,11 +1,17 @@
 <script setup>
 // One uniform: its parts in two columns either side of the figure. A part card and the figure's hotspot for it
 // light up together (hover or focus on either); a hotspot also scrolls to its card. Notes that refer to Company
-// Heraldry link there. Every link goes to the canonical address, so the guard never replaces a history entry.
-import { computed, ref } from 'vue'
+// Heraldry link there. Every link goes to the canonical address, so the guard never replaces a history entry. The
+// introduction and the notes are page texts (lib/deathwatch/armourTexts.js) the Watch Commander can edit.
+import { computed, onMounted, ref } from 'vue'
 import { useRoute } from 'vue-router'
 import { resolveArea } from '../../../lib/deathwatch/areas'
 import { PAINT, hotspot, noteParts } from '../../../lib/deathwatch/armour'
+import { leadOf, notesOf } from '../../../lib/deathwatch/armourTexts'
+import { inline } from '../../../lib/deathwatch/notables'
+import { useAuth } from '../../../stores/auth'
+import { useDeathwatchData } from '../../../stores/deathwatchData'
+import Inline from '../Inline'
 import ArmourHead from './ArmourHead.vue'
 import ArmourTiles from './ArmourTiles.vue'
 
@@ -17,7 +23,15 @@ const props = defineProps({
 })
 
 const route = useRoute()
-const link = (tab, item) => ({ path: resolveArea({ area: 'armouringhall', tab, sub: item }).canonical, query: route.query.scene ? { scene: route.query.scene } : {} })
+const auth = useAuth()
+const data = useDeathwatchData()
+// Once: the defaults show at once, and what the data holds replaces them when it arrives.
+onMounted(() => {
+  if (data.status !== 'ready') data.load(auth.token)
+})
+const lead = computed(() => leadOf(data.cfg.tx, props.current))
+const notes = (title) => notesOf(data.cfg.tx, props.current, title)
+const link =(tab, item) => ({ path: resolveArea({ area: 'armouringhall', tab, sub: item }).canonical, query: route.query.scene ? { scene: route.query.scene } : {} })
 const lit = ref('')
 const flash = ref('')
 const cards = ref({})
@@ -39,12 +53,7 @@ function jump(title) {
 <template>
   <div class="ah">
     <ArmourHead :label="label" :tab="tab" :list="list" :current="current" />
-    <p v-if="current.who" class="ah-lead">
-      In addition to the
-      <template v-if="!current.specialistOnly"><RouterLink :to="link('standard', 'watchbrother')">standard Watch-Brother Uniform</RouterLink></template>
-      <template v-if="current.command">{{ current.specialistOnly ? '' : ' and the' }} <RouterLink :to="link('specialist')">Specialist</RouterLink> markings</template>, {{ current.who }}
-      may use the following colors and markings:
-    </p>
+    <p v-if="lead.length" class="ah-lead"><Inline :segs="lead" /></p>
 
     <div class="ah-grid">
       <figure class="ah-fig">
@@ -71,7 +80,7 @@ function jump(title) {
       </figure>
       <div v-for="(col, c) in [current.L, current.R]" :key="c" class="ah-col" :class="{ r: c }">
         <section
-          v-for="[title, rows, notes, tiles] in col"
+          v-for="[title, rows, , tiles] in col"
           :key="title"
           :ref="(el) => (cards[title] = el)"
           class="ah-part"
@@ -90,12 +99,12 @@ function jump(title) {
               <i :style="{ '--c': PAINT[paint] }" /><small>{{ role }}</small>{{ paint }}
             </span>
           </div>
-          <template v-for="n in notes" :key="n">
+          <template v-for="n in notes(title)" :key="n">
             <p v-if="n.startsWith('///')" class="ah-cf">{{ n }}</p>
             <p v-else-if="noteParts(clean(n))" class="ah-nt">
-              <b>{{ noteParts(clean(n))[0] }}</b><span>{{ noteParts(clean(n))[1] }}</span>
+              <b>{{ noteParts(clean(n))[0] }}</b><span><Inline :segs="inline(noteParts(clean(n))[1])" /></span>
             </p>
-            <p v-else>{{ clean(n) }}</p>
+            <p v-else><Inline :segs="inline(clean(n))" /></p>
             <RouterLink v-if="heraldry(n)" class="ah-chl" :to="link('standard', 'companyheraldry')">Company Heraldry<i aria-hidden="true">›</i></RouterLink>
           </template>
         </section>
@@ -116,14 +125,15 @@ function jump(title) {
   border: 1px solid var(--dw-line-2);
   background: color-mix(in oklab, var(--dw-surface) 80%, transparent);
 }
-.ah-lead a {
+/* The introduction's links are page-text elements, which carry no scope id (Inline.js). */
+.ah-lead :deep(a) {
   font-weight: 700;
   color: var(--dw-accent);
   text-decoration: underline;
   text-decoration-color: color-mix(in oklab, var(--dw-accent) 50%, transparent);
   text-underline-offset: 4px;
 }
-.ah-lead a:focus-visible {
+.ah-lead :deep(a:focus-visible) {
   outline: 2px solid var(--dw-accent);
   outline-offset: 2px;
 }

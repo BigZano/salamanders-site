@@ -172,6 +172,35 @@ describe('DeathwatchArea', () => {
     expect(w.find('nav').exists()).toBe(true)
   })
 
+  it('offers the Watch Commander "Edit page" on a page with texts, with that page’s texts', async () => {
+    const { w, router } = await mountAt('/deathwatch/recruitment/requirements', { commander: true })
+    expect(w.get('.pe-open').text()).toBe('Edit page')
+    expect(w.findAll('.pe textarea').map((t) => t.attributes('name'))).toEqual(['rq_q', 'rq1', 'rq2', 'rq3'])
+    await router.push('/deathwatch/hallofrelics/fortress-lore')
+    await settle()
+    expect(w.findAll('.pe textarea').map((t) => t.attributes('name'))[0]).toBe('lo_s')
+    await router.push('/deathwatch/eventtracker/standings')
+    await settle()
+    expect(w.find('.pe-open').exists()).toBe(false)
+  })
+
+  it('offers an Armouring Hall uniform’s own texts, and Company Heraldry its own', async () => {
+    const { w, router } = await mountAt('/deathwatch/armouringhall/specialist/librarium', { commander: true })
+    expect(w.get('.pe textarea').attributes('name')).toBe('ah_librarium_lead')
+    await router.push('/deathwatch/armouringhall/specialist/mechanicus')
+    await settle()
+    expect(w.get('.pe textarea').attributes('name')).toBe('ah_mechanicus_lead')
+    await router.push('/deathwatch/armouringhall/standard/companyheraldry')
+    await settle()
+    expect(w.get('.pe textarea').attributes('name')).toBe('ah_companyheraldry_companies1')
+  })
+
+  it('offers "Edit page" to nobody but the Watch Commander', async () => {
+    const { w } = await mountAt('/deathwatch/recruitment/requirements', { command: true })
+    expect(w.find('h2').exists()).toBe(true)
+    expect(w.find('.pe-open').exists()).toBe(false)
+  })
+
   it('puts the views behind a bar on a phone, with the same list in a sheet', async () => {
     const { w } = await mountAt('/deathwatch/eventtracker/players')
     const bar = w.find('button.dw-areabar')

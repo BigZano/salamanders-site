@@ -1,8 +1,14 @@
 <script setup>
 // Company Heraldry: each Battle Company's pauldron and greave, the Watch Company markings and the alternative
 // colours, beside the Watch Brother figure. Tiles come from one sprite of 23: 0–13 the 1st to 7th Company (pauldron,
-// greave), 14–18 the Watch Company markings Primus to Quintus, 19–22 the alternative 5th and 6th.
+// greave), 14–18 the Watch Company markings Primus to Quintus, 19–22 the alternative 5th and 6th. The note under each
+// section is a page text (lib/deathwatch/armourTexts.js) the Watch Commander can edit.
+import { onMounted } from 'vue'
 import { PAINT } from '../../../lib/deathwatch/armour'
+import { heraldryNotes } from '../../../lib/deathwatch/armourTexts'
+import { useAuth } from '../../../stores/auth'
+import { useDeathwatchData } from '../../../stores/deathwatchData'
+import Inline from '../Inline'
 import ArmourHead from './ArmourHead.vue'
 import ArmourTiles from './ArmourTiles.vue'
 
@@ -15,6 +21,14 @@ defineProps({
 const N = 23
 const ORD = ['1st', '2nd', '3rd', '4th', '5th', '6th', '7th']
 const companies = (ks) => ks.map((k) => [ORD[k], [k * 2, k * 2 + 1]])
+
+const auth = useAuth()
+const data = useDeathwatchData()
+// Once: the defaults show at once, and what the data holds replaces them when it arrives.
+onMounted(() => {
+  if (data.status !== 'ready') data.load(auth.token)
+})
+const notes = (slug) => heraldryNotes(data.cfg.tx, slug)
 </script>
 
 <template>
@@ -31,6 +45,7 @@ const companies = (ks) => ks.map((k) => [ORD[k], [k * 2, k * 2 + 1]])
           <div class="cos">
             <div v-for="[n, t] in companies([0, 1, 2, 3])" :key="n" class="co"><b>{{ n }} Company</b><ArmourTiles :sprite="current.spr" :tiles="t" :count="N" /></div>
           </div>
+          <p v-for="(p, i) in notes('companies1')" :key="i"><Inline :segs="p" /></p>
         </section>
         <section class="ah-part">
           <h4>Watch Company Markings</h4>
@@ -39,7 +54,7 @@ const companies = (ks) => ks.map((k) => [ORD[k], [k * 2, k * 2 + 1]])
             <span><i :style="{ '--c': PAINT['Abaddon Black'] }" /><small>Marking</small>Abaddon Black</span>
             <span><i :style="{ '--c': PAINT['Mephiston Red'] }" /><small>Stripe</small>Mephiston Red</span>
           </div>
-          <p>Painted Abaddon Black with a Mephiston Red stripe. Fully black markings denote Watch Company Primus.</p>
+          <p v-for="(p, i) in notes('markings')" :key="i"><Inline :segs="p" /></p>
         </section>
       </div>
       <div class="ah-col r">
@@ -48,7 +63,7 @@ const companies = (ks) => ks.map((k) => [ORD[k], [k * 2, k * 2 + 1]])
           <div class="cos">
             <div v-for="[n, t] in companies([4, 5, 6])" :key="n" class="co"><b>{{ n }} Company</b><ArmourTiles :sprite="current.spr" :tiles="t" :count="N" /></div>
           </div>
-          <p>These colors follow the standards of each Battle-Brother's own Company and also appear in the regular uniform guidelines.</p>
+          <p v-for="(p, i) in notes('companies2')" :key="i"><Inline :segs="p" /></p>
         </section>
         <section class="ah-part">
           <h4>Alternative Colors</h4>
@@ -56,6 +71,7 @@ const companies = (ks) => ks.map((k) => [ORD[k], [k * 2, k * 2 + 1]])
             <div class="co"><b>5th Company</b><ArmourTiles :sprite="current.spr" :tiles="[19, 20]" :count="N" /></div>
             <div class="co"><b>6th Company</b><ArmourTiles :sprite="current.spr" :tiles="[21, 22]" :count="N" /></div>
           </div>
+          <p v-for="(p, i) in notes('alternative')" :key="i"><Inline :segs="p" /></p>
         </section>
       </div>
     </div>
