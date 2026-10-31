@@ -3,35 +3,31 @@ import { readFileSync, readdirSync } from 'node:fs'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { TEXT, contrast, over } from './test-utils/contrast'
+import { HOVER_MEDIA, withoutHoverMedia } from './test-utils/css'
 
 const css = readFileSync(new URL('./style.css', import.meta.url), 'utf8')
 const html = readFileSync(new URL('../index.html', import.meta.url), 'utf8')
 // The declarations of the `body { … }` rule (not body::before).
 const bodyRule = () => css.match(/\n\s*body\s*\{([^}]*)\}/)?.[1] ?? ''
-const HOVER_MEDIA = '@media (hover: hover) and (pointer: fine) {'
-// style.css with every hover-media block cut out (brace-matched), to see what is left outside it.
-const withoutHoverMedia = (source) => {
-  let out = source
-  for (let at = out.indexOf(HOVER_MEDIA); at !== -1; at = out.indexOf(HOVER_MEDIA)) {
-    let depth = 0
-    let end = at + HOVER_MEDIA.length - 1
-    for (let i = end; i < out.length; i++) {
-      if (out[i] === '{') depth++
-      else if (out[i] === '}' && --depth === 0) {
-        end = i
-        break
-      }
-    }
-    out = out.slice(0, at) + out.slice(end + 1)
-  }
-  return out
-}
 
 describe('style.css', () => {
   it('defines the roster tokens', () => {
     expect(css).toContain('--color-whitehot: #f2d27a;')
     expect(css).toContain('--color-vacant: #ff9a7a;')
     expect(css).toContain('--ease-forge: cubic-bezier(0.2, 0.8, 0.2, 1);')
+  })
+
+  it('defines the motion tokens inside @theme', () => {
+    const theme = css.slice(css.indexOf('@theme {'), css.indexOf('\n}', css.indexOf('@theme {')))
+    expect(theme).toContain('--dur-press: 120ms;')
+    expect(theme).toContain('--dur-state: 180ms;')
+    expect(theme).toContain('--dur-view: 240ms;')
+    expect(theme).toContain('--dur-sheet: 320ms;')
+  })
+
+  it('defines one global spinner', () => {
+    expect(css).toContain('@keyframes spin {')
+    expect(css).toContain('rotate(360deg)')
   })
 
   it('.surface keeps body text readable over the brightest lava', () => {
@@ -52,6 +48,32 @@ describe('style.css', () => {
     // a staggered pour is delays, not durations: with delays left in, ranks still light one by one
     expect(block).toContain('transition-delay: 0s !important')
     expect(block).toContain('animation-delay: 0s !important')
+  })
+
+  it('keeps opacity and colour feedback under reduced motion', () => {
+    const at = css.indexOf('@media (prefers-reduced-motion: reduce)')
+    expect(at).toBeGreaterThan(-1)
+    // Brace-match the query: slicing to the end of the file would let the later .btn-ember rules satisfy this.
+    let depth = 0
+    let end = css.indexOf('{', at)
+    for (let i = end; i < css.length; i++) {
+      if (css[i] === '{') depth++
+      else if (css[i] === '}' && --depth === 0) {
+        end = i
+        break
+      }
+    }
+    const block = css.slice(at, end + 1)
+    for (const selector of ['.rm-fade', '.btn-ember', '.btn-drake', '.btn-ghost', '.btn-sm']) {
+      expect(block, selector).toContain(selector)
+    }
+    expect(block).toContain('transition-duration: var(--dur-state) !important')
+    expect(block).toContain('animation-duration: var(--dur-state) !important')
+    const list = block.match(/transition-property:([^;]*);/)?.[1] ?? ''
+    const props = list.replace('!important', '').split(',').map((p) => p.trim())
+    expect(props).toContain('opacity')
+    expect(props).toContain('color')
+    expect(props).not.toContain('transform')
   })
 })
 
@@ -129,7 +151,7 @@ describe('mobile baseline', () => {
     // Without a transform transition the press snaps instead of easing.
     for (const cls of ['btn-ember', 'btn-drake', 'btn-ghost']) {
       const rule = css.match(new RegExp(`\\.${cls}\\s*\\{([^}]*)\\}`))
-      expect(rule[1], cls).toContain('transform 0.15s ease')
+      expect(rule[1], cls).toContain('transform var(--dur-press) var(--ease-forge)')
     }
   })
 
