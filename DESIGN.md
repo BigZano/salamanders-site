@@ -392,8 +392,8 @@ engine lazy-loaded and at most 25 KB gzipped.
 fails the build on:
 
 - R1: `transition: all`.
-- R2: a stray easing: `ease`, `ease-in` or `ease-out` anywhere; `ease-in-out` outside `deathwatch.css` and
-  `DeathwatchGate.vue`; `cubic-bezier(` outside the two Archive files.
+- R2: a stray easing: `ease`, `ease-in` or `ease-out` anywhere; `ease-in-out` outside `deathwatch.css`,
+  `DeathwatchGate.vue` and `ArchiveGate.vue`; `cubic-bezier(` outside the two Archive files.
 - R3: a literal duration in a transition, or in an animation outside the authored files and the spinner.
 - R4: `infinite` outside `deathwatch.css`, `ArchiveGate.vue` and the spinner.
 - R5: a `:hover` outside the `(hover: hover) and (pointer: fine)` block.
