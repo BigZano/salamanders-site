@@ -39,7 +39,8 @@ describe('companies.json branch keys', () => {
       for (const s of c.sections) {
         expect(typeof s.h === 'string' && s.h.trim() !== '', `${c.id}: a section heading`).toBe(true)
         const text = [...(s.p ?? []), ...(s.list ?? [])]
-        expect(text.length + (s.notables?.length ?? 0), `${c.id}: ${s.h} has content`).toBeGreaterThan(0)
+        // a section of `notables: true` is where the cards go: the server sends them, they are not in the data
+        expect(text.length + (s.notables === true ? 1 : 0), `${c.id}: ${s.h} has content`).toBeGreaterThan(0)
         expect(text.every((t) => typeof t === 'string' && t.trim() !== ''), `${c.id}: ${s.h} has a blank line`).toBe(true)
       }
     }
