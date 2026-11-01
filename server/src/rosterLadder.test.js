@@ -1,9 +1,12 @@
 import { describe, it, expect } from 'vitest'
-import { readFileSync } from 'node:fs'
+import { existsSync, readFileSync } from 'node:fs'
 import * as L from './rosterLadder.js'
 
 const SNOWFLAKE = /^\d{17,20}$/
-const SPEC = readFileSync(new URL('../../docs/superpowers/specs/2026-10-13-roster-design.md', import.meta.url), 'utf8')
+// The roster spec lives on the maintainers' machines (docs/superpowers/ is not in the repo), so the cross-check
+// against its id table runs only where the spec is; CI has no spec and skips that one test.
+const SPEC_URL = new URL('../../docs/superpowers/specs/2026-10-13-roster-design.md', import.meta.url)
+const SPEC = existsSync(SPEC_URL) ? readFileSync(SPEC_URL, 'utf8') : null
 
 // Every role id the roster reads, with what it means.
 function meanings() {
@@ -49,7 +52,7 @@ describe('role ids', () => {
     }
   })
 
-  it('are exactly the ids in the spec table (guards typos in either)', () => {
+  it.skipIf(SPEC === null)('are exactly the ids in the spec table (guards typos in either; needs the local spec)', () => {
     const inSpec = [...new Set(SPEC.match(/\b\d{17,20}\b/g))].sort()
     const inCode = meanings().map(([id]) => id).sort()
     expect(inCode).toEqual(inSpec)

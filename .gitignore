@@ -61,11 +61,14 @@ coverage/
 .stryker-tmp/
 reports/
 
-# New development notes (specs, plans, handoffs, ideas) stay on the maintainers' machines.
-# Files already tracked in these folders stay tracked.
+# Development notes (specs, plans, handoffs, ideas) stay on the maintainers' machines.
+# Untracked 2026-11-01; the files stay on disk, and earlier versions remain in the history.
 docs/superpowers/
 docs/handoff/
 docs/ideas/
+
+# The design tool's working copies (the tracked briefs live in docs/design/)
+.impeccable/
 
 # A local export of the guild's roles
 roles_list.txt
