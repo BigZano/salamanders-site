@@ -387,8 +387,8 @@ established.
 
 ### Canvas budget
 
-Draw: under 6ms per frame at 390px with 4x CPU throttle, measured headless. Not yet measured headless; on a desktop
-with no throttle the volcano and title together cost 0.22ms average and 1.6ms worst per frame (2026-11-01).
+Draw target: under 6ms per frame at 390px with 4x CPU throttle, measured headless. Not measured that way yet; on a
+desktop with no throttle the volcano and title together cost 0.22ms average and 1.6ms worst per frame (2026-11-01).
 
 Dragons, when they land: the engine lazy-loaded, at most 25 KB gzipped.
 
