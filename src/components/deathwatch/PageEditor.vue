@@ -69,8 +69,8 @@ async function save() {
         </div>
         <p v-if="msg" class="pe-msg" role="alert">{{ msg }}</p>
         <div class="pe-actions">
-          <button type="submit" class="dw-btn pe-save" :disabled="saving">{{ saving ? 'Saving…' : 'Save' }}</button>
-          <button type="button" class="dw-btn pe-cancel" @click="dialog.close()">Cancel</button>
+          <button type="submit" class="dw-btn rm-fade pe-save" :disabled="saving">{{ saving ? 'Saving…' : 'Save' }}</button>
+          <button type="button" class="dw-btn rm-fade pe-cancel" @click="dialog.close()">Cancel</button>
         </div>
       </form>
     </dialog>
@@ -98,6 +98,7 @@ async function save() {
   background: color-mix(in oklab, var(--dw-surface) 88%, transparent);
   box-shadow: 0 10px 30px -8px rgb(0 0 0 / 0.7);
   cursor: pointer;
+  transition: transform var(--dur-press) var(--ease-forge);
 }
 .pe-open svg {
   width: 16px;
@@ -112,6 +113,9 @@ async function save() {
   .pe-open:hover {
     background: color-mix(in oklab, var(--dw-accent) 18%, var(--dw-surface));
   }
+}
+.pe-open:active {
+  transform: scale(0.97);
 }
 .pe-open:focus-visible {
   outline: 2px solid var(--dw-accent);
@@ -183,6 +187,10 @@ async function save() {
   border-radius: 999px;
   background: none;
   cursor: pointer;
+  transition: transform var(--dur-press) var(--ease-forge);
+}
+.pe-reset:active {
+  transform: scale(0.97);
 }
 .pe-reset:focus-visible {
   outline: 2px solid var(--dw-accent);

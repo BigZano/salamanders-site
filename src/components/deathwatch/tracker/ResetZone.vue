@@ -32,16 +32,16 @@ async function go() {
     <h2 class="dw-plaque">{{ title }}</h2>
     <p class="dw-sub">{{ text }} This cannot be undone.</p>
     <div class="dw-actions">
-      <button type="button" class="dw-btn" @click="$emit('backup')">Download backup</button>
-      <button type="button" class="dw-btn danger" @click="open = !open">{{ title }}</button>
+      <button type="button" class="dw-btn rm-fade" @click="$emit('backup')">Download backup</button>
+      <button type="button" class="dw-btn rm-fade danger" @click="open = !open">{{ title }}</button>
       <span class="dw-msg" role="status">{{ msg }}</span>
     </div>
     <template v-if="open">
       <p class="dw-msg"><b>{{ ask }}</b> Download a backup first if you still need the results.</p>
       <label class="dw-field confirm">Type RESET to confirm<input v-model="typed" autocomplete="off" autocapitalize="characters" /></label>
       <div class="dw-actions">
-        <button type="button" class="dw-btn" @click="open = false">Cancel</button>
-        <button type="button" class="dw-btn danger" :disabled="typed.trim().toUpperCase() !== 'RESET'" @click="go">Delete permanently</button>
+        <button type="button" class="dw-btn rm-fade" @click="open = false">Cancel</button>
+        <button type="button" class="dw-btn rm-fade danger" :disabled="typed.trim().toUpperCase() !== 'RESET'" @click="go">Delete permanently</button>
       </div>
     </template>
   </section>

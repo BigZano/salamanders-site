@@ -11,7 +11,7 @@ defineEmits(['retry'])
   <div class="dw-page">
     <p v-if="status === 'error'" class="dw-empty" role="alert">
       {{ error || 'The data could not be loaded.' }}
-      <button type="button" class="dw-btn" @click="$emit('retry')">Try again</button>
+      <button type="button" class="dw-btn rm-fade" @click="$emit('retry')">Try again</button>
     </p>
     <p v-else-if="status !== 'ready'" class="dw-sub" role="status">Loading…</p>
     <slot v-else />

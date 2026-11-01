@@ -177,9 +177,9 @@ async function resetMissions() {
       </fieldset>
 
       <div class="dw-actions">
-        <button type="button" class="dw-btn" @click="store(false)">Save mission</button>
-        <button type="button" class="dw-btn" @click="store(true)">Save &amp; next</button>
-        <button v-if="saved" type="button" class="dw-btn danger" @click="remove">{{ armed ? 'Tap again to delete' : 'Delete mission' }}</button>
+        <button type="button" class="dw-btn rm-fade" @click="store(false)">Save mission</button>
+        <button type="button" class="dw-btn rm-fade" @click="store(true)">Save &amp; next</button>
+        <button v-if="saved" type="button" class="dw-btn rm-fade danger" @click="remove">{{ armed ? 'Tap again to delete' : 'Delete mission' }}</button>
         <span class="dw-msg" :class="{ ok: msg.endsWith('✓'), bad: msg.startsWith('Not') }" role="status">{{ msg }}</span>
       </div>
 
@@ -214,6 +214,10 @@ async function resetMissions() {
   background: transparent;
   border: 1px dashed var(--dw-line-2);
   cursor: pointer;
+  transition: transform var(--dur-press) var(--ease-forge);
+}
+.grid button:active {
+  transform: scale(0.97);
 }
 .grid button.ok {
   color: var(--dw-accent);

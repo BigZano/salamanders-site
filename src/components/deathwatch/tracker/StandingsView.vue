@@ -92,13 +92,13 @@ async function copy() {
   </div>
   <template v-if="share">
     <div class="dw-actions">
-      <button type="button" class="dw-btn" @click="text = discordText(R)">Share to Discord</button>
+      <button type="button" class="dw-btn rm-fade" @click="text = discordText(R)">Share to Discord</button>
     </div>
     <div v-if="text" class="share">
       <textarea v-model="text" rows="12" aria-label="Discord message" />
       <div class="dw-actions">
-        <button type="button" class="dw-btn" @click="copy">Copy</button>
-        <button type="button" class="dw-btn" @click="text = ''">Close</button>
+        <button type="button" class="dw-btn rm-fade" @click="copy">Copy</button>
+        <button type="button" class="dw-btn rm-fade" @click="text = ''">Close</button>
         <span class="dw-msg" role="status">{{ copied }}</span>
       </div>
     </div>

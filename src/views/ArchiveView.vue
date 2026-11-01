@@ -32,5 +32,7 @@ const resolved = computed(() => {
 .arch-missing { text-align: center; color: #c9cfc9; }
 .arch-missing-eyebrow { font-family: var(--font-mono); font-size: 0.7rem; letter-spacing: 0.28em; text-transform: uppercase; color: var(--color-averland); margin: 0 0 1rem; }
 .arch-missing-link { display: inline-block; margin-top: 0.9rem; color: var(--color-bone); text-decoration: underline; text-decoration-color: rgba(89, 214, 108, 0.5); text-underline-offset: 3px; }
-.arch-missing-link:hover { color: #fff; text-decoration-color: var(--color-drake); }
+@media (hover: hover) and (pointer: fine) {
+  .arch-missing-link:hover { color: #fff; text-decoration-color: var(--color-drake); }
+}
 </style>

@@ -158,7 +158,9 @@
       transition-property:
         opacity, color, background-color, border-color, box-shadow, outline-color !important;
     }
-    .rm-fade {
+    /* `main > *` is the route fade (App.vue), opacity only. */
+    .rm-fade,
+    main > * {
       animation-duration: var(--dur-state) !important;
     }
   }

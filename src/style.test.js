@@ -69,6 +69,8 @@ describe('style.css', () => {
     }
     expect(block).toContain('transition-duration: var(--dur-state) !important')
     expect(block).toContain('animation-duration: var(--dur-state) !important')
+    // the route fade (App.vue's `main > *`) shares the animation-duration rule with .rm-fade
+    expect(block).toMatch(/\.rm-fade,\s*main > \*\s*\{\s*animation-duration: var\(--dur-state\) !important/)
     const list = block.match(/transition-property:([^;]*);/)?.[1] ?? ''
     const props = list.replace('!important', '').split(',').map((p) => p.trim())
     expect(props).toContain('opacity')

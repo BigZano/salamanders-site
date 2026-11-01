@@ -26,6 +26,10 @@ const SWEPT = [
   'components/StaleNotice.vue',
   'components/WeaponSlot.vue',
   'components/WeaponTree.vue',
+  // Sweep B: the views, the Deathwatch area, the route fade.
+  'views',
+  'components/deathwatch',
+  'App.vue',
 ]
 
 // The canvas and its dev tuner keep their own numbers, so they are never scanned, even once swept.

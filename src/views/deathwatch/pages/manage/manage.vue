@@ -191,7 +191,7 @@ async function resetTeams() {
       <label v-for="[k, l] in WEIGHT_LABELS" :key="k" class="dw-field">{{ l }}<input v-model="weights[k]" type="number" /></label>
     </div>
     <div class="dw-actions">
-      <button type="button" class="dw-btn" @click="saveWeights">Save scoring</button>
+      <button type="button" class="dw-btn rm-fade" @click="saveWeights">Save scoring</button>
       <span class="dw-msg" role="status">{{ m1 }}</span>
     </div>
 
@@ -206,7 +206,7 @@ async function resetTeams() {
         <label class="dw-field">Current name<input v-model="rn.a" list="dw-names" autocomplete="off" @input="rn.plan = null" /></label>
         <label class="dw-field">New name<input v-model="rn.b" list="dw-names" autocomplete="off" @input="rn.plan = null" /></label>
       </div>
-      <div class="dw-actions"><button type="button" class="dw-btn" @click="rnCheck">Check</button></div>
+      <div class="dw-actions"><button type="button" class="dw-btn rm-fade" @click="rnCheck">Check</button></div>
       <p v-if="rn.plan?.error" class="dw-msg bad" role="alert">{{ rn.plan.error }}</p>
       <template v-else-if="rn.plan">
         <p class="dw-msg">
@@ -216,8 +216,8 @@ async function resetTeams() {
           <template v-if="rn.plan.existing">“{{ rn.b.trim() }}” already exists ({{ rn.plan.existing }} entries), so the two become one player.</template>
         </p>
         <div class="dw-actions">
-          <button type="button" class="dw-btn" @click="rn.plan = null">Cancel</button>
-          <button type="button" class="dw-btn" @click="rnDo">Rename everywhere</button>
+          <button type="button" class="dw-btn rm-fade" @click="rn.plan = null">Cancel</button>
+          <button type="button" class="dw-btn rm-fade" @click="rnDo">Rename everywhere</button>
         </div>
       </template>
       <p v-if="rn.msg" class="dw-msg" :class="{ ok: rn.msg.startsWith('Done'), bad: rn.msg.startsWith('Not') || rn.msg.startsWith('No') || rn.msg.startsWith('Can') }" role="status">{{ rn.msg }}</p>
@@ -238,8 +238,8 @@ async function resetTeams() {
         </label>
       </div>
       <div class="dw-actions">
-        <button type="button" class="dw-btn" @click="saveTeam(t)">Save Kill Team</button>
-        <button type="button" class="dw-btn danger" @click="forms[t.id].del = !forms[t.id].del">Delete Kill Team</button>
+        <button type="button" class="dw-btn rm-fade" @click="saveTeam(t)">Save Kill Team</button>
+        <button type="button" class="dw-btn rm-fade danger" @click="forms[t.id].del = !forms[t.id].del">Delete Kill Team</button>
         <span class="dw-msg" role="status">{{ forms[t.id].msg }}</span>
       </div>
       <template v-if="forms[t.id].del">
@@ -247,19 +247,19 @@ async function resetTeams() {
           <b>Delete “{{ t.n }}” with {{ t.m.length }} mission{{ t.m.length === 1 ? '' : 's' }}?</b> This cannot be undone. Use “Download backup” first if you still need the results.
         </p>
         <div class="dw-actions">
-          <button type="button" class="dw-btn" @click="forms[t.id].del = false">Cancel</button>
-          <button type="button" class="dw-btn danger" @click="deleteTeam(t)">Delete permanently</button>
+          <button type="button" class="dw-btn rm-fade" @click="forms[t.id].del = false">Cancel</button>
+          <button type="button" class="dw-btn rm-fade danger" @click="deleteTeam(t)">Delete permanently</button>
         </div>
       </template>
     </fieldset>
     <div class="dw-actions">
-      <button type="button" class="dw-btn" @click="addTeam">Add Kill Team</button>
+      <button type="button" class="dw-btn rm-fade" @click="addTeam">Add Kill Team</button>
       <span class="dw-msg bad" role="status">{{ m2 }}</span>
     </div>
 
     <h2 class="dw-plaque">Restore from backup</h2>
     <p class="dw-sub">Loads a file made with “Download backup”. All current Kill Teams, missions and scoring rules are replaced by the backup. This cannot be undone.</p>
-    <div class="dw-actions"><button type="button" class="dw-btn" @click="backup">Download backup</button></div>
+    <div class="dw-actions"><button type="button" class="dw-btn rm-fade" @click="backup">Download backup</button></div>
     <label class="dw-field file">Backup file<input type="file" accept=".json,application/json,text/plain" @change="rsPick" /></label>
     <template v-if="rs.plan">
       <p class="dw-msg">
@@ -269,7 +269,7 @@ async function resetTeams() {
       </p>
       <label class="dw-field confirm">Type RESTORE to confirm<input v-model="rs.typed" autocomplete="off" autocapitalize="characters" /></label>
       <div class="dw-actions">
-        <button type="button" class="dw-btn danger" :disabled="rs.typed.trim().toUpperCase() !== 'RESTORE'" @click="rsDo">Restore backup</button>
+        <button type="button" class="dw-btn rm-fade danger" :disabled="rs.typed.trim().toUpperCase() !== 'RESTORE'" @click="rsDo">Restore backup</button>
       </div>
     </template>
     <p v-if="rs.msg" class="dw-msg" :class="{ ok: rs.msg.startsWith('Restored'), bad: !rs.msg.startsWith('Restor') }" role="status">{{ rs.msg }}</p>
@@ -282,8 +282,8 @@ async function resetTeams() {
       </p>
       <label class="dw-field name">Event name<input v-model="ar.name" autocomplete="off" /></label>
       <div class="dw-actions">
-        <button type="button" class="dw-btn" @click="archive(false)">Save snapshot</button>
-        <button type="button" class="dw-btn danger" @click="ar.asking = !ar.asking">Archive &amp; reset</button>
+        <button type="button" class="dw-btn rm-fade" @click="archive(false)">Save snapshot</button>
+        <button type="button" class="dw-btn rm-fade danger" @click="ar.asking = !ar.asking">Archive &amp; reset</button>
       </div>
       <template v-if="ar.asking">
         <p class="dw-msg">
@@ -292,8 +292,8 @@ async function resetTeams() {
         </p>
         <label class="dw-field confirm">Type RESET to confirm<input v-model="ar.typed" autocomplete="off" autocapitalize="characters" /></label>
         <div class="dw-actions">
-          <button type="button" class="dw-btn" @click="ar.asking = false">Cancel</button>
-          <button type="button" class="dw-btn danger" :disabled="ar.typed.trim().toUpperCase() !== 'RESET'" @click="archive(true)">Archive &amp; reset</button>
+          <button type="button" class="dw-btn rm-fade" @click="ar.asking = false">Cancel</button>
+          <button type="button" class="dw-btn rm-fade danger" :disabled="ar.typed.trim().toUpperCase() !== 'RESET'" @click="archive(true)">Archive &amp; reset</button>
         </div>
       </template>
       <p v-if="ar.msg" class="dw-msg" role="status">{{ ar.msg }}</p>

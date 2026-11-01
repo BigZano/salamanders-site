@@ -13,9 +13,10 @@ import { dragOffset, shouldDismiss } from '../../lib/deathwatch/sheetDrag'
 const open = defineModel({ type: Boolean, default: false })
 const dialog = useTemplateRef('dialog')
 
-// The slide-out lasts SLIDE_MS (see the stylesheet). The timer is only for a transition that never ends,
-// for instance in a hidden tab, so the dialog still closes.
-const SLIDE_MS = 220
+// The slide-out lasts SLIDE_MS: the stylesheet's --dur-view (240ms), the close. The slide-in is the longer
+// --dur-sheet (see the stylesheet). The timer is only for a transition that never ends, for instance in a
+// hidden tab, so the dialog still closes.
+const SLIDE_MS = 240
 const SAFETY_MS = SLIDE_MS + 80
 
 const reducedMotion = () => window.matchMedia?.('(prefers-reduced-motion: reduce)').matches === true
@@ -129,25 +130,32 @@ const cancel = (event) => release(event, false)
   overflow: hidden;
   overscroll-behavior: contain;
   transform: translateY(0);
-  /* what a released drag springs back with */
-  transition: transform 200ms var(--ease-forge);
+  /* A transition takes the duration of the state it enters, so this is the slide-out's: --dur-view (the
+     JS constant SLIDE_MS mirrors it). The slide-in and a released drag's spring-back take --dur-sheet below. */
+  transition: transform var(--dur-view) var(--ease-forge);
 }
-/* Sliding in. */
+/* Sliding in, and what a released drag springs back to: the open state's own, longer, duration. */
+.dw-sheet[open]:not([data-closing]) {
+  transition-duration: var(--dur-sheet);
+}
 @starting-style {
   .dw-sheet[open] {
     transform: translateY(100%);
   }
 }
-/* Sliding out (DeathwatchNavSheet sets data-closing, then closes the dialog when this has finished). */
+/* Sliding out (DeathwatchNavSheet sets data-closing, then closes the dialog when this has finished). It takes
+   the base rule's --dur-view. */
 .dw-sheet[data-closing] {
   transform: translateY(100%);
-  transition-duration: 220ms;
 }
 /* Literal colours here: ::backdrop does not inherit custom properties in older browsers. */
 .dw-sheet::backdrop {
   background: rgba(0, 0, 0, 0.6);
   opacity: 1;
-  transition: opacity 220ms ease-out;
+  transition: opacity var(--dur-view) var(--ease-forge);
+}
+.dw-sheet[open]:not([data-closing])::backdrop {
+  transition-duration: var(--dur-sheet);
 }
 @starting-style {
   .dw-sheet[open]::backdrop {

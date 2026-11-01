@@ -59,6 +59,7 @@ const to = (tab, u) => ({ path: `/deathwatch/armouringhall/${tab}/${itemSlug(u)}
   border: 1px solid var(--dw-line-2);
   border-radius: 999px;
   background: color-mix(in oklab, var(--dw-surface) 70%, transparent);
+  transition: transform var(--dur-press) var(--ease-forge);
 }
 .ah-pick-link img {
   width: 34px;
@@ -78,6 +79,9 @@ const to = (tab, u) => ({ path: `/deathwatch/armouringhall/${tab}/${itemSlug(u)}
     color: var(--dw-ink);
     border-color: var(--dw-muted);
   }
+}
+.ah-pick-link:active {
+  transform: scale(0.97);
 }
 .ah-head {
   display: flex;

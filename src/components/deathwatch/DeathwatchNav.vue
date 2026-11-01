@@ -25,7 +25,7 @@ const tabs = computed(() => info.value.tabs.filter((t) => props.command || !t.co
     <ul>
       <li v-for="tab in tabs" :key="tab.slug">
         <RouterLink
-          class="dw-nav-link"
+          class="dw-nav-link rm-fade"
           :to="resolveArea({ area, tab: tab.slug }).canonical"
           :aria-current="tab.slug === current ? 'page' : undefined"
           @click="emit('navigate')"
@@ -37,7 +37,7 @@ const tabs = computed(() => info.value.tabs.filter((t) => props.command || !t.co
         </RouterLink>
       </li>
       <li>
-        <RouterLink class="dw-nav-link dw-nav-back" to="/deathwatch" @click="emit('navigate')">
+        <RouterLink class="dw-nav-link dw-nav-back rm-fade" to="/deathwatch" @click="emit('navigate')">
           <svg class="dw-nav-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
             <component :is="shape[0]" v-for="(shape, i) in iconFor('menu')" :key="i" v-bind="shape[1]" />
           </svg>
@@ -69,9 +69,9 @@ const tabs = computed(() => info.value.tabs.filter((t) => props.command || !t.co
   letter-spacing: 0.05em;
   text-transform: uppercase;
   transition:
-    background-color 0.2s ease,
-    color 0.2s ease,
-    transform 0.15s var(--ease-forge);
+    background-color var(--dur-state) var(--ease-forge),
+    color var(--dur-state) var(--ease-forge),
+    transform var(--dur-press) var(--ease-forge);
 }
 .dw-nav-icon {
   flex: none;

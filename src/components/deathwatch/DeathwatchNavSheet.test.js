@@ -1,6 +1,9 @@
 // @vitest-environment jsdom
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { mount } from '@vue/test-utils'
+import { readFileSync } from 'node:fs'
+import { dirname, join } from 'node:path'
+import { fileURLToPath } from 'node:url'
 import DeathwatchNavSheet from './DeathwatchNavSheet.vue'
 
 // jsdom has no modal <dialog>, pointer events, pointer capture or matchMedia: the pieces of the browser the sheet
@@ -129,7 +132,8 @@ describe('DeathwatchNavSheet: closing', () => {
   it('does not wait for an animation that never ends', async () => {
     const { w } = mountSheet()
     await w.setProps({ modelValue: false })
-    vi.advanceTimersByTime(299)
+    // the safety timer is SLIDE_MS (240, the slide-out) + 80
+    vi.advanceTimersByTime(319)
     expect(HTMLDialogElement.prototype.close).not.toHaveBeenCalled()
     vi.advanceTimersByTime(1)
     expect(HTMLDialogElement.prototype.close).toHaveBeenCalledTimes(1)
@@ -265,5 +269,28 @@ describe('DeathwatchNavSheet: dragging the handle', () => {
     pointer(handle(w), 'pointerdown', { y: 200 })
     pointer(handle(w), 'pointermove', { y: 230 })
     expect(dialog.style.transform).toBe('translateY(30px)')
+  })
+})
+
+// The slide-out ends on a transitionend for the stylesheet's close duration, and the JS keeps a timer for the case it
+// never comes. The two numbers have to say the same thing, or the dialog closes before it has finished sliding.
+describe('DeathwatchNavSheet: its CSS and its JS agree', () => {
+  const here = dirname(fileURLToPath(import.meta.url))
+  const sheet = readFileSync(join(here, 'DeathwatchNavSheet.vue'), 'utf8')
+  const tokens = readFileSync(join(here, '..', '..', 'style.css'), 'utf8')
+  const token = (name) => Number(tokens.match(new RegExp(`--${name}:\\s*(\\d+)ms;`))?.[1])
+  const rule = (selector) =>
+    sheet.match(new RegExp(`(^|\\n)${selector.replace(/[.[\]():]/g, '\\$&')}\\s*\\{([^}]*)\\}`))?.[2] ?? ''
+
+  it('slides out for as long as --dur-view, which is SLIDE_MS', () => {
+    expect(Number(sheet.match(/const SLIDE_MS = (\d+)/)?.[1])).toBe(token('dur-view'))
+    expect(sheet).toMatch(/const SAFETY_MS = SLIDE_MS \+ 80/)
+    expect(rule('.dw-sheet')).toContain('transition: transform var(--dur-view) var(--ease-forge)')
+    expect(rule('.dw-sheet[data-closing]')).not.toContain('transition')
+  })
+
+  it('slides in, and springs back, for --dur-sheet', () => {
+    expect(rule('.dw-sheet[open]:not([data-closing])')).toContain('transition-duration: var(--dur-sheet)')
+    expect(rule('.dw-sheet[open]:not([data-closing])::backdrop')).toContain('transition-duration: var(--dur-sheet)')
   })
 })

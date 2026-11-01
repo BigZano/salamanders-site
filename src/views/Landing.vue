@@ -40,7 +40,7 @@ const ops = [
         <h2 class="ops-title">Muster the Chapter</h2>
       </div>
       <div class="ops-grid">
-        <RouterLink v-for="o in ops" :key="o.to" :to="o.to" class="ops-card panel-forge">
+        <RouterLink v-for="o in ops" :key="o.to" :to="o.to" class="ops-card panel-forge rm-fade">
           <p class="ops-kite">{{ o.kite }}</p>
           <h3 class="ops-card-title">{{ o.title }}</h3>
           <p class="ops-body">{{ o.body }}</p>
@@ -79,11 +79,18 @@ const ops = [
   flex-direction: column;
   padding: 1.4rem;
   border-radius: 4px;
-  transition: transform 0.18s ease, border-color 0.18s ease;
+  transition:
+    transform var(--dur-press) var(--ease-forge),
+    border-color var(--dur-state) var(--ease-forge);
 }
-.ops-card:hover {
-  transform: translateY(-3px);
-  border-color: var(--color-drake);
+@media (hover: hover) and (pointer: fine) {
+  .ops-card:hover {
+    transform: translateY(-3px);
+    border-color: var(--color-drake);
+  }
+}
+.ops-card:active {
+  transform: scale(0.97);
 }
 .ops-kite {
   font-family: var(--font-mono);

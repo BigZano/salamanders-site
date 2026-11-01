@@ -234,7 +234,7 @@ onBeforeUnmount(() => {
       <button
         v-for="name in CLASS_NAMES"
         :key="name"
-        class="class-tab"
+        class="class-tab rm-fade"
         :class="{ on: planner.activeClass === name }"
         role="tab"
         :aria-selected="planner.activeClass === name"
@@ -277,7 +277,7 @@ onBeforeUnmount(() => {
                 <button
                   v-for="perk in c.perks"
                   :key="perk.level"
-                  class="perk"
+                  class="perk rm-fade"
                   :data-cat="perk.cat"
                   :class="{ selected: isSelected(perk), locked: perk.level > planner.level }"
                   :disabled="perk.level > planner.level"
@@ -532,7 +532,7 @@ onBeforeUnmount(() => {
           v-for="p in planner.prestigePool"
           :key="p.name"
           type="button"
-          class="pr-card"
+          class="pr-card rm-fade"
           :class="{ picked: p.picked }"
           :disabled="p.disabled"
           :aria-pressed="p.picked"
@@ -588,10 +588,19 @@ onBeforeUnmount(() => {
   border-radius: 2px;
   cursor: pointer;
   min-height: var(--tap);
-  transition: all 0.15s ease;
+  transition:
+    color var(--dur-state) var(--ease-forge),
+    background-color var(--dur-state) var(--ease-forge),
+    border-color var(--dur-state) var(--ease-forge),
+    transform var(--dur-press) var(--ease-forge);
 }
-.class-tab:hover {
-  color: var(--color-bone);
+@media (hover: hover) and (pointer: fine) {
+  .class-tab:hover {
+    color: var(--color-bone);
+  }
+}
+.class-tab:active {
+  transform: scale(0.97);
 }
 .class-tab.on {
   color: #1a0d06;
@@ -728,15 +737,25 @@ onBeforeUnmount(() => {
   padding: 0.5rem 0.25rem;
   text-align: center;
   cursor: pointer;
-  transition: 0.15s;
+  transition:
+    transform var(--dur-press) var(--ease-forge),
+    border-color var(--dur-state) var(--ease-forge),
+    background-color var(--dur-state) var(--ease-forge),
+    box-shadow var(--dur-state) var(--ease-forge),
+    opacity var(--dur-state) var(--ease-forge);
   /* Holding a perk opens its popout; keep iOS's callout and text selection out of the way. */
   -webkit-touch-callout: none;
   -webkit-user-select: none;
   user-select: none;
 }
-.perk:hover:not(:disabled) {
-  border-color: var(--color-ash-2);
-  background: rgba(255, 255, 255, 0.02);
+@media (hover: hover) and (pointer: fine) {
+  .perk:hover:not(:disabled) {
+    border-color: var(--color-ash-2);
+    background: rgba(255, 255, 255, 0.02);
+  }
+}
+.perk:active:not(:disabled) {
+  transform: scale(0.97);
 }
 .perk.locked {
   cursor: not-allowed;
@@ -772,9 +791,11 @@ onBeforeUnmount(() => {
     inset 0 0 0 1px rgba(255, 106, 43, 0.35),
     0 0 22px -6px rgba(255, 106, 43, 0.55);
 }
-.perk.selected:hover:not(:disabled) {
-  border-color: var(--color-ember);
-  background: rgba(255, 106, 43, 0.16);
+@media (hover: hover) and (pointer: fine) {
+  .perk.selected:hover:not(:disabled) {
+    border-color: var(--color-ember);
+    background: rgba(255, 106, 43, 0.16);
+  }
 }
 /* clip-path clips box-shadow away, which is why the old ember ring never showed.
    drop-shadow follows the clipped hex silhouette. */
@@ -1149,9 +1170,15 @@ onBeforeUnmount(() => {
   padding: 0.15rem 0;
   cursor: pointer;
   min-height: var(--tap);
+  transition: transform var(--dur-press) var(--ease-forge);
 }
-.save-more:hover {
-  color: var(--color-bone);
+@media (hover: hover) and (pointer: fine) {
+  .save-more:hover {
+    color: var(--color-bone);
+  }
+}
+.save-more:active {
+  transform: scale(0.97);
 }
 .save-go {
   justify-content: center;
@@ -1177,6 +1204,10 @@ onBeforeUnmount(() => {
   padding: 0.2rem 0.45rem;
   cursor: pointer;
   min-height: var(--tap);
+  transition: transform var(--dur-press) var(--ease-forge);
+}
+.save-needs-pick:active {
+  transform: scale(0.97);
 }
 .save .fld {
   width: 100%;
@@ -1320,10 +1351,16 @@ onBeforeUnmount(() => {
   border: 1px solid var(--color-ash);
   border-radius: 2px;
   cursor: pointer;
+  transition: transform var(--dur-press) var(--ease-forge);
 }
-.pr-rank-clear:hover {
-  color: var(--color-bone);
-  border-color: var(--color-ember);
+@media (hover: hover) and (pointer: fine) {
+  .pr-rank-clear:hover {
+    color: var(--color-bone);
+    border-color: var(--color-ember);
+  }
+}
+.pr-rank-clear:active {
+  transform: scale(0.97);
 }
 .pr-pool-label {
   font-family: var(--font-mono);
@@ -1373,12 +1410,22 @@ onBeforeUnmount(() => {
   text-align: left;
   font: inherit;
   cursor: pointer;
-  transition: 0.15s;
+  transition:
+    transform var(--dur-press) var(--ease-forge),
+    border-color var(--dur-state) var(--ease-forge),
+    background-color var(--dur-state) var(--ease-forge),
+    box-shadow var(--dur-state) var(--ease-forge),
+    opacity var(--dur-state) var(--ease-forge);
 }
-.pr-card:hover:not(:disabled) {
-  border-color: var(--color-ash-2);
-  border-left-color: var(--color-gold);
-  background: rgba(14, 28, 22, 0.7);
+@media (hover: hover) and (pointer: fine) {
+  .pr-card:hover:not(:disabled) {
+    border-color: var(--color-ash-2);
+    border-left-color: var(--color-gold);
+    background: rgba(14, 28, 22, 0.7);
+  }
+}
+.pr-card:active:not(:disabled) {
+  transform: scale(0.97);
 }
 .pr-card:disabled {
   cursor: not-allowed;
@@ -1451,7 +1498,7 @@ onBeforeUnmount(() => {
   letter-spacing: 0.06em;
   font-size: 0.82rem;
   cursor: pointer;
-  transition: transform 150ms var(--ease-forge);
+  transition: transform var(--dur-press) var(--ease-forge);
 }
 .toast-undo:active {
   transform: scale(0.97);
@@ -1461,9 +1508,15 @@ onBeforeUnmount(() => {
     color: var(--color-bone);
   }
 }
-.toast-enter-active,
+.toast-enter-active {
+  transition:
+    opacity var(--dur-sheet) var(--ease-forge),
+    transform var(--dur-sheet) var(--ease-forge);
+}
 .toast-leave-active {
-  transition: opacity 0.2s ease, transform 0.2s ease;
+  transition:
+    opacity var(--dur-view) var(--ease-forge),
+    transform var(--dur-view) var(--ease-forge);
 }
 .toast-enter-from,
 .toast-leave-to {

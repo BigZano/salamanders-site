@@ -99,7 +99,7 @@
   border: 1px solid var(--dw-line-2);
   background: var(--dw-grain), color-mix(in oklab, #0b130c 94%, transparent);
   clip-path: polygon(10px 0, calc(100% - 10px) 0, 100% 10px, 100% calc(100% - 10px), calc(100% - 10px) 100%, 10px 100%, 0 calc(100% - 10px), 0 10px);
-  transition: border-color 0.3s;
+  transition: border-color var(--dur-state) var(--ease-forge);
 }
 .dw .ah-part h4::after {
   content: '';

@@ -40,7 +40,7 @@ function jump(key) {
     </header>
 
     <nav class="lo-toc" aria-label="Chapters">
-      <button v-for="c in l.chapters" :key="c.n" type="button" @click="jump(c.n)">
+      <button v-for="c in l.chapters" :key="c.n" type="button" class="rm-fade" @click="jump(c.n)">
         <b>{{ c.n }}</b><Inline :segs="c.title" />
       </button>
     </nav>
@@ -171,18 +171,27 @@ function jump(key) {
   border: 1px solid rgb(201 154 62 / 0.4);
   border-radius: 999px;
   cursor: pointer;
-  transition: border-color 0.2s, background-color 0.2s;
+  transition:
+    border-color var(--dur-state) var(--ease-forge),
+    background-color var(--dur-state) var(--ease-forge),
+    transform var(--dur-press) var(--ease-forge);
 }
 .lo-toc b {
   font: 700 14px var(--dw-font-title);
   color: var(--gd);
 }
-.lo-toc button:hover,
+@media (hover: hover) and (pointer: fine) {
+  .lo-toc button:hover {
+    border-color: var(--gd);
+    background: rgb(214 176 92 / 0.14);
+  }
+}
+.lo-toc button:active {
+  transform: scale(0.97);
+}
 .lo-toc button:focus-visible {
   border-color: var(--gd);
   background: rgb(214 176 92 / 0.14);
-}
-.lo-toc button:focus-visible {
   outline: 2px solid var(--gl);
   outline-offset: 2px;
 }
@@ -293,10 +302,5 @@ function jump(key) {
 
 .lo :deep(b) {
   color: var(--gl);
-}
-@media (prefers-reduced-motion: reduce) {
-  .lo-toc button {
-    transition: none;
-  }
 }
 </style>
