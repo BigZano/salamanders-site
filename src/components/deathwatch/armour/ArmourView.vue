@@ -1,19 +1,18 @@
 <script setup>
-// One uniform: its parts in two columns either side of the figure. A part card and the figure's hotspot for it
-// light up together (hover or focus on either); a hotspot also scrolls to its card. Notes that refer to Company
-// Heraldry link there. Every link goes to the canonical address, so the guard never replaces a history entry. The
-// introduction and the notes are page texts (lib/deathwatch/armourTexts.js) the Watch Commander can edit.
+// One uniform, one part at a time. On a wide screen: the parts as a list, the figure, the chosen part in detail.
+// On a phone: the figure, the parts as a strip of thumbnails, and a bar at the foot that opens the chosen part in a
+// bottom sheet (a marker opens it straight away). A part and its marker light up together (hover or focus on
+// either). The introduction and the notes are page texts (lib/deathwatch/armourTexts.js) the Watch Commander can edit.
 import { computed, onMounted, ref } from 'vue'
-import { useRoute } from 'vue-router'
-import { resolveArea } from '../../../lib/deathwatch/areas'
-import { PAINT, hotspot, noteParts } from '../../../lib/deathwatch/armour'
+import { hotspot } from '../../../lib/deathwatch/armour'
 import { leadOf, notesOf } from '../../../lib/deathwatch/armourTexts'
-import { inline } from '../../../lib/deathwatch/notables'
 import { useAuth } from '../../../stores/auth'
 import { useDeathwatchData } from '../../../stores/deathwatchData'
+import DeathwatchNavSheet from '../DeathwatchNavSheet.vue'
 import Inline from '../Inline'
+import ArmourDetail from './ArmourDetail.vue'
 import ArmourHead from './ArmourHead.vue'
-import ArmourTiles from './ArmourTiles.vue'
+import './armour-view.css'
 
 const props = defineProps({
   label: { type: String, required: true },
@@ -22,7 +21,6 @@ const props = defineProps({
   current: { type: Object, required: true },
 })
 
-const route = useRoute()
 const auth = useAuth()
 const data = useDeathwatchData()
 // Once: the defaults show at once, and what the data holds replaces them when it arrives.
@@ -30,23 +28,31 @@ onMounted(() => {
   if (data.status !== 'ready') data.load(auth.token)
 })
 const lead = computed(() => leadOf(data.cfg.tx, props.current))
-const notes = (title) => notesOf(data.cfg.tx, props.current, title)
-const link =(tab, item) => ({ path: resolveArea({ area: 'armouringhall', tab, sub: item }).canonical, query: route.query.scene ? { scene: route.query.scene } : {} })
-const lit = ref('')
-const flash = ref('')
-const cards = ref({})
+const notes = computed(() => notesOf(data.cfg.tx, props.current, part.value[0]))
 const parts = computed(() => [...props.current.L, ...props.current.R])
-const reduced = () => globalThis.matchMedia?.('(prefers-reduced-motion: reduce)').matches
+// The chosen part by title, so it stays chosen on the next uniform; the first part until one is chosen.
+const sel = ref('')
+const part = computed(() => parts.value.find((p) => p[0] === sel.value) ?? parts.value[0])
+const lit = ref('')
+const sheet = ref(false)
+// The layout follows the hall's own width (a container query), so the stylesheet decides: no detail beside the
+// figure means the phone layout.
+const detail = ref(null)
+const phone = () => getComputedStyle(detail.value).display === 'none'
 
-// A note without the "(see Company Heraldry)" aside, which becomes a link below it instead.
-const clean = (n) => n.replace(/\s*\(see Company Heraldry\)/, '')
-const heraldry = (n) => /Company Heraldry/.test(n)
+// A part's tile, cut from the sprite of 11 and cropped to fill a thumbnail: its middle, or for a part whose telling
+// detail sits higher in the tile (the knee, the chest's eagle), nearer its top. The first tile, but the Gauntlets'
+// second, which shows the gauntlet better.
+const FOCUS_Y = { Wargear: 25, Breastplate: 25, Greaves: 12 }
+const THUMB_TILE = { Gauntlets: 1 }
+const thumb = (p) => ({
+  backgroundImage: `url(${props.current.spr})`,
+  backgroundPosition: `${(p[3][THUMB_TILE[p[0]] ?? 0] ?? p[3][0]) * 10}% ${FOCUS_Y[p[0]] ?? 50}%`,
+})
 
-function jump(title) {
-  cards.value[title]?.scrollIntoView({ behavior: reduced() ? 'auto' : 'smooth', block: 'center' })
-  cards.value[title]?.focus({ preventScroll: true })
-  flash.value = ''
-  requestAnimationFrame(() => (flash.value = title))
+function pick(title, open = false) {
+  sel.value = title
+  if (open && phone()) sheet.value = true
 }
 </script>
 
@@ -55,61 +61,75 @@ function jump(title) {
     <ArmourHead :label="label" :tab="tab" :list="list" :current="current" />
     <p v-if="lead.length" class="ah-lead"><Inline :segs="lead" /></p>
 
-    <div class="ah-grid">
-      <figure class="ah-fig">
-        <div class="ah-screen">
-        <img :src="current.img" :alt="`${current.name} armour, front view`" width="468" height="880" />
-        <button
-          v-for="p in parts"
-          :key="p[0]"
-          type="button"
-          class="ah-hs"
-          :class="{ on: lit === p[0] }"
-          :style="{ left: `${hotspot(current, p[4])[0]}%`, top: `${hotspot(current, p[4])[1]}%` }"
-          :aria-label="`Show ${p[0]}`"
-          @mouseenter="lit = p[0]"
-          @mouseleave="lit = ''"
-          @focus="lit = p[0]"
-          @blur="lit = ''"
-          @click="jump(p[0])"
-        >
-          <span>{{ p[0] }}</span>
-        </button>
-        </div>
-        <figcaption>{{ current.name }} · front view<span>Tap a marker to find its part</span></figcaption>
-      </figure>
-      <div v-for="(col, c) in [current.L, current.R]" :key="c" class="ah-col" :class="{ r: c }">
-        <section
-          v-for="[title, rows, , tiles] in col"
-          :key="title"
-          :ref="(el) => (cards[title] = el)"
-          class="ah-part"
-          :class="{ on: lit === title, flash: flash === title }"
-          tabindex="-1"
-          @mouseenter="lit = title"
-          @mouseleave="lit = ''"
-          @focus="lit = title"
-          @blur="lit = ''"
-          @animationend="flash = ''"
-        >
-          <h4>{{ title }}</h4>
-          <ArmourTiles :sprite="current.spr" :tiles="tiles" :count="11" />
-          <div v-if="rows.length" class="ah-sw">
-            <span v-for="[role, paint] in rows" :key="role">
-              <i :style="{ '--c': PAINT[paint] }" /><small>{{ role }}</small>{{ paint }}
-            </span>
-          </div>
-          <template v-for="n in notes(title)" :key="n">
-            <p v-if="n.startsWith('///')" class="ah-cf">{{ n }}</p>
-            <p v-else-if="noteParts(clean(n))" class="ah-nt">
-              <b>{{ noteParts(clean(n))[0] }}</b><span><Inline :segs="inline(noteParts(clean(n))[1])" /></span>
-            </p>
-            <p v-else><Inline :segs="inline(clean(n))" /></p>
-            <RouterLink v-if="heraldry(n)" class="ah-chl" :to="link('standard', 'companyheraldry')">Company Heraldry<i aria-hidden="true">›</i></RouterLink>
-          </template>
-        </section>
+    <div class="av">
+      <nav class="av-parts" aria-labelledby="av-parts-h">
+        <h4 id="av-parts-h" class="av-h">Armour Parts</h4>
+        <ul>
+          <li v-for="p in parts" :key="p[0]">
+            <button
+              type="button"
+              class="av-part"
+              :class="{ on: lit === p[0] }"
+              :aria-current="p === part ? 'true' : undefined"
+              @mouseenter="lit = p[0]"
+              @mouseleave="lit = ''"
+              @focus="lit = p[0]"
+              @blur="lit = ''"
+              @click="pick(p[0])"
+            >
+              <i class="av-thumb" :style="thumb(p)" aria-hidden="true" />
+              <span>{{ p[0] }}</span>
+              <svg class="av-chev" viewBox="0 0 24 24" aria-hidden="true"><path d="m9 6 6 6-6 6" /></svg>
+            </button>
+          </li>
+        </ul>
+      </nav>
+
+      <div class="av-stage">
+        <figure class="av-fig">
+          <img :src="current.img" :alt="`${current.name} armour, front view`" width="468" height="880" />
+          <button
+            v-for="p in parts"
+            :key="p[0]"
+            type="button"
+            class="ah-hs"
+            :class="{ on: lit === p[0] || p === part, l: hotspot(current, p[4])[0] < 20, r: hotspot(current, p[4])[0] > 80 }"
+            :style="{ left: `${hotspot(current, p[4])[0]}%`, top: `${hotspot(current, p[4])[1]}%` }"
+            :aria-label="`Show ${p[0]}`"
+            @mouseenter="lit = p[0]"
+            @mouseleave="lit = ''"
+            @focus="lit = p[0]"
+            @blur="lit = ''"
+            @click="pick(p[0], true)"
+          >
+            <span>{{ p[0] }}</span>
+          </button>
+          <figcaption>Front view</figcaption>
+        </figure>
+        <p class="av-hint">Select a part or a marker to view its details.</p>
       </div>
+
+      <!-- Announced in a word on each pick; the panel itself is not live, so its tiles are not all read out again. -->
+      <p class="av-live" aria-live="polite">Showing {{ part[0] }}</p>
+      <aside ref="detail" class="av-detail">
+        <ArmourDetail :label="label" :part="part" :notes="notes" :sprite="current.spr" />
+      </aside>
+
+      <button type="button" class="av-bar" @click="sheet = true">
+        <i class="av-thumb" :style="thumb(part)" aria-hidden="true" />
+        <span><b>{{ part[0] }}</b>View colours &amp; details</span>
+        <svg class="av-chev" viewBox="0 0 24 24" aria-hidden="true"><path d="m6 15 6-6 6 6" /></svg>
+      </button>
     </div>
+
+    <DeathwatchNavSheet v-model="sheet" :aria-label="`${part[0]} details`">
+      <div class="av-sheet">
+        <button type="button" class="av-close" aria-label="Close" @click="sheet = false">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6 6 18" /></svg>
+        </button>
+        <ArmourDetail :label="label" :part="part" :notes="notes" :sprite="current.spr" />
+      </div>
+    </DeathwatchNavSheet>
 
     <section class="ah-set">
       <h4>Armour Set</h4>
@@ -117,178 +137,3 @@ function jump(title) {
     </section>
   </div>
 </template>
-
-<style scoped>
-.ah-lead {
-  margin: 0;
-  padding: 0.75rem 1rem;
-  border: 1px solid var(--dw-line-2);
-  background: color-mix(in oklab, var(--dw-surface) 80%, transparent);
-}
-/* The introduction's links are page-text elements, which carry no scope id (Inline.js). */
-.ah-lead :deep(a) {
-  font-weight: 700;
-  color: var(--dw-accent);
-  text-decoration: underline;
-  text-decoration-color: color-mix(in oklab, var(--dw-accent) 50%, transparent);
-  text-underline-offset: 4px;
-}
-.ah-lead :deep(a:focus-visible) {
-  outline: 2px solid var(--dw-accent);
-  outline-offset: 2px;
-}
-.ah-hs {
-  position: absolute;
-  z-index: 2;
-  width: 18px;
-  height: 18px;
-  margin: -9px 0 0 -9px;
-  padding: 0;
-  border: 2px solid var(--dw-accent);
-  border-radius: 50%;
-  background: rgb(10 13 17 / 0.65);
-  cursor: pointer;
-  transition:
-    transform var(--dur-press) var(--ease-forge),
-    background-color var(--dur-state) var(--ease-forge);
-}
-/* A larger invisible target than the 18px dot, for a thumb. */
-.ah-hs::after {
-  content: '';
-  position: absolute;
-  inset: -13px;
-}
-.ah-hs span {
-  position: absolute;
-  left: 50%;
-  bottom: calc(100% + 9px);
-  translate: -50% 4px;
-  padding: 3px 10px;
-  font: 700 0.75rem / 1.2 var(--dw-font-cond);
-  letter-spacing: 0.12em;
-  text-transform: uppercase;
-  white-space: nowrap;
-  color: var(--dw-accent);
-  background: rgb(10 13 17 / 0.92);
-  border: 1px solid var(--dw-accent);
-  border-radius: 999px;
-  opacity: 0;
-  pointer-events: none;
-  /* Hiding takes --dur-state; showing (below) takes --dur-view. */
-  transition:
-    opacity var(--dur-state) var(--ease-forge),
-    translate var(--dur-state) var(--ease-forge);
-}
-.ah-hs.on,
-.ah-hs:focus-visible {
-  transform: scale(1.3);
-  background: var(--dw-accent);
-  outline: none;
-}
-.ah-hs:active {
-  transform: scale(0.97);
-}
-.ah-hs.on span,
-.ah-hs:focus-visible span {
-  opacity: 1;
-  translate: -50% 0;
-  transition-duration: var(--dur-view);
-}
-.ah-part:focus {
-  outline: none;
-}
-.ah-part.on {
-  border-color: var(--dw-accent);
-  background: var(--dw-grain), color-mix(in oklab, var(--dw-accent) 8%, #0b130c);
-}
-.ah-part.flash {
-  animation: ah-flash 1.3s var(--ease-forge);
-}
-/* The card a marker jumped to brightens, then settles. Its corners are clipped, so it lights from inside. */
-@keyframes ah-flash {
-  from {
-    border-color: var(--dw-accent);
-    background-color: color-mix(in oklab, var(--dw-accent) 22%, #0b130c);
-  }
-}
-.ah-nt {
-  display: grid;
-  grid-template-columns: auto 1fr;
-  gap: 4px 12px;
-  padding: 0.55rem 0.75rem;
-  font-size: 0.9rem;
-  border-left: 1px solid color-mix(in oklab, var(--dw-accent) 70%, transparent);
-  background: linear-gradient(90deg, color-mix(in oklab, var(--dw-accent) 9%, transparent), transparent 85%);
-}
-.ah-nt b {
-  min-width: 58px;
-  padding-top: 2px;
-  font: 500 0.95rem / 1 var(--dw-font-hud);
-  letter-spacing: 0.12em;
-  text-transform: uppercase;
-  color: var(--dw-accent);
-}
-.ah-cf {
-  font: 600 0.9rem ui-monospace, Consolas, monospace;
-  letter-spacing: 0.14em;
-  color: var(--dw-muted);
-}
-.ah-chl {
-  display: inline-flex;
-  align-items: center;
-  gap: 0.4rem;
-  min-height: 36px;
-  margin-top: 0.5rem;
-  padding: 0.25rem 0.75rem;
-  font: 600 0.85rem / 1 var(--dw-font-cond);
-  letter-spacing: 0.1em;
-  text-transform: uppercase;
-  text-decoration: none;
-  color: var(--dw-accent);
-  border: 1px solid color-mix(in oklab, var(--dw-accent) 50%, var(--dw-line-2));
-  transition: transform var(--dur-press) var(--ease-forge);
-}
-.ah-chl:active {
-  transform: scale(0.97);
-}
-.ah-chl i {
-  font-style: normal;
-}
-.ah-chl:focus-visible {
-  outline: 2px solid var(--dw-accent);
-  outline-offset: 2px;
-}
-.ah-set {
-  display: grid;
-  justify-items: center;
-  gap: 0.4rem;
-  padding: 1.4rem 1rem 1.2rem;
-  text-align: center;
-  border: 1px solid transparent;
-  border-image: var(--dw-frame-s) 12 / 12px stretch;
-  background: var(--dw-scan), var(--dw-grain), rgb(4 8 4 / 0.7);
-}
-.ah-set h4 {
-  margin: 0;
-  font: 500 clamp(1.6rem, 3vw, 2.2rem) / 1 var(--dw-font-hud);
-  letter-spacing: 0.1em;
-  text-transform: uppercase;
-  color: var(--dw-accent);
-}
-.ah-set p {
-  margin: 0;
-  font: 700 0.9rem var(--dw-font-cond);
-  letter-spacing: 0.4em;
-  text-transform: uppercase;
-  color: var(--dw-muted);
-}
-@media (prefers-reduced-motion: reduce) {
-  .ah-part.flash {
-    animation: none;
-  }
-  .ah-hs,
-  .ah-hs span {
-    transition: none;
-  }
-}
-</style>

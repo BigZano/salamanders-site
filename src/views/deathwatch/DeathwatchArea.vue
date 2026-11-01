@@ -12,10 +12,12 @@ import { pageTexts } from '../../lib/deathwatch/pageTexts'
 import { useDeathwatch } from '../../stores/deathwatch'
 import crest from '../../components/deathwatch/img/crest.webp'
 import crestGold from '../../components/deathwatch/img/crest-gold.webp'
+import crestArmour from '../../components/deathwatch/img/crest-armouringhall.png'
 import DeathwatchAreaBar from '../../components/deathwatch/DeathwatchAreaBar.vue'
 import DeathwatchNav from '../../components/deathwatch/DeathwatchNav.vue'
 import DeathwatchNavSheet from '../../components/deathwatch/DeathwatchNavSheet.vue'
 import PageEditor from '../../components/deathwatch/PageEditor.vue'
+import HallHead from '../../components/deathwatch/armour/HallHead.vue'
 import { SkNote } from '../../components/deathwatch/skeleton'
 
 const route = useRoute()
@@ -35,8 +37,12 @@ const locked = computed(() => currentTab.value.command === true && !store.comman
 const texts = computed(() => (store.commander ? pageTexts(page.value.area, page.value.tab, page.value.sub) : []))
 
 // While a view's chunk is on its way (after a short delay, so a fast one never flashes it), and if it fails.
-const Loading = { render: () => h('p', { class: 'dw-area-loading', role: 'status' }, 'Loading…') }
-const Failed = { render: () => h('p', { class: 'dw-area-error', role: 'alert' }, 'This view could not be loaded. Try again.') }
+// From 900px the Armouring Hall has no rail (.solo): its views head themselves (HallHead). Where no view does (still
+// loading, failed, or locked, below), its head is drawn here instead, so the hall never loses its way out.
+const hallHead = () => (page.value.area === 'armouringhall' ? h(HallHead, { tab: page.value.tab }) : null)
+const Loading = { render: () => [hallHead(), h('p', { class: 'dw-area-loading', role: 'status' }, 'Loading…')] }
+// `error` is what defineAsyncComponent hands it: taken as a prop, so it does not fall on the fragment as an attribute.
+const Failed = { props: ['error'], render: () => [hallHead(), h('p', { class: 'dw-area-error', role: 'alert' }, 'This view could not be loaded. Try again.')] }
 // Keyed on a string: vue-router gives a fresh params object on every navigation (a query, an Armouring Hall item),
 // and a view must only be rebuilt when the area or the tab changes, so it keeps what it holds across the rest.
 const viewKey = computed(() => `${page.value.area}/${page.value.tab}`)
@@ -68,14 +74,14 @@ watch(viewKey, async (key) => {
 </script>
 
 <template>
-  <section v-if="page" class="dw-area">
+  <section v-if="page" class="dw-area" :class="{ solo: page.area === 'armouringhall' }">
     <p v-if="restricted" class="dw-area-restricted dw-panel" role="status">Restricted to the Watch Commander.</p>
     <template v-else>
       <!-- The rail. On a phone only its head shows (the crest and the area's name); from 900px the list of views joins it. -->
       <aside class="dw-area-side dw-panel">
         <header class="dw-area-head">
-          <!-- The Hall of Relics shows the gold crest, as on the old site. -->
-          <img class="dw-area-crest" :src="page.area === 'hallofrelics' ? crestGold : crest" alt="" width="120" height="120" />
+          <!-- The Hall of Relics shows the gold crest, as on the old site; the Armouring Hall its own emblem. -->
+          <img class="dw-area-crest" :src="{ hallofrelics: crestGold, armouringhall: crestArmour }[page.area] ?? crest" alt="" width="120" height="120" />
           <div>
             <p class="dw-area-eyebrow">Watch Fortress Ebonhold</p>
             <h1 class="dw-area-title">{{ area.label }}</h1>
@@ -93,7 +99,10 @@ watch(viewKey, async (key) => {
       <div class="dw-area-main">
         <!-- Keyed on the view, so the whole framed sheet opens again (deathwatch.css) when the tab changes. -->
         <div :key="viewKey" ref="sheet" class="dw-area-sheet dw-panel">
-          <p v-if="locked" class="dw-area-restricted" role="status">Reserved for the Deathwatch Command.</p>
+          <template v-if="locked">
+            <HallHead v-if="page.area === 'armouringhall'" :tab="page.tab" />
+            <p class="dw-area-restricted" role="status">Reserved for the Deathwatch Command.</p>
+          </template>
           <component :is="view" v-else :key="viewKey" />
         </div>
       </div>
@@ -110,7 +119,7 @@ watch(viewKey, async (key) => {
   align-content: start;
   gap: 1rem;
   min-height: calc(100dvh - 4rem);
-  max-width: 78rem;
+  max-width: 86rem;
   margin: 0 auto;
   padding: 1.25rem 1rem 3rem;
 }
@@ -249,10 +258,10 @@ watch(viewKey, async (key) => {
   }
 }
 /* A wide screen: the rail docks at the left edge and the view sits in the middle of the screen, balanced on the
-   right by an empty column the rail's width. The view keeps the width it has below (78rem less the padding, the
+   right by an empty column the rail's width. The view keeps the width it has below (86rem less the padding, the
    rail and the gap), so only the rail moves and the view never narrows or widens across the step; the step is where
    the centre column first holds that width with a scrollbar taking its share of the window. */
-@media (min-width: 1640px) {
+@media (min-width: 1740px) {
   .dw-area {
     grid-template-columns: 18.75rem minmax(0, 1fr) 18.75rem;
     max-width: none;
@@ -261,7 +270,23 @@ watch(viewKey, async (key) => {
   .dw-area-main {
     justify-self: center;
     width: 100%;
-    max-width: calc(78rem - 2rem - 18.75rem - 1.5rem);
+    max-width: calc(86rem - 2rem - 18.75rem - 1.5rem);
+  }
+}
+/* The Armouring Hall heads its own tabs and the way back (HallHead.vue): from 900px it needs no rail, and its view
+   is exactly as wide as the site's menu bar (AppNav: 76rem, 1.25rem in from each side), its edges under the bar's.
+   On a phone the rail's head and the bar stay, as in every area. */
+@media (min-width: 900px) {
+  .dw-area.solo {
+    grid-template-columns: minmax(0, 1fr);
+    max-width: 76rem;
+    padding-inline: 1.25rem;
+  }
+  .dw-area.solo .dw-area-side {
+    display: none;
+  }
+  .dw-area.solo .dw-area-main {
+    max-width: none;
   }
 }
 </style>

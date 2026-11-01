@@ -1,12 +1,14 @@
 // @vitest-environment jsdom
 // The rebuilt Armouring Hall: each tab shows the uniform its address names, with the old site's parts, paints and
-// notes; the picker and the Company Heraldry links keep a dev ?scene=; a part card and its hotspot light up together.
+// notes; the picker and the Company Heraldry links keep a dev ?scene=; a part and its marker light up together, and
+// the chosen part shows in detail (beside the figure on a wide screen, in a bottom sheet on a phone).
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import { flushPromises, mount } from '@vue/test-utils'
 import { createPinia, setActivePinia } from 'pinia'
 import { createMemoryHistory, createRouter } from 'vue-router'
 vi.mock('../../../lib/deathwatch/api', () => ({ getData: vi.fn(async () => null), writeDoc: vi.fn() }))
 import { getData } from '../../../lib/deathwatch/api'
+import { useDeathwatch } from '../../../stores/deathwatch'
 import { useDeathwatchData } from '../../../stores/deathwatchData'
 
 const PAGES = import.meta.glob('./armouringhall/*.vue', { eager: true })
@@ -26,36 +28,49 @@ async function mountPage(tab, sub = '', query = {}, { tx, status = 'ready' } = {
   return w
 }
 const texts = (w, sel) => w.findAll(sel).map((e) => e.text())
-const card = (w, title) => w.findAll('.ah-part').find((c) => c.get('h4').text() === title)
-const spot = (w, title) => w.get(`.ah-hs[aria-label="Show ${title}"]`)
-// Which cards and hotspots are lit right now, by name.
-const lit = (w) => ({
-  cards: w.findAll('.ah-part.on').map((c) => c.get('h4').text()),
-  spots: w.findAll('.ah-hs.on').map((h) => h.attributes('aria-label')),
-})
 
-// jsdom has no scrollIntoView: stand one in for each test, and take it away again after.
-const scrollIntoView = Element.prototype.scrollIntoView
 beforeEach(() => {
   document.body.innerHTML = ''
-  Element.prototype.scrollIntoView = vi.fn()
-})
-afterEach(() => {
-  Element.prototype.scrollIntoView = scrollIntoView
-  vi.unstubAllGlobals()
 })
 
 describe('Armouring Hall', () => {
-  it('Standard opens on the Watch Brother, with every part and the Armour Set to come', async () => {
+  it('heads every tab with the hall and its tabs, the open one marked; Watch Command for the Command only', async () => {
+    const tabs = (w) => w.findAll('.hh-tab').map((a) => [a.text(), a.attributes('href'), a.attributes('aria-current')])
+    const w = await mountPage('specialist', 'librarium', { scene: 'allowed' })
+    expect(w.get('.hh-title').text()).toBe('Armouring Hall')
+    expect(w.get('.hh-title').attributes('aria-level')).toBe('1')
+    expect(w.get('.hh-back').attributes('href')).toBe('/deathwatch')
+    expect(tabs(w)).toEqual([
+      ['Standard', '/deathwatch/armouringhall/standard/watchbrother?scene=allowed', undefined],
+      ['Specialist', '/deathwatch/armouringhall/specialist/reclusiarc?scene=allowed', 'page'],
+      ['Restricted Wargear', '/deathwatch/armouringhall/restricted-wargear?scene=allowed', undefined],
+    ])
+    useDeathwatch().$patch({ command: true })
+    await flushPromises()
+    expect(tabs(w).map(([label]) => label)).toEqual(['Standard', 'Specialist', 'Watch Command', 'Restricted Wargear'])
+    const rw = await mountPage('restricted-wargear')
+    expect(rw.get('.hh-tab[aria-current="page"]').text()).toBe('Restricted Wargear')
+  })
+
+  it('Standard opens on the Watch Brother, lists every part, shows the Helm, and the Armour Set to come', async () => {
     const w = await mountPage('standard')
     expect(w.get('h2').text()).toBe('Standard')
     // The original had no heading here: kept for assistive technology, hidden on screen.
     expect(w.get('h2').classes()).toContain('dw-sr-only')
     expect(w.get('h2').classes()).not.toContain('dw-plaque')
     expect(w.get('.ah-title').text()).toBe('Watch Brother')
-    expect(texts(w, '.ah-part h4')).toEqual(['Helm', 'Pauldrons', 'Wargear', 'Breastplate', 'Gauntlets', 'Greaves'])
+    expect(texts(w, '.av-part span')).toEqual(['Helm', 'Pauldrons', 'Wargear', 'Breastplate', 'Gauntlets', 'Greaves'])
+    expect(w.get('.av-part[aria-current="true"]').text()).toBe('Helm')
+    expect(w.findAll('.av-part[aria-current]')).toHaveLength(1)
+    expect(w.get('.av-detail .ad-cls').text()).toBe('Standard Armour')
+    expect(w.get('.av-detail .ad-title').text()).toBe('Helm')
+    expect(w.get('.av-bar b').text()).toBe('Helm')
     expect(w.text()).toContain('Armour Set')
     expect(w.findAll('.ah-hs')).toHaveLength(6)
+    expect(w.findAll('.ah-hs.on').map((h) => h.attributes('aria-label'))).toEqual(['Show Helm'])
+    // The markers near the left edge open their labels inward; none sits near the right one.
+    expect(w.findAll('.ah-hs.l').map((h) => h.attributes('aria-label'))).toEqual(['Show Pauldrons', 'Show Gauntlets'])
+    expect(w.findAll('.ah-hs.r')).toHaveLength(0)
   })
 
   it('shows the uniform the address names, and marks it in the picker', async () => {
@@ -63,107 +78,254 @@ describe('Armouring Hall', () => {
     expect(w.get('.ah-title').text()).toBe('Librarium')
     expect(w.get('.ah-pick [aria-current="page"]').text()).toBe('Librarium')
     expect(w.findAll('.ah-pick a').map((a) => a.attributes('href'))).toEqual([
-      '/deathwatch/armouringhall/specialist/apothecarion?scene=allowed',
-      '/deathwatch/armouringhall/specialist/librarium?scene=allowed',
-      '/deathwatch/armouringhall/specialist/mechanicus?scene=allowed',
       '/deathwatch/armouringhall/specialist/reclusiarc?scene=allowed',
+      '/deathwatch/armouringhall/specialist/librarium?scene=allowed',
+      '/deathwatch/armouringhall/specialist/apothecarion?scene=allowed',
+      '/deathwatch/armouringhall/specialist/mechanicus?scene=allowed',
     ])
     expect(w.text()).toContain('Librarians and higher-ranking members of the Librarium may use the following colors and markings')
   })
 
+  it('picks the uniform from a dropdown, which closes on a pick, on Escape and when focus leaves', async () => {
+    const w = await mountPage('specialist', 'librarium')
+    const dd = w.get('.ah-dd').element
+    expect(texts(w, '.ah-cls')).toEqual(['Specialist'])
+    expect(w.get('.ah-dd-btn').text()).toBe('Librarium')
+    expect(w.get('.ah-dd-btn img').attributes('src')).toBe(w.get('.ah-icon').attributes('src'))
+    dd.open = true
+    await w.findAll('.ah-pick-link')[0].trigger('click')
+    expect(dd.open).toBe(false)
+    dd.open = true
+    await w.get('.ah-dd').trigger('keydown', { key: 'Escape' })
+    expect(dd.open).toBe(false)
+    expect(document.activeElement).toBe(w.get('.ah-dd-btn').element)
+    dd.open = true
+    await w.get('.ah-dd').trigger('focusout', { relatedTarget: w.findAll('.ah-pick-link')[1].element })
+    expect(dd.open).toBe(true)
+    await w.get('.ah-dd').trigger('focusout', { relatedTarget: null })
+    expect(dd.open).toBe(false)
+  })
+
+  // Review of #53: Safari on macOS gives a <summary> no focus on a click, so no focusout ever comes from outside.
+  it('closes the dropdown on a press outside it, listening only while it is open', async () => {
+    const w = await mountPage('specialist', 'librarium')
+    const dd = w.get('.ah-dd').element
+    const press = (el) => el.dispatchEvent(new Event('pointerdown', { bubbles: true }))
+    const add = vi.spyOn(document, 'addEventListener')
+    const remove = vi.spyOn(document, 'removeEventListener')
+    dd.open = true
+    dd.dispatchEvent(new Event('toggle'))
+    expect(add).toHaveBeenCalledWith('pointerdown', expect.any(Function))
+    press(w.get('.ah-dd-btn').element)
+    press(w.findAll('.ah-pick-link')[1].element)
+    expect(dd.open).toBe(true)
+    press(document.body)
+    expect(dd.open).toBe(false)
+    dd.dispatchEvent(new Event('toggle'))
+    expect(remove).toHaveBeenCalledWith('pointerdown', add.mock.calls.find(([t]) => t === 'pointerdown')[1])
+    w.unmount()
+    press(document.body) // gone with the page, and harmless if it were not
+    vi.restoreAllMocks()
+  })
+
+  it('survives the dropdown’s late toggle event when a pick has already taken the page away', async () => {
+    const w = await mountPage('specialist', 'librarium')
+    const dd = w.get('.ah-dd').element
+    dd.open = true // the browser queues its toggle event for a task later
+    w.unmount()
+    await new Promise((r) => setTimeout(r, 0))
+    expect(dd.open).toBe(true) // and nothing threw (Vitest fails the run on an uncaught error)
+    vi.restoreAllMocks()
+  })
+
   it('lists each paint with its role, and leads each note with its side', async () => {
     const w = await mountPage('specialist', 'mechanicus')
-    const helm = w.findAll('.ah-part')[0]
-    expect(texts(helm, '.ah-sw span')).toEqual(['PrimaryMephiston Red', 'SecondaryAbaddon Black', 'TertiarySilver', 'LensesMephiston Red'])
-    const greaves = w.findAll('.ah-part')[5]
-    expect(texts(greaves, '.ah-nt b')).toEqual(['Left', 'Right'])
+    expect(texts(w, '.av-detail .ad-sw li')).toEqual(['PrimaryRed', 'SecondaryAbaddon Black', 'TertiaryLiberator Gold', 'LensesLiberator Gold'])
+    await w.findAll('.av-part')[5].trigger('click')
+    expect(w.get('.av-detail .ad-title').text()).toBe('Greaves')
+    expect(texts(w, '.av-detail .ah-nt b')).toEqual(['Left', 'Right'])
+  })
+
+  it('a part without paints or notes shows neither list', async () => {
+    const w = await mountPage('standard')
+    await w.findAll('.av-part')[1].trigger('click')
+    expect(w.find('.av-detail .ad-sw').exists()).toBe(false)
+    await w.findAll('.av-part')[3].trigger('click')
+    expect(w.find('.av-detail .ad-notes').exists()).toBe(false)
+  })
+
+  it('crops each part thumbnail from its first tile in the sprite, the Wargear, the Breastplate and the Greaves nearer their top, the Gauntlets from their second tile', async () => {
+    const w = await mountPage('standard')
+    const pos = w.findAll('.av-part .av-thumb').map((t) => t.attributes('style').match(/background-position: ([^;]+)/)[1])
+    expect(pos).toEqual(['0% 50%', '10% 50%', '30% 25%', '50% 25%', '80% 50%', '90% 12%'])
   })
 
   it('links a note about Company Heraldry there, without the aside', async () => {
-    const w = await mountPage('standard')
-    const pauldrons = w.findAll('.ah-part')[1]
+    const w = await mountPage('standard', '', { scene: 'commander' })
+    await w.findAll('.av-part')[1].trigger('click')
+    const pauldrons = w.get('.av-detail')
     expect(pauldrons.text()).not.toContain('(see Company Heraldry)')
-    expect(pauldrons.get('.ah-chl').attributes('href')).toBe('/deathwatch/armouringhall/standard/companyheraldry')
+    expect(pauldrons.get('.ah-chl').attributes('href')).toBe('/deathwatch/armouringhall/standard/companyheraldry?scene=commander')
+    const plain = await mountPage('standard')
+    await plain.findAll('.av-part')[1].trigger('click')
+    expect(plain.get('.av-detail .ah-chl').attributes('href')).toBe('/deathwatch/armouringhall/standard/companyheraldry')
   })
 
-  it('lights a part card and its hotspot together under the pointer, and puts them out when it leaves', async () => {
-    const w = await mountPage('standard')
-    await spot(w, 'Breastplate').trigger('mouseenter')
-    expect(lit(w)).toEqual({ cards: ['Breastplate'], spots: ['Show Breastplate'] })
-    await spot(w, 'Breastplate').trigger('mouseleave')
-    expect(lit(w)).toEqual({ cards: [], spots: [] })
-    await card(w, 'Helm').trigger('mouseenter')
-    expect(lit(w)).toEqual({ cards: ['Helm'], spots: ['Show Helm'] })
-    await card(w, 'Helm').trigger('mouseleave')
-    expect(lit(w)).toEqual({ cards: [], spots: [] })
+  it('lights a part and its marker together, and keeps the chosen part on the next uniform', async () => {
+    const w = await mountPage('specialist')
+    await w.findAll('.ah-hs')[3].trigger('mouseenter')
+    expect(w.findAll('.av-part.on').map((c) => c.text())).toEqual(['Breastplate'])
+    await w.findAll('.ah-hs')[3].trigger('mouseleave')
+    expect(w.findAll('.av-part.on')).toHaveLength(0)
+    await w.findAll('.ah-hs')[2].trigger('focus')
+    expect(w.findAll('.av-part.on').map((c) => c.text())).toEqual(['Wargear'])
+    await w.findAll('.ah-hs')[2].trigger('blur')
+    expect(w.findAll('.av-part.on')).toHaveLength(0)
+    await w.findAll('.av-part')[4].trigger('mouseenter')
+    expect(w.findAll('.ah-hs.on').map((h) => h.attributes('aria-label'))).toEqual(['Show Helm', 'Show Gauntlets'])
+    await w.findAll('.av-part')[4].trigger('mouseleave')
+    await w.findAll('.av-part')[0].trigger('focus')
+    expect(w.findAll('.av-part.on').map((c) => c.text())).toEqual(['Helm'])
+    await w.findAll('.av-part')[0].trigger('blur')
+    expect(w.findAll('.av-part.on')).toHaveLength(0)
+    await w.findAll('.av-part')[4].trigger('click')
+    expect(w.get('.av-detail .ad-title').text()).toBe('Gauntlets')
+    await w.vm.$router.push('/deathwatch/armouringhall/specialist/librarium')
+    await flushPromises()
+    expect(w.get('.av-detail .ad-title').text()).toBe('Gauntlets')
+    expect(w.get('.av-detail .ad-sw li').text()).toBe('Right primaryAlaitoc Blue')
   })
 
-  it('lights a card and its hotspot while either has focus, and puts them out when focus leaves', async () => {
-    const w = await mountPage('standard')
-    spot(w, 'Wargear').element.focus()
-    await w.vm.$nextTick()
-    expect(lit(w)).toEqual({ cards: ['Wargear'], spots: ['Show Wargear'] })
-    spot(w, 'Wargear').element.blur()
-    await w.vm.$nextTick()
-    expect(lit(w)).toEqual({ cards: [], spots: [] })
-    card(w, 'Gauntlets').element.focus()
-    await w.vm.$nextTick()
-    expect(lit(w)).toEqual({ cards: ['Gauntlets'], spots: ['Show Gauntlets'] })
-    card(w, 'Gauntlets').element.blur()
-    await w.vm.$nextTick()
-    expect(lit(w)).toEqual({ cards: [], spots: [] })
+  describe('on a phone', () => {
+    let phone
+    beforeEach(() => {
+      phone = true
+      // jsdom applies no component styles: the narrow layout hides the detail beside the figure, stood in for here.
+      const real = window.getComputedStyle
+      vi.spyOn(window, 'getComputedStyle').mockImplementation((el) => (phone && el.classList.contains('av-detail') ? { display: 'none' } : real(el)))
+      // Reduced motion, so the sheet closes at once rather than after its slide.
+      window.matchMedia = vi.fn((q) => ({ matches: q.includes('reduce') }))
+      HTMLDialogElement.prototype.showModal = vi.fn(function () {
+        this.setAttribute('open', '')
+      })
+      HTMLDialogElement.prototype.close = vi.fn(function () {
+        this.removeAttribute('open')
+        this.dispatchEvent(new Event('close'))
+      })
+    })
+    afterEach(() => {
+      vi.restoreAllMocks()
+      delete window.matchMedia
+    })
+    // Two sheets: the uniforms' (in the head) and the chosen part's.
+    const sheetOf = (w, sel) => w.findAll('dialog').find((d) => d.find(sel).exists())
+    const partSheet = (w) => sheetOf(w, '.av-sheet')
+
+    it('the uniforms bar names the open one and opens the others in a sheet; choosing one closes it', async () => {
+      const w = await mountPage('specialist', 'librarium')
+      expect(w.get('.ah-pick-bar').text()).toContain('Librarium')
+      const uniforms = sheetOf(w, '.ah-pick-sheet')
+      expect(uniforms.attributes('open')).toBeUndefined()
+      await w.get('.ah-pick-bar').trigger('click')
+      await flushPromises()
+      expect(uniforms.attributes('open')).toBe('')
+      expect(uniforms.findAll('.ah-pick-row').map((a) => [a.text(), a.attributes('aria-current')])).toEqual([
+        ['Reclusiarc', undefined],
+        ['Librarium', 'page'],
+        ['Apothecarion', undefined],
+        ['Mechanicus', undefined],
+      ])
+      await uniforms.findAll('.ah-pick-row')[3].trigger('click')
+      await flushPromises()
+      expect(uniforms.attributes('open')).toBeUndefined()
+      expect(w.get('.ah-title').text()).toBe('Mechanicus')
+    })
+
+    it('a marker opens its part in the sheet; the close button shuts it', async () => {
+      const w = await mountPage('standard')
+      await w.findAll('.ah-hs')[2].trigger('click')
+      await flushPromises()
+      expect(partSheet(w).attributes('open')).toBe('')
+      expect(partSheet(w).get('.ad-title').text()).toBe('Wargear')
+      expect(partSheet(w).text()).toContain('///CLASSIFIED///')
+      await w.get('.av-close').trigger('click')
+      await flushPromises()
+      expect(partSheet(w).attributes('open')).toBeUndefined()
+    })
+
+    it('names the part sheet by its part, as the uniforms sheet is named', async () => {
+      const w = await mountPage('standard')
+      expect(partSheet(w).attributes('aria-label')).toBe('Helm details')
+      await w.findAll('.av-part')[3].trigger('click')
+      await flushPromises()
+      expect(partSheet(w).attributes('aria-label')).toBe('Breastplate details')
+    })
+
+        it('a thumbnail only chooses its part; the bar opens it', async () => {
+      const w = await mountPage('standard')
+      await w.findAll('.av-part')[3].trigger('click')
+      await flushPromises()
+      expect(partSheet(w).attributes('open')).toBeUndefined()
+      expect(w.get('.av-bar b').text()).toBe('Breastplate')
+      await w.get('.av-bar').trigger('click')
+      await flushPromises()
+      expect(partSheet(w).attributes('open')).toBe('')
+      expect(partSheet(w).get('.ad-title').text()).toBe('Breastplate')
+    })
+
+    it('a marker on a wide screen only chooses its part', async () => {
+      phone = false
+      const w = await mountPage('standard')
+      await w.findAll('.ah-hs')[5].trigger('click')
+      await flushPromises()
+      expect(partSheet(w).attributes('open')).toBeUndefined()
+      expect(w.get('.av-detail .ad-title').text()).toBe('Greaves')
+    })
   })
 
-  it('a hotspot scrolls to its card, moves focus to it and lights it, with no pointer ever over it', async () => {
-    const w = await mountPage('standard')
-    await spot(w, 'Greaves').trigger('click')
-    const greaves = card(w, 'Greaves').element
-    expect(Element.prototype.scrollIntoView).toHaveBeenCalledOnce()
-    expect(Element.prototype.scrollIntoView.mock.contexts[0]).toBe(greaves)
-    expect(document.activeElement).toBe(greaves)
-    await w.vm.$nextTick()
-    expect(lit(w)).toEqual({ cards: ['Greaves'], spots: ['Show Greaves'] })
-  })
-
-  it('flashes the card a hotspot scrolled to, afresh on each click, until its animation ends', async () => {
-    const frames = []
-    vi.stubGlobal('requestAnimationFrame', (run) => frames.push(run))
-    const nextFrame = async (w) => {
-      frames.splice(0).forEach((run) => run(0))
-      await w.vm.$nextTick()
-    }
-    const flashing = (w) => w.findAll('.ah-part.flash').map((c) => c.get('h4').text())
-    const w = await mountPage('standard')
-    await spot(w, 'Helm').trigger('click')
-    expect(flashing(w)).toEqual([])
-    await nextFrame(w)
-    expect(flashing(w)).toEqual(['Helm'])
-    // The same marker again: the flash goes out until the next frame, so the animation starts over.
-    await spot(w, 'Helm').trigger('click')
-    expect(flashing(w)).toEqual([])
-    await nextFrame(w)
-    expect(flashing(w)).toEqual(['Helm'])
-    await spot(w, 'Pauldrons').trigger('click')
-    await nextFrame(w)
-    expect(flashing(w)).toEqual(['Pauldrons'])
-    await card(w, 'Pauldrons').trigger('animationend')
-    expect(flashing(w)).toEqual([])
-  })
-
-  it('Company Heraldry shows every company, the Watch Company markings and the alternative colors', async () => {
+  it('Company Heraldry: the companies as a list, the chosen one’s pauldron and greave, the Watch Company markings', async () => {
     const w = await mountPage('standard', 'companyheraldry')
     expect(w.get('.ah-title').text()).toBe('Company Heraldry')
-    expect(texts(w, '.ah-part h4')).toEqual(['Battle Companies I–IV', 'Watch Company Markings', 'Battle Companies V–VII', 'Alternative Colors'])
-    expect(texts(w, '.co b')).toEqual(['1st Company', '2nd Company', '3rd Company', '4th Company', '5th Company', '6th Company', '7th Company', '5th Company', '6th Company'])
+    expect(texts(w, '.av-part span')).toEqual(['1st Company', '2nd Company', '3rd Company', '4th Company', '5th Company', '6th Company', '7th Company'])
+    expect(texts(w, '.hv-h')).toEqual(['1st Company', 'Watch Company Markings'])
+    const tiles = () => w.findAll('.hv-box')[0].findAll('.ah-tile').map((t) => t.attributes('style'))
+    const first = tiles()
+    expect(w.get('.av-fig img').attributes('src')).toContain('co-1st.jpg')
+    expect(first).toHaveLength(2)
+    expect(w.find('.hv-modes').exists()).toBe(false)
+    expect(w.findAll('.hv-box')[0].text()).toContain('regular uniform guidelines')
     expect(w.findAll('.wm .ah-tile')).toHaveLength(5)
+    // The 5th has an alternative scheme: Standard first, the other tiles and the alternative note on a switch.
+    await w.findAll('.av-part')[4].trigger('click')
+    expect(w.get('.av-part[aria-current]').text()).toBe('5th Company')
+    expect(w.get('.hv-h').text()).toBe('5th Company')
+    expect(w.get('.hv-mode[aria-pressed="true"]').text()).toBe('Standard')
+    expect(w.get('.av-fig img').attributes('src')).toContain('co-5th.jpg')
+    expect(w.get('.av-fig img').attributes('alt')).toBe("Watch Brother armour in the 5th Company's colours, front view")
+    const std = tiles()
+    expect(std).not.toEqual(first)
+    expect(w.findAll('.hv-box')[0].text()).toContain('regular uniform guidelines')
+    await w.findAll('.hv-mode')[1].trigger('click')
+    expect(w.get('.hv-mode[aria-pressed="true"]').text()).toBe('Alternative')
+    expect(tiles()).not.toEqual(std)
+    expect(w.findAll('.hv-box')[0].text()).not.toContain('regular uniform guidelines')
+    expect(w.get('.av-fig img').attributes('src')).toContain('co-5thalt')
+    await w.findAll('.hv-mode')[0].trigger('click')
+    expect(tiles()).toEqual(std)
+    // Another company starts on its standard scheme again.
+    await w.findAll('.hv-mode')[1].trigger('click')
+    await w.findAll('.av-part')[5].trigger('click')
+    expect(w.get('.hv-mode[aria-pressed="true"]').text()).toBe('Standard')
+    await w.findAll('.av-part')[6].trigger('click')
+    expect(w.find('.hv-modes').exists()).toBe(false)
   })
 
-  it('Watch Command: the Sergeant is still WIP; the Specialist links no Watch-Brother uniform', async () => {
+  it('Watch Command: the Sergeant is done; its specialists link their Specialist uniform, not the Watch-Brother one', async () => {
     const w = await mountPage('watch-command')
     expect(w.get('.ah-title').text()).toBe('Watch Sergeant')
     expect(w.text()).not.toContain('Reserved')
-    expect(w.find('.ah-head .ah-wip').exists()).toBe(true)
-    const s = await mountPage('watch-command', 'watchspecialist')
+    expect(w.find('.ah-head .ah-wip').exists()).toBe(false)
+    const s = await mountPage('watch-command', 'watchapothecary')
     expect(s.get('.ah-lead').text()).not.toContain('Watch-Brother')
     expect(s.get('.ah-lead a').attributes('href')).toBe('/deathwatch/armouringhall/specialist/apothecarion')
   })
@@ -174,7 +336,24 @@ describe('Armouring Hall', () => {
     expect(texts(w, '.rw-card > b')).toEqual(['L. Pauldron', 'L. Gauntlet (Heroic)'])
     expect(w.text()).toContain('Previous Tours of Duty also count')
     // No Discord link: its ids may not be in the repo.
-    expect(w.find('a').exists()).toBe(false)
+    // No Discord link anywhere on the page, head and "Coming soon" included: its ids may not be in the repo.
+    expect(w.findAll('a').every((a) => !(a.attributes('href') ?? '').includes('discord'))).toBe(true)
+    expect(w.find('.rw a').exists()).toBe(false)
+  })
+
+  it('Restricted Wargear: Non-Active Deployment open first, Active Deployment still to come (WIP)', async () => {
+    const w = await mountPage('restricted-wargear')
+    const modes = () => w.findAll('.rw-mode').map((b) => [b.text(), b.attributes('aria-pressed')])
+    expect(modes()).toEqual([
+      ['Non-Active Deployment', 'true'],
+      ['Active DeploymentWIP', 'false'],
+    ])
+    await w.findAll('.rw-mode')[1].trigger('click')
+    expect(modes().map(([, on]) => on)).toEqual(['false', 'true'])
+    expect(w.get('.rw-soon').text()).toBe('Active DeploymentComing soon')
+    expect(w.find('.rw-card').exists()).toBe(false)
+    await w.findAll('.rw-mode')[0].trigger('click')
+    expect(w.findAll('.rw-card')).toHaveLength(2)
   })
 })
 
@@ -196,14 +375,16 @@ describe('Armouring Hall page texts', () => {
   it('shows a part’s notes from the page texts, one a line, with their marks and the Company Heraldry link', async () => {
     const tx = { ah_watchbrother_greaves: 'Left: a *new* marking.\n\nA plain note (see Company Heraldry).' }
     const w = await mountPage('standard', '', {}, { tx })
-    const greaves = card(w, 'Greaves')
+    // The other parts keep the notes they ship with.
+    expect(w.get('.av-detail').text()).toContain('Mask Pattern.')
+    await w.findAll('.av-part')[5].trigger('click')
+    const greaves = w.get('.av-detail')
+    expect(greaves.get('.ad-title').text()).toBe('Greaves')
     expect(texts(greaves, '.ah-nt b')).toEqual(['Left'])
     expect(greaves.get('.ah-nt i').text()).toBe('new')
     expect(greaves.text()).toContain('A plain note')
     expect(greaves.text()).not.toContain('(see Company Heraldry)')
     expect(greaves.find('.ah-chl').exists()).toBe(true)
-    // The other parts keep the notes they ship with.
-    expect(card(w, 'Helm').text()).toContain('Mask Pattern.')
   })
 
   it('loads the page texts when they are not there yet, and not again when they are', async () => {
@@ -214,15 +395,17 @@ describe('Armouring Hall page texts', () => {
     expect(getData).toHaveBeenCalled()
   })
 
-  it('Company Heraldry: a note under each section from the page texts, the defaults elsewhere', async () => {
-    const tx = { ah_companyheraldry_companies1: 'First *note*\nSecond note', ah_companyheraldry_markings: '' }
+  it('Company Heraldry: the notes from the page texts, one for every company, the defaults elsewhere', async () => {
+    const tx = { ah_companyheraldry_companies: 'First *note*\nSecond note', ah_companyheraldry_markings: '', ah_companyheraldry_alternative: 'Alt note' }
     const w = await mountPage('standard', 'companyheraldry', {}, { tx })
-    const section = (title) => w.findAll('.ah-part').find((s) => s.get('h4').text() === title)
-    expect(texts(section('Battle Companies I–IV'), ':scope > p')).toEqual(['First note', 'Second note'])
-    expect(section('Battle Companies I–IV').get('p i').text()).toBe('note')
-    expect(section('Watch Company Markings').findAll(':scope > p')).toHaveLength(0)
-    expect(section('Battle Companies V–VII').text()).toContain("own Company and also appear in the regular uniform guidelines")
-    expect(section('Alternative Colors').findAll(':scope > p')).toHaveLength(0)
+    const box = (i) => w.findAll('.hv-box')[i]
+    expect(texts(box(0), '.hv-note')).toEqual(['First note', 'Second note'])
+    expect(box(0).get('.hv-note i').text()).toBe('note')
+    expect(box(1).findAll('.hv-note')).toHaveLength(0)
+    await w.findAll('.av-part')[4].trigger('click')
+    expect(texts(box(0), '.hv-note')).toEqual(['First note', 'Second note'])
+    await w.findAll('.hv-mode')[1].trigger('click')
+    expect(texts(box(0), '.hv-note')).toEqual(['Alt note'])
   })
 
   it('Company Heraldry: loads the page texts when they are not there yet, and not again when they are', async () => {
@@ -258,5 +441,32 @@ describe('Armouring Hall page texts', () => {
     expect(getData).not.toHaveBeenCalled()
     await mountPage('restricted-wargear', '', {}, { status: 'idle' })
     expect(getData).toHaveBeenCalled()
+  })
+})
+
+// Review of #53: a pick is announced in a word, not by reading the whole detail panel out again.
+describe('Armouring Hall, announced', () => {
+  it('a uniform says which part shows, and its detail panel is not a live region', async () => {
+    const w = await mountPage('standard')
+    const live = w.findAll('[aria-live]')
+    expect(live.map((e) => [e.classes(), e.text()])).toEqual([[['av-live'], 'Showing Helm']])
+    await w.findAll('.av-part')[3].trigger('click')
+    await flushPromises()
+    expect(w.get('.av-live').text()).toBe('Showing Breastplate')
+    expect(w.get('.av-detail').attributes('aria-live')).toBeUndefined()
+  })
+
+  it('Company Heraldry says which company shows, and its box is not a live region', async () => {
+    const w = await mountPage('standard', 'companyheraldry')
+    expect(w.findAll('[aria-live]').map((e) => e.classes())).toEqual([['av-live']])
+    expect(w.get('.av-live').text()).toMatch(/^Showing the \S+ Company$/)
+    expect(w.get('.hv-box').attributes('aria-live')).toBeUndefined()
+  })
+
+  it('/watch-command falls back to the Sergeant for the old Watch Specialist address and for a slug it does not know', async () => {
+    for (const sub of ['watchspecialist', 'nonsense']) {
+      const w = await mountPage('watch-command', sub)
+      expect(w.get('.ah-title').text(), sub).toBe('Watch Sergeant')
+    }
   })
 })

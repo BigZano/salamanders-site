@@ -10,24 +10,22 @@ import { UNIFORMS, itemSlug } from './armour'
 import { inline } from './notables'
 
 const WATCH_BROTHER = '[standard Watch-Brother Uniform](/deathwatch/armouringhall/standard/watchbrother)'
-const SPECIALIST = '[Specialist](/deathwatch/armouringhall/specialist/apothecarion) markings'
 const NOTES = 'one note per line · “Left:”, “Right:”, “Pattern:” lead a note · “(see Company Heraldry)” links there'
 
 const leadKey = (u) => `ah_${itemSlug(u)}_lead`
 /** A part's notes key, by its uniform and its title ("ah_librarium_helm"). */
 export const noteKey = (u, title) => `ah_${itemSlug(u)}_${title.toLowerCase()}`
 
-// The introduction as the page wrote it: what the uniform builds on, then who may wear it.
+// The introduction as the page wrote it: what the uniform builds on (a Watch Command specialist such as the Watch
+// Apothecary its Specialist uniform, every other one the Watch-Brother uniform), then who may wear it.
 function lead(u) {
-  const on = [...(u.specialistOnly ? [] : [WATCH_BROTHER]), ...(u.command ? [SPECIALIST] : [])]
-  return `In addition to the ${on.join(' and the ')}, ${u.who} may use the following colors and markings:`
+  return `In addition to the ${u.onSpecialist ? `[Specialist Uniform](/deathwatch/armouringhall/specialist/${u.onSpecialist})` : WATCH_BROTHER}, ${u.who} may use the following colors and markings:`
 }
 
 // Company Heraldry's sections, as [slug, title, the note it had]; the page lays them out (HeraldryView.vue).
 const HERALDRY = [
-  ['companies1', 'Battle Companies I–IV', ''],
+  ['companies', 'Battle Companies', "These colors follow the standards of each Battle-Brother's own Company and also appear in the regular uniform guidelines."],
   ['markings', 'Watch Company Markings', 'Painted Abaddon Black with a Mephiston Red stripe. Fully black markings denote Watch Company Primus.'],
-  ['companies2', 'Battle Companies V–VII', "These colors follow the standards of each Battle-Brother's own Company and also appear in the regular uniform guidelines."],
   ['alternative', 'Alternative Colors', ''],
 ]
 const heraldryKey = (slug) => `ah_companyheraldry_${slug}`
@@ -59,8 +57,43 @@ export const RW_TEXTS = {
   rw_f: 'A Tour of Duty is a four-week Deathwatch Tour. **Previous Tours of Duty also count** toward the required number.',
 }
 
-// The stored text for a key, else its default. Only text counts, as on the other pages.
-const read = (tx, k, defaults) => (tx && Object.hasOwn(tx, k) && typeof tx[k] === 'string' ? tx[k] : defaults[k])
+// Keys the hall used before Armouring Hall 2.0, by the key that took their place: Company Heraldry's two Battle
+// Companies notes became one, and the one Watch Specialist became four (the parts keep their titles). A text the
+// Watch Commander stored under an old key still shows until the new key is saved, which drops the old ones
+// (pageTexts.editedTexts).
+const OLD_SPECIALIST = 'watchspecialist'
+export const LEGACY_KEYS = Object.fromEntries([
+  [heraldryKey('companies'), [heraldryKey('companies1'), heraldryKey('companies2')]],
+  ...Object.values(UNIFORMS)
+    .flat()
+    .filter((u) => u.onSpecialist)
+    .flatMap((u) => [
+      [leadKey(u), [`ah_${OLD_SPECIALIST}_lead`]],
+      ...[...u.L, ...u.R].map((p) => [noteKey(u, p[0]), [`ah_${OLD_SPECIALIST}_${p[0].toLowerCase()}`]]),
+    ]),
+])
+
+/**
+ * The old keys a save of `k` may drop: those no other new key reads. A Watch Specialist's old key feeds all four
+ * specialists, so it stays until each has its own text.
+ * shortcut: restoring one specialist's default shows the old text again while it stays; drop it by hand if that bites.
+ */
+export function replacedKeys(k) {
+  const mine = Object.hasOwn(LEGACY_KEYS, k) ? LEGACY_KEYS[k] : []
+  return mine.filter((o) => Object.values(LEGACY_KEYS).filter((olds) => olds.includes(o)).length === 1)
+}
+
+const stored = (tx, k) => (tx && Object.hasOwn(tx, k) && typeof tx[k] === 'string' ? tx[k] : undefined)
+
+/** The text stored under the keys an older page used for `k`, one a line, or undefined when there is none. */
+export function legacyText(tx, k) {
+  const old = (Object.hasOwn(LEGACY_KEYS, k) ? LEGACY_KEYS[k] : []).map((o) => stored(tx, o)).filter((t) => t !== undefined)
+  // An emptied old key stays emptied (that part hidden), but adds no blank line beside another one.
+  return old.length ? old.filter((t) => t.trim()).join('\n') : undefined
+}
+
+// The stored text for a key, else what an older page stored for it, else its default. Only text counts.
+const read = (tx, k, defaults) => stored(tx, k) ?? legacyText(tx, k) ?? defaults[k]
 const lines = (t) => t.split('\n').map((l) => l.trim())
 
 /** The introduction of a uniform as inline segments, [] when it has none or it is emptied. */

@@ -2,7 +2,7 @@
 // page reads (cfg.tx), with the old site's labels, and how an edit becomes the stored document. A text equal to its
 // default is not stored, so a later change to the default reaches it; an empty text is stored, and hides that part.
 import { UNIFORMS, uniformFor } from './armour'
-import { ARMOUR_TEXTS, RW_TEXTS, armourFields } from './armourTexts'
+import { ARMOUR_TEXTS, RW_TEXTS, armourFields, legacyText, replacedKeys } from './armourTexts'
 import { LORE_TEXTS } from './loreTexts'
 import { RECRUITMENT_TEXTS } from './recruitmentTexts'
 
@@ -61,14 +61,19 @@ export function pageTexts(area, tab, sub) {
 /** The old site's text for a key, or '' (the Notable Members have none: members' names never ship in the code). */
 export const defaultText = (k) => (Object.hasOwn(DEFAULTS, k) ? DEFAULTS[k] : '')
 
-/** What a page shows for a key: the stored text, else the default. Only text replaces it, as the pages read it. */
-export const textOf = (tx, k) => (tx && Object.hasOwn(tx, k) && typeof tx[k] === 'string' ? tx[k] : defaultText(k))
+/** What a page shows for a key: the stored text, else an older page's (armourTexts.legacyText), else the default. */
+export const textOf = (tx, k) =>
+  (tx && Object.hasOwn(tx, k) && typeof tx[k] === 'string' ? tx[k] : undefined) ?? legacyText(tx, k) ?? defaultText(k)
 
-/** The stored texts after an edit: every other text kept, each edited one stored unless it equals its default. */
+/**
+ * The stored texts after an edit: every other text kept, each edited one stored unless it equals its default, and the
+ * old keys only it replaced dropped (armourTexts.replacedKeys), so its default, restored, stays the default.
+ */
 export function editedTexts(tx, values) {
   const out = { ...tx }
   for (const [k, v] of Object.entries(values)) {
     const t = v.trimEnd()
+    for (const old of replacedKeys(k)) delete out[old]
     if (t === defaultText(k)) delete out[k]
     else out[k] = t
   }

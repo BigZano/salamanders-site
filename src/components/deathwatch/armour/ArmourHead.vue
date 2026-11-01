@@ -1,8 +1,14 @@
 <script setup>
-// The head of an Armouring Hall page: the picker between the tab's uniforms (as links, so each has its address),
-// then the uniform's icon either side of its class label and its title in the uniform's own colours.
+// The head of an Armouring Hall page: the hall's own head (HallHead), the picker between the tab's uniforms as
+// a dropdown (links, so each has its address), then the uniform's icon either side of its class label and its title
+// in the uniform's own colours. On a phone the dropdown is a bar that opens them in a bottom sheet instead, as the
+// area's own bar does for its tabs.
+import { onBeforeUnmount, ref } from 'vue'
 import { useRoute } from 'vue-router'
 import { itemSlug } from '../../../lib/deathwatch/armour'
+import DeathwatchAreaBar from '../DeathwatchAreaBar.vue'
+import DeathwatchNavSheet from '../DeathwatchNavSheet.vue'
+import HallHead from './HallHead.vue'
 import './armour.css'
 
 defineProps({
@@ -13,16 +19,71 @@ defineProps({
 })
 const route = useRoute()
 const to = (tab, u) => ({ path: `/deathwatch/armouringhall/${tab}/${itemSlug(u)}`, query: route.query.scene ? { scene: route.query.scene } : {} })
+const sheet = ref(false)
+// The wide screen's dropdown: closes on a pick, on Escape (back to its button), and when focus leaves it.
+const dd = ref(null)
+function close(e) {
+  dd.value.open = false
+  if (e?.key === 'Escape') dd.value.querySelector('summary').focus()
+}
+const leave = (e) => dd.value.contains(e.relatedTarget) || (dd.value.open = false)
+// Safari on macOS does not focus <summary> on a click, so a click elsewhere brings no focusout: a press outside closes
+// it too, listened for only while it is open.
+function outside(e) {
+  if (dd.value && !dd.value.contains(e.target)) dd.value.open = false
+}
+// From the event, not the ref: toggle comes a task later, by when a pick may have taken the page (and the ref) away.
+function toggled(e) {
+  if (e.target.open) document.addEventListener('pointerdown', outside)
+  else document.removeEventListener('pointerdown', outside)
+}
+onBeforeUnmount(() => document.removeEventListener('pointerdown', outside))
 </script>
 
 <template>
-  <nav v-if="list.length > 1" class="ah-pick" :aria-label="label">
-    <RouterLink v-for="u in list" :key="u.name" class="ah-pick-link" :to="to(tab, u)" :aria-current="u === current ? 'page' : undefined">
-      <img :src="u.ico" alt="" width="34" height="34" />
-      <span>{{ u.name }}</span>
-      <i v-if="u.wip" class="ah-wip">WIP</i>
-    </RouterLink>
-  </nav>
+  <HallHead :tab="tab" />
+  <template v-if="list.length > 1">
+    <div class="ah-pick">
+      <details ref="dd" class="ah-dd" @focusout="leave" @keydown.esc="close" @toggle="toggled">
+        <summary class="ah-dd-btn">
+          <img :src="current.ico" alt="" width="34" height="34" />
+          <span>{{ current.name }}</span>
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m6 9 6 6 6-6" /></svg>
+        </summary>
+        <nav class="ah-dd-list" :aria-label="label">
+          <RouterLink
+            v-for="u in list"
+            :key="u.name"
+            class="ah-pick-link"
+            :to="to(tab, u)"
+            :aria-current="u === current ? 'page' : undefined"
+            @click="close"
+          >
+            <img :src="u.ico" alt="" width="28" height="28" />
+            <span>{{ u.name }}</span>
+            <i v-if="u.wip" class="ah-wip">WIP</i>
+          </RouterLink>
+        </nav>
+      </details>
+    </div>
+    <DeathwatchAreaBar class="ah-pick-bar" :area-label="label" :tab-label="current.name" :open="sheet" @open="sheet = true" />
+    <DeathwatchNavSheet v-model="sheet" :aria-label="`${label} uniforms`">
+      <nav class="ah-pick-sheet" :aria-label="label">
+        <RouterLink
+          v-for="u in list"
+          :key="u.name"
+          class="ah-pick-row"
+          :to="to(tab, u)"
+          :aria-current="u === current ? 'page' : undefined"
+          @click="sheet = false"
+        >
+          <img :src="u.ico" alt="" width="34" height="34" />
+          <span>{{ u.name }}</span>
+          <i v-if="u.wip" class="ah-wip">WIP</i>
+        </RouterLink>
+      </nav>
+    </DeathwatchNavSheet>
+  </template>
   <header class="ah-head" :style="{ '--t1': current.t[0], '--t2': current.t[1], '--t3': current.t[2] }">
     <img class="ah-icon" :src="current.ico" alt="" width="76" height="76" />
     <div>
@@ -36,52 +97,150 @@ const to = (tab, u) => ({ path: `/deathwatch/armouringhall/${tab}/${itemSlug(u)}
 </template>
 
 <style scoped>
+/* A phone: the bar that opens the uniforms in the sheet; from 900px the sub-tabs instead. */
 .ah-pick {
+  display: none;
+}
+.ah-pick-sheet {
+  display: grid;
+  gap: 0.4rem;
+}
+.ah-pick-row {
   display: flex;
-  gap: 0.6rem;
-  overflow-x: auto;
-  overscroll-behavior-x: contain;
-  padding: 2px 2px 6px;
-  scrollbar-width: none;
+  align-items: center;
+  gap: 0.8rem;
+  min-height: 52px;
+  padding: 0.4rem 0.9rem 0.4rem 0.6rem;
+  font: 600 0.95rem / 1 var(--dw-font-cond);
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  text-decoration: none;
+  color: var(--dw-ink);
+  border: 1px solid var(--dw-line-2);
+  border-radius: 10px;
+}
+.ah-pick-row img {
+  width: 34px;
+  height: auto;
+}
+.ah-pick-row[aria-current='page'] {
+  color: var(--dw-accent);
+  border-color: var(--dw-accent);
+}
+.ah-pick-row:focus-visible {
+  outline: 2px solid var(--dw-accent);
+  outline-offset: 2px;
+}
+@media (min-width: 900px) {
+  .ah-pick-bar {
+    display: none;
+  }
+}
+/* The uniforms as a dropdown under a gold rule, as in the design: a framed button with the open uniform's icon and
+   name (the tab's name already shows above the uniform's title); its list opens over the page below. */
+@media (min-width: 900px) {
+  .ah-pick {
+    display: grid;
+    justify-items: center;
+    gap: 0.5rem;
+    padding-top: 0.8rem;
+    background: linear-gradient(90deg, transparent, var(--dw-gold) 10%, var(--dw-gold) 90%, transparent) top / 100% 1px no-repeat;
+  }
+}
+.ah-dd {
+  position: relative;
+  width: min(24rem, 100%);
+}
+.ah-dd-btn {
+  display: flex;
+  align-items: center;
+  gap: 0.9rem;
+  min-height: 56px;
+  padding: 0.4rem 1rem 0.4rem 0.6rem;
+  list-style: none;
+  cursor: pointer;
+  font: 600 1.05rem / 1 var(--dw-font-cond);
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--dw-ink);
+  border: 1px solid color-mix(in oklab, var(--dw-gold) 45%, var(--dw-line-2));
+  border-radius: 8px;
+  background: color-mix(in oklab, var(--dw-surface) 85%, transparent);
+}
+.ah-dd-btn::-webkit-details-marker {
+  display: none;
+}
+.ah-dd-btn span {
+  flex: 1;
+  text-align: center;
+}
+.ah-dd-btn img {
+  width: 34px;
+  height: auto;
+}
+.ah-dd-btn svg {
+  width: 20px;
+  height: 20px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 2;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  transition: transform var(--dur-state) var(--ease-forge);
+}
+.ah-dd[open] .ah-dd-btn svg {
+  transform: rotate(180deg);
+}
+.ah-dd-btn:focus-visible {
+  outline: 2px solid var(--dw-accent);
+  outline-offset: 2px;
+}
+.ah-dd-list {
+  position: absolute;
+  inset: calc(100% + 0.35rem) 0 auto;
+  z-index: 20;
+  display: grid;
+  gap: 0.25rem;
+  padding: 0.35rem;
+  border: 1px solid color-mix(in oklab, var(--dw-gold) 45%, var(--dw-line-2));
+  border-radius: 8px;
+  background: var(--dw-surface);
+  box-shadow: 0 12px 30px rgb(0 0 0 / 0.6);
 }
 .ah-pick-link {
   display: flex;
-  flex: none;
   align-items: center;
-  gap: 0.6rem;
+  gap: 0.75rem;
   min-height: 44px;
-  padding: 0.35rem 1rem 0.35rem 0.5rem;
-  font: 600 0.9rem / 1 var(--dw-font-cond);
+  padding: 0 0.75rem 0 0.5rem;
+  font: 600 0.85rem / 1 var(--dw-font-cond);
   letter-spacing: 0.14em;
   text-transform: uppercase;
   text-decoration: none;
   color: var(--dw-muted);
-  border: 1px solid var(--dw-line-2);
-  border-radius: 999px;
-  background: color-mix(in oklab, var(--dw-surface) 70%, transparent);
-  transition: transform var(--dur-press) var(--ease-forge);
+  border-radius: 6px;
 }
 .ah-pick-link img {
-  width: 34px;
+  width: 28px;
   height: auto;
 }
 .ah-pick-link[aria-current='page'] {
   color: var(--dw-accent);
-  border-color: var(--dw-accent);
-  box-shadow: 0 0 0 1px var(--dw-accent);
+  background: color-mix(in oklab, var(--dw-accent) 10%, transparent);
 }
 .ah-pick-link:focus-visible {
   outline: 2px solid var(--dw-accent);
-  outline-offset: 2px;
+  outline-offset: -2px;
 }
 @media (hover: hover) and (pointer: fine) {
-  .ah-pick-link:hover {
+  .ah-pick-link:hover,
+  .ah-dd-btn:hover {
     color: var(--dw-ink);
-    border-color: var(--dw-muted);
+    border-color: var(--dw-accent);
   }
-}
-.ah-pick-link:active {
-  transform: scale(0.97);
+  .ah-pick-link:hover {
+    background: color-mix(in oklab, var(--dw-ink) 6%, transparent);
+  }
 }
 .ah-head {
   display: flex;

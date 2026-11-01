@@ -52,8 +52,8 @@ describe('AREAS', () => {
         blurb: 'Explore armour sets, chapter colours, and heraldry.',
         tabs: [
           { slug: 'standard', label: 'Standard', items: ['watchbrother', 'companyheraldry'] },
-          { slug: 'specialist', label: 'Specialist', items: ['apothecarion', 'librarium', 'mechanicus', 'reclusiarc'] },
-          { slug: 'watch-command', label: 'Watch Command', command: true, items: ['watchsergeant', 'watchspecialist'] },
+          { slug: 'specialist', label: 'Specialist', items: ['reclusiarc', 'librarium', 'apothecarion', 'mechanicus'] },
+          { slug: 'watch-command', label: 'Watch Command', command: true, items: ['watchsergeant', 'watchchaplain', 'watchlibrarian', 'watchapothecary', 'watchtechmarine'] },
           { slug: 'restricted-wargear', label: 'Restricted Wargear' },
         ],
       },
@@ -111,7 +111,7 @@ describe('resolveArea', () => {
   })
 
   it('opens an Armouring Hall tab without an item on its first uniform, and one without uniforms on none', () => {
-    expect(resolveArea({ area: 'armouringhall', tab: 'specialist' }).canonical).toBe('/deathwatch/armouringhall/specialist/apothecarion')
+    expect(resolveArea({ area: 'armouringhall', tab: 'specialist' }).canonical).toBe('/deathwatch/armouringhall/specialist/reclusiarc')
     expect(resolveArea({ area: 'armouringhall', tab: 'watch-command' }).canonical).toBe('/deathwatch/armouringhall/watch-command/watchsergeant')
     expect(resolveArea({ area: 'armouringhall', tab: 'restricted-wargear' })).toEqual({
       area: 'armouringhall',
@@ -178,7 +178,7 @@ describe('resolveArea', () => {
   })
 
   // Every tab of the Armouring Hall, and what any address that does not name one of its items becomes.
-  const FIRST = { standard: 'watchbrother', specialist: 'apothecarion', 'watch-command': 'watchsergeant', 'restricted-wargear': '' }
+  const FIRST = { standard: 'watchbrother', specialist: 'reclusiarc', 'watch-command': 'watchsergeant', 'restricted-wargear': '' }
   const NOT_AN_ITEM = [
     'nope', 'quatsch', 'a', 'a'.repeat(40), '../x', 'A B', '', 'a'.repeat(41), 'abc!', 'ABC', 'abc\n', 'a-b', 'a/b',
     123, 0, true, ['watchbrother'], { toString: () => 'watchbrother' }, null, undefined,
@@ -195,7 +195,14 @@ describe('resolveArea', () => {
 
   it('takes an item of another tab for an unknown one', () => {
     expect(resolveArea({ area: 'armouringhall', tab: 'standard', sub: 'librarium' }).sub).toBe('watchbrother')
-    expect(resolveArea({ area: 'armouringhall', tab: 'specialist', sub: 'watchbrother' }).sub).toBe('apothecarion')
+    expect(resolveArea({ area: 'armouringhall', tab: 'specialist', sub: 'watchbrother' }).sub).toBe('reclusiarc')
     expect(resolveArea({ area: 'armouringhall', tab: 'restricted-wargear', sub: 'watchbrother' }).sub).toBe('')
+  })
+
+  it('sends the old Watch Specialist address, and a slug it never had, to the Watch Sergeant', () => {
+    for (const sub of ['watchspecialist', 'watchmedic']) {
+      const r = resolveArea({ area: 'armouringhall', tab: 'watch-command', sub })
+      expect([r.sub, r.canonical], sub).toEqual(['watchsergeant', '/deathwatch/armouringhall/watch-command/watchsergeant'])
+    }
   })
 })

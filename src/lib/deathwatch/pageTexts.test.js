@@ -34,8 +34,8 @@ describe('pageTexts', () => {
 
   it('gives an Armouring Hall uniform page the texts of the uniform it shows, Company Heraldry its own', () => {
     expect(pageTexts('armouringhall', 'specialist', 'librarium')[0][0]).toBe('ah_librarium_lead')
-    expect(pageTexts('armouringhall', 'specialist', '')[0][0]).toBe('ah_apothecarion_lead')
-    expect(pageTexts('armouringhall', 'standard', 'companyheraldry')[0][0]).toBe('ah_companyheraldry_companies1')
+    expect(pageTexts('armouringhall', 'specialist', '')[0][0]).toBe('ah_reclusiarc_lead')
+    expect(pageTexts('armouringhall', 'standard', 'companyheraldry')[0][0]).toBe('ah_companyheraldry_companies')
     expect(pageTexts('armouringhall', 'restricted-wargear').map(([k]) => k)[0]).toBe('rw_h')
     expect(pageTexts('armouringhall', 'constructor')).toEqual([])
   })
@@ -86,5 +86,29 @@ describe('editedTexts', () => {
   it('starts from nothing when there are no texts yet', () => {
     expect(editedTexts(undefined, { nm_i: 'Hello' })).toEqual({ nm_i: 'Hello' })
     expect(editedTexts(null, {})).toEqual({})
+  })
+})
+
+describe('the keys before Armouring Hall 2.0, in the editor', () => {
+  const OLD = { ah_companyheraldry_companies1: 'First.', ah_companyheraldry_companies2: 'Second.', ah_watchspecialist_helm: 'Old helm.' }
+
+  it('opens a field on what the page shows: the old text while the new key is not stored', () => {
+    expect(textOf(OLD, 'ah_companyheraldry_companies')).toBe('First.\nSecond.')
+    expect(textOf(OLD, 'ah_watchtechmarine_helm')).toBe('Old helm.')
+    expect(textOf({ ...OLD, ah_watchtechmarine_helm: 'Mine.' }, 'ah_watchtechmarine_helm')).toBe('Mine.')
+    expect(textOf({}, 'ah_watchtechmarine_helm')).toBe(defaultText('ah_watchtechmarine_helm'))
+  })
+
+  it('drops the Battle Companies’ old keys on a save, so a restored default stays the default', () => {
+    const saved = editedTexts(OLD, { ah_companyheraldry_companies: defaultText('ah_companyheraldry_companies') })
+    expect(saved).toEqual({ ah_watchspecialist_helm: 'Old helm.' })
+    expect(textOf(saved, 'ah_companyheraldry_companies')).toBe(defaultText('ah_companyheraldry_companies'))
+    expect(editedTexts(OLD, { ah_companyheraldry_companies: 'New.' })).toEqual({ ah_companyheraldry_companies: 'New.', ah_watchspecialist_helm: 'Old helm.' })
+  })
+
+  it('keeps the old Watch Specialist key on a save of one specialist, for the other three', () => {
+    const saved = editedTexts(OLD, { ah_watchapothecary_helm: 'Mine.' })
+    expect(saved.ah_watchspecialist_helm).toBe('Old helm.')
+    expect(textOf(saved, 'ah_watchlibrarian_helm')).toBe('Old helm.')
   })
 })
