@@ -13,7 +13,7 @@ import { withoutHoverMedia } from './test-utils/css'
 // stylesheet is under the rules from the day it is added.
 const SWEPT = ['.']
 
-// The canvas and its dev tuner keep their own numbers, so they are never scanned, even once swept.
+// The canvas and its dev tuner keep their own numbers, so the sweep of src/ never scans them.
 const SKIPPED = [
   'components/MountDeathfire.vue',
   'components/FireText.vue',
@@ -26,8 +26,8 @@ const EASE_IN_OUT_FILES = [
   'components/deathwatch/DeathwatchGate.vue',
   'components/archive/ArchiveGate.vue',
 ]
-// Files that keep their own cubic-bezier curve (the archive thread cooling and the gate unsealing).
-const CUBIC_BEZIER_FILES = ['components/archive/ArchiveThread.vue', 'components/archive/ArchiveGate.vue']
+// Files that keep their own cubic-bezier curve (the archive thread cooling).
+const CUBIC_BEZIER_FILES = ['components/archive/ArchiveThread.vue']
 // Files whose animations keep their own authored durations (the loops above, plus the roster flash and ping and
 // the armour card's arrival flash).
 const AUTHORED_DURATION_FILES = [
@@ -97,7 +97,7 @@ const checkFile = (file, text) => {
   const add = (rule, at) => found.push({ rule, ...lineAt(text, at) })
 
   // R1: name the properties that change.
-  for (const m of text.matchAll(/transition\s*:\s*all\b/g)) add('R1', m.index)
+  for (const m of text.matchAll(/transition(-property)?\s*:\s*all\b/g)) add('R1', m.index)
 
   for (const m of text.matchAll(TIMING_DECLARATION)) {
     const [whole, prop, value] = m
@@ -162,9 +162,12 @@ describe('motion policy', () => {
 describe('the motion rules check', () => {
   const rules = (file, source) => checkFile(file, source).map((f) => f.rule)
 
-  it('R1 catches transition: all in either spelling', () => {
+  it('R1 catches transition: all and transition-property: all, in either spacing', () => {
     expect(rules('a.vue', '.a { transition: all var(--dur-state) var(--ease-forge); }')).toEqual(['R1'])
     expect(rules('a.vue', '.a { transition:all var(--dur-state) var(--ease-forge); }')).toEqual(['R1'])
+    expect(rules('a.vue', '.a { transition-property: all; }')).toEqual(['R1'])
+    expect(rules('a.vue', '.a { transition-property:all; }')).toEqual(['R1'])
+    expect(rules('a.vue', '.a { transition-property: opacity, transform; }')).toEqual([])
     expect(rules('a.vue', '.a { transition: opacity var(--dur-state) var(--ease-forge); }')).toEqual([])
   })
 
@@ -186,7 +189,7 @@ describe('the motion rules check', () => {
     const curve = '.a { animation: cool 1.7s cubic-bezier(0.2, 0.7, 0.3, 1); }'
     expect(rules('a.vue', curve)).toEqual(['R2', 'R3'])
     expect(rules('components/archive/ArchiveThread.vue', curve)).toEqual([])
-    // the archive gate's unsealing glow keeps ease-in-out, and may loop while the gate shows
+    // the archive gate's unsealing glow keeps ease-in-out (but not a cubic-bezier), and may loop while the gate shows
     const glow = '.a { animation: gate-glow 1.6s ease-in-out infinite; }'
     expect(rules('a.vue', glow)).toEqual(['R2', 'R3'])
     expect(rules('components/archive/ArchiveGate.vue', glow)).toEqual([])
