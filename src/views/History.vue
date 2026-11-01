@@ -193,6 +193,21 @@ const when = (d) => new Date(d).toLocaleString()
   border-color: var(--color-ember);
   color: var(--color-ember);
 }
+/* Every button squeezes when pressed except the full-width event row (.hist-line), which is a list row. */
+.hist-filter,
+.hist-actions button,
+.hist-revoke button,
+.hist-revoked button,
+.hist-more {
+  transition: transform var(--dur-press) var(--ease-forge);
+}
+.hist-filter:active,
+.hist-actions button:active,
+.hist-revoke button:active,
+.hist-revoked button:active,
+.hist-more:active {
+  transform: scale(0.97);
+}
 .hist-search,
 .hist-revoke input {
   flex: 1;

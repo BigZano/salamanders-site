@@ -148,7 +148,9 @@ function jump(title) {
   border-radius: 50%;
   background: rgb(10 13 17 / 0.65);
   cursor: pointer;
-  transition: transform 0.25s, background-color 0.25s;
+  transition:
+    transform var(--dur-press) var(--ease-forge),
+    background-color var(--dur-state) var(--ease-forge);
 }
 /* A larger invisible target than the 18px dot, for a thumb. */
 .ah-hs::after {
@@ -172,7 +174,10 @@ function jump(title) {
   border-radius: 999px;
   opacity: 0;
   pointer-events: none;
-  transition: opacity 0.2s, translate 0.25s;
+  /* Hiding takes --dur-state; showing (below) takes --dur-view. */
+  transition:
+    opacity var(--dur-state) var(--ease-forge),
+    translate var(--dur-state) var(--ease-forge);
 }
 .ah-hs.on,
 .ah-hs:focus-visible {
@@ -180,10 +185,14 @@ function jump(title) {
   background: var(--dw-accent);
   outline: none;
 }
+.ah-hs:active {
+  transform: scale(0.97);
+}
 .ah-hs.on span,
 .ah-hs:focus-visible span {
   opacity: 1;
   translate: -50% 0;
+  transition-duration: var(--dur-view);
 }
 .ah-part:focus {
   outline: none;
@@ -193,7 +202,7 @@ function jump(title) {
   background: var(--dw-grain), color-mix(in oklab, var(--dw-accent) 8%, #0b130c);
 }
 .ah-part.flash {
-  animation: ah-flash 1.3s ease-out;
+  animation: ah-flash 1.3s var(--ease-forge);
 }
 /* The card a marker jumped to brightens, then settles. Its corners are clipped, so it lights from inside. */
 @keyframes ah-flash {
@@ -237,6 +246,10 @@ function jump(title) {
   text-decoration: none;
   color: var(--dw-accent);
   border: 1px solid color-mix(in oklab, var(--dw-accent) 50%, var(--dw-line-2));
+  transition: transform var(--dur-press) var(--ease-forge);
+}
+.ah-chl:active {
+  transform: scale(0.97);
 }
 .ah-chl i {
   font-style: normal;

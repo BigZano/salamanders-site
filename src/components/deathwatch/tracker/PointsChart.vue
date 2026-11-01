@@ -196,6 +196,11 @@ function setMode(k) {
   background: transparent;
   border: 1px solid var(--dw-line-2);
   cursor: pointer;
+  transition: transform var(--dur-press) var(--ease-forge);
+}
+.pc-modes button:active,
+.pc-legend button:active {
+  transform: scale(0.97);
 }
 .pc-modes button[aria-pressed='true'],
 .pc-legend button[aria-pressed='true'] {

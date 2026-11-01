@@ -36,19 +36,14 @@ main {
   min-height: 60svh;
 }
 /* Route enter animation — replaces the old RouterView transition. Each route's
-   root element is a fresh node, so this replays on every navigation. */
+   root element is a fresh node, so this replays on every navigation. Opacity
+   only; reduced motion keeps the fade through the allowlist in style.css. */
 main > * {
-  animation: view-in 0.22s ease-out both;
+  animation: view-in var(--dur-view) var(--ease-forge) both;
 }
 @keyframes view-in {
   from {
     opacity: 0;
-    transform: translateY(6px);
-  }
-}
-@media (prefers-reduced-motion: reduce) {
-  main > * {
-    animation: none;
   }
 }
 </style>

@@ -26,7 +26,7 @@ function go(event) {
 </script>
 
 <template>
-  <a class="dw-banner" href="/deathwatch" aria-label="REDACTED — Deathwatch access" @click="go">REDACTED</a>
+  <a class="dw-banner rm-fade" href="/deathwatch" aria-label="REDACTED — Deathwatch access" @click="go">REDACTED</a>
 </template>
 
 <style scoped>
@@ -48,8 +48,8 @@ function go(event) {
   text-indent: 0.5em; /* the trailing letter-space would otherwise push the word off centre */
   text-transform: uppercase;
   transition:
-    transform 0.15s var(--ease-forge),
-    border-color 0.2s ease;
+    transform var(--dur-press) var(--ease-forge),
+    border-color var(--dur-state) var(--ease-forge);
 }
 @media (hover: hover) and (pointer: fine) {
   .dw-banner:hover {
@@ -57,6 +57,6 @@ function go(event) {
   }
 }
 .dw-banner:active {
-  transform: scale(0.98);
+  transform: scale(0.97);
 }
 </style>

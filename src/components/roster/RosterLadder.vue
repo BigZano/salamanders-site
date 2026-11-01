@@ -71,7 +71,7 @@ const styleOf = (item) => ({ '--s': item.s, '--h': item.heat.h, '--hp': item.hea
   box-shadow: 0 0 10px -1px var(--hn);
   transform: scaleY(0);
   transform-origin: top;
-  transition: transform 0.12s linear;
+  transition: transform var(--dur-press) var(--ease-forge);
 }
 .rs-last::before {
   bottom: auto;
@@ -87,7 +87,9 @@ const styleOf = (item) => ({ '--s': item.s, '--h': item.heat.h, '--hp': item.hea
   height: 11px;
   background: var(--h);
   transform: translate(-50%, -50%) rotate(45deg) scale(0);
-  transition: transform 0.15s, box-shadow 0.2s;
+  transition:
+    transform var(--dur-press) var(--ease-forge),
+    box-shadow var(--dur-state) var(--ease-forge);
 }
 
 /* A lateral rank (Terminator): a hollow node on a dashed stub off the spine. */
@@ -202,13 +204,13 @@ const styleOf = (item) => ({ '--s': item.s, '--h': item.heat.h, '--hp': item.hea
 <style>
 .rs-panel[data-open] .rs-step::before {
   transform: scaleY(1);
-  transition-duration: 0.18s;
+  transition-duration: var(--dur-state);
   transition-delay: calc(var(--s) * var(--pour) + 40ms);
 }
 .rs-panel[data-open] .rs-node {
   transform: translate(-50%, -50%) rotate(45deg) scale(1);
   box-shadow: 0 0 12px 1px var(--h);
-  transition: transform 0.32s cubic-bezier(0.3, 1.7, 0.5, 1), box-shadow 0.5s;
+  transition: transform var(--dur-sheet) var(--ease-forge), box-shadow var(--dur-sheet) var(--ease-forge);
   transition-delay: calc(var(--s) * var(--pour) + 90ms);
 }
 .rs-panel[data-open] .rs-lateral .rs-node {

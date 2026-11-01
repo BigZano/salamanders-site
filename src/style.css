@@ -31,6 +31,10 @@
   --color-vacant: #ff9a7a;
 
   --ease-forge: cubic-bezier(0.2, 0.8, 0.2, 1);
+  --dur-press: 120ms;
+  --dur-state: 180ms;
+  --dur-view: 240ms;
+  --dur-sheet: 320ms;
 
   --font-display: 'Oswald Variable', 'Bahnschrift', 'DIN Condensed', 'Oswald',
     'Arial Narrow', system-ui, sans-serif;
@@ -143,6 +147,22 @@
       transition-delay: 0s !important;
       scroll-behavior: auto !important;
     }
+
+    /* Reduced motion keeps meaning: opacity and colour still change, nothing moves. */
+    .rm-fade,
+    .btn-ember,
+    .btn-drake,
+    .btn-ghost,
+    .btn-sm {
+      transition-duration: var(--dur-state) !important;
+      transition-property:
+        opacity, color, background-color, border-color, box-shadow, outline-color !important;
+    }
+    /* `main > *` is the route fade (App.vue), opacity only. */
+    .rm-fade,
+    main > * {
+      animation-duration: var(--dur-state) !important;
+    }
   }
 }
 
@@ -212,9 +232,9 @@
       0 8px 30px -8px rgba(224, 67, 29, 0.7),
       inset 0 1px 0 rgba(255, 255, 255, 0.35);
     transition:
-      transform 0.15s ease,
-      box-shadow 0.25s ease,
-      filter 0.2s ease;
+      transform var(--dur-press) var(--ease-forge),
+      box-shadow var(--dur-state) var(--ease-forge),
+      filter var(--dur-state) var(--ease-forge);
   }
   /* Hover only where a pointer can really hover: a touch screen fakes one on the first tap and keeps it. */
   @media (hover: hover) and (pointer: fine) {
@@ -245,9 +265,9 @@
     background: rgba(89, 214, 108, 0.06);
     border: 1px solid rgba(89, 214, 108, 0.4);
     transition:
-      transform 0.15s ease,
-      background 0.2s ease,
-      border-color 0.2s ease;
+      transform var(--dur-press) var(--ease-forge),
+      background-color var(--dur-state) var(--ease-forge),
+      border-color var(--dur-state) var(--ease-forge);
   }
   @media (hover: hover) and (pointer: fine) {
     .btn-drake:hover {
@@ -273,9 +293,9 @@
     border: 1px solid var(--color-ash);
     text-decoration: none;
     transition:
-      transform 0.15s ease,
-      color 0.2s ease,
-      border-color 0.2s ease;
+      transform var(--dur-press) var(--ease-forge),
+      color var(--dur-state) var(--ease-forge),
+      border-color var(--dur-state) var(--ease-forge);
   }
   @media (hover: hover) and (pointer: fine) {
     .btn-ghost:hover {
@@ -294,6 +314,14 @@
     font-size: 0.78rem;
     cursor: pointer;
     min-height: var(--tap);
+  }
+}
+
+/* The one spinner for the whole site. A component writes animation: spin 0.8s linear infinite and does
+   not define its own @keyframes spin. Unlayered and unscoped so every scoped style can name it. */
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
   }
 }
 

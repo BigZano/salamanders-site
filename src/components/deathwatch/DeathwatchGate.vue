@@ -83,9 +83,9 @@ const retry = () => store.load(auth.token)
   border-radius: 2px;
   cursor: pointer;
 }
-/* Waiting for the server: a slow breathing, opacity only. */
+/* Waiting for the server: a slow breathing, opacity only, three breaths and then still. */
 .dw-gate-checking {
-  animation: dw-gate-pulse 1.6s ease-in-out infinite;
+  animation: dw-gate-pulse 1.6s ease-in-out 3;
 }
 @keyframes dw-gate-pulse {
   50% {

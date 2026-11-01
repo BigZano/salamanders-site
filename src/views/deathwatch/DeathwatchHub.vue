@@ -55,7 +55,7 @@ const recruitmentTo = resolveArea({ area: 'recruitment' }).canonical
         <RouterLink class="dw-call-btn" :to="recruitmentTo">Enlist now</RouterLink>
       </div>
     </div>
-    <RouterLink v-if="store.commander" class="dw-manage dw-btn" :to="manageTo">
+    <RouterLink v-if="store.commander" class="dw-manage dw-btn rm-fade" :to="manageTo">
       <svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true" focusable="false">
         <component :is="shape[0]" v-for="(shape, i) in iconFor('manage')" :key="i" v-bind="shape[1]" />
       </svg>
@@ -145,7 +145,7 @@ const recruitmentTo = resolveArea({ area: 'recruitment' }).canonical
   text-decoration: none;
   background: linear-gradient(90deg, rgb(8 14 9 / 0.92), rgb(12 22 14 / 0.88));
   clip-path: polygon(10px 0, calc(100% - 10px) 0, 100% 10px, 100% calc(100% - 10px), calc(100% - 10px) 100%, 10px 100%, 0 calc(100% - 10px), 0 10px);
-  transition: transform 0.15s var(--ease-forge);
+  transition: transform var(--dur-press) var(--ease-forge);
 }
 .dw-card-text,
 .dw-card-go {
@@ -159,7 +159,7 @@ const recruitmentTo = resolveArea({ area: 'recruitment' }).canonical
   border: 1px solid color-mix(in oklab, var(--dw-accent) 35%, var(--dw-line-2));
   clip-path: inherit;
   pointer-events: none;
-  transition: border-color 0.2s ease;
+  transition: border-color var(--dur-state) var(--ease-forge);
 }
 .dw-card-art {
   display: block;
@@ -191,7 +191,7 @@ const recruitmentTo = resolveArea({ area: 'recruitment' }).canonical
   font: 700 2rem / 1 var(--dw-font-title);
   color: #ff8a3d;
   text-shadow: 0 0 10px rgb(255 120 40 / 0.5);
-  transition: translate 0.2s ease;
+  transition: translate var(--dur-state) var(--ease-forge);
 }
 
 /* The call to enlist: a gold ornament, the call in spaced capitals with "you" glowing orange, and the orange button
@@ -257,7 +257,10 @@ const recruitmentTo = resolveArea({ area: 'recruitment' }).canonical
   border: 1px solid #ffc58a;
   border-radius: 6px;
   box-shadow: 0 0 24px rgb(255 120 40 / 0.4), inset 0 1px 0 rgb(255 255 255 / 0.35);
-  transition: box-shadow 0.2s ease, filter 0.2s ease;
+  transition:
+    box-shadow var(--dur-state) var(--ease-forge),
+    filter var(--dur-state) var(--ease-forge),
+    transform var(--dur-press) var(--ease-forge);
 }
 .dw-call-btn:focus-visible {
   outline: 2px solid #ffc58a;
@@ -275,8 +278,9 @@ const recruitmentTo = resolveArea({ area: 'recruitment' }).canonical
     box-shadow: 0 0 32px rgb(255 120 40 / 0.6), inset 0 1px 0 rgb(255 255 255 / 0.35);
   }
 }
-.dw-card:active {
-  transform: scale(0.99);
+.dw-card:active,
+.dw-call-btn:active {
+  transform: scale(0.97);
 }
 /* The corners are clipped, which also clips an outline drawn outside the card: draw the ring inside it, as .dw-btn,
    far enough in (2px thick, from 5px to 7px) that its own corners clear the 10px chamfer (x + y = 10). */

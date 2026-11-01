@@ -58,11 +58,15 @@ const ORDINALS = ['', '1st', '2nd', '3rd', '4th', '5th', '6th', '7th']
   font-size: 0.86rem;
   line-height: 1.2;
   list-style: none;
-  transition: border-color 0.15s, background 0.15s;
+  transition:
+    border-color var(--dur-state) var(--ease-forge),
+    background-color var(--dur-state) var(--ease-forge);
 }
-.rs-member:hover {
-  border-color: rgba(89, 214, 108, 0.55);
-  background: rgba(89, 214, 108, 0.06);
+@media (hover: hover) and (pointer: fine) {
+  .rs-member:hover {
+    border-color: rgba(89, 214, 108, 0.55);
+    background: rgba(89, 214, 108, 0.06);
+  }
 }
 .rs-avatar {
   position: relative;
@@ -138,7 +142,7 @@ const ORDINALS = ['', '1st', '2nd', '3rd', '4th', '5th', '6th', '7th']
 }
 /* added by the page when Find me lands on this chip */
 .rs-ping {
-  animation: rs-ping 1.4s ease-out 2;
+  animation: rs-ping 1.4s var(--ease-forge) 2;
 }
 @keyframes rs-ping {
   0% { box-shadow: 0 0 0 0 rgba(89, 214, 108, 0.7); }
@@ -152,9 +156,11 @@ const ORDINALS = ['', '1st', '2nd', '3rd', '4th', '5th', '6th', '7th']
   background: none;
   border-color: transparent;
 }
-.rs-hero:hover {
-  background: none;
-  border-color: transparent;
+@media (hover: hover) and (pointer: fine) {
+  .rs-hero:hover {
+    background: none;
+    border-color: transparent;
+  }
 }
 .rs-hero .rs-avatar {
   width: 4.2rem;

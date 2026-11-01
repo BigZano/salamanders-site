@@ -70,9 +70,9 @@ function freshPlanner() {
 
       <div class="auth" v-if="auth.signedIn">
         <span class="auth-name">{{ auth.member.username }}</span>
-        <button class="auth-btn" type="button" @click="auth.signOut()">Sign out</button>
+        <button class="auth-btn rm-fade" type="button" @click="auth.signOut()">Sign out</button>
       </div>
-      <button v-else class="auth-btn auth-signin" type="button" @click="auth.signIn()">
+      <button v-else class="auth-btn auth-signin rm-fade" type="button" @click="auth.signIn()">
         Sign in
       </button>
 
@@ -106,9 +106,9 @@ function freshPlanner() {
         </a>
         <div class="auth auth-mobile" v-if="auth.signedIn">
           <span class="auth-name">Signed in as {{ auth.member.username }}</span>
-          <button class="auth-btn" type="button" @click="auth.signOut()">Sign out</button>
+          <button class="auth-btn rm-fade" type="button" @click="auth.signOut()">Sign out</button>
         </div>
-        <button v-else class="auth-btn auth-signin auth-mobile" type="button" @click="auth.signIn()">
+        <button v-else class="auth-btn auth-signin auth-mobile rm-fade" type="button" @click="auth.signIn()">
           Sign in with Discord
         </button>
       </nav>
@@ -179,11 +179,15 @@ function freshPlanner() {
   color: var(--color-smoke);
   padding: 0.5rem 0.7rem;
   border-radius: 2px;
-  transition: color 0.15s ease, background 0.15s ease;
+  transition:
+    color var(--dur-state) var(--ease-forge),
+    background-color var(--dur-state) var(--ease-forge);
 }
-.nav-link:hover {
-  color: var(--color-bone);
-  background: rgba(89, 214, 108, 0.06);
+@media (hover: hover) and (pointer: fine) {
+  .nav-link:hover {
+    color: var(--color-bone);
+    background: rgba(89, 214, 108, 0.06);
+  }
 }
 .nav-link.is-active {
   color: var(--color-drake);
@@ -230,19 +234,29 @@ function freshPlanner() {
   border-radius: 2px;
   padding: 0.45rem 0.8rem;
   cursor: pointer;
-  transition: 0.12s;
+  transition:
+    color var(--dur-state) var(--ease-forge),
+    border-color var(--dur-state) var(--ease-forge),
+    transform var(--dur-press) var(--ease-forge);
 }
-.auth-btn:hover {
-  color: var(--color-bone);
-  border-color: var(--color-ash-2);
+.auth-btn:active {
+  transform: scale(0.97);
+}
+@media (hover: hover) and (pointer: fine) {
+  .auth-btn:hover {
+    color: var(--color-bone);
+    border-color: var(--color-ash-2);
+  }
 }
 .auth-signin {
   color: var(--color-drake);
   border-color: rgba(89, 214, 108, 0.35);
 }
-.auth-signin:hover {
-  color: var(--color-bone);
-  border-color: var(--color-drake);
+@media (hover: hover) and (pointer: fine) {
+  .auth-signin:hover {
+    color: var(--color-bone);
+    border-color: var(--color-drake);
+  }
 }
 .auth-mobile {
   margin-top: 0.6rem;
@@ -260,6 +274,10 @@ function freshPlanner() {
   border: 1px solid var(--color-ash);
   border-radius: 3px;
   cursor: pointer;
+  transition: transform var(--dur-press) var(--ease-forge);
+}
+.burger:active {
+  transform: scale(0.97);
 }
 .burger span {
   display: block;
@@ -267,7 +285,9 @@ function freshPlanner() {
   width: 20px;
   margin: 0 auto;
   background: var(--color-bone);
-  transition: transform 0.22s ease, opacity 0.2s ease;
+  transition:
+    transform var(--dur-state) var(--ease-forge),
+    opacity var(--dur-state) var(--ease-forge);
 }
 .burger span.x:nth-child(1) {
   transform: translateY(7px) rotate(45deg);
@@ -304,9 +324,15 @@ function freshPlanner() {
   border-radius: 2px;
 }
 
-.sheet-enter-active,
+.sheet-enter-active {
+  transition:
+    opacity var(--dur-view) var(--ease-forge),
+    transform var(--dur-view) var(--ease-forge);
+}
 .sheet-leave-active {
-  transition: opacity 0.2s ease, transform 0.2s ease;
+  transition:
+    opacity var(--dur-state) var(--ease-forge),
+    transform var(--dur-state) var(--ease-forge);
 }
 .sheet-enter-from,
 .sheet-leave-to {

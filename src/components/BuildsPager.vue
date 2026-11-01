@@ -8,12 +8,12 @@ const emit = defineEmits(['update:page'])
 
 <template>
   <div v-if="pageCount > 1" class="pager">
-    <button class="pager-btn" :disabled="page <= 1" @click="emit('update:page', page - 1)">
+    <button class="pager-btn rm-fade" :disabled="page <= 1" @click="emit('update:page', page - 1)">
       ‹ Prev
     </button>
     <span class="pager-label">Page {{ page }} of {{ pageCount }}</span>
     <button
-      class="pager-btn"
+      class="pager-btn rm-fade"
       :disabled="page >= pageCount"
       @click="emit('update:page', page + 1)"
     >
@@ -41,11 +41,20 @@ const emit = defineEmits(['update:page'])
   border-radius: 2px;
   padding: 0.4rem 0.8rem;
   cursor: pointer;
-  transition: 0.12s;
+  transition:
+    color var(--dur-state) var(--ease-forge),
+    border-color var(--dur-state) var(--ease-forge),
+    opacity var(--dur-state) var(--ease-forge),
+    transform var(--dur-press) var(--ease-forge);
 }
-.pager-btn:hover:not(:disabled) {
-  color: var(--color-bone);
-  border-color: var(--color-ash-2);
+@media (hover: hover) and (pointer: fine) {
+  .pager-btn:hover:not(:disabled) {
+    color: var(--color-bone);
+    border-color: var(--color-ash-2);
+  }
+}
+.pager-btn:active:not(:disabled) {
+  transform: scale(0.97);
 }
 .pager-btn:disabled {
   cursor: not-allowed;

@@ -90,8 +90,8 @@ async function remove() {
       <HonourRollView v-else-if="view === 'honour-roll'" :R="R" :to="to" />
       <GameStatsView v-else :R="R" />
       <div v-if="gate.commander" class="dw-actions">
-        <button type="button" class="dw-btn" @click="backup">Download backup</button>
-        <button type="button" class="dw-btn danger" @click="remove">{{ armed ? 'Tap again to delete' : 'Delete from archive' }}</button>
+        <button type="button" class="dw-btn rm-fade" @click="backup">Download backup</button>
+        <button type="button" class="dw-btn rm-fade danger" @click="remove">{{ armed ? 'Tap again to delete' : 'Delete from archive' }}</button>
         <span class="dw-msg bad" role="status">{{ msg }}</span>
       </div>
     </template>
@@ -101,6 +101,7 @@ async function remove() {
 <style scoped>
 .ev {
   text-decoration: none;
+  transition: transform var(--dur-press) var(--ease-forge);
 }
 .ev:focus-visible {
   outline: 2px solid var(--dw-accent);
@@ -110,6 +111,9 @@ async function remove() {
   .ev:hover {
     border-color: var(--dw-accent);
   }
+}
+.ev:active {
+  transform: scale(0.97);
 }
 .views {
   display: flex;
@@ -127,6 +131,10 @@ async function remove() {
   text-decoration: none;
   color: var(--dw-silver);
   border: 1px solid var(--dw-line-2);
+  transition: transform var(--dur-press) var(--ease-forge);
+}
+.views a:active {
+  transform: scale(0.97);
 }
 .views a[aria-current='page'] {
   color: var(--dw-accent);

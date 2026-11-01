@@ -73,5 +73,7 @@ const view = computed(() => (archive.archive?.legacy ? legacyView(archive.archiv
 .leg-holders { display: flex; flex-wrap: wrap; gap: 0.38rem; margin: 0; padding: 0; list-style: none; }
 .leg-missing { text-align: center; color: #c9cfc9; }
 .leg-missing-link { display: inline-block; margin-top: 0.9rem; color: var(--color-bone); text-decoration: underline; text-decoration-color: rgba(89, 214, 108, 0.5); text-underline-offset: 3px; }
-.leg-missing-link:hover { color: #fff; text-decoration-color: var(--color-drake); }
+@media (hover: hover) and (pointer: fine) {
+  .leg-missing-link:hover { color: #fff; text-decoration-color: var(--color-drake); }
+}
 </style>

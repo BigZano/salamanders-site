@@ -210,6 +210,10 @@ const when = (d) => new Date(d).toLocaleString()
   border-radius: 999px;
   padding: 0.35rem 0.8rem;
   cursor: pointer;
+  transition: transform var(--dur-press) var(--ease-forge);
+}
+.rv-chip:active {
+  transform: scale(0.97);
 }
 .rv-chip.on {
   color: var(--color-bone);

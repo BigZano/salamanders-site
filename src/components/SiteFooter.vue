@@ -74,8 +74,10 @@ const footerLinks = computed(() => links.value.filter((l) => l.to !== '/'))
   font-size: 0.82rem;
   color: var(--color-smoke);
 }
-.footer-links a:hover {
-  color: var(--color-drake);
+@media (hover: hover) and (pointer: fine) {
+  .footer-links a:hover {
+    color: var(--color-drake);
+  }
 }
 .footer-fine {
   max-width: 76rem;

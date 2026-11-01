@@ -162,7 +162,7 @@ async function remove(b) {
       />
       <div class="b-filters" role="group" aria-label="Filter by class">
         <button
-          class="b-chip"
+          class="b-chip rm-fade"
           :class="{ on: !classFilter }"
           @click="classFilter = ''"
         >
@@ -172,7 +172,7 @@ async function remove(b) {
         <button
           v-for="c in usedClasses"
           :key="c"
-          class="b-chip"
+          class="b-chip rm-fade"
           :class="{ on: classFilter === c }"
           @click="classFilter = classFilter === c ? '' : c"
         >
@@ -303,11 +303,20 @@ async function remove(b) {
   border-radius: 2px;
   padding: 0.35rem 0.7rem;
   cursor: pointer;
-  transition: 0.12s;
+  transition:
+    transform var(--dur-press) var(--ease-forge),
+    color var(--dur-state) var(--ease-forge),
+    background-color var(--dur-state) var(--ease-forge),
+    border-color var(--dur-state) var(--ease-forge);
 }
-.b-chip:hover {
-  color: var(--color-bone);
-  border-color: var(--color-ash-2);
+@media (hover: hover) and (pointer: fine) {
+  .b-chip:hover {
+    color: var(--color-bone);
+    border-color: var(--color-ash-2);
+  }
+}
+.b-chip:active {
+  transform: scale(0.97);
 }
 .b-chip.on {
   color: #1a0d06;
@@ -411,9 +420,15 @@ async function remove(b) {
   border-radius: 3px;
   font-size: 0.85rem;
 }
-.toast-enter-active,
+.toast-enter-active {
+  transition:
+    opacity var(--dur-sheet) var(--ease-forge),
+    transform var(--dur-sheet) var(--ease-forge);
+}
 .toast-leave-active {
-  transition: opacity 0.2s ease, transform 0.2s ease;
+  transition:
+    opacity var(--dur-view) var(--ease-forge),
+    transform var(--dur-view) var(--ease-forge);
 }
 .toast-enter-from,
 .toast-leave-to {

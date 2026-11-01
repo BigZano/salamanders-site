@@ -78,9 +78,15 @@ const where = (n) => (n.level === null ? 'Prestige' : `Level ${n.level}`)
   border-radius: 2px;
   padding: 0.3rem 0.7rem;
   cursor: pointer;
+  transition: transform var(--dur-press) var(--ease-forge);
 }
-.stale-dismiss:hover {
-  color: var(--color-bone);
+@media (hover: hover) and (pointer: fine) {
+  .stale-dismiss:hover {
+    color: var(--color-bone);
+  }
+}
+.stale-dismiss:active {
+  transform: scale(0.97);
 }
 .stale-lead {
   margin: 0.5rem 0 0.7rem;

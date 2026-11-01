@@ -40,7 +40,7 @@ defineEmits(['open'])
   color: var(--dw-ink);
   text-align: left;
   cursor: pointer;
-  transition: transform 0.15s var(--ease-forge);
+  transition: transform var(--dur-press) var(--ease-forge);
 }
 .dw-areabar-text {
   display: flex;
@@ -65,7 +65,7 @@ defineEmits(['open'])
   color: var(--dw-accent);
 }
 .dw-areabar:active {
-  transform: scale(0.98);
+  transform: scale(0.97);
 }
 /* Its corners are clipped, which also clips an outline drawn outside the box: draw the ring inside it. */
 .dw-areabar:focus-visible {

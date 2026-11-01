@@ -37,18 +37,18 @@ const plural = (n, one, many) => `${n} ${n === 1 ? one : many}`
     </ul>
 
     <div class="rs-actions">
-      <button type="button" class="rs-btn rs-find" @click="$emit('find')">
+      <button type="button" class="rs-btn rs-find rm-fade" @click="$emit('find')">
         <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" aria-hidden="true">
           <circle cx="8" cy="8" r="4.2" />
           <path d="M8 0.8v3M8 12.2v3M0.8 8h3M12.2 8h3" />
         </svg>
         Find me
       </button>
-      <button v-if="openable" type="button" class="rs-btn rs-expand-all" @click="$emit('toggle-all')">
+      <button v-if="openable" type="button" class="rs-btn rs-expand-all rm-fade" @click="$emit('toggle-all')">
         {{ allOpen ? 'Collapse all' : 'Expand all' }}
       </button>
       <span class="rs-spacer" />
-      <button v-if="canInfirmary" type="button" class="rs-btn rs-infirmary-toggle" :aria-pressed="infirmaryOpen" @click="$emit('toggle-infirmary')">
+      <button v-if="canInfirmary" type="button" class="rs-btn rs-infirmary-toggle rm-fade" :aria-pressed="infirmaryOpen" @click="$emit('toggle-infirmary')">
         Infirmary
       </button>
     </div>
@@ -83,8 +83,10 @@ const plural = (n, one, many) => `${n} ${n === 1 ? one : many}`
   color: var(--color-gold);
   border-bottom: 1px dotted rgba(223, 184, 91, 0.6);
 }
-.rs-status button:hover {
-  color: var(--color-bone);
+@media (hover: hover) and (pointer: fine) {
+  .rs-status button:hover {
+    color: var(--color-bone);
+  }
 }
 .rs-status button:focus-visible {
   outline: 2px solid var(--color-drake);
@@ -119,11 +121,20 @@ const plural = (n, one, many) => `${n} ${n === 1 ? one : many}`
   color: var(--color-smoke);
   background: transparent;
   border: 1px solid var(--color-ash-2);
-  transition: background 0.2s, border-color 0.2s, color 0.2s;
+  transition:
+    transform var(--dur-press) var(--ease-forge),
+    background-color var(--dur-state) var(--ease-forge),
+    border-color var(--dur-state) var(--ease-forge),
+    color var(--dur-state) var(--ease-forge);
 }
-.rs-btn:hover {
-  color: var(--color-bone);
-  border-color: var(--color-smoke);
+@media (hover: hover) and (pointer: fine) {
+  .rs-btn:hover {
+    color: var(--color-bone);
+    border-color: var(--color-smoke);
+  }
+}
+.rs-btn:active {
+  transform: scale(0.97);
 }
 .rs-btn svg {
   width: 1rem;
@@ -134,10 +145,12 @@ const plural = (n, one, many) => `${n} ${n === 1 ? one : many}`
   background: rgba(89, 214, 108, 0.06);
   border-color: rgba(89, 214, 108, 0.4);
 }
-.rs-find:hover {
-  color: var(--color-drake);
-  background: rgba(89, 214, 108, 0.12);
-  border-color: rgba(89, 214, 108, 0.75);
+@media (hover: hover) and (pointer: fine) {
+  .rs-find:hover {
+    color: var(--color-drake);
+    background: rgba(89, 214, 108, 0.12);
+    border-color: rgba(89, 214, 108, 0.75);
+  }
 }
 .rs-btn[aria-pressed='true'] {
   color: var(--color-bone);

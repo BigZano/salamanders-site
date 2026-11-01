@@ -69,3 +69,6 @@ docs/ideas/
 
 # A local export of the guild's roles
 roles_list.txt
+
+# Subagent-driven-development scratch (ledgers, briefs, review packages)
+.superpowers/

@@ -11,7 +11,7 @@ const data = useDeathwatchData()
 <template>
   <p class="dw-retry" role="alert">
     <slot />
-    <button type="button" class="dw-btn" @click="data.load(auth.token)">Try again</button>
+    <button type="button" class="dw-btn rm-fade" @click="data.load(auth.token)">Try again</button>
   </p>
 </template>
 

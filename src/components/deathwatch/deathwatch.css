@@ -37,19 +37,19 @@
   font-family: var(--dw-font-body);
 }
 
-/* The site's route enter animation (App.vue) slides and fades the page in. On the area itself it would take the fixed
-   backdrop with it: a transform hangs the backdrop from the area (it slid, then jumped into place), and an opacity
-   lifts the whole area, backdrop and all, above the site footer, dimming it. So the area does not animate; each
-   view on it slides and fades in the same way as it appears: the hub, an area as it opens, and the framed sheet with
-   the tab's view as the tab changes (the rail stays still). The backdrop stays fixed to the window. `body`
-   outranks App.vue's scoped rule. */
+/* The site's route enter animation (App.vue) fades the page in. On the area itself it would take the fixed
+   backdrop with it: an opacity lifts the whole area, backdrop and all, above the site footer, dimming it (and a
+   transform would hang the backdrop from the area: it slid, then jumped into place). So the area does not animate;
+   each view on it slides and fades in as it appears: the hub, an area as it opens, and the framed sheet with the
+   tab's view as the tab changes (the rail stays still). The backdrop stays fixed to the window. `body` outranks
+   App.vue's scoped rule. */
 body main > .dw {
   animation: none;
 }
 .dw .dw-hub,
 .dw .dw-area,
 .dw .dw-area-sheet {
-  animation: dw-area-in 0.22s ease-out backwards;
+  animation: dw-area-in var(--dur-view) var(--ease-forge) backwards;
 }
 @keyframes dw-area-in {
   from {
@@ -170,13 +170,15 @@ body:has(.dw-sheet[open]) {
     opacity: calc(var(--dw-wm) * 0.96);
   }
 }
-/* A placeholder bar where a view's content will be: a slow pulse of opacity, so it reads as "not here yet". */
+/* A placeholder bar where a view's content will be: a slow pulse of opacity, three times and then still, so it reads
+   as "not here yet" without shimmering for ever. `forwards` leaves it at the dim end of the pulse, not back at full
+   strength. */
 .dw-sk-bar {
   display: block;
   height: 0.9em;
   border-radius: 1px;
   background: color-mix(in oklab, var(--dw-accent) 22%, var(--dw-line-2));
-  animation: dw-pulse 1.8s ease-in-out infinite;
+  animation: dw-pulse 1.8s ease-in-out 3 forwards;
 }
 @keyframes dw-pulse {
   0%,
@@ -307,7 +309,7 @@ body:has(.dw-sheet[open]) {
 .dw .nm-spl {
   border-radius: 2px;
   filter: blur(4px);
-  transition: filter 0.2s;
+  transition: filter var(--dur-state) var(--ease-forge);
   cursor: pointer;
 }
 .dw .nm-spl.open {
@@ -352,8 +354,8 @@ body:has(.dw-sheet[open]) {
   clip-path: polygon(9px 0, 100% 0, 100% calc(100% - 9px), calc(100% - 9px) 100%, 0 100%, 0 9px);
   cursor: pointer;
   transition:
-    transform 0.15s var(--ease-forge, ease),
-    background-color 0.2s ease;
+    transform var(--dur-press) var(--ease-forge),
+    background-color var(--dur-state) var(--ease-forge);
 }
 .dw-btn:active {
   transform: scale(0.97);

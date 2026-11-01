@@ -153,9 +153,15 @@ function initials(name) {
   letter-spacing: 0.12em;
   text-transform: uppercase;
   color: var(--color-smoke);
+  transition: transform var(--dur-press) var(--ease-forge);
 }
-.c-top:hover {
-  color: var(--color-bone);
+@media (hover: hover) and (pointer: fine) {
+  .c-top:hover {
+    color: var(--color-bone);
+  }
+}
+.c-top:active {
+  transform: scale(0.97);
 }
 .c-top:focus-visible {
   outline: 2px solid var(--color-drake);

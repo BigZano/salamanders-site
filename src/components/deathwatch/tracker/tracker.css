@@ -113,6 +113,7 @@
   color: inherit;
   text-align: left;
   cursor: pointer;
+  transition: transform var(--dur-press) var(--ease-forge);
 }
 .dw button.dw-tile:focus-visible {
   outline: 2px solid var(--dw-accent);
@@ -122,6 +123,9 @@
   .dw button.dw-tile:hover {
     border-color: var(--dw-accent);
   }
+}
+.dw button.dw-tile:active {
+  transform: scale(0.97);
 }
 
 /* A link inside a table or a tile: a name that opens its profile. */

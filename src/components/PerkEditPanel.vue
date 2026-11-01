@@ -181,11 +181,20 @@ function cancel() {
   border-radius: 2px;
   padding: 0.35rem 0.6rem;
   cursor: pointer;
+  transition: transform var(--dur-press) var(--ease-forge);
 }
-.pe .pe-confirm,
-.pe .pe-remove:hover {
+.pe button:active:not(:disabled) {
+  transform: scale(0.97);
+}
+.pe .pe-confirm {
   border-color: var(--color-ember);
   color: var(--color-ember);
+}
+@media (hover: hover) and (pointer: fine) {
+  .pe .pe-remove:hover {
+    border-color: var(--color-ember);
+    color: var(--color-ember);
+  }
 }
 .pe-error {
   margin-top: 0.4rem;

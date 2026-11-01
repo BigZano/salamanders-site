@@ -140,7 +140,7 @@ function toggle(p) {
             <button
               v-for="p in t.perks"
               :key="p.id"
-              class="wnode"
+              class="wnode rm-fade"
               :class="{ on: selected[p.id], dim: !selected[p.id] && full }"
               @click="toggle(p)"
               @mouseenter="preview(p)"
@@ -243,10 +243,16 @@ function toggle(p) {
   border-radius: 2px;
   padding: 0.4rem 0.7rem;
   cursor: pointer;
+  transition: transform var(--dur-press) var(--ease-forge);
 }
-.wtree-reset:hover {
-  color: var(--color-bone);
-  border-color: var(--color-ash-2);
+@media (hover: hover) and (pointer: fine) {
+  .wtree-reset:hover {
+    color: var(--color-bone);
+    border-color: var(--color-ash-2);
+  }
+}
+.wtree-reset:active {
+  transform: scale(0.97);
 }
 
 .wtree-scroll {
@@ -284,6 +290,10 @@ function toggle(p) {
   width: 1.2rem;
   cursor: pointer;
   font-weight: 800;
+  transition: transform var(--dur-press) var(--ease-forge);
+}
+.wtier-add:active {
+  transform: scale(0.97);
 }
 .wtier[data-q='standard'] .wtier-head {
   background: #9aa8a0;
@@ -318,11 +328,22 @@ function toggle(p) {
   font-size: 0.78rem;
   line-height: 1.2;
   cursor: pointer;
-  transition: 0.12s;
+  transition:
+    transform var(--dur-press) var(--ease-forge),
+    color var(--dur-state) var(--ease-forge),
+    background-color var(--dur-state) var(--ease-forge),
+    border-color var(--dur-state) var(--ease-forge),
+    box-shadow var(--dur-state) var(--ease-forge),
+    opacity var(--dur-state) var(--ease-forge);
 }
-.wnode:hover {
-  border-color: var(--color-ash-2);
-  color: var(--color-bone);
+@media (hover: hover) and (pointer: fine) {
+  .wnode:hover {
+    border-color: var(--color-ash-2);
+    color: var(--color-bone);
+  }
+}
+.wnode:active:not(.dim) {
+  transform: scale(0.97);
 }
 .wnode-dot {
   flex: none;
@@ -426,10 +447,16 @@ function toggle(p) {
   height: 1.4rem;
   line-height: 1;
   cursor: pointer;
+  transition: transform var(--dur-press) var(--ease-forge);
 }
-.wdetail-close:hover {
-  color: var(--color-bone);
-  border-color: var(--color-ash-2);
+@media (hover: hover) and (pointer: fine) {
+  .wdetail-close:hover {
+    color: var(--color-bone);
+    border-color: var(--color-ash-2);
+  }
+}
+.wdetail-close:active {
+  transform: scale(0.97);
 }
 .corrected-tag + .wdetail-close {
   margin-left: 0.4rem;

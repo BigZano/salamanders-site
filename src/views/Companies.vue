@@ -148,7 +148,7 @@ function backToIndex() {
         v-for="c in chips"
         :key="c.id"
         type="button"
-        class="c-chip"
+        class="c-chip rm-fade"
         @click="scrollToArticle(c.id)"
       >
         <span class="c-chip-sigil">{{ c.sigil }}</span>
@@ -225,8 +225,10 @@ function backToIndex() {
   font-size: 0.72rem;
   color: var(--color-smoke);
 }
-.rs-dev-scenes a:hover {
-  color: var(--color-drake);
+@media (hover: hover) and (pointer: fine) {
+  .rs-dev-scenes a:hover {
+    color: var(--color-drake);
+  }
 }
 
 .c-note {
@@ -265,11 +267,19 @@ function backToIndex() {
   font-family: inherit;
   cursor: pointer;
   min-height: var(--tap);
-  transition: border-color 0.15s ease, color 0.15s ease;
+  transition:
+    border-color var(--dur-state) var(--ease-forge),
+    color var(--dur-state) var(--ease-forge),
+    transform var(--dur-press) var(--ease-forge);
 }
-.c-chip:hover {
-  color: var(--color-bone);
-  border-color: var(--color-drake);
+@media (hover: hover) and (pointer: fine) {
+  .c-chip:hover {
+    color: var(--color-bone);
+    border-color: var(--color-drake);
+  }
+}
+.c-chip:active {
+  transform: scale(0.97);
 }
 .c-chip-sigil {
   display: inline-flex;

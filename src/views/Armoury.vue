@@ -177,7 +177,7 @@ watch(() => route.query.w, openFromQuery)
         <button
           v-for="w in list"
           :key="w.name"
-          class="w-item"
+          class="w-item rm-fade"
           :class="{ on: activeWeapon === w.name }"
           @click="selectWeapon(w.name)"
         >
@@ -350,6 +350,10 @@ watch(() => route.query.w, openFromQuery)
   border-radius: 2px;
   cursor: pointer;
   min-height: var(--tap);
+  transition: transform var(--dur-press) var(--ease-forge);
+}
+.cat-tab:active {
+  transform: scale(0.97);
 }
 .cat-tab.on {
   color: #1a0d06;
@@ -412,10 +416,14 @@ watch(() => route.query.w, openFromQuery)
   font-size: 0.85rem;
   cursor: pointer;
   min-height: var(--tap);
-  transition: 0.12s;
+  transition:
+    border-color var(--dur-state) var(--ease-forge),
+    background-color var(--dur-state) var(--ease-forge);
 }
-.w-item:hover {
-  border-color: var(--color-ash-2);
+@media (hover: hover) and (pointer: fine) {
+  .w-item:hover {
+    border-color: var(--color-ash-2);
+  }
 }
 .w-item.on {
   border-color: var(--color-ember);
@@ -468,11 +476,6 @@ watch(() => route.query.w, openFromQuery)
   border-top-color: var(--color-ember);
   border-radius: 50%;
   animation: spin 0.8s linear infinite;
-}
-@keyframes spin {
-  to {
-    transform: rotate(360deg);
-  }
 }
 .w-error h2 {
   font-family: var(--font-display);
@@ -767,9 +770,15 @@ watch(() => route.query.w, openFromQuery)
   border-radius: 3px;
   font-size: 0.85rem;
 }
-.toast-enter-active,
+.toast-enter-active {
+  transition:
+    opacity var(--dur-sheet) var(--ease-forge),
+    transform var(--dur-sheet) var(--ease-forge);
+}
 .toast-leave-active {
-  transition: opacity 0.2s ease, transform 0.2s ease;
+  transition:
+    opacity var(--dur-view) var(--ease-forge),
+    transform var(--dur-view) var(--ease-forge);
 }
 .toast-enter-from,
 .toast-leave-to {

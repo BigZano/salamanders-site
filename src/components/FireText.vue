@@ -88,8 +88,14 @@ function measure() {
 
 function layout() {
   const cv = canvas.value
-  metrics = measure()
-  if (!cv || !metrics || metrics.width < 4 || metrics.height < 4) return false
+  const m = measure()
+  if (!cv || !m || m.width < 4 || m.height < 4) return false
+  // NaN has been seen here, from the first resize callback in a narrow frame, and it passes the size test
+  // above. It would make the grid NaN and createImageData throw, so wait for a layout that can be read.
+  if (!Number.isFinite(m.width) || !Number.isFinite(m.height)) return false
+  // Assigned last, after every guard: a rejected layout must not overwrite the last good metrics, or a running
+  // draw() would hand NaN to createLinearGradient and throw every frame until a readable layout arrived.
+  metrics = m
 
   const dpr = Math.min(window.devicePixelRatio || 1, 2)
   cv.width = Math.ceil(metrics.width * dpr)
