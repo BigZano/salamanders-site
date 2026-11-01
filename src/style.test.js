@@ -79,6 +79,34 @@ describe('style.css', () => {
   })
 })
 
+describe('App.vue route fade', () => {
+  const app = readFileSync(new URL('./App.vue', import.meta.url), 'utf8')
+
+  it('fades by opacity only, so it can stay visible under reduced motion', () => {
+    // The fade is the one route-change cue left when nothing may move; a translate would have to be cut with it.
+    const at = app.indexOf('@keyframes view-in')
+    expect(at).toBeGreaterThan(-1)
+    let depth = 0
+    let end = app.indexOf('{', at)
+    for (let i = end; i < app.length; i++) {
+      if (app[i] === '{') depth++
+      else if (app[i] === '}' && --depth === 0) {
+        end = i
+        break
+      }
+    }
+    const block = app.slice(at, end + 1)
+    expect(block).toContain('opacity')
+    expect(block).not.toMatch(/transform|translate/)
+  })
+
+  it('has no reduced-motion block of its own', () => {
+    // A scoped rule is unlayered, so it loses to the layered blanket in style.css; the route fade's reduced-motion
+    // duration comes from `.rm-fade, main > *` there, and a block here would only look as if it worked.
+    expect(app).not.toContain('prefers-reduced-motion')
+  })
+})
+
 // The platform layer that makes the site feel installed on a phone (see docs/handoff/2026-10-20-mobile-baseline.md).
 describe('mobile baseline', () => {
   it('lets the page paint under the notch', () => {

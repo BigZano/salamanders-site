@@ -9,28 +9,9 @@ import { withoutHoverMedia } from './test-utils/css'
 // a real pointer. A failure names the rule (R1 to R6), the file and the line, so it works as a worksheet.
 //
 // Paths are relative to src/, written with forward slashes. An entry is a file, or a folder (every .vue
-// and .css under it). Each sweep task adds its files here; the last one makes it the whole of src/.
-const SWEPT = [
-  'style.css',
-  // Sweep A: the component styles.
-  'components/archive',
-  'components/company',
-  'components/roster',
-  'components/AppNav.vue',
-  'components/BuildCard.vue',
-  'components/BuildsPager.vue',
-  'components/HeroForge.vue',
-  'components/PageHeader.vue',
-  'components/PerkEditPanel.vue',
-  'components/SiteFooter.vue',
-  'components/StaleNotice.vue',
-  'components/WeaponSlot.vue',
-  'components/WeaponTree.vue',
-  // Sweep B: the views, the Deathwatch area, the route fade.
-  'views',
-  'components/deathwatch',
-  'App.vue',
-]
+// and .css under it, at any depth). The single entry '.' is the whole of src/, so a new component or
+// stylesheet is under the rules from the day it is added.
+const SWEPT = ['.']
 
 // The canvas and its dev tuner keep their own numbers, so they are never scanned, even once swept.
 const SKIPPED = [
@@ -75,6 +56,7 @@ const expand = (entries) => {
   for (const entry of entries) {
     if (statSync(join(srcDir, entry)).isDirectory()) {
       for (const f of readdirSync(join(srcDir, entry), { recursive: true })) {
+        if (/(^|[\\/])node_modules[\\/]/.test(f)) continue
         if (/\.(vue|css)$/.test(f)) found.add(`${entry}/${f}`.replaceAll('\\', '/').replace(/^\.\//, ''))
       }
     } else found.add(entry)
@@ -288,5 +270,21 @@ describe('the motion rules check', () => {
     expect(files).toContain('components/deathwatch/deathwatch.css')
     expect(files).toContain('components/AppNav.vue')
     for (const skipped of SKIPPED) expect(files).not.toContain(skipped)
+  })
+
+  it('SWEPT reaches every .vue and .css under src/, at any depth', () => {
+    // A second, hand-rolled walk (one directory at a time), so narrowing SWEPT or breaking expand() shows up here.
+    const walk = (dir, prefix = '') =>
+      readdirSync(dir, { withFileTypes: true }).flatMap((entry) => {
+        if (entry.name === 'node_modules') return []
+        if (entry.isDirectory()) return walk(join(dir, entry.name), `${prefix}${entry.name}/`)
+        return /\.(vue|css)$/.test(entry.name) ? [`${prefix}${entry.name}`] : []
+      })
+    const everything = walk(srcDir).filter((f) => !SKIPPED.includes(f)).sort()
+    expect(expand(SWEPT)).toEqual(everything)
+    // and the depth is real: the app shell, a deep page, and the skeleton components are all in
+    for (const f of ['App.vue', 'views/deathwatch/pages/manage/checks.vue', 'components/deathwatch/skeleton/SkTable.vue']) {
+      expect(everything).toContain(f)
+    }
   })
 })
