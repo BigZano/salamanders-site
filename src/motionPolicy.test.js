@@ -47,7 +47,8 @@ const EASE_IN_OUT_FILES = [
 ]
 // Files that keep their own cubic-bezier curve (the archive thread cooling and the gate unsealing).
 const CUBIC_BEZIER_FILES = ['components/archive/ArchiveThread.vue', 'components/archive/ArchiveGate.vue']
-// Files whose animations keep their own authored durations (the loops above, plus the roster flash and ping).
+// Files whose animations keep their own authored durations (the loops above, plus the roster flash and ping and
+// the armour card's arrival flash).
 const AUTHORED_DURATION_FILES = [
   'components/archive/ArchiveThread.vue',
   'components/archive/ArchiveGate.vue',
@@ -55,6 +56,7 @@ const AUTHORED_DURATION_FILES = [
   'components/deathwatch/DeathwatchGate.vue',
   'components/roster/RosterBranch.vue',
   'components/roster/RosterMember.vue',
+  'components/deathwatch/armour/ArmourView.vue',
 ]
 // The only animations allowed to loop forever: the Deathwatch drift and flicker, the Archive gate's unsealing
 // glow, and a spinner. A line that says `infinite` must name one of them (so dw-pulse and dw-gate-pulse, which

@@ -202,7 +202,7 @@ function jump(title) {
   background: var(--dw-grain), color-mix(in oklab, var(--dw-accent) 8%, #0b130c);
 }
 .ah-part.flash {
-  animation: ah-flash var(--dur-sheet) var(--ease-forge);
+  animation: ah-flash 1.3s var(--ease-forge);
 }
 /* The card a marker jumped to brightens, then settles. Its corners are clipped, so it lights from inside. */
 @keyframes ah-flash {

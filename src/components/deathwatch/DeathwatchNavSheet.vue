@@ -148,7 +148,8 @@ const cancel = (event) => release(event, false)
 .dw-sheet[data-closing] {
   transform: translateY(100%);
 }
-/* Literal colours here: ::backdrop does not inherit custom properties in older browsers. */
+/* Literal colours here, and the duration tokens below: ::backdrop does not inherit custom properties in older
+   browsers, which keep the scrim (its colour is literal) and lose only its fade. */
 .dw-sheet::backdrop {
   background: rgba(0, 0, 0, 0.6);
   opacity: 1;

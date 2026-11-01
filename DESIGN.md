@@ -318,7 +318,7 @@ These keep their own numbers and curves. Everything not listed here is functiona
 | `src/components/archive/ArchiveGate.vue` | `gate-glow`, the unsealing: 1.6s `ease-in-out`, infinite while the gate is unsealing | duration and curve |
 | `src/components/deathwatch/deathwatch.css` | `dw-drift` 40s and `dw-flicker` 5s, `ease-in-out` with `infinite alternate` and `infinite` | as is |
 | `src/components/deathwatch/deathwatch.css`, `src/components/deathwatch/DeathwatchGate.vue` | `dw-pulse` 1.8s (the skeleton shimmer) and `dw-gate-pulse` 1.6s (the gate pulse), `ease-in-out`, 3 iterations then rest | as is |
-| `src/components/roster/RosterBranch.vue`, `src/components/roster/RosterMember.vue` | the attention flash that finds a member: `rs-flash` 1.4s and `rs-ping` 1.4s, twice | duration and iteration count; the easing is `var(--ease-forge)` |
+| `src/components/roster/RosterBranch.vue`, `src/components/roster/RosterMember.vue`, `src/components/deathwatch/armour/ArmourView.vue` | the attention flashes: the one that finds a member (`rs-flash` 1.4s and `rs-ping` 1.4s, twice) and the armour card's arrival from a deep link (`ah-flash` 1.3s) | duration and iteration count; the easing is `var(--ease-forge)` |
 
 ### Loops
 
