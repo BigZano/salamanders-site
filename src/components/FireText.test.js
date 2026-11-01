@@ -5,8 +5,8 @@ import FireText from './FireText.vue'
 
 /*
  * jsdom has no canvas, so the 2D context here is a stand-in that records what the component asks of it.
- * One piece of real behaviour is kept on purpose, because it is the piece that broke in Chrome:
- * createImageData takes integers and throws a TypeError for NaN or Infinity.
+ * Two pieces of real behaviour are kept on purpose, because they are the pieces that break in Chrome:
+ * createImageData takes integers and throws a TypeError for NaN or Infinity, and so does createLinearGradient.
  */
 const label = () => wrapper.get('.firetext-label')
 const canvas = () => wrapper.get('canvas').element
@@ -26,11 +26,20 @@ function strictCreateImageData(w, h) {
   return { width: w, height: h, data: new Uint8ClampedArray(w * h * 4) }
 }
 
+function strictCreateLinearGradient(...coords) {
+  if (!coords.every(Number.isFinite)) {
+    throw new TypeError(
+      "Failed to execute 'createLinearGradient' on 'CanvasRenderingContext2D': The provided double value is non-finite.",
+    )
+  }
+  return { addColorStop() {} }
+}
+
 function context() {
   return {
     createImageData,
     measureText: () => ({ actualBoundingBoxAscent: 20, actualBoundingBoxDescent: 5 }),
-    createLinearGradient: () => ({ addColorStop() {} }),
+    createLinearGradient: strictCreateLinearGradient,
     setTransform() {},
     clearRect() {},
     fillRect() {},
@@ -115,5 +124,27 @@ describe('FireText layout', () => {
 
     releaseFonts()
     await flushPromises()
+  })
+
+  it('keeps the last good layout when a later resize measures NaN, so the running loop keeps drawing', async () => {
+    // Motion allowed: start() hands over to the animation loop, which the test steps by hand.
+    vi.stubGlobal('matchMedia', () => ({ matches: false }))
+    let frame
+    vi.stubGlobal('requestAnimationFrame', (cb) => (frame = cb))
+    vi.stubGlobal('cancelAnimationFrame', () => {})
+
+    wrapper = mount(FireText, { props: { text: 'SALAMANDERS' } })
+    await flushPromises()
+    expect(canvas().style.width).toBe('408px')
+    expect(() => frame(1000)).not.toThrow()
+
+    // A rejected layout is skipped, and must not leave NaN behind for the next frame to draw with.
+    rect = { width: NaN, height: NaN }
+    expect(resize).not.toThrow()
+    expect(canvas().width).toBe(408)
+    expect(canvas().style.width).toBe('408px')
+    expect(() => frame(2000)).not.toThrow()
+    expect(canvas().width).toBe(408)
+    expect(canvas().style.width).toBe('408px')
   })
 })
