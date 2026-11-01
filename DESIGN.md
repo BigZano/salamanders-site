@@ -204,7 +204,7 @@ lettering keeps its size). A micro-label writes its size as `max(<size>, var(--t
 Mobile first, single column, with a left-aligned reading column and the volcano placed in the empty half
 (each route has its own volcano profile, quieter on long pages of tables). Pages set their own width: 60rem for
 Companies, 68rem for Builds, 76rem for the Armoury, the landing page and the sticky navigation (1.25rem padding);
-the reading page has 1.5rem side padding. Breakpoints seen: 600px, 640px, 860px and 900px. On a phone cards go full width, tap targets are at least 44px (the banner strips are 56px),
+the reading page has 1.5rem side padding. Breakpoints seen: 600px, 640px, 768px (the phone text floor and tap tokens), 860px and 900px. On a phone cards go full width, tap targets are at least 44px (the banner strips are 56px),
 and the page pads the safe areas so nothing hides under a notch or the home indicator. The Deathwatch area shows
 the list of views as a bottom sheet below 900px and as a sidebar from 900px.
 
@@ -299,7 +299,8 @@ An exit uses the next stop down: a sheet closes at `--dur-view`, a view leaves a
 sheet opens at `--dur-sheet` and slides out at `--dur-view`. The route fade (`view-in` in `src/App.vue`) is opacity
 only, at `--dur-view`.
 
-The canvas and the authored list below are exempt.
+The canvas and the authored list below are exempt. A `transition-delay` or `animation-delay` that staggers a list may
+be a literal; the duration it staggers still takes a token.
 
 ### Easing
 
@@ -314,9 +315,10 @@ These keep their own numbers and curves. Everything not listed here is functiona
 | File | What | Keeps |
 |---|---|---|
 | `src/components/MountDeathfire.vue`, `src/components/FireText.vue`, `src/components/FireTuner.vue` | the volcano canvas, the title fire and its dev tuner | everything; the policy test skips them |
+| `src/components/MountDeathfire.vue` | the Prometheus cycle: the moon crosses the sky once every 15 minutes on a wall clock every visitor shares; at its closest pass, in live mode only, the Time of Trial: a veil that rises over 6s, holds, and falls over 40-60s, its size drawn by chance | the 15-minute shared clock; the veil eases in and out, is never darker than 0.62, and never flashes; under reduced motion the canvas is one still frame, so the moon freezes where the clock put it |
 | `src/components/archive/ArchiveThread.vue` | `brand-cool`, 1.7s `cubic-bezier(0.2, 0.7, 0.3, 1)` | duration and curve |
 | `src/components/archive/ArchiveGate.vue` | `gate-glow`, the unsealing: 1.6s `ease-in-out`, infinite while the gate is unsealing | duration and curve |
-| `src/components/deathwatch/deathwatch.css` | `dw-drift` 40s and `dw-flicker` 5s, `ease-in-out` with `infinite alternate` and `infinite` | as is |
+| `src/components/deathwatch/deathwatch.css` | `dw-drift` 40s and `dw-flicker` 5s, `ease-in-out`, `infinite alternate` and `infinite`, bounded by the Deathwatch backdrop: they run as long as it shows | as is |
 | `src/components/deathwatch/deathwatch.css`, `src/components/deathwatch/DeathwatchGate.vue` | `dw-pulse` 1.8s (the skeleton shimmer) and `dw-gate-pulse` 1.6s (the gate pulse), `ease-in-out`, 3 iterations then rest | as is |
 | `src/components/roster/RosterBranch.vue`, `src/components/roster/RosterMember.vue`, `src/components/deathwatch/armour/ArmourView.vue` | the attention flashes: the one that finds a member (`rs-flash` 1.4s and `rs-ping` 1.4s, twice) and the armour card's arrival from a deep link (`ah-flash` 1.3s) | duration and iteration count; the easing is `var(--ease-forge)` |
 
@@ -325,8 +327,9 @@ These keep their own numbers and curves. Everything not listed here is functiona
 A loop is bounded by the life of what it shows, or by visibility. The lifetime-bounded loops are the spinner and the
 Archive gate's unsealing glow (`gate-glow`), which runs only while the "Unsealing the archive…" line shows.
 `infinite` is allowed only for the Deathwatch drift and flicker (`dw-drift`, `dw-flicker`), the spinner, and that
-glow. The skeleton shimmer (`dw-pulse`) and the gate's `dw-gate-pulse` run three iterations, then rest. The canvas
-pauses when the tab is hidden and when it is offscreen.
+glow. The skeleton shimmer (`dw-pulse`) and the gate's `dw-gate-pulse` run three iterations, then rest. The volcano
+stops drawing when the tab is hidden (it is a fixed backdrop, so it is never offscreen); the FireText title stops
+drawing when it is scrolled out of view.
 
 There is one spinner: `@keyframes spin` in `src/style.css`, unscoped. A component writes
 `animation: spin 0.8s linear infinite;` and never defines its own `@keyframes spin`.
@@ -346,7 +349,7 @@ an important declaration in unlayered CSS, and Vue scoped styles are unlayered. 
 two ways:
 
 - Put `class="rm-fade"` on an element whose animation or transition is opacity or colour only.
-- Add a selector to the allowlist rule in `src/style.css`.
+- Add a selector to the allowlist rules in `src/style.css`.
 
 The allowlist gives `.rm-fade`, `.btn-ember`, `.btn-drake`, `.btn-ghost` and `.btn-sm` a `--dur-state` transition
 on `opacity`, `color`, `background-color`, `border-color`, `box-shadow` and `outline-color` only. A second rule,
@@ -378,13 +381,16 @@ exception is `grid-template-rows` from `0fr` to `1fr` for an expand or collapse,
 ### Vue
 
 A swap of one view or panel for another is a `<Transition>` with a `key` and `mode="out-in"`. A list that gains and
-loses items is a `<TransitionGroup>`. There is no `@starting-style` yet, because the floor for phone browsers is not
+loses items is a `<TransitionGroup>`. `@starting-style` is used only by the Deathwatch bottom sheet and its backdrop
+(`src/components/deathwatch/DeathwatchNavSheet.vue`); do not spread it until the floor for phone browsers is
 established.
 
 ### Canvas budget
 
-The budget is under 6ms of draw per frame at 390px with 4x CPU throttle, measured headless, with the dragon
-engine lazy-loaded and at most 25 KB gzipped.
+Draw: under 6ms per frame at 390px with 4x CPU throttle, measured headless. Not yet measured headless; on a desktop
+with no throttle the volcano and title together cost 0.22ms average and 1.6ms worst per frame (2026-11-01).
+
+Dragons, when they land: the engine lazy-loaded, at most 25 KB gzipped.
 
 ### Enforcement
 

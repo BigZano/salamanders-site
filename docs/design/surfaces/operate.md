@@ -20,7 +20,7 @@
 
 ## Proof and content
 - Game data follows the installed game files and patch notes (PRODUCT.md, principle 4). A corrected perk is marked "Corrected in game"; a weapon shows where its data came from; weapon trees are re-synced weekly.
-- Every list has copy for loading, empty, no-match and failed states ("No builds posted yet", "No weapons match", Retry).
+- Builds and the Armoury have copy for loading, empty, no-match and failed states ("No builds posted yet", "No weapons match", Retry); the other lists do not yet.
 - Member names reach the page from the API at run time and never live in the repo.
 
 ## Constraints
