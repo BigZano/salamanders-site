@@ -3,10 +3,11 @@
 // says why not. It asks the server (GET /deathwatch/me, via the store) and trusts nothing else: not the Legion
 // list's `isMember` hint (a Deathwatch member need not be on it), and not its own state, which only decides
 // what to show. The server enforces every read and write again.
-import { computed, watch } from 'vue'
+import { computed, ref, watch } from 'vue'
 import { useRoute } from 'vue-router'
 import { useAuth } from '../../stores/auth'
 import { useDeathwatch } from '../../stores/deathwatch'
+import DeathwatchBoot from './DeathwatchBoot.vue'
 
 const auth = useAuth()
 const store = useDeathwatch()
@@ -18,9 +19,20 @@ watch(() => auth.member, () => store.load(auth.token), { immediate: true })
 const busy = computed(() => store.status === 'idle' || store.status === 'checking')
 const signIn = () => auth.signIn({ returnTo: route.fullPath })
 const retry = () => store.load(auth.token)
+
+// The cogitator's wake (DeathwatchBoot) plays over the gate once per visit to the site (the tab's session): once it
+// ends cleared, it is not shown again until the tab is closed. Refused, it plays again on the next try. Never with
+// reduced motion (or where that cannot be asked, as in tests). The key is read by DeathwatchBanner too.
+const BOOTED = 'dw-booted'
+const boot = ref(!!globalThis.matchMedia && !matchMedia('(prefers-reduced-motion: reduce)').matches && !sessionStorage.getItem(BOOTED))
+const booted = (cleared) => {
+  boot.value = false
+  if (cleared) sessionStorage.setItem(BOOTED, '1')
+}
 </script>
 
 <template>
+  <DeathwatchBoot v-if="boot" @done="booted" />
   <slot v-if="store.status === 'allowed'" />
   <section v-else class="dw-gate surface" :aria-busy="busy ? 'true' : undefined">
     <h1 class="dw-gate-eyebrow">Watch Fortress Ebonhold</h1>
