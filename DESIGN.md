@@ -342,9 +342,10 @@ empty state.
   title in display caps at `--text-xl`, a body in smoke at 44 characters, actions in the default slot. An empty or
   prompt panel shows a muted ForgeMark, a loading one the spinner, an error an ember stud before its title; a gate
   shows no mark. An error is `role="alert"`, a loading panel `role="status"` with `aria-busy`.
-- **ForgeMark:** the divider and the empty-state mark: a flame, an anvil and a hammer on one line with ash hairlines
-  between. Only the flame is warm (ember, with a soft glow); the anvil and hammer are Ash 2 strokes on Basalt 3. A
-  `muted` prop quiets it for empty states.
+- **ForgeMark:** the divider and the empty-state mark: a heated bar. One pixel tall, 160px wide (96px at `sm`), cold at
+  both ends and hot in the middle: transparent to Ash 2 to Ember to Whitehot, and back, with a soft static glow at the
+  hot spot only. Cold armour, molten core. `muted` cools it for empty states: no glow, an ember heart in place of the
+  white-hot one.
 
 ### Navigation
 - **Style:** sticky, translucent obsidian glass with a 10px blur and an ash bottom border; the brand is spaced

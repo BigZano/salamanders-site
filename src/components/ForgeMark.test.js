@@ -3,123 +3,135 @@ import { describe, it, expect } from 'vitest'
 import { readFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import { mount } from '@vue/test-utils'
+import { h } from 'vue'
 import ForgeMark from './ForgeMark.vue'
 
+const source = readFileSync(fileURLToPath(import.meta.url).replace(/\.test\.js$/, '.vue'), 'utf8')
+const style = source.slice(source.indexOf('<style'))
+// The declarations of the first rule whose selector is exactly `selector`.
+const rule = (selector) => {
+  const at = style.indexOf(`\n${selector} {`)
+  expect(at, `${selector} rule`).toBeGreaterThan(-1)
+  return style.slice(at, style.indexOf('}', at))
+}
+
 describe('ForgeMark', () => {
-  it('renders one decorative svg', () => {
+  it('renders one decorative, unfocusable root', () => {
     const w = mount(ForgeMark)
-    expect(w.findAll('svg.forge-mark')).toHaveLength(1)
-    const svg = w.get('svg.forge-mark')
-    expect(svg.attributes('aria-hidden')).toBe('true')
-    expect(svg.attributes('focusable')).toBe('false')
-    expect(svg.attributes('viewBox')).toBe('0 0 120 24')
-  })
-
-  it('draws a flame, an anvil, a hammer and two hairlines', () => {
-    const w = mount(ForgeMark)
-    expect(w.find('.mark-flame').exists()).toBe(true)
-    expect(w.find('.mark-anvil').exists()).toBe(true)
-    expect(w.find('.mark-hammer').exists()).toBe(true)
-    expect(w.findAll('.mark-rule')).toHaveLength(2)
-  })
-
-  it('puts the hairlines between the three cells', () => {
-    const rules = mount(ForgeMark).findAll('line.mark-rule')
-    expect(rules.map((r) => [r.attributes('x1'), r.attributes('x2'), r.attributes('y1'), r.attributes('y2')])).toEqual([
-      ['30', '44', '12', '12'],
-      ['76', '90', '12', '12'],
-    ])
+    const root = w.element
+    expect(root.classList.contains('forge-mark')).toBe(true)
+    expect(root.getAttribute('aria-hidden')).toBe('true')
+    expect(root.getAttribute('focusable')).toBe('false')
+    expect(w.findAll('.forge-mark')).toHaveLength(1)
   })
 
   it('is full strength and medium by default', () => {
-    const svg = mount(ForgeMark).get('svg')
-    expect(svg.classes()).not.toContain('is-muted')
-    expect(svg.classes()).not.toContain('is-sm')
+    const root = mount(ForgeMark).get('.forge-mark')
+    expect(root.classes()).not.toContain('is-muted')
+    expect(root.classes()).not.toContain('is-sm')
   })
 
   it('muted adds is-muted', () => {
-    expect(mount(ForgeMark, { props: { muted: true } }).get('svg').classes()).toContain('is-muted')
+    expect(mount(ForgeMark, { props: { muted: true } }).get('.forge-mark').classes()).toContain('is-muted')
   })
 
   it('size="sm" adds is-sm', () => {
-    expect(mount(ForgeMark, { props: { size: 'sm' } }).get('svg').classes()).toContain('is-sm')
+    expect(mount(ForgeMark, { props: { size: 'sm' } }).get('.forge-mark').classes()).toContain('is-sm')
   })
 
-  describe('the flame', () => {
-    // Every point of an absolute path (M L C H V Z only), as [x, y] pairs; H and V keep the other axis.
-    const pointsOf = (d) => {
-      const pts = []
-      let x = 0
-      let y = 0
-      for (const [, cmd, args] of d.matchAll(/([MLCHVZ])([^MLCHVZ]*)/g)) {
-        const n = (args.match(/-?\d*\.?\d+/g) ?? []).map(Number)
-        if (cmd === 'H') x = n[0]
-        else if (cmd === 'V') y = n[0]
-        if (cmd === 'H' || cmd === 'V') pts.push([x, y])
-        else if (cmd !== 'Z') {
-          for (let i = 0; i < n.length; i += 2) pts.push([n[i], n[i + 1]])
-          ;[x, y] = pts[pts.length - 1]
-        }
-      }
-      return pts
-    }
-    const paths = () => mount(ForgeMark).findAll('.mark-flame path')
-    const body = () => mount(ForgeMark).get('.mark-flame .flame-body').attributes('d')
+  it('keeps a parent class on the root', () => {
+    const Parent = { render: () => h(ForgeMark, { class: 'hero-mark', muted: true }) }
+    const classes = mount(Parent).get('.forge-mark').classes()
+    expect(classes).toEqual(expect.arrayContaining(['forge-mark', 'hero-mark', 'is-muted']))
+  })
 
-    it('is at most three paths: the body, the lick and the dark core', () => {
+  describe('the glow', () => {
+    it('is one centred element, 36% wide, 1px of bar and 1px of spread each side', () => {
+      const glows = mount(ForgeMark).findAll('.mark-glow')
+      expect(glows).toHaveLength(1)
+      const g = glows[0].attributes()
+      expect(g.width).toBe('36%')
+      expect(g.x).toBe('32%')
+      expect(Number(g.height)).toBe(3)
+      expect(Number(g.y)).toBe(-1)
+    })
+
+    it('is blurred by a filter the element names, and is ember at 55%', () => {
       const w = mount(ForgeMark)
-      expect(paths().length).toBeLessThanOrEqual(3)
-      for (const part of ['flame-body', 'flame-lick', 'flame-core']) {
-        expect(w.findAll(`.mark-flame path.${part}`), part).toHaveLength(1)
-      }
+      const filter = w.get('filter')
+      expect(w.get('.mark-glow').attributes('filter')).toBe(`url(#${filter.attributes('id')})`)
+      expect(filter.get('feGaussianBlur').attributes('stdDeviation')).toBe('5')
+      expect(rule('.mark-glow')).toMatch(/fill:\s*color-mix\(in srgb, var\(--color-ember\) 55%, transparent\)/)
     })
 
-    it('stays inside its 24 by 24 cell, on whole or half pixels, with its base on y = 22', () => {
-      for (const p of paths()) {
-        for (const [x, y] of pointsOf(p.attributes('d'))) {
-          expect(x, p.classes().join(' ')).toBeGreaterThanOrEqual(0)
-          expect(x).toBeLessThanOrEqual(24)
-          expect(y).toBeGreaterThanOrEqual(0)
-          expect(y).toBeLessThanOrEqual(24)
-          expect(x * 2 % 1).toBe(0)
-          expect(y * 2 % 1).toBe(0)
-        }
-      }
-      expect(Math.max(...pointsOf(body()).map(([, y]) => y))).toBe(22)
+    it('gives every mark its own filter id, so several on one page cannot collide', () => {
+      const Page = { render: () => h('div', [h(ForgeMark), h(ForgeMark), h(ForgeMark, { size: 'sm' })]) }
+      const ids = mount(Page)
+        .findAll('filter')
+        .map((f) => f.attributes('id'))
+      expect(ids).toHaveLength(3)
+      expect(new Set(ids).size).toBe(3)
     })
 
-    it('is asymmetric: the taller tongue leans well right of centre, a shorter one stands left of it', () => {
-      const pts = pointsOf(body())
-      const top = pts.reduce((a, b) => (b[1] < a[1] ? b : a))
-      expect(top[0]).toBeGreaterThanOrEqual(15)
-      // a second tip, at least 4 lower and left of centre (so two tongues, not one teardrop)
-      expect(pts.some(([x, y]) => x < 10 && y >= top[1] + 4 && y < 10)).toBe(true)
-    })
-
-    it('has a dark core in obsidian, the ember body, and the ember-light lick', () => {
-      const source = readFileSync(fileURLToPath(import.meta.url).replace(/\.test\.js$/, '.vue'), 'utf8')
-      expect(source).toMatch(/\.flame-core\s*\{[^}]*fill:\s*var\(--color-obsidian\)/)
-      expect(source).toMatch(/\.flame-body\s*\{[^}]*fill:\s*var\(--color-ember\)/)
-      expect(source).toMatch(/\.flame-lick\s*\{[^}]*fill:\s*var\(--color-ember-light\)/)
+    it('is gone when muted: no glow and no filter', () => {
+      const w = mount(ForgeMark, { props: { muted: true } })
+      expect(w.find('.mark-glow').exists()).toBe(false)
+      expect(w.find('filter').exists()).toBe(false)
     })
   })
 
-  describe('the cold marks', () => {
-    const source = () => readFileSync(fileURLToPath(import.meta.url).replace(/\.test\.js$/, '.vue'), 'utf8')
-
-    it('anvil and hammer are drawn in a smoke stroke over a basalt-3 fill, so they show on obsidian', () => {
-      expect(source()).toMatch(
-        /\.mark-anvil,\s*\.mark-hammer\s*\{[^}]*fill:\s*var\(--color-basalt-3\)[^}]*stroke:\s*var\(--color-smoke\)/,
-      )
+  describe('the bar', () => {
+    it('is one pixel tall, 160px wide at md and 96px at sm, a block that does not shrink', () => {
+      expect(rule('.forge-mark')).toMatch(/\bwidth:\s*160px/)
+      expect(rule('.forge-mark')).toMatch(/\bheight:\s*1px/)
+      expect(rule('.forge-mark')).toMatch(/display:\s*block/)
+      expect(rule('.forge-mark')).toMatch(/flex:\s*none/)
+      expect(rule('.forge-mark.is-sm')).toMatch(/\bwidth:\s*96px/)
     })
 
-    it('the hairlines stay ash-2 and faint', () => {
-      expect(source()).toMatch(/\.mark-rule\s*\{[^}]*stroke:\s*var\(--color-ash-2\)/)
+    it('runs transparent, ash-2, ember, the core, ember, ash-2, transparent, in that order', () => {
+      const gradient = rule('.forge-mark').match(/linear-gradient\(([^;]*?)\);/s)?.[1]
+      expect(gradient).toBeDefined()
+      const stops = gradient
+        .split(',')
+        .map((s) => s.trim())
+        .filter((s) => s !== '90deg')
+      expect(stops.map((s) => s.replace(/\s+\d+%$/, ''))).toEqual([
+        'transparent',
+        'var(--color-ash-2)',
+        'var(--color-ember)',
+        'var(--mark-core)',
+        'var(--color-ember)',
+        'var(--color-ash-2)',
+        'transparent',
+      ])
     })
+
+    it('has its hot zone (ember to the core to ember) in the middle 30% and the core at the centre', () => {
+      const at = (name) =>
+        [...rule('.forge-mark').matchAll(new RegExp(`${name.replace(/[()]/g, '\\$&')}\\s+(\\d+)%`, 'g'))].map((m) => Number(m[1]))
+      expect(at('var(--color-ember)')).toEqual([35, 65])
+      expect(at('var(--mark-core)')).toEqual([50])
+      expect(at('var(--color-ash-2)')).toEqual([20, 80])
+    })
+
+    it('is white-hot at its heart, and only in the un-muted rule', () => {
+      expect(rule('.forge-mark')).toMatch(/--mark-core:\s*var\(--color-whitehot\)/)
+      expect(style.match(/whitehot/g)).toHaveLength(1)
+      expect(rule('.forge-mark.is-muted')).not.toContain('whitehot')
+    })
+
+    it('cools to ember at 60% in the middle when muted', () => {
+      expect(rule('.forge-mark.is-muted')).toMatch(/--mark-core:\s*color-mix\(in srgb, var\(--color-ember\) 60%, transparent\)/)
+    })
+  })
+
+  it('uses tokens only: no hex or rgb colours', () => {
+    expect(style).not.toMatch(/#[0-9a-fA-F]{3,8}\b/)
+    expect(style).not.toMatch(/rgba?\(/)
   })
 
   it('has no animation of any kind in its source', () => {
-    const source = readFileSync(fileURLToPath(import.meta.url).replace(/\.test\.js$/, '.vue'), 'utf8')
     expect(source).not.toContain('@keyframes')
     expect(source).not.toContain('animation:')
     expect(source).not.toContain('transition')
