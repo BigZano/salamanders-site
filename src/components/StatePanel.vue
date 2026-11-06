@@ -13,7 +13,7 @@ const props = defineProps({
   body: { type: String, default: '' },
 })
 
-const role = computed(() => ({ error: 'alert', loading: 'status' })[props.kind])
+const role = computed(() => (props.kind === 'error' ? 'alert' : props.kind === 'loading' ? 'status' : undefined))
 </script>
 
 <template>

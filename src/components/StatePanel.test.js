@@ -94,6 +94,13 @@ describe('StatePanel', () => {
     expect(warn.mock.calls.flat().join(' ')).toMatch(/Invalid prop: custom validator check failed for prop "kind"/)
   })
 
+  it('gives a role only to error and loading, never from the prototype chain', () => {
+    vi.spyOn(console, 'warn').mockImplementation(() => {})
+    for (const kind of ['constructor', 'toString', '__proto__', 'hasOwnProperty']) {
+      expect(panel({ kind }).attributes('role'), kind).toBeUndefined()
+    }
+  })
+
   it('does not warn on any of the five kinds', () => {
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
     for (const kind of ['empty', 'error', 'gate', 'loading', 'prompt']) panel({ kind })
