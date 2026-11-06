@@ -136,6 +136,7 @@ describe('ogSvg', () => {
 describe('index.html', () => {
   const html = read('index.html')
   it('keeps the svg icon and links the rest of the set', () => {
+    expect(html).toContain('<link rel="icon" type="image/png" sizes="48x48" href="/icon-48.png" />')
     expect(html).toContain('<link rel="icon" type="image/svg+xml" href="/favicon.svg" />')
     expect(html).toContain('<link rel="apple-touch-icon" href="/apple-touch-icon.png" />')
     expect(html).toContain('<link rel="manifest" href="/site.webmanifest" />')

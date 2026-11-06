@@ -189,7 +189,8 @@ A near-black green ground with grey-green armour, one living green, and a furnac
 
 ### Tertiary
 - **Gold** (#dfb85b), **Averland** (#fdb825) and **Whitehot** (#f2d27a): honours and record. Averland is the
-  Legion Archive's brass plaque; whitehot is the hot end of the rank heat ramp; gold is rules and edges.
+  Legion Archive's brass plaque; whitehot is the hot end of the rank heat ramp and the heart of the ForgeMark's heated
+  bar; gold is rules and edges.
 - **Cobalt** (#6cc4ef) and **Violet** (#bb82e0): the weapon tree's two branches. **Vacant** (#ff9a7a): a post nobody holds.
 
 ### Neutral
@@ -348,7 +349,7 @@ empty state.
   loading, prompt): a `.surface` with 3px corners, centred, a title in display caps at `--text-xl`, a body in smoke at
   44 characters, actions in the default slot. Its mark depends on the kind: empty and prompt show a muted ForgeMark,
   loading the spinner, error an 8px ember stud (the Stud Rule's one exception); a gate shows no mark and reads from the
-  left, since it may carry a form. An error is `role="alert"`, a loading panel `role="status"` with `aria-busy`.
+  left, since it may carry a form. An error is `role="alert"`, a loading panel `role="status"`.
 - **ForgeMark:** the divider and the empty-state mark: a heated bar, hidden from assistive tech and never animated. One
   pixel tall, 160px wide (96px at `sm`), cold at both ends and hot in the middle: transparent to Ash 2 to Ember to
   Whitehot, and back, with a soft fixed glow at the hot spot only. Cold armour, molten core. `muted` cools it for

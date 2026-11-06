@@ -1,5 +1,8 @@
 // @vitest-environment jsdom
 import { describe, it, expect, vi, afterEach } from 'vitest'
+import { readFileSync } from 'node:fs'
+import { fileURLToPath } from 'node:url'
+import { dirname, join } from 'node:path'
 import { mount } from '@vue/test-utils'
 import StatePanel from './StatePanel.vue'
 
@@ -24,10 +27,10 @@ describe('StatePanel', () => {
     expect(w.find('.spinner').exists()).toBe(false)
   })
 
-  it('loading: role status, aria-busy, spinner, and no title when none is given', () => {
+  it('loading: role status without aria-busy, a spinner, and no title when none is given', () => {
     const w = panel({ kind: 'loading' })
     expect(w.attributes('role')).toBe('status')
-    expect(w.attributes('aria-busy')).toBe('true')
+    expect(w.attributes('aria-busy')).toBeUndefined()
     expect(w.find('.spinner').exists()).toBe(true)
     expect(w.find('.state-title').exists()).toBe(false)
     expect(w.find('.state-body').exists()).toBe(false)
@@ -105,5 +108,11 @@ describe('StatePanel', () => {
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
     for (const kind of ['empty', 'error', 'gate', 'loading', 'prompt']) panel({ kind })
     expect(warn).not.toHaveBeenCalled()
+  })
+
+  it('lets a long unbroken string in the body wrap instead of overflowing', () => {
+    const source = readFileSync(join(dirname(fileURLToPath(import.meta.url)), 'StatePanel.vue'), 'utf8')
+    const rule = source.match(/\.state-body\s*\{[^}]*\}/)[0]
+    expect(rule).toMatch(/overflow-wrap:\s*anywhere/)
   })
 })

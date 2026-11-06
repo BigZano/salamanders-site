@@ -93,7 +93,7 @@ const when = (d) => new Date(d).toLocaleString()
     <PageHeader eyebrow="The Forge" title="Version History" lede="Every perk correction, deleted build and privilege change. Nothing here is ever removed." />
 
     <StatePanel v-if="!auth.signedIn" kind="gate" class="hist-empty" body="Sign in with Discord to view the history.">
-      <button type="button" class="btn-ember btn-sm" @click="auth.signIn()">Sign in with Discord</button>
+      <button type="button" class="btn-ember btn-md" @click="auth.signIn()">Sign in with Discord</button>
     </StatePanel>
     <template v-else>
       <div class="hist-tools">
@@ -142,7 +142,7 @@ const when = (d) => new Date(d).toLocaleString()
           </div>
         </li>
       </ol>
-      <StatePanel v-if="!events.length && !error" kind="empty" class="hist-empty" body="Nothing yet." />
+      <StatePanel v-if="!events.length && !error && !loading" kind="empty" class="hist-empty" body="Nothing yet." />
       <button v-if="next" type="button" class="hist-more btn-ghost btn-sm" :disabled="loading" @click="load(true)">Older</button>
     </template>
   </section>

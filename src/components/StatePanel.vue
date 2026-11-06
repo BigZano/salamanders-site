@@ -17,12 +17,7 @@ const role = computed(() => (props.kind === 'error' ? 'alert' : props.kind === '
 </script>
 
 <template>
-  <div
-    class="state-panel surface"
-    :class="'is-' + kind"
-    :role="role"
-    :aria-busy="kind === 'loading' ? 'true' : undefined"
-  >
+  <div class="state-panel surface" :class="'is-' + kind" :role="role">
     <ForgeMark v-if="kind === 'empty' || kind === 'prompt'" muted />
     <span v-else-if="kind === 'loading'" class="spinner" aria-hidden="true"></span>
     <span v-else-if="kind === 'error'" class="stud state-stud" aria-hidden="true"></span>
@@ -62,6 +57,7 @@ const role = computed(() => (props.kind === 'error' ? 'alert' : props.kind === '
   margin: 0;
   max-width: 44ch;
   line-height: 1.6;
+  overflow-wrap: anywhere;
   color: var(--color-smoke);
 }
 .state-actions {

@@ -220,6 +220,25 @@ describe('History.vue', () => {
     expect(panel.text()).toContain('Nothing yet.')
   })
 
+  it('does not say "Nothing yet." while the first load is still in flight', async () => {
+    const { getHistory } = await import('../lib/perksApi')
+    getHistory.mockReset()
+    let resolve
+    getHistory.mockReturnValueOnce(new Promise((r) => (resolve = r)))
+    const wrapper = mount(History)
+    await wrapper.vm.$nextTick()
+    expect(wrapper.vm.loading).toBe(true)
+    expect(wrapper.find('.hist-empty').exists()).toBe(false)
+    expect(wrapper.text()).not.toContain('Nothing yet.')
+
+    resolve({ events: [], revocations: [], next: null })
+    await new Promise((r) => setTimeout(r, 0))
+    await wrapper.vm.$nextTick()
+    const panel = wrapper.find('.state-panel.is-empty.hist-empty')
+    expect(panel.exists()).toBe(true)
+    expect(panel.text()).toContain('Nothing yet.')
+  })
+
   it('shows a refusal in an alert state panel', async () => {
     const { getHistory } = await import('../lib/perksApi')
     getHistory.mockReset()
@@ -281,6 +300,6 @@ describe('History.vue when signed out', () => {
     const wrapper = mount(History)
     const panel = wrapper.find('.state-panel.is-gate.hist-empty')
     expect(panel.exists()).toBe(true)
-    expect(panel.find('button').classes()).toEqual(expect.arrayContaining(['btn-ember', 'btn-sm']))
+    expect(panel.find('button').classes()).toEqual(expect.arrayContaining(['btn-ember', 'btn-md']))
   })
 })
