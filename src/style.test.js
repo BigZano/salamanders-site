@@ -291,3 +291,85 @@ describe('small text', () => {
     expect(under).toEqual([])
   })
 })
+
+// The page layer (docs/superpowers/specs/2026-11-05-page-layer-design.md): a type ramp, radii and three colours that
+// every page names instead of a literal, plus the one segmented tab, search field, stud and lede.
+describe('page layer tokens', () => {
+  // The text between the braces that open at `at` (brace-matched), braces excluded.
+  const blockAt = (source, at) => {
+    let depth = 0
+    const open = source.indexOf('{', at)
+    for (let i = open; i < source.length; i++) {
+      if (source[i] === '{') depth++
+      else if (source[i] === '}' && --depth === 0) return source.slice(open + 1, i)
+    }
+    return source.slice(open + 1)
+  }
+  const theme = () => blockAt(css, css.indexOf('@theme {'))
+  const components = () => blockAt(css, css.indexOf('@layer components'))
+
+  it('defines the text ramp, radii and the three new colours inside @theme', () => {
+    const tokens = {
+      '--color-pewter': '#c3d0c6',
+      '--color-ember-light': '#ffb066',
+      '--color-ember-ink': '#1a0d06',
+      '--text-xs': '0.72rem',
+      '--text-sm': '0.82rem',
+      '--text-md': '0.9rem',
+      '--text-base': '1rem',
+      '--text-lg': '1.25rem',
+      '--text-xl': '1.5rem',
+      '--text-2xl': 'clamp(1.8rem, 5vw, 2.8rem)',
+      '--text-display': 'clamp(2.2rem, 7vw, 3.6rem)',
+      '--radius-sm': '2px',
+      '--radius-md': '3px',
+      '--radius-lg': '8px',
+      '--radius-pill': '999px',
+    }
+    const block = theme()
+    for (const [name, value] of Object.entries(tokens)) {
+      expect(block, name).toContain(`${name}: ${value};`)
+    }
+  })
+
+  it('defines one segmented tab, one search field, one stud and one lede', () => {
+    const layer = components()
+    for (const selector of ['.tab-forge {', '.field-forge {', '.stud {', '.page-lede {']) {
+      expect(layer.split(selector).length - 1, selector).toBe(1)
+    }
+    const on = layer.match(/\.tab-forge\.on\s*\{([^}]*)\}/)?.[1] ?? ''
+    expect(on).toContain('var(--color-ember-light)')
+    expect(on).toContain('var(--color-ember)')
+    expect(on).toContain('var(--color-ember-ink)')
+    // hover is gated behind a real pointer, but it must exist
+    expect(css).toContain('.tab-forge:hover')
+    expect(withoutHoverMedia(css)).not.toContain('.tab-forge:hover')
+    const active = css.match(/\.tab-forge:active\s*\{([^}]*)\}/)?.[1] ?? ''
+    expect(active).toContain('transform: scale(0.97)')
+  })
+
+  it('keeps tab colour feedback under reduced motion', () => {
+    const reduced = blockAt(css, css.indexOf('@media (prefers-reduced-motion: reduce)'))
+    // The selector list of the allowlist rule is whatever sits between the previous rule and the brace that
+    // holds `transition-property`.
+    const props = reduced.indexOf('transition-property:')
+    expect(props).toBeGreaterThan(-1)
+    const open = reduced.lastIndexOf('{', props)
+    const selectors = reduced.slice(reduced.lastIndexOf('}', open) + 1, open)
+    expect(selectors).toContain('.rm-fade')
+    expect(selectors).toContain('.tab-forge')
+  })
+
+  // Red until the page tasks (3-9) replace the literals in their components; Task 11 turns it on.
+  // The Deathwatch and Archive areas are out of scope for the page layer and keep their own values.
+  it.todo('keeps the ember hex out of components')
+  // it('keeps the ember hex out of components', () => {
+  //   const dir = fileURLToPath(new URL('.', import.meta.url))
+  //   const files = readdirSync(dir, { recursive: true })
+  //     .map((f) => f.replaceAll('\', '/'))
+  //     .filter((f) => /\.(vue|css)$/.test(f))
+  //     .filter((f) => f !== 'style.css' && !/(^|\/)(deathwatch|archive)\//.test(f))
+  //   const offenders = files.filter((f) => /#ffb066|#1a0d06/i.test(readFileSync(join(dir, f), 'utf8')))
+  //   expect(offenders).toEqual([])
+  // })
+})

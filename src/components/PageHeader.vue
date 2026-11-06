@@ -27,10 +27,4 @@ defineProps({
   margin: 0.4rem 0 0.6rem;
   color: var(--color-bone);
 }
-.page-lede {
-  color: #c3d0c6;
-  max-width: 52ch;
-  line-height: 1.6;
-  margin: 0;
-}
 </style>
