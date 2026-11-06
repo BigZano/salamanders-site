@@ -67,6 +67,11 @@ const where = (n) => (n.level === null ? 'Prestige' : `Level ${n.level}`)
   color: var(--color-ember);
 }
 .stale-dismiss {
+  min-width: var(--tap);
+  min-height: var(--tap);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
   font-family: var(--font-display);
   text-transform: uppercase;
   letter-spacing: 0.06em;

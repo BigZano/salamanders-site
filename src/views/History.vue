@@ -157,7 +157,7 @@ const when = (d) => new Date(d).toLocaleString()
 .hist-meta {
   color: var(--color-smoke);
 }
-.hist-empty {
+.is-gate.hist-empty {
   margin-top: 2rem;
 }
 .hist-error {
@@ -184,6 +184,7 @@ const when = (d) => new Date(d).toLocaleString()
 .hist-item {
   border: 1px solid var(--color-ash);
   border-radius: var(--radius-md);
+  /* Mirrors .surface without the blur; long list on phones. */
   background: color-mix(in srgb, var(--color-basalt-2) 86%, transparent);
 }
 .hist-stud {
@@ -244,6 +245,7 @@ const when = (d) => new Date(d).toLocaleString()
   padding: 0 0.8rem 0.8rem;
 }
 .hist-note {
+  font-size: var(--text-sm);
   overflow-wrap: anywhere;
 }
 .hist-change {

@@ -14,8 +14,8 @@ const route = useRoute()
       </p>
     </PageHeader>
     <div class="nf-links">
-      <RouterLink to="/" class="btn-ember nf-cta">Back to the forge</RouterLink>
-      <RouterLink to="/planner" class="btn-drake nf-cta">Perk Builder</RouterLink>
+      <RouterLink to="/" class="btn-ember btn-md nf-cta">Back to the forge</RouterLink>
+      <RouterLink to="/planner" class="btn-drake btn-md nf-cta">Perk Builder</RouterLink>
     </div>
   </section>
 </template>
@@ -45,11 +45,5 @@ const route = useRoute()
   justify-content: center;
   flex-wrap: wrap;
   margin-top: 1.8rem;
-}
-/* Both buttons are primary ways out: full size, 44px tall on a phone. */
-.nf-cta {
-  padding: 0.7rem 1.4rem;
-  border-radius: var(--radius-sm);
-  min-height: var(--tap);
 }
 </style>

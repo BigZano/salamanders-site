@@ -160,6 +160,7 @@ const wikiUrl = computed(() => WIKI + encodeURIComponent(weapon.value))
 }
 .slot-toggle {
   flex: none;
+  min-height: var(--tap);
   display: inline-flex;
   align-items: center;
   gap: 0.4rem;

@@ -199,7 +199,7 @@ function initials(name) {
 }
 .block-h {
   display: flex;
-  align-items: center;
+  align-items: flex-start;
   gap: 0.6rem;
   font-family: var(--font-mono);
   text-transform: uppercase;
@@ -208,9 +208,11 @@ function initials(name) {
   color: var(--color-gold);
   margin-bottom: 0.6rem;
 }
-/* The Stud Rule: the ember sits in a stud before the label, not in a side border. */
+/* The Stud Rule: the ember sits in a stud before the label, not in a side border. A heading that wraps keeps
+   the stud on its first line. */
 .block-h .stud {
   color: var(--color-ember);
+  margin-top: calc((1lh - 6px) / 2);
 }
 .block-p {
   color: var(--color-pewter);

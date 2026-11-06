@@ -60,7 +60,7 @@ const fmt = (d) => new Date(d).toLocaleDateString()
     />
 
     <StatePanel v-if="!auth.signedIn || !auth.token" kind="gate" class="r-gate" body="Sign in with Discord to file a report.">
-      <button type="button" class="btn-ember r-cta" @click="auth.signIn()">Sign in with Discord</button>
+      <button type="button" class="btn-ember btn-md" @click="auth.signIn()">Sign in with Discord</button>
     </StatePanel>
 
     <StatePanel v-else-if="error" kind="error" class="r-error" :body="error" />
@@ -111,9 +111,9 @@ const fmt = (d) => new Date(d).toLocaleDateString()
             Reports involving a Reclusiarch go straight to High Command's official form. Nothing is saved here.
             The form opens pre-filled with what you've written; check it and submit it there.
           </p>
-          <a class="btn-ember r-cta" :href="officialLink" target="_blank" rel="noopener">Open the official form</a>
+          <a class="btn-ember btn-md" :href="officialLink" target="_blank" rel="noopener">Open the official form</a>
         </div>
-        <button v-else class="btn-ember r-cta" type="submit" :disabled="sending">
+        <button v-else class="btn-ember btn-md" type="submit" :disabled="sending">
           {{ sending ? 'Filing…' : 'File report' }}
         </button>
       </form>
@@ -148,13 +148,6 @@ const fmt = (d) => new Date(d).toLocaleDateString()
 .r-loading,
 .r-error {
   margin-top: 1.6rem;
-}
-/* Every ember button on the page is its primary action: full size, 44px tall on a phone. */
-.r-cta {
-  padding: 0.7rem 1.4rem;
-  border-radius: var(--radius-sm);
-  min-height: var(--tap);
-  cursor: pointer;
 }
 
 .r-form {

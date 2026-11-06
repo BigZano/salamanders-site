@@ -29,4 +29,5 @@
 - Refuses: a generic three-column feature grid of icon, heading and blurb as the argument for the clan. The proof is the tools; the rows are doors into them. The muster is that arrangement: four rows on one dense panel, each a name, a line and one live fact, in place of four equal cards.
 
 ## Unresolved
-- divider marks (flame, anvil, hammer) and the cold-armour material
+- the hero mark's margins (tuned for a 24px mark, now a 1px bar)
+- the cold-armour material

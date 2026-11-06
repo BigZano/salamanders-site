@@ -76,7 +76,7 @@ const when = (d) => new Date(d).toLocaleString()
     <PageHeader eyebrow="Reclusiam" title="Report Review" />
 
     <StatePanel v-if="!auth.signedIn || !auth.token" kind="gate" class="rv-gate" body="Sign in with Discord to review reports.">
-      <button type="button" class="btn-ember rv-btn" @click="auth.signIn()">Sign in with Discord</button>
+      <button type="button" class="btn-ember btn-md" @click="auth.signIn()">Sign in with Discord</button>
     </StatePanel>
     <StatePanel v-else-if="!access && !error" kind="loading" class="rv-loading" body="Checking your roles…" />
     <StatePanel v-else-if="access && !access.reviewer && !access.admin" kind="gate" class="rv-gate" body="Restricted to Reclusiarchs." />
@@ -120,23 +120,23 @@ const when = (d) => new Date(d).toLocaleString()
 
           <!-- Reclusiarch actions -->
           <div v-if="access.reviewer && selected.status === 'received'" class="rv-actions">
-            <button class="btn-ember rv-btn" :disabled="busy" @click="act('claim')">Claim</button>
+            <button class="btn-ember btn-md" :disabled="busy" @click="act('claim')">Claim</button>
           </div>
 
           <div v-if="access.reviewer && selected.status === 'under_review'" class="rv-actions">
             <label>Notes (required to resolve; added to the official form on escalation)
               <textarea v-model="note" class="field-forge" rows="4" maxlength="4000" />
             </label>
-            <button class="btn-drake rv-btn" :disabled="busy || !note.trim()" @click="act('resolve')">Resolve</button>
+            <button class="btn-drake btn-md" :disabled="busy || !note.trim()" @click="act('resolve')">Resolve</button>
 
             <div class="rv-escalate">
               <label>Follow-up with those involved?
                 <select v-model="followUp" class="field-forge"><option>Yes</option><option>No</option></select>
               </label>
-              <a class="btn-ember rv-btn" :href="escalateLink" target="_blank" rel="noopener" @click="formOpened = true">
+              <a class="btn-ember btn-md" :href="escalateLink" target="_blank" rel="noopener" @click="formOpened = true">
                 1. Open official form (pre-filled)
               </a>
-              <button class="btn-ember rv-btn" :disabled="busy || !formOpened" @click="act('escalate')">
+              <button class="btn-ember btn-md" :disabled="busy || !formOpened" @click="act('escalate')">
                 2. I submitted it: mark escalated
               </button>
             </div>
@@ -147,7 +147,7 @@ const when = (d) => new Date(d).toLocaleString()
             <label>Reason to reopen (failsafe)
               <textarea v-model="note" class="field-forge" rows="2" maxlength="4000" />
             </label>
-            <button class="btn-ember rv-btn" :disabled="busy || !note.trim()" @click="act('reopen')">Reopen</button>
+            <button class="btn-ember btn-md" :disabled="busy || !note.trim()" @click="act('reopen')">Reopen</button>
           </div>
 
           <h3>History</h3>
@@ -181,14 +181,6 @@ const when = (d) => new Date(d).toLocaleString()
 .rv-error {
   margin: 1.2rem 0;
 }
-/* Every ember or drake button on the page acts on a report: full size, 44px tall on a phone. */
-.rv-btn {
-  padding: 0.7rem 1.4rem;
-  border-radius: var(--radius-sm);
-  min-height: var(--tap);
-  cursor: pointer;
-}
-
 .rv-filters {
   display: flex;
   flex-wrap: wrap;

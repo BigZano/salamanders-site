@@ -233,7 +233,7 @@ async function remove(b) {
       title="No builds posted yet"
       body="Build a loadout in the Perk Builder, then hit Save to library in the Your Build panel. Sign in with Discord to post — everyone sees it here."
     >
-      <RouterLink to="/planner" class="btn-ember b-cta">Open the Perk Builder</RouterLink>
+      <RouterLink to="/planner" class="btn-ember btn-md">Open the Perk Builder</RouterLink>
     </StatePanel>
 
     <transition name="toast">
@@ -290,13 +290,6 @@ async function remove(b) {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(17rem, 1fr));
   gap: 1rem;
-}
-
-/* The empty state's one primary action: the full ember size, 44px tall on a phone. */
-.b-cta {
-  padding: 0.7rem 1.4rem;
-  border-radius: var(--radius-sm);
-  min-height: var(--tap);
 }
 
 .toast {

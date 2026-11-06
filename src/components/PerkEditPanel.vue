@@ -171,6 +171,11 @@ function cancel() {
   font-size: var(--text-sm);
 }
 .pe button {
+  min-width: var(--tap);
+  min-height: var(--tap);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
   font-family: var(--font-display);
   text-transform: uppercase;
   letter-spacing: 0.06em;

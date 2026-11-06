@@ -1123,7 +1123,7 @@ onBeforeUnmount(() => {
 }
 .bg-slot {
   flex: none;
-  width: 4.6rem;
+  width: 5rem;
   font-family: var(--font-mono);
   text-transform: uppercase;
   letter-spacing: 0.1em;
@@ -1348,6 +1348,11 @@ onBeforeUnmount(() => {
   flex: none;
   width: 1.4rem;
   height: 1.4rem;
+  min-width: var(--tap);
+  min-height: var(--tap);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
   line-height: 1;
   font-size: var(--text-base);
   color: var(--color-smoke);

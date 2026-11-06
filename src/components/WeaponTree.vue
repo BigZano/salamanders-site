@@ -235,6 +235,7 @@ function toggle(p) {
 }
 .wtree-reset {
   margin-left: auto;
+  min-height: var(--tap);
   font-family: var(--font-display);
   text-transform: uppercase;
   letter-spacing: 0.06em;
@@ -452,6 +453,8 @@ function toggle(p) {
   border-radius: var(--radius-sm);
   width: 1.4rem;
   height: 1.4rem;
+  min-width: var(--tap);
+  min-height: var(--tap);
   line-height: 1;
   cursor: pointer;
   transition: transform var(--dur-press) var(--ease-forge);
