@@ -21,8 +21,8 @@ defineProps({
   font-family: var(--font-display);
   text-transform: uppercase;
   font-weight: 700;
-  font-size: clamp(2.2rem, 7vw, 3.6rem);
-  letter-spacing: 0.01em;
+  font-size: var(--text-display);
+  letter-spacing: 0.02em;
   line-height: 1.05;
   margin: 0.4rem 0 0.6rem;
   color: var(--color-bone);
