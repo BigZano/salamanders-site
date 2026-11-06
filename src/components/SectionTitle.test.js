@@ -19,6 +19,17 @@ describe('SectionTitle', () => {
     expect(count({ count: null }).exists()).toBe(false)
   })
 
+  it('reads the count after a hidden separator, so a screen reader hears "Members, 2" and not "Members2"', () => {
+    const w = mount(SectionTitle, { props: { count: 2 }, slots: { default: 'Verified Members' } })
+    expect(w.get('.section-title').element.textContent).toContain(', 2')
+    expect(w.get('.section-title-count').text()).toBe('2')
+    // the separator is visually hidden, and the visible count is not the hidden one
+    expect(w.get('.sr-only').text()).toBe(',')
+    expect(w.get('.sr-only').classes()).not.toContain('section-title-count')
+    // no count, no separator
+    expect(mount(SectionTitle, { slots: { default: 'Verified Members' } }).find('.sr-only').exists()).toBe(false)
+  })
+
   it('as="h3" renders an h3 and no h2', () => {
     const w = mount(SectionTitle, { props: { as: 'h3' }, slots: { default: 'Sub' } })
     expect(w.find('h3.section-title').exists()).toBe(true)

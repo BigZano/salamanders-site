@@ -80,6 +80,10 @@ describe('Landing muster', () => {
     expect(w.findAll('ul.muster-list > li > .muster-row')).toHaveLength(4)
   })
 
+  it('keeps the list semantics Safari drops from a list with no bullets', () => {
+    expect(render().get('ul.muster-list').attributes('role')).toBe('list')
+  })
+
   it('sets the rows on a dense panel, not straight on the volcano', () => {
     expect(render().get('ul.muster-list').classes()).toContain('surface')
   })
@@ -104,6 +108,15 @@ describe('Landing muster', () => {
     expect(rowsOf(w)[2].find('.muster-fact').exists()).toBe(false)
     await flushPromises()
     expect(rowsOf(w)[2].get('.muster-fact').text()).toBe('2 posted')
+  })
+
+  it('shows nothing for builds when none are posted', async () => {
+    vi.mocked(buildsApi.listBuilds).mockResolvedValue([])
+    const w = render()
+    await flushPromises()
+    expect(rowsOf(w)[2].find('.muster-fact').exists()).toBe(false)
+    expect(w.text()).not.toContain('0 posted')
+    expect(rowsOf(w)).toHaveLength(4)
   })
 
   it('shows nothing for builds when the call fails', async () => {

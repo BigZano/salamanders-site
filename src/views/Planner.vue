@@ -566,10 +566,6 @@ onBeforeUnmount(() => {
   gap: 0.4rem;
   margin: 1.6rem 0 1.4rem;
 }
-/* The look is .tab-forge (style.css). This rule is the tap-target pin in style.test.js. */
-.class-tab {
-  min-height: var(--tap);
-}
 
 /* class hero */
 .hero-card {

@@ -327,10 +327,6 @@ watch(() => route.query.w, openFromQuery)
   gap: 0.4rem;
   flex-wrap: wrap;
 }
-/* .tab-forge and .field-forge carry the tap height; style.test.js still reads it from these two rules. */
-.cat-tab {
-  min-height: var(--tap);
-}
 .cat-count {
   font-family: var(--font-mono);
   font-size: var(--text-xs);
@@ -339,7 +335,6 @@ watch(() => route.query.w, openFromQuery)
 .w-search {
   flex: 1 1 14rem;
   max-width: 20rem;
-  min-height: var(--tap);
 }
 
 .a-layout {

@@ -59,12 +59,10 @@ typography:
     fontFamily: "system-ui, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif"
     fontSize: "0.82rem"
     fontWeight: 400
-    lineHeight: 1.5
   meta:
     fontFamily: "system-ui, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif"
     fontSize: "0.9rem"
     fontWeight: 400
-    lineHeight: 1.5
   card-title:
     fontFamily: "'Oswald Variable', Bahnschrift, 'DIN Condensed', Oswald, 'Arial Narrow', system-ui, sans-serif"
     fontSize: "1.25rem"
@@ -79,8 +77,6 @@ typography:
     fontFamily: "'Oswald Variable', Bahnschrift, 'DIN Condensed', Oswald, 'Arial Narrow', system-ui, sans-serif"
     fontSize: "clamp(1.8rem, 5vw, 2.8rem)"
     fontWeight: 700
-    lineHeight: 1.05
-    letterSpacing: "0.02em"
   wordmark:
     fontFamily: "'Oswald Variable', Bahnschrift, 'DIN Condensed', Oswald, 'Arial Narrow', system-ui, sans-serif"
     fontSize: "clamp(2.5rem, 12.5vw, 9.5rem)"
@@ -245,7 +241,8 @@ component names the stop, never the number.
 - **`--text-md`** (0.9rem): card body, and ledes inside a card.
 - **`--text-base`** (1rem): reading text.
 - **`--text-lg`** (1.25rem): card titles, in display caps.
-- **`--text-xl`** (1.5rem): subheads, such as the class hero and the title of an empty or error state.
+- **`--text-xl`** (1.5rem): subheads, such as the class hero, a company's title on /companies and the title of an
+  empty or error state.
 - **`--text-2xl`** (`clamp(1.8rem, 5vw, 2.8rem)`): the display h2 that opens a section.
 - **`--text-display`** (`clamp(2.2rem, 7vw, 3.6rem)`): the page title.
 
@@ -293,6 +290,9 @@ chips. The Deathwatch bottom sheet rounds only its top corners (14px). Borders a
 
 The shared class is `.stud` in `src/style.css`: it takes the colour of the text beside it.
 
+**The one exception:** the error state's stud (StatePanel) is 8px, not 6px. It is the only warm mark on an error panel
+and stands alone above the title, so it needs the extra size to read.
+
 ## Components
 
 ### Buttons
@@ -303,9 +303,13 @@ The shared class is `.stud` in `src/style.css`: it takes the colour of the text 
 - **Secondary (drake):** a faint drake tint with a drake outline and drake uppercase label.
 - **Quiet (ghost, `.btn-ghost`):** the second action beside an ember or drake one: transparent fill, a one-pixel ash
   border, a smoke label that turns bone on hover, in the same uppercase display type.
+- **Full size (`.btn-md`):** the shape every page's primary action uses, with any of the three above: 0.7rem 1.4rem
+  padding, 2px corners, and a minimum height of `--tap`.
 - **Small (`.btn-sm`):** the shared small size for buttons set in a row or a card, used with any of the three above
   (0.5rem 0.85rem padding, 2px corners, `--text-sm` type). Its minimum height is `--tap`: its own size on desktop, 44px
   on a phone.
+- **Disabled:** an ember, drake or ghost button that cannot be pressed drops to 55% opacity with a `not-allowed`
+  cursor, and its hover rules are `:hover:not(:disabled)`, so it never lifts or brightens under a pointer.
 - **Tap targets:** every tap target is at least `--tap` (44px) on touch screens and phones.
 - **Press:** `scale(0.97)` on every pressable thing, at `--dur-press` (120ms). **Hover:** only inside
   `@media (hover: hover) and (pointer: fine)`. See Motion.
@@ -333,19 +337,22 @@ The shared class is `.stud` in `src/style.css`: it takes the colour of the text 
 ### Page frame
 Every page on the main site is built from the same few parts, so no view draws its own header, section title or
 empty state.
-- **PageHeader:** an eyebrow only where it states a fact (a department, who may enter), the page title in
-  `--text-display`, a `.page-lede` in pewter at 52 characters, and a slot for the page's controls. `.page-lede` is
-  global, so a view can put a link in the header's slot.
-- **SectionTitle:** the h2 strip for a section inside a page: display caps at `--text-base`, 0.08em tracking, smoke,
-  a one-pixel ash rule under it, an optional mono count, and an `aside` slot for a control on the right.
-- **StatePanel:** one panel for empty, error, gate, loading and prompt: a `.surface` with 3px corners, centred, a
-  title in display caps at `--text-xl`, a body in smoke at 44 characters, actions in the default slot. An empty or
-  prompt panel shows a muted ForgeMark, a loading one the spinner, an error an ember stud before its title; a gate
-  shows no mark. An error is `role="alert"`, a loading panel `role="status"` with `aria-busy`.
-- **ForgeMark:** the divider and the empty-state mark: a heated bar. One pixel tall, 160px wide (96px at `sm`), cold at
-  both ends and hot in the middle: transparent to Ash 2 to Ember to Whitehot, and back, with a soft static glow at the
-  hot spot only. Cold armour, molten core. `muted` cools it for empty states: no glow, an ember heart in place of the
-  white-hot one.
+- **PageHeader:** the page's one h1 in display caps at `--text-display`. An eyebrow appears only where it states a
+  fact (a department, who may enter), never as decoration. The lede is `.page-lede`, pewter at 52 characters, and the
+  default slot after it holds the page's controls. `.page-lede` is global, so a view can put a link in that slot.
+- **SectionTitle:** the h2 strip for a section inside a page (`as` makes it an h3): display caps at `--text-base`,
+  0.08em tracking, smoke, with a one-pixel ash rule under the whole row. The optional count is mono at `--text-xs` in
+  pewter, and is read aloud after a hidden comma ("Verified Members, 2"). The `aside` slot holds a control on the
+  right, above the rule.
+- **StatePanel:** one panel for the five things a page can have nothing else to show (`kind`: empty, error, gate,
+  loading, prompt): a `.surface` with 3px corners, centred, a title in display caps at `--text-xl`, a body in smoke at
+  44 characters, actions in the default slot. Its mark depends on the kind: empty and prompt show a muted ForgeMark,
+  loading the spinner, error an 8px ember stud (the Stud Rule's one exception); a gate shows no mark and reads from the
+  left, since it may carry a form. An error is `role="alert"`, a loading panel `role="status"` with `aria-busy`.
+- **ForgeMark:** the divider and the empty-state mark: a heated bar, hidden from assistive tech and never animated. One
+  pixel tall, 160px wide (96px at `sm`), cold at both ends and hot in the middle: transparent to Ash 2 to Ember to
+  Whitehot, and back, with a soft fixed glow at the hot spot only. Cold armour, molten core. `muted` cools it for
+  empty states: no glow, and a dimmer ember heart in place of the white-hot one.
 
 ### Navigation
 - **Style:** sticky, translucent obsidian glass with a 10px blur and an ash bottom border; the brand is spaced

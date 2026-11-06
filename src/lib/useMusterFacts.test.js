@@ -79,14 +79,18 @@ describe('useMusterFacts builds count', () => {
     expect(muster.facts.value['/builds']).toBe('2 posted')
   })
 
-  it('counts whatever the list holds, including none', async () => {
+  it('counts whatever the list holds', async () => {
     const { muster } = host({ listBuilds: vi.fn().mockResolvedValue(rows(17)) })
     await flushPromises()
     expect(muster.facts.value['/builds']).toBe('17 posted')
+  })
 
-    const { muster: empty } = host({ listBuilds: vi.fn().mockResolvedValue([]) })
+  it('says nothing when none are posted: a zero persuades nobody', async () => {
+    const { muster } = host({ listBuilds: vi.fn().mockResolvedValue([]) })
     await flushPromises()
-    expect(empty.facts.value['/builds']).toBe('0 posted')
+    expect(muster.facts.value['/builds']).toBeNull()
+    // the other three facts are still there
+    expect(muster.facts.value['/planner']).toBe(`${CLASS_NAMES.length} classes`)
   })
 
   it('stays null when the call rejects, and says nothing in the console', async () => {

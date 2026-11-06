@@ -266,7 +266,7 @@
   }
   /* Hover only where a pointer can really hover: a touch screen fakes one on the first tap and keeps it. */
   @media (hover: hover) and (pointer: fine) {
-    .btn-ember:hover {
+    .btn-ember:hover:not(:disabled) {
       transform: translateY(-1px);
       filter: brightness(1.06);
       box-shadow:
@@ -298,7 +298,7 @@
       border-color var(--dur-state) var(--ease-forge);
   }
   @media (hover: hover) and (pointer: fine) {
-    .btn-drake:hover {
+    .btn-drake:hover:not(:disabled) {
       background: rgba(89, 214, 108, 0.12);
       border-color: rgba(89, 214, 108, 0.7);
     }
@@ -326,13 +326,22 @@
       border-color var(--dur-state) var(--ease-forge);
   }
   @media (hover: hover) and (pointer: fine) {
-    .btn-ghost:hover {
+    .btn-ghost:hover:not(:disabled) {
       color: var(--color-bone);
       border-color: var(--color-ash-2);
     }
   }
   .btn-ghost:active {
     transform: scale(0.97);
+  }
+
+  /* The full size: the shape every page's primary action uses. The colours come from .btn-ember, .btn-drake or
+     .btn-ghost. */
+  .btn-md {
+    padding: 0.7rem 1.4rem;
+    border-radius: var(--radius-sm);
+    min-height: var(--tap);
+    cursor: pointer;
   }
 
   /* The small size, shared by every page that sets buttons in a row or a card */
@@ -342,6 +351,14 @@
     font-size: var(--text-sm);
     cursor: pointer;
     min-height: var(--tap);
+  }
+
+  /* A button that cannot be pressed: dimmed, no lift on hover (the hover rules above skip :disabled). */
+  .btn-ember:disabled,
+  .btn-drake:disabled,
+  .btn-ghost:disabled {
+    opacity: 0.55;
+    cursor: not-allowed;
   }
 
   /* The one segmented control: Planner class tabs, Armoury category tabs, Builds class chips. On is the ember

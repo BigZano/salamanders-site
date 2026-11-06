@@ -38,7 +38,8 @@ const ops = [
 
     <section class="muster">
       <SectionTitle>Muster the Chapter</SectionTitle>
-      <ul class="muster-list surface">
+      <!-- role="list": Safari drops the list semantics of a list with list-style: none. -->
+      <ul class="muster-list surface" role="list">
         <li v-for="o in ops" :key="o.to">
           <RouterLink class="muster-row rm-fade" :to="o.to">
             <span class="muster-name">{{ o.title }}</span>

@@ -11,7 +11,11 @@ defineProps({
   <div class="section-head">
     <component :is="as" class="section-title">
       <span class="section-title-text"><slot /></span>
-      <span v-if="count !== null" class="section-title-count">{{ count }}</span>
+      <template v-if="count !== null">
+        <!-- Read aloud as "Verified Members, 2" rather than "Verified Members2". -->
+        <span class="sr-only">, </span>
+        <span class="section-title-count">{{ count }}</span>
+      </template>
     </component>
     <div v-if="$slots.aside" class="section-aside"><slot name="aside" /></div>
   </div>

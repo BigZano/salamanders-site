@@ -1,4 +1,3 @@
-// @vitest-environment jsdom
 // The brief names this scripts/render-marks.test.js, but vitest.config.js only picks up
 // scripts/**/*.test.mjs, so it carries the .mjs extension like every other script test here.
 import { describe, it, expect, beforeEach, afterEach } from 'vitest'

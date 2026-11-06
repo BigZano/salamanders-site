@@ -233,6 +233,28 @@ describe('small buttons', () => {
   it('grow to the tap target on phones and touch screens', () => {
     expect(css).toMatch(/\.btn-sm\s*\{[^}]*min-height:\s*var\(--tap\)/)
   })
+
+  it('have a full size, .btn-md, that every page primary action shares', () => {
+    const md = css.match(/\.btn-md\s*\{([^}]*)\}/)?.[1] ?? ''
+    expect(md).toContain('padding: 0.7rem 1.4rem;')
+    expect(md).toContain('border-radius: var(--radius-sm);')
+    expect(md).toContain('min-height: var(--tap);')
+    expect(md).toContain('cursor: pointer;')
+    const redefined = vueFiles.filter((f) => /^\.btn-md\s*(\{|:hover)/m.test(readFileSync(join(dir, f), 'utf8')))
+    expect(redefined).toEqual([])
+  })
+
+  it('dim a disabled button and never lift it on hover', () => {
+    const disabled = css.match(/\.btn-ember:disabled,\s*\.btn-drake:disabled,\s*\.btn-ghost:disabled\s*\{([^}]*)\}/)?.[1] ?? ''
+    expect(disabled).toContain('opacity: 0.55;')
+    expect(disabled).toContain('cursor: not-allowed;')
+    const hovers = css.slice(css.indexOf(HOVER_MEDIA))
+    for (const cls of ['btn-ember', 'btn-drake', 'btn-ghost']) {
+      expect(hovers, cls).toContain(`.${cls}:hover:not(:disabled)`)
+    }
+    // no hover rule on a shared button may skip the :disabled guard
+    expect(css).not.toMatch(/\.btn-(ember|drake|ghost):hover\s*\{/)
+  })
 })
 
 // PRODUCT.md promises tap targets of at least 44px on phones. --tap is `auto` on desktop (a control keeps
@@ -240,8 +262,9 @@ describe('small buttons', () => {
 describe('tap targets', () => {
   const dir = fileURLToPath(new URL('.', import.meta.url))
   const read = (file) => readFileSync(join(dir, file), 'utf8')
+  // `selector {` at the start of a line, indented or not (the shared rules in style.css sit inside a layer).
   const rule = (source, selector) =>
-    new RegExp(`\\n${selector.replace(/[.[\]]/g, '\\$&')} \\{([^}]*)\\}`).exec(source)?.[1] ?? ''
+    new RegExp(`\\n[ \\t]*${selector.replace(/[.[\]]/g, '\\$&')} \\{([^}]*)\\}`).exec(source)?.[1] ?? ''
 
   it('is auto on desktop and 44px on phones and touch screens', () => {
     expect(css).toMatch(/:root\s*\{\s*--tap:\s*auto;/)
@@ -252,11 +275,11 @@ describe('tap targets', () => {
     ['components/AppNav.vue', '.brand'],
     ['components/SiteFooter.vue', '.footer-links a'],
     ['components/WeaponSlot.vue', '.slot-select'],
-    ['views/Armoury.vue', '.cat-tab'],
+    // The segmented tab and the search field carry it for every page (Planner .class-tab, Armoury .cat-tab and .w-search).
+    ['style.css', '.tab-forge'],
+    ['style.css', '.field-forge'],
     ['views/Armoury.vue', '.w-item'],
-    ['views/Armoury.vue', '.w-search'],
     ['views/Companies.vue', '.c-chip'],
-    ['views/Planner.vue', '.class-tab'],
     ['views/Planner.vue', '.save-more'],
     ['views/Planner.vue', '.save-needs-pick'],
     ['views/Planner.vue', '.save .fld'],
@@ -269,8 +292,9 @@ describe('tap targets', () => {
   })
 })
 
-// The micro-labels (mono caps, 8.6 to 10.9px) are unreadable on a phone. Each sub-11px size is written
-// max(<its size>, var(--text-floor)): the variable is 0 on desktop, so nothing there changes, and 11px on phones.
+// The micro-labels (mono caps) are unreadable on a phone. Each sub-11px size is written
+// max(<its size>, var(--text-floor)): the variable is 0 on desktop, where a micro-label now sits at --text-xs
+// (11.5px), and 11px on phones.
 describe('small text', () => {
   const dir = fileURLToPath(new URL('.', import.meta.url))
   const files = readdirSync(dir, { recursive: true }).filter((f) => /\.(vue|css)$/.test(f))
@@ -360,16 +384,17 @@ describe('page layer tokens', () => {
     expect(selectors).toContain('.tab-forge')
   })
 
-  // Red until the page tasks (3-9) replace the literals in their components; Task 11 turns it on.
-  // The Deathwatch and Archive areas are out of scope for the page layer and keep their own values.
-  it.todo('keeps the ember hex out of components')
-  // it('keeps the ember hex out of components', () => {
-  //   const dir = fileURLToPath(new URL('.', import.meta.url))
-  //   const files = readdirSync(dir, { recursive: true })
-  //     .map((f) => f.replaceAll('\', '/'))
-  //     .filter((f) => /\.(vue|css)$/.test(f))
-  //     .filter((f) => f !== 'style.css' && !/(^|\/)(deathwatch|archive)\//.test(f))
-  //   const offenders = files.filter((f) => /#ffb066|#1a0d06/i.test(readFileSync(join(dir, f), 'utf8')))
-  //   expect(offenders).toEqual([])
-  // })
+  // The ember gradient's light top and its ink live in style.css as --color-ember-light and --color-ember-ink; a
+  // component names the token. The Deathwatch and Archive areas are out of scope for the page layer and keep
+  // their own values, and so does the volcano canvas (it draws in JS, like motionPolicy.test.js's skipped files).
+  it('keeps the ember hex out of components', () => {
+    const dir = fileURLToPath(new URL('.', import.meta.url))
+    const files = readdirSync(dir, { recursive: true })
+      .map((f) => f.replaceAll('\\', '/'))
+      .filter((f) => /\.(vue|css)$/.test(f))
+      .filter((f) => f !== 'style.css' && f !== 'components/MountDeathfire.vue')
+      .filter((f) => !/(^|\/)(deathwatch|archive)\//.test(f))
+    const offenders = files.filter((f) => /#ffb066|#1a0d06/i.test(readFileSync(join(dir, f), 'utf8')))
+    expect(offenders).toEqual([])
+  })
 })

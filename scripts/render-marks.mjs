@@ -6,28 +6,12 @@
 //
 // The skull is not copied: its drawing ops come from src/components/archive/drakeSkull.js (the same seed the plaque
 // uses), flattened here to single colours, since a favicon has no gradients, filters or CSS variables around it.
-// The commands the committed files are checked against live in render-marks.test.mjs.
-import * as nodeModule from 'node:module'
+// The committed files are checked against these generators in render-marks.test.mjs.
+import { createRequire } from 'node:module'
 import { existsSync, mkdirSync, writeFileSync } from 'node:fs'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
-
-// drakeSkull.js imports './wrought' with no extension, which Vite resolves and plain Node does not. Retry a
-// relative, extensionless import from src/ with '.js' so this script runs under `node` as well as under Vite.
-nodeModule.registerHooks?.({
-  resolve(specifier, context, nextResolve) {
-    try {
-      return nextResolve(specifier, context)
-    } catch (err) {
-      const fromSrc = context.parentURL?.includes('/src/')
-      if (err.code === 'ERR_MODULE_NOT_FOUND' && fromSrc && /^\.{1,2}\//.test(specifier) && !/\.\w+$/.test(specifier)) {
-        return nextResolve(`${specifier}.js`, context)
-      }
-      throw err
-    }
-  },
-})
-const { drakeSkull } = await import('../src/components/archive/drakeSkull.js')
+import { drakeSkull } from '../src/components/archive/drakeSkull.js'
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..')
 
@@ -197,7 +181,7 @@ export function manifest() {
  */
 function rasteriser(root) {
   const modules = join(root, 'node_modules')
-  const need = nodeModule.createRequire(join(root, 'package.json'))
+  const need = createRequire(join(root, 'package.json'))
   if (existsSync(join(modules, 'sharp'))) {
     const sharp = need('sharp')
     return (svg, w, h) => sharp(Buffer.from(svg)).resize(w, h).png().toBuffer()
