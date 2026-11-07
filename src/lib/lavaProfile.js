@@ -2,8 +2,9 @@
  * The shape of a lava flow's speed, and the packing of everything the lava
  * shader reads each frame.
  *
- * Both are pure so they can be tested without a GL context. The shader uses the
- * same velocity formula in GLSL, so change the two together.
+ * Both are pure so they can be tested without a GL context. The velocity formula
+ * is written out again in GLSL, in lavaShader.glsl.js and lavaSim.glsl.js, so change
+ * the three together.
  */
 
 // How many channels and calm rects the fragment shader's uniform arrays hold.

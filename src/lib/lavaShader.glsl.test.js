@@ -10,6 +10,9 @@ describe('the GLSL sources', () => {
     }
   })
   it('declare every uniform the layer sets, and the lava fragment uses each', () => {
+    expect(UNIFORMS).toHaveLength(17)
+    for (const u of ['uSim', 'uPalette', 'uSimSize']) expect(UNIFORMS).toContain(u)
+    for (const u of ['uCrust', 'uBreakoutRate', 'uTime', 'uPhase', 'uSurge']) expect(UNIFORMS).not.toContain(u)
     for (const u of UNIFORMS) {
       expect(LAVA_VERT + LAVA_FRAG).toMatch(new RegExp(`uniform\\s+\\w+\\s+${u}\\b`))
       // Whole words only, and not in comments: a plain substring count passes vacuously for uHeat
@@ -24,13 +27,12 @@ describe('the GLSL sources', () => {
     }
   })
   it('name the look constants so they can be tuned in one place', () => {
-    for (const name of ['SPEED', 'GAIN', 'WARP', 'WARP_FREQ', 'CELL', 'FOLD_PX', 'MARGIN', 'CRACK_PX', 'PERIOD']) {
+    for (const name of ['SPEED', 'CYCLE', 'WARP', 'WARP_FREQ', 'CELL', 'FOLD_PX', 'MARGIN']) {
       expect(LAVA_FRAG).toMatch(new RegExp(`const\\s+\\w+\\s+${name}\\s*=`))
     }
   })
   it('carry the spec colours and the field layout', () => {
-    expect(LAVA_FRAG).toContain('12.0, 6.0, 4.0')
-    expect(LAVA_FRAG).toContain('255.0, 220.0, 150.0')
+    expect(LAVA_FRAG).toMatch(/texture\(uPalette/)
     expect(LAVA_FRAG).toContain('52.0, 40.0, 34.0')
     expect(FIELD_FRAG).toMatch(/across.*along/s)
   })

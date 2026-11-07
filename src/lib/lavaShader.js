@@ -1,110 +1,30 @@
 /**
- * The lava shader's layer: whether to use it, and how it draws.
+ * The lava shader's layer: how it draws.
  *
- * `supportsLavaShader` and `hasWebGL2` are plain functions over a `win` argument so they can be tested
- * without a browser. `createLavaLayer` wraps the rest: the strips, the profile uniforms and the two GLSL
- * passes, behind a canvas the volcano composites into its own 2D context.
+ * `createLavaLayer` wraps the strips, the profile uniforms, the heat simulation and the GLSL passes behind
+ * a canvas the volcano composites into its own 2D context. Whether to use the shader at all
+ * (`supportsLavaShader`, `hasWebGL2`) and the GPU setup live in lavaGpu.js; the first two are re-exported
+ * here, where the volcano and the tests look for them.
  */
 
 import { packUniforms, MAX_CHANNELS, MAX_CALM } from './lavaProfile'
-import { buildStrips, bounds, STRIDE } from './lavaStrips'
-import { compileProgram, createFieldTarget, deleteFieldTarget } from './lavaGl'
-import { FIELD_VERT, FIELD_FRAG, LAVA_VERT, LAVA_FRAG, UNIFORMS } from './lavaShader.glsl'
+import { buildStrips, bounds } from './lavaStrips'
+import { simSize, parents, simUniforms } from './lavaSim'
+import { createFieldTarget, deleteFieldTarget, readTarget } from './lavaGl'
+import { uploadFrame, uploadSim } from './lavaUniforms'
+import { hasWebGL2, buildGpu } from './lavaGpu'
 
-/**
- * Whether the page was told to force the shader on or off.
- *
- * `?lava=0` forces the ribbons, `?lava=1` forces the shader on when the browser
- * has WebGL2, and anything else leaves the choice to the capability check
- * ('auto'). With no `search` given it reads the current page's query string, so
- * the volcano can call it bare. Outside a browser there is no query string, and
- * the answer is 'auto'.
- */
-export function supportsLavaShader({ search, win = typeof window === 'undefined' ? undefined : window } = {}) {
-  const query = search ?? win?.location?.search ?? ''
-  const flag = new URLSearchParams(query).get('lava')
-  if (flag === '0') return 'off'
-  if (flag === '1') return 'on'
-  return 'auto'
-}
-
-/**
- * Whether a WebGL2 context can really be made here.
- *
- * Checking for the constructor is not enough: a browser can expose it and still
- * refuse a context (a blocklisted GPU, or hardware acceleration switched off),
- * so a throwaway canvas is asked for one. The probe context is released at once,
- * because browsers cap how many live contexts a page may hold and the real layer
- * needs its own.
- */
-export function hasWebGL2(win) {
-  if (!win || !('WebGL2RenderingContext' in win)) return false
-  try {
-    const gl = win.document.createElement('canvas').getContext('webgl2')
-    if (!gl) return false
-    gl.getExtension?.('WEBGL_lose_context')?.loseContext()
-    return true
-  } catch {
-    // Some browsers throw rather than return null when a context is refused.
-    return false
-  }
-}
+export { supportsLavaShader, hasWebGL2 } from './lavaGpu'
 
 // How far past the bank the levee reaches, in channel half widths. The shader's LEVEE is the same number.
 const LEVEE = 2.2
 
-// The field pass's attributes: [name, floats, offset in floats] in the order lavaStrips lays a vertex out.
-const ATTRIBUTES = [['aPos', 2, 0], ['aAcross', 1, 2], ['aAlong', 1, 3], ['aHalf', 1, 4], ['aHeat', 1, 5], ['aId', 1, 6]]
+// A sim step that no frame times (stepN's) lasts this long, in seconds.
+const STEP = 1 / 30
 
-// The lava pass's single floats; packUniforms supplies all of them.
-const SCALARS = ['uTime', 'uCrust', 'uHeat', 'uViscosity', 'uCracks', 'uFoldScale', 'uBreakoutRate', 'uDensity']
-
-/**
- * Everything the layer owns on the GPU, or null if a program will not build. Kept in one object so that
- * losing the context is a single `gpu = null` and a restore is a single call to this. The field target
- * is made by `renderField`, once the canvas has its size.
- */
-function buildGpu(gl) {
-  // A float field holds `across` as it is. Without float rendering the field is bytes, and both fragment
-  // shaders pack and unpack `across` themselves when they see the define on the line after #version.
-  const float = Boolean(gl.getExtension('EXT_color_buffer_float'))
-  const sourceFor = (source) => (float ? source : source.replace('#version 300 es\n', '#version 300 es\n#define FIELD_PACKED\n'))
-  const fieldProgram = compileProgram(gl, FIELD_VERT, sourceFor(FIELD_FRAG))
-  const lavaProgram = compileProgram(gl, LAVA_VERT, sourceFor(LAVA_FRAG))
-  if (!fieldProgram || !lavaProgram) {
-    if (fieldProgram) gl.deleteProgram(fieldProgram)
-    if (lavaProgram) gl.deleteProgram(lavaProgram)
-    return null
-  }
-
-  // Looked up once: asking the driver for a location by name every frame is slow on a phone.
-  const loc = {}
-  for (const name of UNIFORMS) loc[name] = gl.getUniformLocation(lavaProgram, name)
-
-  const vertexBuffer = gl.createBuffer()
-  const indexBuffer = gl.createBuffer()
-  const fieldVao = gl.createVertexArray()
-  gl.bindVertexArray(fieldVao)
-  gl.bindBuffer(gl.ARRAY_BUFFER, vertexBuffer)
-  for (const [name, size, offset] of ATTRIBUTES) {
-    const at = gl.getAttribLocation(fieldProgram, name)
-    // The compiler drops aHeat (unread), and a dropped attribute has no location.
-    if (at < 0) continue
-    gl.enableVertexAttribArray(at)
-    gl.vertexAttribPointer(at, size, gl.FLOAT, false, STRIDE * 4, offset * 4)
-  }
-  gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, indexBuffer)
-  // The lava pass takes its corners from gl_VertexID, so its VAO stays empty.
-  const lavaVao = gl.createVertexArray()
-  gl.bindVertexArray(null)
-
-  // The output is premultiplied for the 2D canvas to composite, so the GPU must not blend it again.
-  gl.disable(gl.BLEND)
-  return {
-    float, fieldProgram, lavaProgram, loc, fieldResolution: gl.getUniformLocation(fieldProgram, 'uResolution'),
-    vertexBuffer, indexBuffer, fieldVao, lavaVao, target: null,
-  }
-}
+// The tuner's shipped lava values (fireTuning's DEFAULTS.lava): what a sim stepped before any frame has been
+// drawn runs on.
+const DEFAULT_TUNE = { crust: 0.75, heat: 1, viscosity: 0.7, cracks: 0.8, foldScale: 1, breakoutRate: 1 }
 
 // The flows in drawing-buffer pixels. Only the fields buildStrips reads are copied, and only the first
 // MAX_CHANNELS, because the shader's per-channel arrays hold no more.
@@ -132,6 +52,11 @@ function lengthOf(pts) {
  * `scale` times the CSS size (half on a phone, the device pixel ratio capped at 2 elsewhere) and every
  * pixel value the GPU sees is in those drawing-buffer pixels.
  *
+ * Each `draw` first steps a heat simulation (lavaSim.glsl): two small textures in channel space, one read
+ * while the other is written, which the lava pass samples for its heat and crust. The sim is not screen
+ * sized, so a resize keeps it. It starts cold; `ignite` starts it cold again, `stepN` runs it without
+ * drawing, and `readSim` reads it back for tools.
+ *
  * `ok` is false while the context is lost, and `draw` does nothing until it is restored. The layer keeps
  * the last layout on the CPU, so a restore re-uploads it rather than asking the volcano to resize.
  */
@@ -140,7 +65,8 @@ export function createLavaLayer({ win = typeof window === 'undefined' ? undefine
   const canvas = win.document.createElement('canvas')
   const gl = canvas.getContext('webgl2', { premultipliedAlpha: true, alpha: true, antialias: false, preserveDrawingBuffer: false })
   if (!gl) return null
-  let gpu = buildGpu(gl)
+  const size = simSize(phone)
+  let gpu = buildGpu(gl, size)
   if (!gpu) {
     // Give the context back: browsers cap how many a page may hold.
     gl.getExtension('WEBGL_lose_context')?.loseContext()
@@ -151,13 +77,23 @@ export function createLavaLayer({ win = typeof window === 'undefined' ? undefine
   let ok = true
   let fieldPasses = 0
   let drawCalls = 0
+  let simPasses = 0
+  // The sim's clock, in seconds of sim time. It moves on with every step so the shader's noise never freezes.
+  let simClock = 0
+  // The next sim step writes the cold state. True at the start, and again after a restore or a change in the
+  // number of channels.
+  let igniteNext = true
+  let channels = 0
   let strips = buildStrips([], { levee: LEVEE })
-  let box = { x: 0, y: 0, w: 0, h: 0 }
   const lengths = new Float32Array(MAX_CHANNELS)
   // Calm rects are scaled into these slots each frame, so a frame allocates nothing of its own.
   const calmPool = Array.from({ length: MAX_CALM }, () => ({ l: 0, t: 0, r: 0, b: 0 }))
   const calm = []
-  const packArgs = { flows: null, calmRects: calm, calmShift: 0, tune: null, density: 1, t: 0, phone }
+  const packArgs = { flows: [], calmRects: calm, calmShift: 0, tune: DEFAULT_TUNE, density: 1, t: 0, phone }
+  // What the two uploads need beyond the packed values: one object each, rewritten, so a frame allocates nothing.
+  const frameExtras = { lengths, width: 0, height: 0, box: { x: 0, y: 0, w: 0, h: 0 }, size }
+  const simExtras = { size, time: 0, ignite: false, surge: null, parent: null, attach: null }
+  let readBuffer = null
 
   function drawRange([start, count]) {
     // drawElements takes a byte offset, and the indices are 16-bit.
@@ -201,20 +137,56 @@ export function createLavaLayer({ win = typeof window === 'undefined' ? undefine
     canvas.width = empty ? 1 : cw
     canvas.height = empty ? 1 : ch
     const scaled = scaleFlows(flows, scale)
+    packArgs.flows = flows
+    if (scaled.length !== channels) igniteNext = true
+    channels = scaled.length
     strips = buildStrips(scaled, { levee: LEVEE })
     let widest = 0
     scaled.forEach((f, i) => {
       lengths[i] = lengthOf(f.pts)
       if (f.widthAt) widest = Math.max(widest, f.widthAt(0))
     })
-    box = bounds(scaled, LEVEE * widest)
+    frameExtras.box = bounds(scaled, LEVEE * widest)
+    frameExtras.width = canvas.width
+    frameExtras.height = canvas.height
     // While the context is lost the new layout is only remembered; the restore renders it.
     if (ok) renderField()
   }
 
+  // Bind a texture to a unit: the field is on 0, the sim on 1 and the palette on 2 for the lava pass.
+  function bind(unit, texture) {
+    gl.activeTexture(gl.TEXTURE0 + unit)
+    gl.bindTexture(gl.TEXTURE_2D, texture)
+  }
+
+  // One step of the heat simulation: read the latest state, write the next into the other target and make
+  // that the latest. The clock moves on first, so every step, stepN's too, gets its own noise.
+  function simStep(dt, packed) {
+    const s = simUniforms(packArgs.tune, dt, phone)
+    const map = parents(packArgs.flows)
+    simClock += s.uDt
+    simExtras.time = simClock
+    simExtras.ignite = igniteNext
+    simExtras.surge = packed.uSurge
+    simExtras.parent = map.parent
+    simExtras.attach = map.attach
+    const { sim, simNow } = gpu
+    gl.bindFramebuffer(gl.FRAMEBUFFER, sim[1 - simNow].fbo)
+    // The pass covers the whole sim texture, whatever size the canvas is.
+    gl.viewport(0, 0, size.along, size.across * MAX_CHANNELS)
+    gl.useProgram(gpu.simProgram)
+    gl.bindVertexArray(gpu.lavaVao)
+    bind(0, sim[simNow].texture)
+    uploadSim(gl, gpu.simLoc, s, simExtras)
+    gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4)
+    gl.bindFramebuffer(gl.FRAMEBUFFER, null)
+    gpu.simNow = 1 - simNow
+    igniteNext = false
+    simPasses++
+  }
+
   function draw(frame) {
-    // A draw before the first field pass has no target to sample either.
-    if (!ok || !gpu.target || tooSmall() || frame.flows.length === 0) return
+    if (!ok) return
     const rects = frame.calmRects
     const calmCount = Math.min(rects.length, MAX_CALM)
     for (let i = 0; i < calmCount; i++) {
@@ -233,30 +205,42 @@ export function createLavaLayer({ win = typeof window === 'undefined' ? undefine
     packArgs.density = frame.density
     packArgs.t = frame.t
     const u = packUniforms(packArgs)
+    // The sim runs even with nothing to show, so it is warm when the channels come back. A caller that gives
+    // no frame time gets a sixtieth of a second, not a NaN in the sim's state.
+    simStep(frame.secs ?? 1 / 60, u)
 
-    const { loc } = gpu
-    gl.bindFramebuffer(gl.FRAMEBUFFER, null)
+    // A draw before the first field pass has no target to sample either.
+    if (!gpu.target || tooSmall() || frame.flows.length === 0) return
     gl.viewport(0, 0, canvas.width, canvas.height)
     gl.clearColor(0, 0, 0, 0)
     gl.clear(gl.COLOR_BUFFER_BIT)
     gl.useProgram(gpu.lavaProgram)
     gl.bindVertexArray(gpu.lavaVao)
-    gl.activeTexture(gl.TEXTURE0)
-    gl.bindTexture(gl.TEXTURE_2D, gpu.target.texture)
-    gl.uniform1i(loc.uField, 0)
-    for (let i = 0; i < SCALARS.length; i++) gl.uniform1f(loc[SCALARS[i]], u[SCALARS[i]])
-    gl.uniform1i(loc.uOctaves, u.uOctaves)
-    gl.uniform1i(loc.uCalmCount, u.uCalmCount)
-    gl.uniform1fv(loc.uSurge, u.uSurge)
-    gl.uniform1fv(loc.uHeatPer, u.uHeatPer)
-    gl.uniform1fv(loc.uPhase, u.uPhase)
-    gl.uniform1fv(loc.uFlow, u.uFlow)
-    gl.uniform4fv(loc.uCalm, u.uCalm)
-    gl.uniform1fv(loc.uLength, lengths)
-    gl.uniform2f(loc.uResolution, canvas.width, canvas.height)
-    gl.uniform4f(loc.uBounds, box.x, box.y, box.w, box.h)
+    bind(0, gpu.target.texture)
+    bind(1, gpu.sim[gpu.simNow].texture)
+    bind(2, gpu.palette)
+    uploadFrame(gl, gpu.loc, u, frameExtras)
     gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4)
     drawCalls++
+  }
+
+  // Run the sim `n` steps of 1/30 s each and draw nothing: a still page's lava is settled this way before
+  // its one frame. The steps follow the last drawn frame's tune and flows, or the shipped tune before one.
+  function stepN(n) {
+    if (!ok) return
+    const packed = packUniforms(packArgs)
+    for (let i = 0; i < n; i++) simStep(STEP, packed)
+  }
+
+  function ignite() {
+    igniteNext = true
+  }
+
+  // The latest sim state as RGBA bytes, for tools: `out` holds simSize.along * simSize.across * 12 * 4 of them.
+  function readSim(out) {
+    if (!ok) return
+    if (gpu.float && readBuffer?.length !== out.length) readBuffer = new Float32Array(out.length)
+    readTarget(gl, gpu.sim[gpu.simNow], size.along, size.across * MAX_CHANNELS, out, gpu.float ? readBuffer : null)
   }
 
   // Preventing the default is what lets the browser restore the context later. Every GL handle is dead
@@ -268,9 +252,10 @@ export function createLavaLayer({ win = typeof window === 'undefined' ? undefine
   }
 
   function onRestored() {
-    gpu = buildGpu(gl)
+    gpu = buildGpu(gl, size)
     if (!gpu) return
     ok = true
+    igniteNext = true
     renderField()
   }
 
@@ -290,9 +275,14 @@ export function createLavaLayer({ win = typeof window === 'undefined' ? undefine
     canvas,
     resize,
     draw,
+    stepN,
+    ignite,
+    readSim,
     dispose,
     get ok() { return ok },
     get fieldPasses() { return fieldPasses },
     get drawCalls() { return drawCalls },
+    get simPasses() { return simPasses },
+    get simSize() { return size },
   }
 }
