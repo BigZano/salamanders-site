@@ -197,8 +197,7 @@ void main() {
   // 2. Lava space, in px, so noise does not stretch with the channel's length.
   float u = across * hw;
   float v = along * uLength[id];
-  // 3. Viscous advection. Two layers of plates half a CYCLE apart, cross-faded so neither shows at
-  // the instant it restarts (each reseeds then); the weights are normalised to keep the contrast.
+  // 3. Viscous advection. Two plate layers half a CYCLE apart, cross-faded so neither shows the instant it reseeds.
   float s = velocity(across, along);
   float cyc = uTime / CYCLE;
   float w0 = 1.0 - abs(2.0 * fract(cyc) - 1.0);
@@ -220,17 +219,16 @@ void main() {
   float crack = (1.0 - smoothstep(0.0, CRACK_PX, abs(c - thr) / max(fwidth(c), 0.002))) * uCracks;
   // 7. Margins: the banks run hot where the flow shears against them.
   float shear = smoothstep(MARGIN.x, MARGIN.y, a);
-  // 8. Breakouts: every PERIOD seconds the crusted toe darkens, then a tongue of lava brightens
-  // there and cools back to crust. A rate of 0 switches them off.
+  // 8. Breakouts: every PERIOD seconds a crusted toe darkens, a tongue brightens there, then cools back. 0 = off.
   float period = mix(PERIOD.x, PERIOD.y, fract(float(id) * 0.618)) / max(uBreakoutRate, 0.01);
   float bp = fract(uTime / period + uPhase[id]);
   float blob = smoothstep(0.45, 0.8, vnoise(vec2(u, v) / (vec2(10.0, 14.0) * scale) + seedShift));
   float dim = smoothstep(0.0, 0.3, bp) * (1.0 - smoothstep(0.3, 0.45, bp));
   float tongue = smoothstep(0.45, 0.6, bp) * (1.0 - smoothstep(0.6, 1.0, bp));
-  float breakout = step(0.001, uBreakoutRate) * smoothstep(0.78, 0.92, along)
-                 * (0.8 * blob * tongue - 0.5 * dim);
-  // 10. Temperature.
-  float T = (1.0 - 0.55 * along) * uHeatPer[id] + crack * 0.6 + shear * 0.35 + fresh * 0.8
+  float breakout = step(0.001, uBreakoutRate) * smoothstep(0.78, 0.92, along) * (0.5 * blob * tongue - 0.5 * dim);
+  // 10. Temperature: deep red to dark orange as the base, scattered hotter spots where the plates run thin.
+  float hot = smoothstep(0.7, 0.95, w0 * pa.x + w1 * pb.x);
+  float T = (0.64 - 0.3 * along) * uHeatPer[id] + hot * 0.45 + crack * 0.45 + shear * 0.18 + fresh * 0.35
           - crusted * 0.9 + fold * 0.08 + breakout;
   T = clamp(T, 0.0, 1.0) * uHeat * uDensity;
   // 11. Colour. The sheet is flow 0 (buildFlows pushes it first), and its head is held at the top.
@@ -241,8 +239,10 @@ void main() {
   float rub = 0.7 + 0.6 * vnoise(vec2(u, v) / (3.0 * scale) + seedShift);
   vec3 rubble = RUBBLE * rub + col * ((LEVEE - a) * T * 0.25);
   col = mix(col, rubble, smoothstep(1.0 - 0.5 / hw, 1.0 + 0.5 / hw, a));
-  // 13. Calm band, a 1 px feather at the field's end, rubble fading to LEVEE, an arm's head feathered in over its first tenth.
-  float alpha = calm(vPx) * clamp((LEVEE - a) * hw, 0.0, 1.0) * (1.0 - smoothstep(1.2, LEVEE, a)) * (id == 0 ? 1.0 : smoothstep(0.0, 0.1, along));
+  // 13. Calm band, 1 px feather at the field's end, rubble fading to LEVEE, and the flat strip ends cut to soft ellipses.
+  float e = max(0.0, (along - 0.9) * 10.0), h = id == 0 ? 0.0 : max(0.0, (0.1 - along) * 10.0);
+  float caps = smoothstep(1.0, 0.8, e * e + a * a * step(0.001, e)) * smoothstep(1.0, 0.8, h * h + a * a * step(0.001, h));
+  float alpha = calm(vPx) * clamp((LEVEE - a) * hw, 0.0, 1.0) * (1.0 - smoothstep(1.2, LEVEE, a)) * caps;
   fragColor = vec4(col * alpha, alpha); // 14. Premultiplied, for the 2D canvas to add with lighter.
 }
 `
