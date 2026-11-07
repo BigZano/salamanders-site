@@ -1,5 +1,7 @@
 // @vitest-environment jsdom
-import { describe, it, expect } from 'vitest'
+import { describe, it, expect, afterEach, vi } from 'vitest'
+import { mount } from '@vue/test-utils'
+import FireTuner from '../components/FireTuner.vue'
 import { DEFAULTS, fireTuning, profileFor, profileKeyFor, resetTuning, routeProfiles } from './fireTuning'
 
 describe('the Deathwatch volcano profile', () => {
@@ -65,7 +67,13 @@ describe('volcano route profiles', () => {
   })
 })
 
+// FireTuner reads the current route for its "This page" section; none is needed here.
+vi.mock('vue-router', () => ({ useRoute: () => ({ path: '/' }) }))
+
 describe('the lava tunables', () => {
+  // each test edits the live values; reset in afterEach so a failed assertion cannot leak into the next test
+  afterEach(() => resetTuning())
+
   it('carries the lava tunables and resets them', () => {
     expect(DEFAULTS.lava).toEqual({ crust: 0.75, heat: 1, viscosity: 0.7, cracks: 0.8, foldScale: 1, breakoutRate: 1 })
     fireTuning.lava.crust = 0.1
@@ -82,6 +90,16 @@ describe('the lava tunables', () => {
   it('does not share its defaults with the live values, so a drag cannot rewrite DEFAULTS', () => {
     fireTuning.lava.heat = 1.7
     expect(DEFAULTS.lava.heat).toBe(1)
-    resetTuning()
+  })
+
+  it('shows in the tuner as a Lava section with a slider each, and in the Copy values text', () => {
+    const tuner = mount(FireTuner)
+    const lava = [...tuner.findAll('.tuner-group')].find((h) => h.text() === 'Lava')
+    expect(lava).toBeDefined()
+    expect(lava.element.parentElement.querySelectorAll('input[type=range]')).toHaveLength(Object.keys(DEFAULTS.lava).length)
+    fireTuning.lava.crust = 0.3
+    expect(tuner.vm.snippet).toContain('lava: {')
+    expect(tuner.vm.snippet).toContain('"crust": 0.3')
+    tuner.unmount()
   })
 })

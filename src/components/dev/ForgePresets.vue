@@ -48,6 +48,7 @@ function apply(n) {
   if (!p) return
   Object.assign(fireTuning.bed, p.tuning.bed)
   Object.assign(fireTuning.text, p.tuning.text)
+  if (p.tuning.lava) Object.assign(fireTuning.lava, p.tuning.lava) // presets saved before the lava shader have none
   Object.assign(randomize, p.randomize)
   for (const k of Object.keys(p.profiles)) if (routeProfiles[k]) Object.assign(routeProfiles[k], p.profiles[k])
   forge.moon = p.moon

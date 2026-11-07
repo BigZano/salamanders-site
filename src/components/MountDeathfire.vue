@@ -3,7 +3,7 @@ import { ref, computed, watch, onMounted, onBeforeUnmount } from 'vue'
 import { forge, forgeAdvance, forgeSample, devNumber } from '../lib/forge'
 import { useRoute } from 'vue-router'
 import { motionAllowed } from '../lib/doomfire'
-import { fireTuning, randomize, profileFor, NEUTRAL_PROFILE } from '../lib/fireTuning'
+import { fireTuning, randomize, profileFor, NEUTRAL_PROFILE, DEFAULTS } from '../lib/fireTuning'
 import { deathfireHeat } from '../lib/deathfireHeat'
 
 /**
@@ -1113,43 +1113,69 @@ function buildSilhouette(w, h) {
 
 const isPhone = () => window.matchMedia?.('(max-width: 768px)').matches
 
-// One object, rewritten each frame, so handing the shader its tuning allocates nothing.
+// The shader's per-frame arguments: two objects rewritten each frame, so handing it a frame allocates nothing.
 const lavaTuning = { crust: 0, heat: 0, viscosity: 0, cracks: 0, foldScale: 0, breakoutRate: 0 }
+const lavaFrame = { t: 0, flows: null, calmRects: null, calmShift: 0, tune: lavaTuning, density: 1 }
 
-/** The tuner's lava values, with this page's own lava heat on top where its profile sets one. */
-function lavaTune() {
+/**
+ * What the shader draws this frame. Its heat takes everything the ribbons' heat does that is not per channel: the tuner's
+ * Lava heat, this page's own lava heat, the old Lava heat slider (against its default) and the caldera's breathing and
+ * flare, so a flare lights the channels whichever paints them.
+ */
+function lavaArgs(breathe, flare) {
   const l = fireTuning.lava
   lavaTuning.crust = l.crust
-  lavaTuning.heat = l.heat * (prof.lavaHeat ?? 1)
+  lavaTuning.heat = l.heat * (prof.lavaHeat ?? 1) * (tune.flowHeat / DEFAULTS.bed.flowHeat) * (0.82 + 0.18 * breathe + flare * 0.5)
   lavaTuning.viscosity = l.viscosity
   lavaTuning.cracks = l.cracks
   lavaTuning.foldScale = l.foldScale
   lavaTuning.breakoutRate = l.breakoutRate
-  return lavaTuning
+  lavaFrame.t = t
+  lavaFrame.flows = flows
+  lavaFrame.calmRects = calmRects
+  lavaFrame.calmShift = calmShift
+  lavaFrame.density = prof.density
+  return lavaFrame
+}
+
+/** Gives the lava layer up and puts the ribbons back at full strength: for anything that throws while it is in use. */
+function dropLava(err) {
+  lava?.dispose()
+  lava = null
+  lavaFade = 0
+  if (import.meta.env.DEV) console.warn('The lava shader failed; the ribbons stay.', err)
+}
+
+function lavaResize(w, h) {
+  try {
+    lava?.resize(w, h, flows)
+  } catch (err) {
+    dropLava(err)
+  }
 }
 
 /**
  * Fetches the WebGL lava layer once the first frame is up, so the page never waits on it: until it lands, and anywhere it
- * cannot run (no WebGL2, no context, ?lava=0), the ribbons paint the channels. The module is its own chunk, so the query
- * flag is read from it rather than imported here, which would pull the whole shader into the main bundle.
+ * cannot run (no WebGL2, no context, ?lava=0), the ribbons paint the channels. ?lava=0 is read here, before the import,
+ * because the shader's own switch (supportsLavaShader) lives in the chunk this would fetch.
  */
 function loadLava() {
-  if (stopped) return
+  if (stopped || new URLSearchParams(window.location.search).get('lava') === '0') return
   lavaWanted = true
   import('../lib/lavaShader')
-    .then(({ createLavaLayer, supportsLavaShader }) => {
-      if (!lavaWanted || supportsLavaShader() === 'off') return
+    .then(({ createLavaLayer }) => {
+      if (!lavaWanted) return
       lava = createLavaLayer({ phone: isPhone() })
       if (!lava || !mountain) return
-      lava.resize(lastW, lastH, flows)
+      lavaResize(lastW, lastH)
       // A still frame (reduced motion) never runs the fade, and a frozen playground does not advance it, so both
       // take the shader at once and repaint.
-      if (mode.value === 'still' || forge?.frozen) {
+      if (lava && (mode.value === 'still' || forge?.frozen)) {
         lavaFade = 1
         draw(1)
       }
     })
-    .catch((err) => console.warn('The lava shader failed; the ribbons stay.', err))
+    .catch(dropLava)
 }
 
 function layout() {
@@ -1179,7 +1205,7 @@ function layout() {
   mountain = buildMountain(w, h)
   ridges = buildRidges(w, h)
   flows = buildFlows(flows, w)
-  lava?.resize(w, h, flows) // the shader's channels follow the same centrelines
+  lavaResize(w, h) // the shader's channels follow the same centrelines
   lip = buildLip(mountain)
   moon = buildMoon(w, h)
   silhouette = buildSilhouette(w, h)
@@ -1383,10 +1409,18 @@ function draw(dt) {
   // 4. Lava running down the flanks, drawn over the rock as channels cut through it: for each, the rubble levee, then
   // the glow in three ribbons (bloom, body, core), then the crust skin closing over the middle, so the margins stay
   // brightest, which is where real channels shear and glow.
-  // Once the WebGL layer has loaded it paints the channels instead (drawn below, after the ribbons). The two cross-fade
-  // over a second, the ribbons at `keep` and the shader at `lavaFade`, so the channels are never dark between them. If
-  // the context is lost the fade drops to zero and the ribbons carry the lava alone until it is restored.
-  if (lava) lavaFade = lava.ok ? Math.min(1, lavaFade + secs) : 0
+  // Once the WebGL layer has loaded it paints the channels instead (composited below, after the ribbons). The two
+  // cross-fade over a second, the ribbons at `keep` and the shader at `lavaFade`, so the channels are never dark between
+  // them. The shader draws first, and the fade only runs once it has drawn something: a layer that never does (or whose
+  // context is lost) leaves the ribbons at full strength until it can.
+  if (lava?.ok) {
+    try {
+      lava.draw(lavaArgs(breathe, flare))
+    } catch (err) {
+      dropLava(err)
+    }
+  }
+  if (lava) lavaFade = lava.ok && lava.drawCalls > 0 ? Math.min(1, lavaFade + secs) : 0
   const keep = 1 - lavaFade
   ctx.lineCap = 'round'
   ctx.lineJoin = 'round'
@@ -1408,7 +1442,6 @@ function draw(dt) {
     if (heat <= 0.01) continue
     // Made even when the shader paints the channel: step 5's tongue at the vent reads it, and a relayout builds new flows.
     const ramp = (f.ramp ??= flowRamp(ctx, f))
-    if (keep <= 0) continue // the shader paints this channel entirely
 
     // Where text sits over the channel its glow steps aside: how much it keeps at each sampled place.
     let calmSum = 0
@@ -1423,15 +1456,17 @@ function draw(dt) {
     ctx.fill(f.shoulder)
     ctx.fillStyle = LEVEE_FILL
     ctx.fill(f.levee)
-    // The bloom: one soft stroke along the whole channel, dimmed by how much of it is under text.
+    // The bloom: one soft stroke along the whole channel, dimmed by how much of it is under text. It is the glow bleeding
+    // into the rock, which the shader does not make, so it stays at full strength under the shader too.
     ctx.globalCompositeOperation = 'lighter'
     ctx.beginPath()
     ctx.moveTo(f.pts[0].x, f.pts[0].y)
     for (const p of f.pts) ctx.lineTo(p.x, p.y)
-    ctx.globalAlpha = Math.max(0, heat * 0.22 * (calmSum / GLOW_STOPS)) * keep
+    ctx.globalAlpha = Math.max(0, heat * 0.22 * (calmSum / GLOW_STOPS))
     ctx.strokeStyle = ramp.bloom
     ctx.lineWidth = f.width * 6
     ctx.stroke()
+    if (keep <= 0) continue // the shader paints the rest of this channel
 
     // The glow inside the channel is a continuous ribbon that swells brighter and dimmer along its length. Nothing in it
     // runs on a clock: the pattern is smooth, non-repeating noise carried down the channel at a speed that itself
@@ -1488,10 +1523,13 @@ function draw(dt) {
   }
   // The shader's channels go over what is left of the ribbons, added the way they are (the layer's canvas is premultiplied).
   if (lava?.ok && lavaFade > 0) {
-    lava.draw({ t, flows, calmRects, calmShift, tune: lavaTune(), density: prof.density })
-    ctx.globalCompositeOperation = 'lighter'
-    ctx.globalAlpha = lavaFade
-    ctx.drawImage(lava.canvas, 0, 0, w, h)
+    try {
+      ctx.globalCompositeOperation = 'lighter'
+      ctx.globalAlpha = lavaFade
+      ctx.drawImage(lava.canvas, 0, 0, w, h)
+    } catch (err) {
+      dropLava(err)
+    }
     ctx.globalAlpha = 1
   }
   ctx.globalCompositeOperation = 'lighter'
