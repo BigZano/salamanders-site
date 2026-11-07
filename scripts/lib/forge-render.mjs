@@ -154,6 +154,18 @@ export function judge({ head, toe, toeWide, levee }) {
   return { ...result, ok: result.head && result.toe && result.levee }
 }
 
+/** The lava tuner values a preset may set: the keys the volcano reads from the query in dev (fireTuning.lava). */
+export const LAVA_KEYS = ['crust', 'heat', 'viscosity', 'cracks', 'foldScale', 'breakoutRate']
+
+/**
+ * Whether a planned URL asks for the lava shader: true for `lava=1`, false for `lava=0`, null when it says nothing
+ * (the volcano then decides for itself). The harness checks the page against this.
+ */
+export function lavaWanted(url) {
+  const v = new URL(url, 'http://harness.invalid').searchParams.get('lava')
+  return v === '1' ? true : v === '0' ? false : null
+}
+
 /**
  * The command line. Flags that take a list (`--paths`, `--sizes`, `--phases`, `--presets`) accept commas, spaces or
  * both (`--paths / /armoury` and `--sizes phone,desktop`); the rest take one value; `--smoke`, `--verbose` and `--gpu` take none.
@@ -184,11 +196,28 @@ export function parseArgs(argv) {
   const paths = raw.paths ?? ['/']
   const bad = paths.find((p) => !p.startsWith('/'))
   if (bad) throw new Error(`--paths must start with "/", got "${bad}" (Git Bash rewrites a bare / into a Windows path: run with MSYS_NO_PATHCONV=1)`)
+  // a preset the volcano would ignore (a typo in a key, a value that is not a number) must fail here, not render a plain picture
+  for (const preset of raw.presets ?? []) {
+    for (const pair of preset.split('&')) {
+      const [key, value = ''] = pair.split('=')
+      if (!LAVA_KEYS.includes(key)) throw new Error(`--presets: unknown lava key "${key}" in "${preset}" (known: ${LAVA_KEYS.join(', ')})`)
+      if (value.trim() === '' || !Number.isFinite(Number(value))) throw new Error(`--presets: "${key}" needs a number in "${preset}"`)
+    }
+  }
   const throttle = raw.throttle === undefined ? null : Number(raw.throttle)
   if (throttle !== null && !(throttle >= 1)) throw new Error(`--throttle must be a number of 1 or more, got "${raw.throttle}"`)
 
+  const base = raw.base ?? 'http://127.0.0.1:5191'
+  let baseUrl
+  try {
+    baseUrl = new URL(base)
+  } catch {
+    throw new Error(`--base must be a URL like http://127.0.0.1:5191, got "${base}"`)
+  }
+  if (!/^https?:$/.test(baseUrl.protocol)) throw new Error(`--base must be an http or https URL, got "${base}"`)
+
   return {
-    base: (raw.base ?? 'http://127.0.0.1:5191').replace(/\/+$/, ''),
+    base: base.replace(/\/+$/, ''),
     out: raw.out ?? '.forge/grid',
     paths,
     sizes: raw.sizes ?? ['phone', 'desktop'],

@@ -9,8 +9,8 @@
  *        [--presets crust=0.3,crust=1] [--throttle 4] [--smoke] [--verbose] [--gpu] [--chrome <path>]
  *
  * A preset is query params the volcano reads in dev (crust, heat, viscosity, cracks, foldScale, breakoutRate);
- * join several with & (and quote it). Exit code: 0 when every entry rendered, no page raised a console error and every
- * probe passed; 1 otherwise; 2 when Chrome could not be started.
+ * join several with & (and quote it). Exit code: 0 when every entry rendered with the lava shader live (as asked), no
+ * page raised a console error and every probe passed; 2 when no Chrome was found; 1 for everything else.
  *
  * Git Bash turns a bare "/" argument into a Windows path: set MSYS_NO_PATHCONV=1 there, or use PowerShell.
  */
@@ -18,7 +18,7 @@ import { spawn } from 'node:child_process'
 import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
-import { chromeCandidates, findChrome, judge, parseArgs, plan, probe, probeRects } from './lib/forge-render.mjs'
+import { chromeCandidates, findChrome, judge, lavaWanted, parseArgs, plan, probe, probeRects } from './lib/forge-render.mjs'
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms))
 
@@ -43,6 +43,7 @@ async function connect(url) {
     ws.onerror = () => fail(new Error(`could not open the DevTools socket at ${url}`))
   })
   let next = 0
+  let closed = false
   const pending = new Map()
   const listeners = new Set()
   ws.onmessage = (m) => {
@@ -58,12 +59,15 @@ async function connect(url) {
     else p.ok(msg.result)
   }
   ws.onclose = () => {
+    closed = true
     for (const p of pending.values()) p.fail(new Error(`${p.method}: the DevTools socket closed`))
     pending.clear()
   }
   return {
     send(method, params = {}, sessionId) {
       return new Promise((ok, fail) => {
+        // a closed socket answers nothing: fail now instead of after the 60 s timer
+        if (closed) return fail(new Error(`${method}: the DevTools socket closed`))
         const id = ++next
         const timer = setTimeout(() => {
           pending.delete(id)
@@ -240,14 +244,20 @@ async function renderEntry(cdp, entry, opts) {
       return result
     }
     // The shader is a lazy chunk: give it the chance to arrive, then the second it takes to fade in.
-    if (entry.url.includes('lava=1')) await waitFor(cdp, sessionId, LAVA_FETCHED, READY_MS)
+    const wantLava = lavaWanted(entry.url)
+    const fetched = wantLava ? await waitFor(cdp, sessionId, LAVA_FETCHED, READY_MS) : true
     await sleep(SETTLE_MS)
 
     const shot = await send('Page.captureScreenshot', { format: 'png' })
     result.png = Buffer.from(shot.data, 'base64')
 
+    // Whether the shader is really painting decides what the picture and the draw timings are of (the ribbons otherwise),
+    // so it is checked for every entry, not only with --smoke.
+    const geometry = JSON.parse(await evaluate(cdp, sessionId, GEOMETRY))
+    if (wantLava === true && !geometry.lava) result.failures.push(fetched ? 'shader not live (the layer was not built, or was dropped)' : `shader not live (its chunk was not fetched in ${READY_MS / 1000} s)`)
+    if (wantLava === false && geometry.lava) result.failures.push('shader live although the page asked for lava=0')
+
     if (opts.smoke) {
-      const geometry = JSON.parse(await evaluate(cdp, sessionId, GEOMETRY))
       const rects = probeRects(geometry)
       if (!rects) result.failures.push('smoke: the volcano has no sheet and arm to probe')
       else {

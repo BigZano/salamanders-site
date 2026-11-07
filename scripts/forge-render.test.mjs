@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { findChrome, plan, probe, probeRects, judge, parseArgs } from './lib/forge-render.mjs'
+import { findChrome, plan, probe, probeRects, judge, parseArgs, lavaWanted } from './lib/forge-render.mjs'
 
 describe('findChrome', () => {
   it('prefers CHROME, then the known installs', () => {
@@ -117,11 +117,33 @@ describe('parseArgs', () => {
     expect(a).toMatchObject({ paths: ['/', '/armoury'], sizes: ['phone', 'desktop'], phases: [0.1, 0.7], presets: ['crust=0.3', 'crust=1'], throttle: 4, smoke: true })
   })
 
+  it('takes only the six lava keys with numbers as presets', () => {
+    expect(parseArgs(['--presets', 'crust=0.3&heat=1.2,foldScale=2']).presets).toEqual(['crust=0.3&heat=1.2', 'foldScale=2'])
+    expect(() => parseArgs(['--presets', 'crst=0.3'])).toThrow(/unknown lava key "crst".*crust, heat, viscosity, cracks, foldScale, breakoutRate/)
+    expect(() => parseArgs(['--presets', 'crust=0.3&t=5'])).toThrow(/unknown lava key "t"/)
+    expect(() => parseArgs(['--presets', 'crust=high'])).toThrow(/"crust" needs a number/)
+    expect(() => parseArgs(['--presets', 'crust'])).toThrow(/"crust" needs a number/)
+  })
+
+  it('checks --base is an http(s) URL before anything starts', () => {
+    expect(parseArgs(['--base', 'http://localhost:5173/']).base).toBe('http://localhost:5173')
+    expect(() => parseArgs(['--base', 'localhost:5173'])).toThrow(/--base must be an http or https URL/)
+    expect(() => parseArgs(['--base', 'not a url'])).toThrow(/--base must be a URL/)
+  })
+
   it('refuses what it cannot make sense of', () => {
     expect(() => parseArgs(['--nope'])).toThrow(/unknown flag/)
     expect(() => parseArgs(['--phases', 'x'])).toThrow(/numbers/)
     expect(() => parseArgs(['--paths', 'C:/Program Files/Git/'])).toThrow(/start with/)
     expect(() => parseArgs(['--throttle', '0'])).toThrow(/throttle/)
     expect(() => parseArgs(['--out'])).toThrow(/needs a value/)
+  })
+})
+
+describe('lavaWanted', () => {
+  it('reads the lava switch out of a planned URL', () => {
+    expect(lavaWanted('/?moon=0.42&t=120&calm=0&lava=1&crust=0.3')).toBe(true)
+    expect(lavaWanted('/armoury?lava=0')).toBe(false)
+    expect(lavaWanted('/?moon=0.42')).toBeNull()
   })
 })

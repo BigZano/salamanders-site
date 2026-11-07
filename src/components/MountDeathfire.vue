@@ -1862,6 +1862,7 @@ onMounted(() => {
       snapshot: () => canvas.value,
       // Where the channels are, in viewport px, for the render harness's smoke probes (scripts/forge-render.mjs).
       geometry: () => ({
+        lava: Boolean(lava?.ok) && lavaFade > 0, // the shader is built, running and painting, so a picture is of it and not the ribbons
         vent: mountain?.vent,
         flows: flows.map((f) => ({ pts: f.pts, head: f.head, widthAt0: f.widthAt?.(0), widthMid: f.widthAt?.(0.5) })),
       }),
