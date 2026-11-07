@@ -47,7 +47,7 @@ let mountain = null // { peak, left, right, profile, crater }
 let ridges = [] // distant silhouettes, for depth
 let flows = [] // lava running down the flanks
 let lip = null // the molten lip along the crater rim, brimming over
-let moon = null // Prometheus: { sprite, r }
+let moon = null // Prometheus: { sprites: [lit from below-right, lit from below-left], r }
 let calmRects = [] // where reading text sits over the canvas, in viewport pixels, as of calmScroll
 let calmScroll = 0
 let calmShift = 0 // how far the page has scrolled since the text was measured
@@ -309,87 +309,117 @@ function buildMountain(w, h) {
 }
 
 /**
- * Prometheus, Nocturne's oversized moon, painted as Io, the most volcanically active world we know: sulphur ochre and
- * orange with pale frost, dark volcanic paterae ringed in red, and hot cores glowing on the night side. Lit from below
- * on its lower-left by the volcano's glow, with a thin warm rim on that edge. Painted once at layout, at the largest
- * size it will be (its closest pass); the draw loop scales it.
+ * Prometheus, Nocturne's oversized moon, painted as Io, the most volcanically active world we know (the Galileo and
+ * Juno images: sulphur-ochre plains in broad bands, pale frost, rust-red plume fallout, dark paterae with ragged
+ * edges and no raised rims). Painted once at layout, pixel by pixel, as a lit sphere: the light is the caldera's,
+ * from below and to the left, so the face turned to the volcano is lit and the far side falls softly into the
+ * sky's own dark, never to black. The terrain is noise on the sphere's surface, so it stretches toward the limb as a
+ * sphere's does, and the edge fades over its last two percent so the disc is not a cut-out. Sized for its closest
+ * pass; the draw loop scales it.
  */
 function buildMoon(w, h) {
-  const r = Math.max(20, Math.min(w * 0.13, h * 0.16))
-  const cv = document.createElement('canvas')
-  cv.width = cv.height = Math.ceil(r * 2)
-  const g = cv.getContext('2d')
+  const r = Math.max(20, Math.min(w * 0.11, h * 0.14))
+  const size = Math.ceil(r * 2)
+  // Two bakes of the same terrain: lit from below-right while the moon is left of the summit, from below-left once it
+  // has crossed. The draw loop fades between them as it passes, so the lit face always turns toward the crater.
+  const lights = [
+    [0.55, 0.72, 0.4],
+    [-0.55, 0.72, 0.4],
+  ].map(([x, y, z]) => {
+    const l = Math.hypot(x, y, z)
+    return [x / l, y / l, z / l]
+  })
+  const sprites = lights.map(() => {
+    const cv = document.createElement('canvas')
+    cv.width = cv.height = size
+    const g = cv.getContext('2d')
+    return { cv, g, img: g.createImageData(size, size) }
+  })
   const rr = mulberry32(0x10ba)
-  const body = g.createRadialGradient(r * 0.7, r * 1.35, r * 0.05, r, r, r)
-  body.addColorStop(0, 'rgb(176,126,48)')
-  body.addColorStop(0.45, 'rgb(122,76,32)')
-  body.addColorStop(0.8, 'rgb(64,36,24)')
-  body.addColorStop(1, 'rgb(16,10,9)')
-  g.fillStyle = body
-  g.beginPath()
-  g.arc(r, r, r - 1, 0, Math.PI * 2)
-  g.fill()
-  g.save()
-  g.clip()
-  const at = () => {
+  // paterae: five dark floors with ragged edges, in all sizes; the two largest keep a dim hot floor and a fallout stain
+  const pats = []
+  for (let i = 0; i < 5; i++) {
     const a = rr() * Math.PI * 2
-    const d = Math.sqrt(rr()) * r * 0.92
-    return [r + Math.cos(a) * d, r + Math.sin(a) * d]
+    const d = Math.sqrt(rr()) * 0.78
+    pats.push({ x: Math.cos(a) * d, y: Math.sin(a) * d, s: i < 2 ? 0.13 + rr() * 0.06 : 0.03 + rr() * 0.06, seed: rr() * 40, hot: i < 2 })
   }
-  // mottling: sulphur, orange and frost
-  const palette = [[214, 178, 70], [190, 96, 40], [226, 214, 170], [124, 62, 28]]
-  for (let i = 0; i < 70; i++) {
-    const [x, y] = at()
-    const c = palette[(rr() * palette.length) | 0]
-    const br = r * (0.06 + rr() * 0.2)
-    const soft = g.createRadialGradient(x, y, 0, x, y, br)
-    soft.addColorStop(0, `rgba(${c[0]},${c[1]},${c[2]},${(0.16 + rr() * 0.22).toFixed(2)})`)
-    soft.addColorStop(1, `rgba(${c[0]},${c[1]},${c[2]},0)`)
-    g.fillStyle = soft
-    g.fillRect(x - br, y - br, br * 2, br * 2)
-  }
-  // plume deposits: broad, faint red-orange halos
-  for (let i = 0; i < 4; i++) {
-    const [x, y] = at()
-    const halo = g.createRadialGradient(x, y, 0, x, y, r * 0.3)
-    halo.addColorStop(0, 'rgba(200,70,40,0.26)')
-    halo.addColorStop(1, 'rgba(200,70,40,0)')
-    g.fillStyle = halo
-    g.fillRect(0, 0, r * 2, r * 2)
-  }
-  // paterae: dark volcanic craters ringed in red, a few with a hot core
-  for (let i = 0; i < 16; i++) {
-    const [x, y] = at()
-    const s = r * (0.03 + rr() * 0.07)
-    g.strokeStyle = 'rgba(150,36,22,0.5)'
-    g.lineWidth = Math.max(1, s * 0.35)
-    g.beginPath()
-    g.arc(x, y, s * 1.35, 0, Math.PI * 2)
-    g.stroke()
-    g.fillStyle = 'rgba(14,8,6,0.9)'
-    g.beginPath()
-    g.arc(x, y, s, 0, Math.PI * 2)
-    g.fill()
-    if (i % 3 === 0) {
-      g.fillStyle = 'rgba(255,128,50,0.9)'
-      g.beginPath()
-      g.arc(x, y, s * 0.4, 0, Math.PI * 2)
-      g.fill()
+  const sky = [14, 9, 8]
+  const sm = (x) => (x <= 0 ? 0 : x >= 1 ? 1 : x * x * (3 - 2 * x))
+  for (let j = 0; j < size; j++) {
+    for (let i = 0; i < size; i++) {
+      const nx = (i + 0.5 - r) / r
+      const ny = (j + 0.5 - r) / r
+      const d2 = nx * nx + ny * ny
+      if (d2 >= 1) continue // outside the disc: alpha stays 0
+      const o = (j * size + i) * 4
+      const nz = Math.sqrt(1 - d2)
+      // terrain on the sphere's surface, large to small: regions, bands, mottling, frost
+      const sx = nx / (nz + 0.35)
+      const sy = ny / (nz + 0.35)
+      const region = vnoise(sx * 1.4 + 40, sy * 1.4 + 40) // bright and dark provinces
+      const band = vnoise(sx * 0.7 + 3.1 + region, sy * 2.6 + 7.7) // broad bands of sulphur deposit, wandering
+      const mott = vnoise(sx * 3 + 11, sy * 3 + 5) * 0.65 + vnoise(sx * 7 + 2, sy * 7 + 9) * 0.35 // mottling
+      const frost = vnoise(sx * 5 + 21, sy * 5 + 17)
+      // sulphur ochre in the bright provinces, rust and brown in the dark, frost where the fine noise peaks
+      const tone = 0.55 + 0.45 * region
+      let R = (140 + 80 * band - 30 * (1 - mott)) * tone + 20
+      let G = (90 + 78 * band - 34 * (1 - mott)) * tone + 10
+      let B = (30 + 28 * band - 14 * (1 - mott)) * tone + 6
+      if (frost > 0.66) {
+        const f = ((frost - 0.66) / 0.34) * 0.75 * tone
+        R += (226 - R) * f
+        G += (214 - G) * f
+        B += (180 - B) * f
+      }
+      for (const p of pats) {
+        const dx = nx - p.x
+        const dy = ny - p.y
+        const dd = Math.sqrt(dx * dx + dy * dy)
+        if (dd > p.s * 2.6) continue
+        const ang = Math.atan2(dy, dx)
+        // the floor's edge wanders gently around the crater: noise over the angle, so it closes on itself
+        const edge = p.s * (0.7 + 0.5 * vnoise(Math.cos(ang) * 1.3 + p.seed, Math.sin(ang) * 1.3 + p.seed))
+        if (p.hot) {
+          // plume fallout: a broad rust-red stain
+          const stain = sm((p.s * 2.6 - dd) / (p.s * 1.8)) * 0.4
+          R += (160 - R) * stain
+          G += (52 - G) * stain
+          B += (28 - B) * stain
+        }
+        const k = sm((edge - dd) / (p.s * 0.45)) * 0.75 // 1 inside, 0 outside, a soft edge
+        if (k > 0) {
+          R += (40 - R) * k
+          G += (22 - G) * k
+          B += (14 - B) * k
+        }
+        if (p.hot) {
+          // a hot dot at the floor's heart
+          const hk = sm((p.s * 0.2 - dd) / (p.s * 0.12)) * 0.8
+          R += (240 - R) * hk
+          G += (110 - G) * hk
+          B += (30 - B) * hk
+        }
+      }
+      // the limb: a soft edge over the last two percent of the radius
+      const alpha = 255 * sm((1 - Math.sqrt(d2)) / 0.025)
+      for (let k = 0; k < 2; k++) {
+        const [lx, ly, lz] = lights[k]
+        const px = sprites[k].img.data
+        // lighting: Lambert with a little wrap, squared for a firm terminator; the dark side falls to the sky, not black
+        const ndl = nx * lx + ny * ly + nz * lz
+        const lit = Math.max(0, Math.min(1, (ndl + 0.18) / 1.18))
+        const lum = 0.05 + 0.95 * lit * lit
+        // and the warm rim where the limb faces the crater
+        const rim = Math.pow(1 - nz, 3) * Math.max(0, ndl) * 0.55
+        px[o] = sky[0] + (R - sky[0]) * lum + 255 * rim
+        px[o + 1] = sky[1] + (G - sky[1]) * lum + 140 * rim
+        px[o + 2] = sky[2] + (B - sky[2]) * lum + 70 * rim
+        px[o + 3] = alpha
+      }
     }
   }
-  // the terminator: the side turned from the volcano falls into shadow
-  const shade = g.createRadialGradient(r * 0.65, r * 1.35, r * 0.5, r, r, r * 1.15)
-  shade.addColorStop(0, 'rgba(6,4,4,0)')
-  shade.addColorStop(1, 'rgba(6,4,4,0.88)')
-  g.fillStyle = shade
-  g.fillRect(0, 0, r * 2, r * 2)
-  g.restore()
-  g.strokeStyle = 'rgba(255,140,70,0.4)'
-  g.lineWidth = Math.max(1.5, r * 0.025)
-  g.beginPath()
-  g.arc(r, r, r - 2, Math.PI * 0.55, Math.PI * 1.05)
-  g.stroke()
-  return { sprite: cv, r }
+  for (const s of sprites) s.g.putImageData(s.img, 0, 0)
+  return { sprites: sprites.map((s) => s.cv), r }
 }
 
 // How far in from the rim corner each crest's base reaches, in crater widths: the rest of the rim is the mouth.
@@ -1085,8 +1115,19 @@ function draw(dt) {
     const y = (0.27 - 0.12 * near) * h + (vnoise(t * 0.017, 9) - 0.5) * h * 0.03
     const rad = (moon.r * scale) / 1.15
     ctx.globalCompositeOperation = 'source-over'
-    ctx.globalAlpha = Math.min(1, (0.4 + prof.density * 0.6) * (0.6 + 0.4 * near))
-    ctx.drawImage(moon.sprite, x - rad, y - rad, rad * 2, rad * 2)
+    // never fully opaque: the sky's haze sits between us and it
+    const alpha = Math.min(0.86, (0.4 + prof.density * 0.6) * (0.6 + 0.4 * near))
+    // lit from the summit's side: the bake lit from below-right while it is left of the peak, the other once past,
+    // fading between them over a fifth of the width
+    const mix = sstep((x - m.peakX) / (w * 0.2) + 0.5)
+    if (mix < 1) {
+      ctx.globalAlpha = alpha * (1 - mix)
+      ctx.drawImage(moon.sprites[0], x - rad, y - rad, rad * 2, rad * 2)
+    }
+    if (mix > 0) {
+      ctx.globalAlpha = alpha * mix
+      ctx.drawImage(moon.sprites[1], x - rad, y - rad, rad * 2, rad * 2)
+    }
   }
   // Time of Trial: the weak sun is blotted out. A smooth veil, eased in and out, never a flash.
   if (trial > 0.01) {
