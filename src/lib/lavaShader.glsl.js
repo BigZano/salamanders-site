@@ -105,7 +105,7 @@ out vec4 fragColor;
 const float LEVEE = 2.2;               // across at the outer edge of the rubble
 const float CYCLE = 40.0;              // seconds a layer of plates lasts before it is renewed
 const float SPEED = 3.0;               // px per second the plug at the centre carries the plates
-const float GAIN = 1.8;                // contrast of the crust noise before the threshold
+const float GAIN = 1.8; const float CRUST_FADE = 2.4; // crust noise contrast; the toe fade curve's power
 const float WARP = 2.4;                // plate cells the domain warp pushes the noise along the flow, at full viscosity
 const float WARP_FREQ = 0.4;           // the warp noise's frequency, against the plates'
 const vec2 CELL = vec2(7.0, 18.0);     // size of a plate in px, across and along the flow
@@ -212,10 +212,10 @@ void main() {
   float sg = uSurge[id];
   float surgeDist = (along - sg) / (0.07 + 0.2 * max(sg, 0.0));
   float fresh = sg < 0.0 ? 0.0 : exp(-surgeDist * surgeDist) * (1.0 - min(1.0, sg));
-  // 5. Crust: slow plates, and more of them toward the toe and with uCrust. Fresh lava breaks it.
+  // 5. Crust: one continuous dark ribbon, fading toward the toe on a curve that steepens with depth (Bret, 2026-11-07).
   float c = clamp(0.5 + (w0 * (pa.x - 0.5) + w1 * (pb.x - 0.5)) * inversesqrt(w0 * w0 + w1 * w1) * GAIN, 0.0, 1.0);
-  float thr = 1.0 - (0.1 + uCrust * pow(along, 0.8)) + fresh;
-  float crusted = smoothstep(thr - 0.1, thr + 0.1, c);
+  float thr = 1.0 - (0.3 + 0.35 * uCrust) + fresh;
+  float crusted = smoothstep(thr - 0.2, thr + 0.2, c) * (1.0 - pow(along, CRUST_FADE));
   // 6. Cracks: bright lines about CRACK_PX wide at the plate edges, whatever the slope of the noise.
   float crack = (1.0 - smoothstep(0.0, CRACK_PX, abs(c - thr) / max(fwidth(c), 0.002))) * uCracks;
   // 7. Margins: the banks run hot where the flow shears against them.
@@ -241,8 +241,8 @@ void main() {
   float rub = 0.7 + 0.6 * vnoise(vec2(u, v) / (3.0 * scale) + seedShift);
   vec3 rubble = RUBBLE * rub + col * ((LEVEE - a) * T * 0.25);
   col = mix(col, rubble, smoothstep(1.0 - 0.5 / hw, 1.0 + 0.5 / hw, a));
-  // 13. Calm band, and a 1 px feather where the field ends; the rubble fades out toward LEVEE.
-  float alpha = calm(vPx) * clamp((LEVEE - a) * hw, 0.0, 1.0) * (1.0 - smoothstep(1.2, LEVEE, a));
+  // 13. Calm band, a 1 px feather at the field's end, rubble fading to LEVEE, an arm's head feathered in over its first tenth.
+  float alpha = calm(vPx) * clamp((LEVEE - a) * hw, 0.0, 1.0) * (1.0 - smoothstep(1.2, LEVEE, a)) * (id == 0 ? 1.0 : smoothstep(0.0, 0.1, along));
   fragColor = vec4(col * alpha, alpha); // 14. Premultiplied, for the 2D canvas to add with lighter.
 }
 `

@@ -168,8 +168,8 @@ export function createLavaLayer({ win = typeof window === 'undefined' ? undefine
   // in a 2D context, and there is nothing to see.
   const tooSmall = () => canvas.width < 2 || canvas.height < 2
 
-  // Rasterise every channel into the field texture. Within a channel the wider levee goes down first so
-  // the channel's own strip wins the middle; across channels the strips' draw order puts the sheet last.
+  // Rasterise every channel into the field texture: every levee first, then every channel body in the
+  // strips' order (sheet last), so no levee ever sits on a neighbouring body where channels meet.
   function renderField() {
     if (tooSmall()) return
     const { vertices, indices, order, ranges } = strips
@@ -188,10 +188,8 @@ export function createLavaLayer({ win = typeof window === 'undefined' ? undefine
     gl.clear(gl.COLOR_BUFFER_BIT)
     gl.useProgram(gpu.fieldProgram)
     gl.uniform2f(gpu.fieldResolution, canvas.width, canvas.height)
-    for (const id of order) {
-      drawRange(ranges[id].levee)
-      drawRange(ranges[id].channel)
-    }
+    for (const id of order) drawRange(ranges[id].levee)
+    for (const id of order) drawRange(ranges[id].channel)
     gl.bindFramebuffer(gl.FRAMEBUFFER, null)
     fieldPasses++
   }

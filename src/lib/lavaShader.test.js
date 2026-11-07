@@ -182,7 +182,7 @@ describe('createLavaLayer', () => {
     expect(rec.uniforms.uCalm.slice(0, 4)).toEqual([5, 14, 15, 24])
   })
 
-  it('draws each channel levee first then channel, in the order the strips give, as byte offsets', () => {
+  it('draws every levee first, then every channel body, in the order the strips give, as byte offsets', () => {
     const { win, gl, rec } = fakeGL()
     const layer = createLavaLayer({ win, phone: false })
     // The sheet is first in the array but a head, so it is drawn after the arm it feeds.
@@ -192,7 +192,7 @@ describe('createLavaLayer', () => {
     expect(uploads).toContain(gl.ELEMENT_ARRAY_BUFFER)
     expect(rec.uploads.every((u) => u.usage === gl.DYNAMIC_DRAW)).toBe(true)
     // Each range is 12 indices of 2 bytes: channel 1 at 24 and 36, channel 0 at 0 and 12.
-    expect(rec.drawElements.map((d) => d.offset)).toEqual([48, 72, 0, 24])
+    expect(rec.drawElements.map((d) => d.offset)).toEqual([48, 0, 72, 24])
     expect(rec.drawElements.every((d) => d.count === 12 && d.mode === gl.TRIANGLES && d.type === gl.UNSIGNED_SHORT)).toBe(true)
   })
 
