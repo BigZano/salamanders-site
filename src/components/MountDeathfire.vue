@@ -1860,8 +1860,18 @@ onMounted(() => {
       },
       time: () => t,
       snapshot: () => canvas.value,
+      // Where the channels are, in viewport px, for the render harness's smoke probes (scripts/forge-render.mjs).
+      geometry: () => ({
+        vent: mountain?.vent,
+        flows: flows.map((f) => ({ pts: f.pts, head: f.head, widthAt0: f.widthAt?.(0), widthMid: f.widthAt?.(0.5) })),
+      }),
     }
     window.__forge = forge
+    // The render grid's lava presets arrive as query params (?crust=0.3&heat=1.2), one per tuner value, applied before the first frame.
+    for (const key of Object.keys(fireTuning.lava)) {
+      const v = devNumber(key)
+      if (v !== null) fireTuning.lava[key] = v
+    }
     const at = devNumber('t')
     if (at !== null) {
       t = at
