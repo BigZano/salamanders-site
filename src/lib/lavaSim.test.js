@@ -30,9 +30,9 @@ describe('simUniforms', () => {
   it('clamps the dt and maps the tunables', () => {
     const u = simUniforms({ heat: 1, crust: 0.75, viscosity: 0.7, cracks: 0.8, breakoutRate: 1 }, 0.4, false)
     expect(u.uDt).toBe(0.05)
-    expect(u.uSource).toBeCloseTo(0.45)
+    expect(u.uSource).toBeCloseTo(0.9)
     expect(u.uCool).toBe(0.75)
     expect(u.uBreak).toBe(1)
-    expect(simUniforms({ heat: 9, crust: -1, viscosity: 2, cracks: 9, breakoutRate: 9 }, 0.01, true)).toMatchObject({ uDt: 0.01, uSource: 0.9, uCool: 0, uVisc: 1, uCrackGlow: 2, uBreak: 4 })
+    expect(simUniforms({ heat: 9, crust: -1, viscosity: 2, cracks: 9, breakoutRate: 9 }, 0.01, true)).toMatchObject({ uDt: 0.01, uSource: 1.8, uCool: 0, uVisc: 1, uCrackGlow: 2, uBreak: 4 })
   })
 })

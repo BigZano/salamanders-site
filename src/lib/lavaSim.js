@@ -74,7 +74,7 @@ const uniforms = {
  * Turn the tunables and the frame time into the simulation's uniform values.
  *
  * `dt` is capped at 50 ms so a stalled tab does not feed the simulation one
- * huge step on its return. Heat 1 gives a source of 0.45 of the palette; a
+ * huge step on its return. Heat 1 gives a source of 0.9 of the palette; a
  * surge adds the rest up to the top. Tunables are clamped to the ranges the
  * tuner offers, as in `packUniforms`. `phone` is part of the signature so the
  * caller need not change if a phone ever wants different values; none do yet.
@@ -82,7 +82,7 @@ const uniforms = {
  */
 export function simUniforms(tune, dt, phone) {
   uniforms.uDt = Math.min(dt, 0.05)
-  uniforms.uSource = clamp(tune.heat, 0, 2) * 0.45
+  uniforms.uSource = clamp(tune.heat, 0, 2) * 0.9
   uniforms.uCool = clamp(tune.crust, 0, 1)
   uniforms.uVisc = clamp(tune.viscosity, 0, 1)
   uniforms.uBreak = clamp(tune.breakoutRate, 0, 4)
