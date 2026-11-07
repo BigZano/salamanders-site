@@ -1,5 +1,6 @@
 <script setup>
 import { ref, computed, watch, onMounted, onBeforeUnmount } from 'vue'
+import { forge, forgeAdvance, forgeSample, devNumber } from '../lib/forge'
 import { useRoute } from 'vue-router'
 import { motionAllowed } from '../lib/doomfire'
 import { fireTuning, randomize, profileFor, NEUTRAL_PROFILE } from '../lib/fireTuning'
@@ -61,7 +62,8 @@ let trialClock = 0 // seconds until the blast throws again
 
 /** Where the moon is in its cycle, 0 to 1. The sky is shared: it follows the clock, so every visitor sees the same moon. */
 function moonPhase() {
-  // Dev preview: ?moon=0.5 puts the moon at its closest pass (and brings the Time of Trial) on load.
+  // The forge playground can pin the phase; otherwise ?moon=0.5 puts the moon at its closest pass on load (dev only).
+  if (forge && forge.moon !== null) return { cycle: 0, phase: forge.moon % 1 }
   const dev = import.meta.env.DEV ? new URLSearchParams(window.location.search).get('moon') : null
   if (dev !== null && Number.isFinite(parseFloat(dev))) return { cycle: 0, phase: parseFloat(dev) % 1 }
   const now = Date.now()
@@ -866,7 +868,7 @@ function measureCalm() {
       range.selectNodeContents(el)
       boxes = range.getClientRects()
     }
-    if (el.closest('.deathfire')) continue
+    if (el.closest('.deathfire, [data-forge]')) continue // the forge playground's controls are not reading text
     for (const r of boxes) {
       if (out.length >= 80) break
       if (r.width < 8 || r.height < 8 || r.bottom < 0 || r.top > h || r.right < 0 || r.left > w) continue
@@ -1653,10 +1655,13 @@ function frame(now) {
   if (stopped) return
   raf = requestAnimationFrame(frame)
   if (hidden) return
-  const elapsed = now - last
-  if (elapsed < 1000 / FPS) return
-  const dt = Math.min(elapsed / 16.7, 3)
+  const real = now - last
+  if (real < 1000 / FPS) return
   last = now
+  // the forge playground can freeze, step or speed the clock; without it the clock is the clock
+  const elapsed = forgeAdvance(forge, real, 1000 / FPS)
+  if (elapsed <= 0) return
+  const dt = Math.min(elapsed / 16.7, 3)
   t += elapsed / 1000
 
   if (tune.sparks > 0 && tune.eruptRate > 0 && t >= nextPulse) {
@@ -1664,7 +1669,11 @@ function frame(now) {
     nextPulse = t + rand(2.5, 9) / tune.eruptRate
   }
 
-  draw(dt)
+  if (forge) {
+    const t0 = performance.now()
+    draw(dt)
+    forgeSample(forge, performance.now() - t0, real)
+  } else draw(dt)
 }
 
 const onVisibility = () => (hidden = document.hidden)
@@ -1723,6 +1732,31 @@ onMounted(() => {
   mode.value = 'live'
   raf = requestAnimationFrame(frame)
   document.addEventListener('visibilitychange', onVisibility)
+
+  if (forge) {
+    // the forge playground's hands on this volcano; ?t=120 opens frozen at that second (the grid uses it)
+    forge.actions = {
+      erupt: (k = 1) => erupt(k),
+      trial: (tier) => {
+        trialTier = tier
+        trialAt = 0
+        trialClock = 0
+      },
+      seek: (sec) => {
+        t = sec
+        draw(1)
+      },
+      time: () => t,
+      snapshot: () => canvas.value,
+    }
+    window.__forge = forge
+    const at = devNumber('t')
+    if (at !== null) {
+      t = at
+      forge.frozen = true
+      draw(1)
+    }
+  }
 })
 
 onBeforeUnmount(() => {

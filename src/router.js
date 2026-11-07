@@ -95,6 +95,10 @@ const routes = [
     // Near ash falls over the plaque, not behind it (MountDeathfire).
     meta: { title, ashOver: true },
   })),
+  // The forge playground: dev only, never in a build (a production load falls through to not-found).
+  ...(import.meta.env.DEV
+    ? [{ path: '/dev/forge', name: 'forge', component: () => import('./views/dev/ForgePlayground.vue'), meta: { title: 'Forge' } }]
+    : []),
   {
     path: '/:pathMatch(.*)*',
     name: 'not-found',

@@ -2,6 +2,7 @@ import { defineConfig } from 'vite'
 import vue from '@vitejs/plugin-vue'
 import tailwindcss from '@tailwindcss/vite'
 import { existsSync, readFileSync } from 'node:fs'
+import { forgeDevPlugin } from './scripts/lib/forge-dev-plugin.mjs'
 
 // Legion Archive: only the key id travels in the bundle (to detect a
 // stale page), never the key. ARCHIVE_LOCK / VITE_ARCHIVE_BASE let the
@@ -16,7 +17,8 @@ export default defineConfig({
   // router.js) needs an absolute base to match against location.pathname.
   // Override with SITE_BASE if that ever changes.
   base: process.env.SITE_BASE || '/',
-  plugins: [vue(), tailwindcss()],
+  // forgeDevPlugin serves only: the /dev/forge playground's snap and reference endpoints.
+  plugins: [vue(), tailwindcss(), forgeDevPlugin()],
   define: {
     __ARCHIVE_KID__: JSON.stringify(archiveLock?.kid ?? null),
     __ARCHIVE_BASE__: JSON.stringify(process.env.VITE_ARCHIVE_BASE || '/archive/'),

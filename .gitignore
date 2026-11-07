@@ -75,3 +75,7 @@ roles_list.txt
 
 # Subagent-driven-development scratch (ledgers, briefs, review packages)
 .superpowers/
+
+# The forge playground's snaps (/dev/forge) and its reference frames (public domain, but large: keep them local)
+.forge/
+docs/design/refs/
