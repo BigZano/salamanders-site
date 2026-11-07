@@ -71,6 +71,16 @@ export const DEFAULTS = {
     // 0 = all soft embers, 1 = all fast sparks, between = both at once.
     sparkMix: 0,
   },
+  // The WebGL lava in the channels (see lib/lavaShader). Every key must be present: the shader packs a missing one as
+  // NaN, so anything that writes here must merge into these, never replace them.
+  lava: {
+    crust: 0.75, // how much of a channel is closed over with cooled plates, 0 bare to 1 mostly crust
+    heat: 1, // overall brightness of the molten parts
+    viscosity: 0.7, // stiffer lava runs as a narrower fast core with the banks sticking, and folds tighter downstream
+    cracks: 0.8, // how bright the glowing cracks between the plates are
+    foldScale: 1, // how fine the pressure folds are, as a multiple of the base: higher gives more folds along a channel
+    breakoutRate: 1, // how often a toe breaks out, as a multiple of the base rate; 0 stops them
+  },
 }
 
 /**
@@ -186,6 +196,7 @@ export function profileFor(path) {
 export function resetTuning() {
   Object.assign(fireTuning.text, DEFAULTS.text)
   Object.assign(fireTuning.bed, DEFAULTS.bed)
+  Object.assign(fireTuning.lava, DEFAULTS.lava)
   Object.assign(randomize, RANDOMIZE_DEFAULTS)
   for (const [path, p] of Object.entries(ROUTE_PROFILE_DEFAULTS)) {
     Object.assign(routeProfiles[path], p)

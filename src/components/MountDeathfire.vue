@@ -47,6 +47,9 @@ let hidden = false
 let mountain = null // { peak, left, right, profile, crater }
 let ridges = [] // distant silhouettes, for depth
 let flows = [] // lava running down the flanks
+let lava = null // the WebGL lava layer (lib/lavaShader), once loaded; null while loading and where WebGL2 is missing
+let lavaFade = 0 // how much of the channels the shader paints, 0 (the ribbons alone) to 1; rises over a second
+let lavaWanted = false // cleared on unmount, so a chunk that arrives late does not build a layer for a gone volcano
 let lip = null // the molten lip along the crater rim, brimming over
 let moon = null // Prometheus: { sprites: [lit from below-right, lit from below-left], r }
 let calmRects = [] // where reading text sits over the canvas, in viewport pixels, as of calmScroll
@@ -668,7 +671,7 @@ function traceSlice(ctx, f, lo, hi) {
  */
 function buildFlows(prev, w) {
   const out = []
-  const phone = window.matchMedia?.('(max-width: 768px)').matches
+  const phone = isPhone()
   // tune.flows is the number of distributaries the sheet splits into; a phone gets one, and its side stream
   const arms = Math.max(0, Math.round(phone ? Math.min(1, tune.flows) : tune.flows))
   if (!arms) return out
@@ -737,6 +740,7 @@ function buildFlows(prev, w) {
     out.push({
       pts,
       kind,
+      widthAt: w, // the channel's width in px at s along it (0 to 1): the shader cuts its strips from it
       head, // starts at the vent: gets the spill, the pool and the full rider count
       levee: ribbon(pts, w, 2.2, 0.22, 0.8, i * 3),
       shoulder: ribbon(pts, w, 4, 0.4, 0.5, i * 3 + 1),
@@ -876,6 +880,16 @@ function measureCalm() {
       out.push({ l: r.left, t: r.top, r: r.right, b: r.bottom })
     }
   }
+  // The shader takes only the first few rects (lib/lavaProfile MAX_CALM), and the page's own order puts the header's links
+  // first, which would fill every slot and leave the hero's text with no calm at all. So the rects nearest a channel go
+  // first; the ribbons take the whole list and do not care about its order.
+  for (const r of out) {
+    r.gap = Infinity
+    for (const f of flows) {
+      for (const p of f.pts) r.gap = Math.min(r.gap, Math.hypot(Math.max(r.l - p.x, 0, p.x - r.r), Math.max(r.t - p.y, 0, p.y - r.b)))
+    }
+  }
+  out.sort((a, b) => a.gap - b.gap || 0)
   // dev: ?calm=0 switches the band off, to compare a page with and without it
   const off = import.meta.env.DEV && new URLSearchParams(window.location.search).get('calm') === '0'
   calmRects = off ? [] : out
@@ -1097,6 +1111,47 @@ function buildSilhouette(w, h) {
   return cv
 }
 
+const isPhone = () => window.matchMedia?.('(max-width: 768px)').matches
+
+// One object, rewritten each frame, so handing the shader its tuning allocates nothing.
+const lavaTuning = { crust: 0, heat: 0, viscosity: 0, cracks: 0, foldScale: 0, breakoutRate: 0 }
+
+/** The tuner's lava values, with this page's own lava heat on top where its profile sets one. */
+function lavaTune() {
+  const l = fireTuning.lava
+  lavaTuning.crust = l.crust
+  lavaTuning.heat = l.heat * (prof.lavaHeat ?? 1)
+  lavaTuning.viscosity = l.viscosity
+  lavaTuning.cracks = l.cracks
+  lavaTuning.foldScale = l.foldScale
+  lavaTuning.breakoutRate = l.breakoutRate
+  return lavaTuning
+}
+
+/**
+ * Fetches the WebGL lava layer once the first frame is up, so the page never waits on it: until it lands, and anywhere it
+ * cannot run (no WebGL2, no context, ?lava=0), the ribbons paint the channels. The module is its own chunk, so the query
+ * flag is read from it rather than imported here, which would pull the whole shader into the main bundle.
+ */
+function loadLava() {
+  if (stopped) return
+  lavaWanted = true
+  import('../lib/lavaShader')
+    .then(({ createLavaLayer, supportsLavaShader }) => {
+      if (!lavaWanted || supportsLavaShader() === 'off') return
+      lava = createLavaLayer({ phone: isPhone() })
+      if (!lava || !mountain) return
+      lava.resize(lastW, lastH, flows)
+      // A still frame (reduced motion) never runs the fade, and a frozen playground does not advance it, so both
+      // take the shader at once and repaint.
+      if (mode.value === 'still' || forge?.frozen) {
+        lavaFade = 1
+        draw(1)
+      }
+    })
+    .catch((err) => console.warn('The lava shader failed; the ribbons stay.', err))
+}
+
 function layout() {
   const cv = canvas.value
   if (!cv) return false
@@ -1124,11 +1179,12 @@ function layout() {
   mountain = buildMountain(w, h)
   ridges = buildRidges(w, h)
   flows = buildFlows(flows, w)
+  lava?.resize(w, h, flows) // the shader's channels follow the same centrelines
   lip = buildLip(mountain)
   moon = buildMoon(w, h)
   silhouette = buildSilhouette(w, h)
 
-  const mobile = window.matchMedia?.('(max-width: 768px)').matches
+  const mobile = isPhone()
   burst = []
   // Honour the slider. This used to be min(w/16, count), which silently capped
   // a requested 112 to 94 on a 1500px screen and made the plume look thin.
@@ -1327,6 +1383,11 @@ function draw(dt) {
   // 4. Lava running down the flanks, drawn over the rock as channels cut through it: for each, the rubble levee, then
   // the glow in three ribbons (bloom, body, core), then the crust skin closing over the middle, so the margins stay
   // brightest, which is where real channels shear and glow.
+  // Once the WebGL layer has loaded it paints the channels instead (drawn below, after the ribbons). The two cross-fade
+  // over a second, the ribbons at `keep` and the shader at `lavaFade`, so the channels are never dark between them. If
+  // the context is lost the fade drops to zero and the ribbons carry the lava alone until it is restored.
+  if (lava) lavaFade = lava.ok ? Math.min(1, lavaFade + secs) : 0
+  const keep = 1 - lavaFade
   ctx.lineCap = 'round'
   ctx.lineJoin = 'round'
   for (const f of flows) {
@@ -1338,8 +1399,16 @@ function draw(dt) {
     // the channels follow the caldera too: a flare lights them, a lull dims them
     const heat = f.heat * pulse * tune.flowHeat * prof.density * (0.82 + 0.18 * breathe + flare * 0.5)
     f._heat = heat // read by the chunk pass below, after this loop's dash state is gone
+    // An eruption sends a pulse of fresh, hotter lava down the channel: slow, spreading as it goes and fading as it cools.
+    // It advances here, ahead of the ribbons' own painting, because the shader reads the same pulse from the flow.
+    if (f.surge >= 0) {
+      f.surge += dt * 0.0035 * lavaSpeed(Math.min(1, f.surge))
+      if (f.surge > 1.15) f.surge = -1
+    }
     if (heat <= 0.01) continue
+    // Made even when the shader paints the channel: step 5's tongue at the vent reads it, and a relayout builds new flows.
     const ramp = (f.ramp ??= flowRamp(ctx, f))
+    if (keep <= 0) continue // the shader paints this channel entirely
 
     // Where text sits over the channel its glow steps aside: how much it keeps at each sampled place.
     let calmSum = 0
@@ -1349,7 +1418,7 @@ function draw(dt) {
     }
     // The levee: rubble banks either side of the cut, a wide faint shoulder and a nearer bank.
     ctx.globalCompositeOperation = 'source-over'
-    ctx.globalAlpha = Math.min(1, 0.5 + heat * 0.5)
+    ctx.globalAlpha = Math.min(1, 0.5 + heat * 0.5) * keep
     ctx.fillStyle = SHOULDER_FILL
     ctx.fill(f.shoulder)
     ctx.fillStyle = LEVEE_FILL
@@ -1359,7 +1428,7 @@ function draw(dt) {
     ctx.beginPath()
     ctx.moveTo(f.pts[0].x, f.pts[0].y)
     for (const p of f.pts) ctx.lineTo(p.x, p.y)
-    ctx.globalAlpha = Math.max(0, heat * 0.22 * (calmSum / GLOW_STOPS))
+    ctx.globalAlpha = Math.max(0, heat * 0.22 * (calmSum / GLOW_STOPS)) * keep
     ctx.strokeStyle = ramp.bloom
     ctx.lineWidth = f.width * 6
     ctx.stroke()
@@ -1371,11 +1440,6 @@ function draw(dt) {
     // heat colour are set by a gradient along the channel, so it varies smoothly with no steps.
     f.D += secs * (0.21 + 0.15 * vnoise(t * 0.05, f.seed))
     f.tau += secs * (0.035 + 0.03 * vnoise(t * 0.04, f.seed + 17))
-    // An eruption sends a pulse of fresh, hotter lava down the channel: slow, spreading as it goes and fading as it cools.
-    if (f.surge >= 0) {
-      f.surge += dt * 0.0035 * lavaSpeed(Math.min(1, f.surge))
-      if (f.surge > 1.15) f.surge = -1
-    }
     const tail = f.pts[f.pts.length - 1]
     const body = ctx.createLinearGradient(f.pts[0].x, f.pts[0].y, tail.x, tail.y)
     const core = ctx.createLinearGradient(f.pts[0].x, f.pts[0].y, tail.x, tail.y)
@@ -1411,16 +1475,24 @@ function draw(dt) {
       const crust = sstep((f.thrs[gi] - n) / 0.3 + 0.5) * (1 - fresh) * (0.25 + 0.75 * s)
       skin.addColorStop(s, `rgba(${SKIN_RGB},${(crust * 0.9).toFixed(3)})`)
     }
-    ctx.globalAlpha = Math.max(0, heat * 0.8)
+    ctx.globalAlpha = Math.max(0, heat * 0.8) * keep
     ctx.fillStyle = body
     ctx.fill(f.ribbon)
-    ctx.globalAlpha = Math.max(0, heat)
+    ctx.globalAlpha = Math.max(0, heat) * keep
     ctx.fillStyle = core
     ctx.fill(f.core)
     ctx.globalCompositeOperation = 'source-over'
-    ctx.globalAlpha = 1
+    ctx.globalAlpha = keep
     ctx.fillStyle = skin
     ctx.fill(f.skin)
+  }
+  // The shader's channels go over what is left of the ribbons, added the way they are (the layer's canvas is premultiplied).
+  if (lava?.ok && lavaFade > 0) {
+    lava.draw({ t, flows, calmRects, calmShift, tune: lavaTune(), density: prof.density })
+    ctx.globalCompositeOperation = 'lighter'
+    ctx.globalAlpha = lavaFade
+    ctx.drawImage(lava.canvas, 0, 0, w, h)
+    ctx.globalAlpha = 1
   }
   ctx.globalCompositeOperation = 'lighter'
 
@@ -1726,11 +1798,13 @@ onMounted(() => {
     t = 2.5
     draw(1)
     mode.value = 'still'
+    loadLava()
     return
   }
 
   mode.value = 'live'
   raf = requestAnimationFrame(frame)
+  requestAnimationFrame(loadLava) // queued behind the first frame, so the shader is fetched only once that has painted
   document.addEventListener('visibilitychange', onVisibility)
 
   if (forge) {
@@ -1768,6 +1842,10 @@ onBeforeUnmount(() => {
   resizeObserver?.disconnect()
   resizeObserver = null
   document.removeEventListener('visibilitychange', onVisibility)
+  lavaWanted = false
+  lava?.dispose()
+  lava = null
+  lavaFade = 0
   mountain = null
   ridges = []
   flows = []

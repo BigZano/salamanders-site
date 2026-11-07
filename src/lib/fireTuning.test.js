@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { describe, it, expect } from 'vitest'
-import { profileFor, profileKeyFor, routeProfiles } from './fireTuning'
+import { DEFAULTS, fireTuning, profileFor, profileKeyFor, resetTuning, routeProfiles } from './fireTuning'
 
 describe('the Deathwatch volcano profile', () => {
   const deathwatch = () => routeProfiles['/deathwatch/*']
@@ -62,5 +62,26 @@ describe('volcano route profiles', () => {
     const { density, scale } = profileFor('/roster')
     expect(density).toBeLessThanOrEqual(0.6)
     expect(scale).toBeLessThanOrEqual(0.6)
+  })
+})
+
+describe('the lava tunables', () => {
+  it('carries the lava tunables and resets them', () => {
+    expect(DEFAULTS.lava).toEqual({ crust: 0.75, heat: 1, viscosity: 0.7, cracks: 0.8, foldScale: 1, breakoutRate: 1 })
+    fireTuning.lava.crust = 0.1
+    resetTuning()
+    expect(fireTuning.lava.crust).toBe(0.75)
+  })
+
+  it('keeps every key the shader reads, since a missing one packs as NaN', () => {
+    for (const key of Object.keys(DEFAULTS.lava)) fireTuning.lava[key] = 0.5
+    resetTuning()
+    expect(fireTuning.lava).toEqual(DEFAULTS.lava)
+  })
+
+  it('does not share its defaults with the live values, so a drag cannot rewrite DEFAULTS', () => {
+    fireTuning.lava.heat = 1.7
+    expect(DEFAULTS.lava.heat).toBe(1)
+    resetTuning()
   })
 })

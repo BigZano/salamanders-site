@@ -65,6 +65,16 @@ const BED_FIELDS = [
   { key: 'scale', label: 'Particle scale', min: 0.2, max: 5, step: 0.1 },
 ]
 
+// The WebGL lava in the channels. Ranges match what lib/lavaProfile clamps each value to.
+const LAVA_FIELDS = [
+  { key: 'crust', label: 'Crust', min: 0, max: 1, step: 0.05 },
+  { key: 'heat', label: 'Heat', min: 0, max: 2, step: 0.05 },
+  { key: 'viscosity', label: 'Viscosity', min: 0, max: 1, step: 0.05 },
+  { key: 'cracks', label: 'Cracks', min: 0, max: 2, step: 0.05 },
+  { key: 'foldScale', label: 'Fold scale', min: 0.25, max: 3, step: 0.05 },
+  { key: 'breakoutRate', label: 'Breakouts', min: 0, max: 4, step: 0.1 },
+]
+
 // Per-route departure from the baked hero.
 const PROFILE_FIELDS = [
   { key: 'bearing', label: 'Bearing', min: -0.6, max: 0.6, step: 0.01, hint: 'where you stand' },
@@ -91,6 +101,7 @@ const snippet = computed(
   () =>
     `text: ${JSON.stringify(fireTuning.text, null, 2)},\n` +
     `bed: ${JSON.stringify(fireTuning.bed, null, 2)},\n` +
+    `lava: ${JSON.stringify(fireTuning.lava, null, 2)},\n` +
     `randomize: ${JSON.stringify(randomize, null, 2)},\n` +
     `profiles: ${JSON.stringify(routeProfiles, null, 2)},`,
 )
@@ -163,6 +174,21 @@ const changed = (group, key) => fireTuning[group][key] !== DEFAULTS[group][key]
             :step="f.step"
           />
           <span class="row-val">{{ fireTuning.bed[f.key] }}</span>
+        </label>
+      </section>
+
+      <section>
+        <h3 class="tuner-group">Lava</h3>
+        <label v-for="f in LAVA_FIELDS" :key="f.key" class="row">
+          <span class="row-label" :class="{ on: changed('lava', f.key) }">{{ f.label }}</span>
+          <input
+            v-model.number="fireTuning.lava[f.key]"
+            type="range"
+            :min="f.min"
+            :max="f.max"
+            :step="f.step"
+          />
+          <span class="row-val">{{ fireTuning.lava[f.key] }}</span>
         </label>
       </section>
 
