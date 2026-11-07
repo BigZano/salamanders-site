@@ -8,13 +8,15 @@ function compile(gl, type, source) {
   gl.shaderSource(shader, source)
   gl.compileShader(shader)
   if (gl.getShaderParameter(shader, gl.COMPILE_STATUS)) return shader
+  if (import.meta.env.DEV) console.warn('lava shader: compile failed\n', gl.getShaderInfoLog(shader))
   gl.deleteShader(shader)
   return null
 }
 
 /**
- * Compile both shaders and link them, or return null if either step fails. Nothing is logged: the
- * caller falls back to the ribbons, and a null is the whole answer.
+ * Compile both shaders and link them, or return null if either step fails. A production page says
+ * nothing and falls back to the ribbons; in development the driver's log is warned, since a null alone
+ * would hide which line of GLSL it disliked.
  */
 export function compileProgram(gl, vertSrc, fragSrc) {
   const vert = compile(gl, gl.VERTEX_SHADER, vertSrc)
@@ -26,6 +28,7 @@ export function compileProgram(gl, vertSrc, fragSrc) {
     gl.attachShader(program, frag)
     gl.linkProgram(program)
     if (!gl.getProgramParameter(program, gl.LINK_STATUS)) {
+      if (import.meta.env.DEV) console.warn('lava shader: link failed\n', gl.getProgramInfoLog(program))
       gl.deleteProgram(program)
       program = null
     }
@@ -38,8 +41,8 @@ export function compileProgram(gl, vertSrc, fragSrc) {
 
 /**
  * A w by h texture with a framebuffer drawing into it. Half floats when `float` is true; otherwise
- * bytes, and `packed` is true to say the shaders must pack `across` themselves. It is sampled by pixel,
- * so NEAREST: a filtered sample would blend channel ids into nonsense.
+ * bytes, and the caller's shaders must pack `across` themselves (it chooses the sources, so it already
+ * knows). It is sampled by pixel, so NEAREST: a filtered sample would blend channel ids into nonsense.
  */
 export function createFieldTarget(gl, w, h, float) {
   const texture = gl.createTexture()
@@ -54,7 +57,7 @@ export function createFieldTarget(gl, w, h, float) {
   gl.bindFramebuffer(gl.FRAMEBUFFER, fbo)
   gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, texture, 0)
   gl.bindFramebuffer(gl.FRAMEBUFFER, null)
-  return { texture, fbo, packed: !float }
+  return { texture, fbo }
 }
 
 export function deleteFieldTarget(gl, target) {

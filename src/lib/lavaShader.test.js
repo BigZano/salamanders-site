@@ -1,7 +1,13 @@
-import { describe, it, expect } from 'vitest'
+import { describe, it, expect, vi, afterEach } from 'vitest'
 import { supportsLavaShader, hasWebGL2, createLavaLayer } from './lavaShader'
 import { UNIFORMS } from './lavaShader.glsl'
 import { compileProgram } from './lavaGl'
+
+// A failed build warns in development, so tests that fail one on purpose spy on console.warn.
+afterEach(() => {
+  vi.restoreAllMocks()
+  vi.unstubAllEnvs()
+})
 
 describe('supportsLavaShader', () => {
   it('reads the switch from the query string', () => {
@@ -43,6 +49,7 @@ function fakeGL({ float = true, compileOk = true, linkOk = true, dpr, refuseCont
   const rec = {
     calls: 0, lookups: 0, programs: 0, loseCalls: 0, contexts: [], deletedPrograms: 0, deletedTargets: 0,
     drawElements: [], drawArrays: [], uploads: [], sources: [], textures: [], uniforms: {},
+    enabled: [], attribs: [], texParams: [], infoLogReads: 0,
   }
   const lose = {
     loseContext() { rec.loseCalls++; fire('webglcontextlost') },
@@ -54,10 +61,16 @@ function fakeGL({ float = true, compileOk = true, linkOk = true, dpr, refuseCont
     gl[name] = (...args) => { rec.calls++; return impl(...args) }
   }
   for (const name of [
-    'compileShader', 'attachShader', 'linkProgram', 'useProgram', 'enableVertexAttribArray', 'vertexAttribPointer',
-    'bindVertexArray', 'bindBuffer', 'bindTexture', 'texParameteri', 'bindFramebuffer', 'framebufferTexture2D',
-    'viewport', 'clearColor', 'clear', 'activeTexture', 'disable', 'deleteShader',
+    'compileShader', 'attachShader', 'linkProgram', 'useProgram', 'bindVertexArray', 'bindBuffer', 'bindTexture',
+    'bindFramebuffer', 'framebufferTexture2D', 'viewport', 'clearColor', 'clear', 'activeTexture', 'disable', 'deleteShader',
   ]) method(name)
+  // The vertex layout and sampler state are recorded: they decide what the shaders read, and a no-op stub
+  // would let a wrong offset or filter through.
+  method('enableVertexAttribArray', (at) => rec.enabled.push(at))
+  method('vertexAttribPointer', (...args) => rec.attribs.push(args))
+  method('texParameteri', (target, name, value) => rec.texParams.push([target, name, value]))
+  method('getShaderInfoLog', () => { rec.infoLogReads++; return 'shader log' })
+  method('getProgramInfoLog', () => { rec.infoLogReads++; return 'program log' })
   method('deleteProgram', () => rec.deletedPrograms++)
   method('deleteFramebuffer', () => rec.deletedTargets++)
   method('deleteTexture')
@@ -112,6 +125,7 @@ describe('createLavaLayer', () => {
     expect(createLavaLayer({ win: {}, phone: false })).toBeNull()
   })
   it('is null when the context is refused or a program does not build', () => {
+    vi.spyOn(console, 'warn').mockImplementation(() => {})
     expect(createLavaLayer({ win: fakeGL({ refuseContext: true }).win, phone: false })).toBeNull()
     expect(createLavaLayer({ win: fakeGL({ compileOk: false }).win, phone: false })).toBeNull()
     expect(createLavaLayer({ win: fakeGL({ linkOk: false }).win, phone: false })).toBeNull()
@@ -194,6 +208,34 @@ describe('createLavaLayer', () => {
     const packed = narrow.rec.sources.filter((s) => s.source.startsWith('#version 300 es\n#define FIELD_PACKED\n'))
     expect(packed.map((s) => s.type)).toEqual([narrow.gl.FRAGMENT_SHADER, narrow.gl.FRAGMENT_SHADER])
     expect(narrow.rec.sources).toHaveLength(4)
+  })
+
+  it('lays the field pass vertices out as lavaStrips does and skips the dropped aHeat', () => {
+    const { win, gl, rec } = fakeGL()
+    createLavaLayer({ win, phone: false })
+    // [location, size, type, normalized, stride, offset]: 7 floats a vertex, so 28 bytes.
+    expect(rec.attribs).toEqual([
+      [0, 2, gl.FLOAT, false, 28, 0], // aPos
+      [1, 1, gl.FLOAT, false, 28, 8], // aAcross
+      [2, 1, gl.FLOAT, false, 28, 12], // aAlong
+      [3, 1, gl.FLOAT, false, 28, 16], // aHalf
+      [5, 1, gl.FLOAT, false, 28, 24], // aId
+    ])
+    expect(rec.enabled).toEqual([0, 1, 2, 3, 5])
+    expect(rec.enabled).not.toContain(-1)
+  })
+
+  it('samples the field by pixel: nearest, clamped to the edge', () => {
+    const { win, gl, rec } = fakeGL()
+    createLavaLayer({ win, phone: false }).resize(800, 600, [flow])
+    const state = Object.fromEntries(rec.texParams.filter(([target]) => target === gl.TEXTURE_2D).map(([, name, value]) => [name, value]))
+    expect(state).toEqual({
+      [gl.TEXTURE_MIN_FILTER]: gl.NEAREST,
+      [gl.TEXTURE_MAG_FILTER]: gl.NEAREST,
+      [gl.TEXTURE_WRAP_S]: gl.CLAMP_TO_EDGE,
+      [gl.TEXTURE_WRAP_T]: gl.CLAMP_TO_EDGE,
+    })
+    expect(rec.texParams).toHaveLength(4)
   })
 
   it('sets every uniform on every draw from locations looked up once', () => {
@@ -301,16 +343,38 @@ describe('createLavaLayer', () => {
 })
 
 describe('compileProgram', () => {
+  const SRC = '#version 300 es\n'
   it('returns null, and deletes the program, when it will not link', () => {
+    vi.spyOn(console, 'warn').mockImplementation(() => {})
     const { gl, rec } = fakeGL({ linkOk: false })
-    expect(compileProgram(gl, '#version 300 es\n', '#version 300 es\n')).toBeNull()
+    expect(compileProgram(gl, SRC, SRC)).toBeNull()
     expect(rec.deletedPrograms).toBe(1)
   })
-  it('returns the linked program', () => {
+  it('returns the linked program, silently', () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
     const { gl, rec } = fakeGL()
-    const program = compileProgram(gl, '#version 300 es\n', '#version 300 es\n')
+    const program = compileProgram(gl, SRC, SRC)
     expect(program).toEqual({ id: 1 })
     expect(rec.deletedPrograms).toBe(0)
     expect(rec.sources.map((s) => s.type)).toEqual([gl.VERTEX_SHADER, gl.FRAGMENT_SHADER])
+    expect(warn).not.toHaveBeenCalled()
+  })
+  it('warns the driver log for a failed compile or link in development', () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    expect(compileProgram(fakeGL({ compileOk: false }).gl, SRC, SRC)).toBeNull()
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining('compile failed'), 'shader log')
+    warn.mockClear()
+    expect(compileProgram(fakeGL({ linkOk: false }).gl, SRC, SRC)).toBeNull()
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining('link failed'), 'program log')
+  })
+  it('says nothing, and does not even read the log, outside development', () => {
+    vi.stubEnv('DEV', false)
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const compileFails = fakeGL({ compileOk: false })
+    const linkFails = fakeGL({ linkOk: false })
+    expect(compileProgram(compileFails.gl, SRC, SRC)).toBeNull()
+    expect(compileProgram(linkFails.gl, SRC, SRC)).toBeNull()
+    expect(warn).not.toHaveBeenCalled()
+    expect(compileFails.rec.infoLogReads + linkFails.rec.infoLogReads).toBe(0)
   })
 })
