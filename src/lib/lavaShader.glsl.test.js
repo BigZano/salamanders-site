@@ -12,7 +12,20 @@ describe('the GLSL sources', () => {
   it('declare every uniform the layer sets, and the lava fragment uses each', () => {
     for (const u of UNIFORMS) {
       expect(LAVA_VERT + LAVA_FRAG).toMatch(new RegExp(`uniform\\s+\\w+\\s+${u}\\b`))
-      expect((LAVA_FRAG + LAVA_VERT).split(u).length).toBeGreaterThan(2)
+      // Whole words only, and not in comments: a plain substring count passes vacuously for uHeat
+      // (inside uHeatPer) and uCalm (inside uCalmCount). One match is the declaration, so a second is a use.
+      const code = (LAVA_FRAG + LAVA_VERT).replace(/\/\/.*$/gm, '')
+      expect((code.match(new RegExp(`\\b${u}\\b`, 'g')) || []).length).toBeGreaterThanOrEqual(2)
+    }
+  })
+  it('keep each shader under 160 lines', () => {
+    for (const s of [FIELD_VERT, FIELD_FRAG, LAVA_VERT, LAVA_FRAG]) {
+      expect(s.trimEnd().split('\n').length).toBeLessThan(160)
+    }
+  })
+  it('name the look constants so they can be tuned in one place', () => {
+    for (const name of ['SPEED', 'GAIN', 'WARP', 'WARP_FREQ', 'CELL', 'FOLD_PX', 'MARGIN', 'CRACK_PX', 'PERIOD']) {
+      expect(LAVA_FRAG).toMatch(new RegExp(`const\\s+\\w+\\s+${name}\\s*=`))
     }
   })
   it('carry the spec colours and the field layout', () => {

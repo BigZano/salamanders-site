@@ -92,29 +92,27 @@ precision highp sampler2D;
 // Lava pass fragment (spec 4.2). With "#define FIELD_PACKED" the field is RGBA8 (see FIELD_FRAG).
 // Sample it NEAREST so channel ids never blend. All px here are drawing-buffer px: uBounds,
 // uResolution and the calm rects share one space, and vPx is the pixel's place in it, y down.
-uniform float uTime;
-uniform float uCrust;
-uniform float uHeat;
-uniform float uViscosity;
-uniform float uCracks;
-uniform float uFoldScale;
-uniform float uBreakoutRate;
-uniform float uDensity;
-uniform int uOctaves;
-uniform float uSurge[12];
-uniform float uHeatPer[12];
-uniform float uPhase[12];
-uniform vec4 uCalm[8];
-uniform int uCalmCount;
-uniform float uLength[12];
-uniform sampler2D uField;
-uniform vec2 uResolution;
-uniform vec4 uBounds;
+uniform float uTime; uniform float uDensity; uniform int uOctaves;    // seconds; the page's glow; noise octaves
+uniform float uCrust; uniform float uHeat; uniform float uViscosity;  // the tuner's lava.crust, heat, viscosity
+uniform float uCracks; uniform float uFoldScale; uniform float uBreakoutRate;  // and its cracks, foldScale, breakoutRate
+uniform float uSurge[12]; uniform float uHeatPer[12]; uniform float uPhase[12]; uniform float uLength[12];  // per channel
+uniform vec4 uCalm[8]; uniform int uCalmCount;   // calm rects as l, t, r, b; only the first uCalmCount are live
+uniform sampler2D uField; uniform vec2 uResolution; uniform vec4 uBounds;
 in vec2 vPx;
 out vec4 fragColor;
 
-const float LEVEE = 2.2;
-const float CYCLE = 40.0;
+// Look constants, tuned by name. The px ones are for a 600 px tall scene and scale with it.
+const float LEVEE = 2.2;               // across at the outer edge of the rubble
+const float CYCLE = 40.0;              // seconds a layer of plates lasts before it is renewed
+const float SPEED = 3.0;               // px per second the plug at the centre carries the plates
+const float GAIN = 1.8;                // contrast of the crust noise before the threshold
+const float WARP = 2.4;                // plate cells the domain warp pushes the noise along the flow, at full viscosity
+const float WARP_FREQ = 0.4;           // the warp noise's frequency, against the plates'
+const vec2 CELL = vec2(7.0, 18.0);     // size of a plate in px, across and along the flow
+const float FOLD_PX = 28.0;            // wavelength of the fold ripples in px
+const vec2 MARGIN = vec2(0.55, 0.95);  // across where the banks start and finish running hot
+const float CRACK_PX = 1.5;            // width of a crack line in px
+const vec2 PERIOD = vec2(10.0, 20.0);  // shortest and longest breakout period in s, spread by channel id
 const vec3 CRUST = vec3(12.0, 6.0, 4.0) / 255.0;
 const vec3 DEEP = vec3(90.0, 10.0, 0.0) / 255.0;
 const vec3 RED = vec3(200.0, 40.0, 10.0) / 255.0;
@@ -174,12 +172,12 @@ float calm(vec2 p) {
 // the viscous profile s for ph of a CYCLE. A layer is only shown while ph runs 0 to 1, fading in and
 // out, so the banks and the centre never shear far enough apart to turn the noise into hair.
 vec2 plates(float u, float v, float s, float ph, float seed, float along, float scale) {
-  float vv = v - ph * CYCLE * s * 3.0 * scale;
-  vec2 cell = vec2(7.0, 18.0) * scale;
+  float vv = v - ph * CYCLE * s * SPEED * scale;
+  vec2 cell = CELL * scale;
   vec2 p = vec2(u, vv) / cell + seed;
-  float warp = (vnoise(p * 0.4 + 7.7) - 0.5) * 2.4 * uViscosity;
+  float warp = (vnoise(p * WARP_FREQ + 7.7) - 0.5) * WARP * uViscosity;
   p.y += warp;
-  float k = 6.2832 / (28.0 * scale) * uFoldScale * (1.0 + 2.0 * along * uViscosity);
+  float k = 6.2832 / (FOLD_PX * scale) * uFoldScale * (1.0 + 2.0 * along * uViscosity);
   return vec2(fbm(p, uOctaves), sin((vv + warp * cell.y) * k));
 }
 void main() {
@@ -205,40 +203,42 @@ void main() {
   float cyc = uTime / CYCLE;
   float w0 = 1.0 - abs(2.0 * fract(cyc) - 1.0);
   float w1 = 1.0 - w0;
-  float sd = float(id) * 17.3;
-  vec2 pa = plates(u, v, s, fract(cyc), floor(cyc) * 11.7 + sd, along, scale);
-  vec2 pb = plates(u, v, s, fract(cyc + 0.5), floor(cyc + 0.5) * 11.7 + sd + 53.0, along, scale);
+  float seedShift = float(id) * 17.3;
+  vec2 pa = plates(u, v, s, fract(cyc), floor(cyc) * 11.7 + seedShift, along, scale);
+  vec2 pb = plates(u, v, s, fract(cyc + 0.5), floor(cyc + 0.5) * 11.7 + seedShift + 53.0, along, scale);
   // 4. Folds: ridges across the flow, bunched toward the toe by plates().
   float fold = w0 * pa.y + w1 * pb.y;
   // 9. Surge, worked out early because the crust threshold needs it. sg is -1 when none.
   float sg = uSurge[id];
-  float sd2 = (along - sg) / (0.07 + 0.2 * max(sg, 0.0));
-  float fresh = sg < 0.0 ? 0.0 : exp(-sd2 * sd2) * (1.0 - min(1.0, sg));
+  float surgeDist = (along - sg) / (0.07 + 0.2 * max(sg, 0.0));
+  float fresh = sg < 0.0 ? 0.0 : exp(-surgeDist * surgeDist) * (1.0 - min(1.0, sg));
   // 5. Crust: slow plates, and more of them toward the toe and with uCrust. Fresh lava breaks it.
-  float c = clamp(0.5 + (w0 * (pa.x - 0.5) + w1 * (pb.x - 0.5)) * inversesqrt(w0 * w0 + w1 * w1) * 1.8, 0.0, 1.0);
+  float c = clamp(0.5 + (w0 * (pa.x - 0.5) + w1 * (pb.x - 0.5)) * inversesqrt(w0 * w0 + w1 * w1) * GAIN, 0.0, 1.0);
   float thr = 1.0 - (0.1 + uCrust * pow(along, 0.8)) + fresh;
   float crusted = smoothstep(thr - 0.1, thr + 0.1, c);
-  // 6. Cracks: bright lines about 1.5 px wide at the plate edges, whatever the slope of the noise.
-  float crack = (1.0 - smoothstep(0.0, 1.5, abs(c - thr) / max(fwidth(c), 0.002))) * uCracks;
+  // 6. Cracks: bright lines about CRACK_PX wide at the plate edges, whatever the slope of the noise.
+  float crack = (1.0 - smoothstep(0.0, CRACK_PX, abs(c - thr) / max(fwidth(c), 0.002))) * uCracks;
   // 7. Margins: the banks run hot where the flow shears against them.
-  float shear = smoothstep(0.55, 0.95, a);
-  // 8. Breakouts: every 10-20 s the crusted toe darkens, then a tongue of lava brightens there
-  // and cools back to crust. A rate of 0 switches them off.
-  float period = (10.0 + 10.0 * fract(float(id) * 0.618)) / max(uBreakoutRate, 0.01);
+  float shear = smoothstep(MARGIN.x, MARGIN.y, a);
+  // 8. Breakouts: every PERIOD seconds the crusted toe darkens, then a tongue of lava brightens
+  // there and cools back to crust. A rate of 0 switches them off.
+  float period = mix(PERIOD.x, PERIOD.y, fract(float(id) * 0.618)) / max(uBreakoutRate, 0.01);
   float bp = fract(uTime / period + uPhase[id]);
-  float blob = smoothstep(0.45, 0.8, vnoise(vec2(u, v) / (vec2(10.0, 14.0) * scale) + sd));
+  float blob = smoothstep(0.45, 0.8, vnoise(vec2(u, v) / (vec2(10.0, 14.0) * scale) + seedShift));
   float dim = smoothstep(0.0, 0.3, bp) * (1.0 - smoothstep(0.3, 0.45, bp));
   float tongue = smoothstep(0.45, 0.6, bp) * (1.0 - smoothstep(0.6, 1.0, bp));
-  float breakout = step(0.001, uBreakoutRate) * smoothstep(0.78, 0.92, along) * (0.8 * blob * tongue - 0.5 * dim);
+  float breakout = step(0.001, uBreakoutRate) * smoothstep(0.78, 0.92, along)
+                 * (0.8 * blob * tongue - 0.5 * dim);
   // 10. Temperature.
-  float T = (1.0 - 0.55 * along) * uHeatPer[id] + crack * 0.6 + shear * 0.35 + fresh * 0.8 - crusted * 0.9 + fold * 0.08 + breakout;
+  float T = (1.0 - 0.55 * along) * uHeatPer[id] + crack * 0.6 + shear * 0.35 + fresh * 0.8
+          - crusted * 0.9 + fold * 0.08 + breakout;
   T = clamp(T, 0.0, 1.0) * uHeat * uDensity;
   // 11. Colour. The sheet is flow 0 (buildFlows pushes it first), and its head is held at the top.
   float hold = id == 0 ? 1.0 - smoothstep(0.1, 0.15, along) : 0.0;
   T = max(T, hold * clamp(uHeat * uDensity, 0.0, 1.0));
   vec3 col = ramp(T);
   // 12. Levee: grey rubble past the bank, lit toward the channel by what the bank is doing.
-  float rub = 0.7 + 0.6 * vnoise(vec2(u, v) / (3.0 * scale) + sd);
+  float rub = 0.7 + 0.6 * vnoise(vec2(u, v) / (3.0 * scale) + seedShift);
   vec3 rubble = RUBBLE * rub + col * ((LEVEE - a) * T * 0.25);
   col = mix(col, rubble, smoothstep(1.0 - 0.5 / hw, 1.0 + 0.5 / hw, a));
   // 13. Calm band, and a 1 px feather where the field ends; the rubble fades out toward LEVEE.
