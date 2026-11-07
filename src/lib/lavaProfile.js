@@ -31,6 +31,9 @@ const clamp = (v, lo, hi) => Math.min(hi, Math.max(lo, v))
 // Each channel gets a fixed phase so neighbouring flows do not pulse in step.
 // 7.31 is arbitrary but not close to a whole number, so the fractions spread.
 const PHASE = new Float32Array(MAX_CHANNELS)
+// How far each channel's pattern has flowed, in seconds of flow: integrated in the volcano so a surge can
+// speed the flow up for a while and the pattern never jumps.
+const FLOW = new Float32Array(MAX_CHANNELS)
 for (let i = 0; i < MAX_CHANNELS; i++) PHASE[i] = (i * 7.31) % 1
 
 // The arrays and the result are built once and refilled on every call. The
@@ -53,6 +56,7 @@ const packed = {
   uSurge: SURGE,
   uHeatPer: HEAT_PER,
   uPhase: PHASE,
+  uFlow: FLOW,
   uCalm: CALM,
   uCalmCount: 0,
 }
@@ -71,6 +75,7 @@ export function packUniforms({ flows, calmRects, calmShift, tune, density, t, ph
   for (let i = 0; i < MAX_CHANNELS; i++) {
     const flow = flows[i]
     SURGE[i] = flow ? (flow.surge ?? -1) : -1
+    FLOW[i] = i < flows.length ? (flows[i].flowDist ?? 0) : 0
     HEAT_PER[i] = flow ? (flow.heat ?? 0) : 0
   }
 

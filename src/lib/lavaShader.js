@@ -250,6 +250,7 @@ export function createLavaLayer({ win = typeof window === 'undefined' ? undefine
     gl.uniform1fv(loc.uSurge, u.uSurge)
     gl.uniform1fv(loc.uHeatPer, u.uHeatPer)
     gl.uniform1fv(loc.uPhase, u.uPhase)
+    gl.uniform1fv(loc.uFlow, u.uFlow)
     gl.uniform4fv(loc.uCalm, u.uCalm)
     gl.uniform1fv(loc.uLength, lengths)
     gl.uniform2f(loc.uResolution, canvas.width, canvas.height)

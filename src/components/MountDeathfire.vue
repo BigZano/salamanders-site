@@ -678,7 +678,7 @@ function buildFlows(prev, w) {
   const rows = mountain.left.length
   const m = mountain
   // the sheet leaves the vent as wide as the valley floor
-  const W0 = Math.max(10, Math.min(30, m.craterHalf * 0.42))
+  const W0 = Math.max(12, Math.min(40, m.craterHalf * 0.56))
   const towardFace = m.peakX < w / 2 ? 1 : -1
 
   // The centreline of a channel from row `from` to fraction `to` of the height: u is its place across the mountain's
@@ -789,7 +789,7 @@ function buildFlows(prev, w) {
     const wob = { amp: grand(0.03, 0.07), freq: grand(3, 6), phase: grand(0, Math.PI * 2) }
     const endAt = grand(0.74, 1)
     const pts = trace(tail.u, fromArm, fan, wob, endAt)
-    const wa = w0 * (arms === 1 ? 0.8 : grand(0.6, 0.75))
+    const wa = w0 * (arms === 1 ? 0.85 : grand(0.72, 0.88))
     const kind = kinds[i] || 'plain'
     const heat = grand(0.7, 1)
     push(pts, widths(wa, true), 'arm', false, heat)
@@ -805,11 +805,12 @@ function buildFlows(prev, w) {
     } else if (kind === 'side' && n > 10) {
       // a side stream: leaves the arm, runs away from it down the flank and runs out
       const ia = Math.round(n * grand(0.3, 0.5))
-      const ib = Math.min(n - 1, ia + Math.round(n * grand(0.35, 0.5)))
+      const ib = Math.min(n - 2, ia + Math.round(n * grand(0.35, 0.5)))
       const side = arms === 1 ? towardFace : fan >= 0 ? 1 : -1
-      const reach = wa * grand(2.5, 4)
-      const sp = offshoot(pts, ia, ib, side, reach, (f) => Math.pow(f, 0.8) + 0.12 * Math.sin(f * 5))
-      push(sp, widths(wa * 0.5, true), 'side', false, heat * grand(0.7, 0.95))
+      // a side stream is a long loop: it leaves its host, swings wide down the flank and returns to it
+      const reach = wa * grand(2.2, 3.2)
+      const sp = offshoot(pts, ia, ib, side, reach, (f) => Math.sin(Math.PI * f) * (0.85 + 0.15 * Math.sin(f * 7)))
+      push(sp, widths(wa * 0.55, false), 'side', false, heat * grand(0.7, 0.95))
     }
   }
   return out
@@ -1433,6 +1434,9 @@ function draw(dt) {
     // the channels follow the caldera too: a flare lights them, a lull dims them
     const heat = f.heat * pulse * tune.flowHeat * prof.density * (0.82 + 0.18 * breathe + flare * 0.5)
     f._heat = heat // read by the chunk pass below, after this loop's dash state is gone
+    // The channel's flow clock: a surge is a faster flow, not a brighter one, so it runs up to 1.9x while the
+    // pulse is in the channel and settles back; the shader carries its pattern by this, so nothing jumps.
+    f.flowDist = (f.flowDist || 0) + secs * (1 + 0.9 * (f.surge >= 0 ? 1 - Math.min(1, f.surge) : 0))
     // An eruption sends a pulse of fresh, hotter lava down the channel: slow, spreading as it goes and fading as it cools.
     // It advances here, ahead of the ribbons' own painting, because the shader reads the same pulse from the flow.
     if (f.surge >= 0) {

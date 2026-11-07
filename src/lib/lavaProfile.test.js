@@ -18,12 +18,14 @@ describe('velocity', () => {
 describe('packUniforms', () => {
   const tune = { crust: 0.75, heat: 1, viscosity: 0.7, cracks: 0.8, foldScale: 1, breakoutRate: 1 }
   it('packs per-channel surge, heat and phase up to twelve channels', () => {
-    const flows = Array.from({ length: 14 }, (_, i) => ({ surge: i === 2 ? 0.4 : -1, heat: 0.9 }))
+    const flows = Array.from({ length: 14 }, (_, i) => ({ surge: i === 2 ? 0.4 : -1, heat: 0.9, flowDist: i === 2 ? 12.5 : undefined }))
     const u = packUniforms({ flows, calmRects: [], calmShift: 0, tune, density: 1, t: 3, phone: false })
     expect(u.uSurge).toHaveLength(MAX_CHANNELS)
     expect(u.uSurge[2]).toBeCloseTo(0.4)
     expect(u.uSurge[0]).toBe(-1)
     expect(u.uHeatPer[5]).toBeCloseTo(0.9)
+    expect(u.uFlow[2]).toBeCloseTo(12.5)
+    expect(u.uFlow[0]).toBe(0)
     expect(u.uPhase[1]).not.toBe(u.uPhase[2])
     expect(u.uTime).toBe(3)
     expect(u.uOctaves).toBe(4)

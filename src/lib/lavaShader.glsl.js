@@ -25,7 +25,7 @@
 // sets the last 4 (each channel's length, the field sampler, the drawing buffer size and the quad).
 export const UNIFORMS = [
   'uTime', 'uCrust', 'uHeat', 'uViscosity', 'uCracks', 'uFoldScale', 'uBreakoutRate', 'uDensity',
-  'uOctaves', 'uSurge', 'uHeatPer', 'uPhase', 'uCalm', 'uCalmCount', 'uLength', 'uField', 'uResolution', 'uBounds',
+  'uOctaves', 'uSurge', 'uHeatPer', 'uPhase', 'uCalm', 'uCalmCount', 'uLength', 'uFlow', 'uField', 'uResolution', 'uBounds',
 ]
 
 export const FIELD_VERT = `#version 300 es
@@ -95,7 +95,7 @@ precision highp sampler2D;
 uniform float uTime; uniform float uDensity; uniform int uOctaves;    // seconds; the page's glow; noise octaves
 uniform float uCrust; uniform float uHeat; uniform float uViscosity;  // the tuner's lava.crust, heat, viscosity
 uniform float uCracks; uniform float uFoldScale; uniform float uBreakoutRate;  // and its cracks, foldScale, breakoutRate
-uniform float uSurge[12]; uniform float uHeatPer[12]; uniform float uPhase[12]; uniform float uLength[12];  // per channel
+uniform float uSurge[12]; uniform float uFlow[12]; uniform float uHeatPer[12]; uniform float uPhase[12]; uniform float uLength[12];  // per channel
 uniform vec4 uCalm[8]; uniform int uCalmCount;   // calm rects as l, t, r, b; only the first uCalmCount are live
 uniform sampler2D uField; uniform vec2 uResolution; uniform vec4 uBounds;
 in vec2 vPx;
@@ -116,7 +116,7 @@ const vec2 PERIOD = vec2(10.0, 20.0);  // shortest and longest breakout period i
 const vec3 CRUST = vec3(12.0, 6.0, 4.0) / 255.0;
 const vec3 DEEP = vec3(90.0, 10.0, 0.0) / 255.0;
 const vec3 RED = vec3(200.0, 40.0, 10.0) / 255.0;
-const vec3 ORANGE = vec3(255.0, 120.0, 30.0) / 255.0;
+const vec3 ORANGE = vec3(255.0, 136.0, 38.0) / 255.0;
 const vec3 WHITE = vec3(255.0, 220.0, 150.0) / 255.0;
 const vec3 RUBBLE = vec3(52.0, 40.0, 34.0) / 255.0;
 
@@ -199,7 +199,7 @@ void main() {
   float v = along * uLength[id];
   // 3. Viscous advection. Two plate layers half a CYCLE apart, cross-faded so neither shows the instant it reseeds.
   float s = velocity(across, along);
-  float cyc = uTime / CYCLE;
+  float cyc = uFlow[id] / CYCLE; // the channel's own flow clock: a surge runs it faster for a while
   float w0 = 1.0 - abs(2.0 * fract(cyc) - 1.0);
   float w1 = 1.0 - w0;
   float seedShift = float(id) * 17.3;
@@ -228,7 +228,7 @@ void main() {
   float breakout = step(0.001, uBreakoutRate) * smoothstep(0.78, 0.92, along) * (0.5 * blob * tongue - 0.5 * dim);
   // 10. Temperature: deep red to dark orange as the base, scattered hotter spots where the plates run thin.
   float hot = smoothstep(0.7, 0.95, w0 * pa.x + w1 * pb.x);
-  float T = (0.64 - 0.3 * along) * uHeatPer[id] + hot * 0.45 + crack * 0.45 + shear * 0.18 + fresh * 0.35
+  float T = (0.64 - 0.3 * along) * uHeatPer[id] + hot * 0.45 + crack * 0.45 + shear * 0.18
           - crusted * 0.9 + fold * 0.08 + breakout;
   T = clamp(T, 0.0, 1.0) * uHeat * uDensity;
   // 11. Colour. The sheet is flow 0 (buildFlows pushes it first), and its head is held at the top.
