@@ -81,8 +81,6 @@ function trialLevel(sec, tier) {
 }
 let spits = [] // lava spat up off the lip, and bubbles popping on it
 const SPIT_MAX = 18
-// Phones get seven of the default eleven channels.
-const PHONE_FLOW_SHARE = 0.64
 let silhouette = null // cached rock, redrawn only on resize
 let drift = [] // continuous sparks/embers off the summit
 let burst = [] // sparks thrown by an eruption pulse
@@ -305,7 +303,23 @@ function buildMountain(w, h) {
   const right = flank(1)
 
   const crown = buildCrown(rimL, rimR, craterHalf, left, right)
-  return { peakX, peakY, craterHalf, left, right, rimL, rimR, crown: crown.poly, mouthL: crown.mouthL, mouthR: crown.mouthR, litL: crown.litL, litR: crown.litR }
+  return {
+    peakX,
+    peakY,
+    craterHalf,
+    left,
+    right,
+    rimL,
+    rimR,
+    crown: crown.poly,
+    mouthL: crown.mouthL,
+    mouthR: crown.mouthR,
+    valley: crown.valley, // the breach, left edge to right edge
+    vent: crown.vent, // the valley floor's low point, where the lava leaves
+    valleyDepth: crown.depth,
+    litL: crown.litL,
+    litR: crown.litR,
+  }
 }
 
 /**
@@ -461,10 +475,28 @@ function buildCrown(rimL, rimR, ch, leftFlank, rightFlank) {
   }
   const left = crest(rimL, leftFlank, -1, tallLeft ? j(1.5, 2.1) : j(0.55, 0.9))
   const right = crest(rimR, rightFlank, 1, tallLeft ? j(0.55, 0.9) : j(1.5, 2.1))
+  // The breach: the near rim is cut away between the crests into a valley, its floor well below rim level, as the
+  // rim of a cone breaks where the lava finds its way out (Mauna Loa's fissure 3 channel, Etna's breached cones).
+  // The lava pools in it and leaves over the floor's low point, the vent.
+  const mw = right.edge.x - left.edge.x
+  const depth = j(0.3, 0.42) * ch
+  const low = 0.42 + j(-0.08, 0.08)
+  const vx = (f) => left.edge.x + mw * f
+  const vy = (f) => left.edge.y + (right.edge.y - left.edge.y) * f
+  const valley = [
+    { x: vx(0.14 + j(-0.03, 0.03)), y: vy(0.14) + depth * 0.5 },
+    { x: vx(low - 0.14), y: vy(low - 0.14) + depth * 0.92 },
+    { x: vx(low), y: vy(low) + depth },
+    { x: vx(low + 0.16), y: vy(low + 0.16) + depth * 0.9 },
+    { x: vx(0.86 + j(-0.03, 0.03)), y: vy(0.86) + depth * 0.45 },
+  ]
   return {
-    poly: [...left.outer, ...left.inner, ...[...right.inner].reverse(), ...[...right.outer].reverse()],
+    poly: [...left.outer, ...left.inner, ...valley, ...[...right.inner].reverse(), ...[...right.outer].reverse()],
     mouthL: left.edge,
     mouthR: right.edge,
+    valley: [left.edge, ...valley, right.edge],
+    vent: valley[2],
+    depth,
     litL: [left.tip, ...left.inner],
     litR: [right.tip, ...right.inner],
   }
@@ -519,11 +551,11 @@ function buildRockShape() {
  * to 0 — an endless procession rather than a one-shot particle.
  * (The glow inside a channel is not a rider: it is a pattern of crust windows, see the lava pass in draw.)
  */
-function buildRiders() {
+function buildRiders(lo = 3, hi = 7) {
   return {
-    // Rafts of crust: three to seven on a channel, spread along it at random and in all sizes, so it reads as
-    // scattered rockfall and not a pattern. About one in five is a big slab.
-    chunks: Array.from({ length: 3 + ((rng() * 5) | 0) }, () => ({
+    // Rafts of crust: three to seven on a trunk, one or two on a branch, spread along it at random and in all sizes,
+    // so it reads as scattered rockfall and not a pattern. About one in five is a big slab.
+    chunks: Array.from({ length: lo + ((rng() * (hi - lo + 1)) | 0) }, () => ({
       boost: 0, // extra speed from being thrown out by a blast; it dies away
       u: rng(),
       speed: grand(0.0007, 0.0014), // rock is heavier than the glow riding past it
@@ -560,6 +592,18 @@ function buildLip(m) {
   const r = mulberry32(hashString(route.path || '/') ^ 0x11b5)
   const n = 64
   const bump = Math.max(2.5, m.craterHalf * 0.11)
+  // The pool fills the breach to half its depth. Its surface runs from wall to wall at that level; the walls below
+  // the surface close the pool's shape.
+  const level = m.mouthL.y + m.valleyDepth * 0.5
+  const cross = (a, b) => ({ x: a.x + ((b.x - a.x) * (level - a.y)) / (b.y - a.y || 1), y: level })
+  const v = m.valley
+  let iL = 0
+  while (iL < v.length - 1 && v[iL + 1].y < level) iL++
+  let iR = v.length - 1
+  while (iR > 0 && v[iR - 1].y < level) iR--
+  const L = cross(v[iL], v[iL + 1])
+  const R = cross(v[iR], v[iR - 1])
+  const walls = v.slice(iL + 1, iR) // the valley points under the surface, left to right
   const coarse = Array.from({ length: 9 }, () => r())
   const crags = Array.from({ length: 24 }, () => r())
   const at = (arr, u) => {
@@ -576,12 +620,12 @@ function buildLip(m) {
     const lift = (at(coarse, u) * 0.55 + at(crags, u) * 0.35 + r() * 0.35 - 0.3) * edge
     w.push(edge)
     pts.push({
-      x: m.mouthL.x + (m.mouthR.x - m.mouthL.x) * u + (r() - 0.5) * m.craterHalf * 0.014 * edge,
-      y: m.mouthL.y + (m.mouthR.y - m.mouthL.y) * u - lift * bump,
+      x: L.x + (R.x - L.x) * u + (r() - 0.5) * m.craterHalf * 0.014 * edge,
+      y: level - lift * bump,
     })
   }
   const stops = Array.from({ length: 13 }, (_, i) => [i / 12, 0.4 + r() * 0.6])
-  return { pts, base: pts.map((p) => ({ x: p.x, y: p.y })), w, stops }
+  return { pts, base: pts.map((p) => ({ x: p.x, y: p.y })), w, stops, walls }
 }
 
 /** The lip's bloom, body and core as horizontal gradients whose strength varies along the rim. */
@@ -605,55 +649,67 @@ function traceSlice(ctx, f, lo, hi) {
 }
 
 /**
- * Lava spilling from the crater and running down the face of the cone.
+ * Lava spilling from the crater and running down the face of the cone, as the USGS record of Kilauea 2018 and Mauna
+ * Loa 2022 shows channels: a few wide ones leave the vent, cut between rubble levees, braid around an island and
+ * rejoin, or throw a side stream that runs out on the flank. Each channel is a segment: a centreline (`pts`), a width
+ * profile along it, and three ribbons built from both, the levee under, the body, and the crust skin over. A trunk
+ * starts at the mouth (`head`); a branch starts on its trunk and shares that point.
  *
- * Positions are expressed as a fraction across the mountain's width at each
- * height, not as an offset from a flank. Offsetting from the flank line pushed
- * the channels off the silhouette entirely and left the front face bare — which
+ * Positions are expressed as a fraction across the mountain's width at each height, not as an offset from a flank.
+ * Offsetting from the flank line pushed the channels off the silhouette entirely and left the front face bare, which
  * is where lava is actually visible.
  *
- * `prev` is the outgoing flow list, if any. The channel geometry doesn't
- * actually need it — the seed is fixed per route, so re-running this after a
- * resize already retraces the same channels against the new mountain, not
- * new random ones. But the riders on those channels (buildRiders, below) use
- * *unseeded* progress so rockfall and the crust pattern never repeat in lockstep, and
- * without carrying that progress across, every rider would snap back to a
- * fresh random position the moment the window resizes — a real pop, just one
- * frame later than the geometry itself.
+ * `prev` is the outgoing flow list, if any. The geometry doesn't need it: the seed is fixed per route, so re-running
+ * this after a resize retraces the same channels against the new mountain. But the riders (buildRiders) use unseeded
+ * progress so rockfall and the crust pattern never repeat in lockstep, and without carrying that progress across,
+ * every rider would snap back to a fresh random position the moment the window resizes.
  */
-function buildFlows(prev) {
+function buildFlows(prev, w) {
   const out = []
   const phone = window.matchMedia?.('(max-width: 768px)').matches
-  const count = Math.max(0, Math.round(tune.flows * (phone ? PHONE_FLOW_SHARE : 1)))
+  // tune.flows is the number of distributaries the sheet splits into; a phone gets one, and its side stream
+  const arms = Math.max(0, Math.round(phone ? Math.min(1, tune.flows) : tune.flows))
+  if (!arms) return out
   const rows = mountain.left.length
+  const m = mountain
+  // the sheet leaves the vent as wide as the valley floor
+  const W0 = Math.max(10, Math.min(30, m.craterHalf * 0.42))
+  const towardFace = m.peakX < w / 2 ? 1 : -1
 
-  for (let i = 0; i < count; i++) {
-    // Where it leaves the crater, as a fraction of the rim (-1 left, 1 right).
-    // Neutral is an even fan across the rim; the seed scatters them, and the
-    // profile's variance decides how much of that scatter this page gets.
-    const even = -0.85 + (i / Math.max(1, count - 1)) * 1.7
-    let u = randomize.flows ? stray(even, grand(-0.85, 0.85)) : even
-    const endAt = grand(0.45, 1)
+  // The centreline of a channel from row `from` to fraction `to` of the height: u is its place across the mountain's
+  // width (-1 left, 1 right), continuous with `u0` at its start, leaning away as the slope broadens with one slow
+  // wander, so it is smooth by construction. Each point carries its u so a branch can leave from it.
+  const trace = (u0, from, lean, wob, to) => {
     const pts = []
-
-    for (let s = 0; s < rows; s++) {
+    const f0 = from / (rows - 1)
+    const w0 = wob.amp * Math.sin(f0 * wob.freq + wob.phase)
+    for (let s = from; s < rows; s++) {
       const f = s / (rows - 1)
-      if (f > endAt) break
-      const l = mountain.left[s]
-      const r = mountain.right[s]
+      if (f > to) break
+      const l = m.left[s]
+      const r = m.right[s]
       const cx = (l.x + r.x) / 2
       const halfW = (r.x - l.x) / 2
-
-      // Gentle meander, and lava tends to run away from the centreline as the
-      // slope broadens rather than tracking straight down.
-      u += grand(-0.05, 0.05) * prof.variance + Math.sign(u) * 0.012
+      let u = u0 + lean * (f - f0) + wob.amp * Math.sin(f * wob.freq + wob.phase) - w0
       u = Math.max(-0.94, Math.min(0.94, u))
-
       // the channels leave through the mouth, then fan out over the face
-      pts.push({ x: cx + u * (1 - CROWN_BASE + CROWN_BASE * Math.min(1, s / 6)) * halfW, y: (l.y + r.y) / 2 })
+      pts.push({ x: cx + u * (1 - CROWN_BASE + CROWN_BASE * Math.min(1, s / 6)) * halfW, y: (l.y + r.y) / 2, u })
     }
+    return pts
+  }
+  // a branch follows its trunk between two of its points, pushed sideways by a profile over its length
+  const offshoot = (trunk, ia, ib, side, px, profile) => {
+    const pts = []
+    for (let k = ia; k <= ib; k++) {
+      const f = (k - ia) / Math.max(1, ib - ia)
+      pts.push({ x: trunk[k].x + side * px * profile(f), y: trunk[k].y })
+    }
+    return pts
+  }
+  const widths = (w0, lobe) => (s) => w0 * (1 - 0.28 * s + (lobe ? 0.45 * sstep((s - 0.82) / 0.12) : 0))
 
-    if (pts.length < 2) continue
+  const push = (pts, w, kind, head, seg) => {
+    if (pts.length < 2) return
     // The glow is sampled at GLOW_STOPS places along the channel. Where each sits in the pattern, how much crust it
     // carries (little near the vent, more toward the toe), and its heat colours depend only on its place: worked out once.
     const phs = new Float32Array(GLOW_STOPS)
@@ -666,7 +722,7 @@ function buildFlows(prev) {
       const s = gi / (GLOW_STOPS - 1)
       // Pattern phase: its wavelength follows the lava's speed (1.5 at the vent, 0.3 at the toe), so it bunches up downstream.
       phs[gi] = (5 * Math.log(1.5 / lavaSpeed(s))) / 1.2
-      thrs[gi] = 0.18 + 0.5 * Math.pow(s, 0.8)
+      thrs[gi] = (head ? 0.18 : 0.3) + 0.5 * Math.pow(s, 0.8)
       bodyA.set(rampAt(BODY_STOPS, s), gi * 4)
       coreA.set(rampAt(CORE_STOPS, s), gi * 4)
       const at = s * (pts.length - 1)
@@ -674,9 +730,17 @@ function buildFlows(prev) {
       gx[gi] = pts[i0].x + (pts[i0 + 1].x - pts[i0].x) * (at - i0)
       gy[gi] = pts[i0].y + (pts[i0 + 1].y - pts[i0].y) * (at - i0)
     }
-    const riders = prev?.[i] ? { chunks: prev[i].chunks, seed: prev[i].seed } : { ...buildRiders(), seed: rand(0, 900) }
+    const i = out.length
+    const riders = prev?.[i] ? { chunks: prev[i].chunks, seed: prev[i].seed } : { ...(head ? buildRiders() : buildRiders(1, 3)), seed: rand(0, 900) }
     out.push({
       pts,
+      kind,
+      head, // starts at the vent: gets the spill, the pool and the full rider count
+      levee: ribbon(pts, w, 2.2, 0.22, 0.8, i * 3),
+      shoulder: ribbon(pts, w, 4, 0.4, 0.5, i * 3 + 1),
+      ribbon: ribbon(pts, w, 1, 0.08, 1.1, i * 3 + 2),
+      core: ribbon(pts, w, 0.42),
+      skin: ribbon(pts, w, 0.6, 0.6, 1.5, i * 3 + 2),
       phs,
       thrs,
       bodyA,
@@ -687,14 +751,100 @@ function buildFlows(prev) {
       D: rand(0, 40), // how far the pattern has been carried: it moves at a speed that wanders
       tau: rand(0, 40), // how far it has evolved
       surge: -1, // where a pulse from an eruption has got to, 0 at the vent to 1 at the toe; -1 when none
-      width: grand(2.4, 5.2),
+      width: w(0) * 0.3, // the spill, the pool and the bloom at the head are sized from this
       phase: grand(0, Math.PI * 2),
       rate: grand(0.12, 0.4),
-      heat: grand(0.55, 1),
+      heat: seg,
       ...riders,
     })
   }
+
+  // The sheet: from the vent, straight-ish down the upper face, to the split.
+  const uVent = (m.vent.x - m.peakX) / ((1 - CROWN_BASE) * m.craterHalf)
+  let from = 0
+  while (from < rows - 1 && m.left[from].y < m.vent.y) from++
+  const splitAt = grand(0.26, 0.36)
+  const sheetLean = (arms === 1 ? towardFace : Math.sign(uVent || 1)) * grand(0.02, 0.1)
+  const sheet = trace(uVent, from, sheetLean, { amp: grand(0.01, 0.03), freq: grand(3, 5), phase: grand(0, Math.PI * 2) }, splitAt)
+  // the head is the vent itself, so the sheet pours from the floor of the breach
+  sheet.unshift({ x: m.vent.x, y: m.vent.y, u: uVent })
+  const w0 = W0
+  push(sheet, (s) => w0 * (0.75 + 0.25 * s), 'sheet', true, grand(0.85, 1))
+
+  // The distributaries: they leave the sheet's toe together and fan out. The first braids around an island, the
+  // second throws a side stream, a third does either or runs plain; the seed may swap the first two. A lone arm
+  // throws the side stream toward the face the page shows.
+  const kinds = arms === 1 ? ['side'] : ['braid', 'side', grand(0, 1) < 0.5 ? 'braid' : 'plain']
+  if (arms > 1 && grand(0, 1) < 0.5) [kinds[0], kinds[1]] = [kinds[1], kinds[0]]
+  const tail = sheet[sheet.length - 1]
+  const fromArm = from + sheet.length - 2
+  for (let i = 0; i < arms; i++) {
+    const fan = arms === 1 ? towardFace * grand(0.05, 0.15) : (i - (arms - 1) / 2) * grand(0.55, 0.75) + grand(-0.06, 0.06)
+    const wob = { amp: grand(0.03, 0.07), freq: grand(3, 6), phase: grand(0, Math.PI * 2) }
+    const endAt = grand(0.74, 1)
+    const pts = trace(tail.u, fromArm, fan, wob, endAt)
+    const wa = w0 * (arms === 1 ? 0.8 : grand(0.6, 0.75))
+    const kind = kinds[i] || 'plain'
+    const heat = grand(0.7, 1)
+    push(pts, widths(wa, true), 'arm', false, heat)
+    const n = pts.length
+    if (kind === 'braid' && n > 12) {
+      // splits around an island and rejoins: a bulge to one side between two points of the arm
+      const ia = Math.round(n * grand(0.25, 0.45))
+      const ib = Math.min(n - 2, ia + Math.round(n * grand(0.22, 0.34)))
+      const side = grand(0, 1) < 0.5 ? -1 : 1
+      const bulge = wa * grand(1.8, 2.6)
+      const bp = offshoot(pts, ia, ib, side, bulge, (f) => Math.sin(Math.PI * f))
+      push(bp, widths(wa * 0.55, false), 'braid', false, heat * grand(0.8, 1))
+    } else if (kind === 'side' && n > 10) {
+      // a side stream: leaves the arm, runs away from it down the flank and runs out
+      const ia = Math.round(n * grand(0.3, 0.5))
+      const ib = Math.min(n - 1, ia + Math.round(n * grand(0.35, 0.5)))
+      const side = arms === 1 ? towardFace : fan >= 0 ? 1 : -1
+      const reach = wa * grand(2.5, 4)
+      const sp = offshoot(pts, ia, ib, side, reach, (f) => Math.pow(f, 0.8) + 0.12 * Math.sin(f * 5))
+      push(sp, widths(wa * 0.5, true), 'side', false, heat * grand(0.7, 0.95))
+    }
+  }
   return out
+}
+
+/**
+ * A ribbon along a centreline: the polygon between the left and right offsets of each point at the width profile
+ * `w(s)` times `k`, with a round head and toe, and edges roughened by `jit` (a fraction of the half width) at
+ * `freq` per point. Built once per channel; the draw loop fills it with a gradient.
+ */
+function ribbon(pts, w, k, jit = 0, freq = 0.7, seed = 0) {
+  const n = pts.length
+  const L = []
+  const R = []
+  for (let i = 0; i < n; i++) {
+    const a = pts[Math.max(0, i - 1)]
+    const b = pts[Math.min(n - 1, i + 1)]
+    let nx = -(b.y - a.y)
+    let ny = b.x - a.x
+    const len = Math.hypot(nx, ny) || 1
+    nx /= len
+    ny /= len
+    // a ragged edge where asked: rubble on the shoulders, plates on the skin
+    const jl = jit ? 1 + jit * (vnoise(i * freq + seed, 1.7) - 0.5) * 2 : 1
+    const jr = jit ? 1 + jit * (vnoise(i * freq + seed, 9.3) - 0.5) * 2 : 1
+    const hw = (w(i / (n - 1)) * k) / 2
+    L.push([pts[i].x + nx * hw * jl, pts[i].y + ny * hw * jl])
+    R.push([pts[i].x - nx * hw * jr, pts[i].y - ny * hw * jr])
+  }
+  const p = new Path2D()
+  p.moveTo(L[0][0], L[0][1])
+  for (let i = 1; i < n; i++) p.lineTo(L[i][0], L[i][1])
+  const t = pts[n - 1]
+  const angT = Math.atan2(t.y - pts[n - 2].y, t.x - pts[n - 2].x)
+  p.arc(t.x, t.y, (w(1) * k) / 2, angT + Math.PI / 2, angT - Math.PI / 2, true)
+  for (let i = n - 2; i >= 0; i--) p.lineTo(R[i][0], R[i][1])
+  const h = pts[0]
+  const angH = Math.atan2(pts[1].y - h.y, pts[1].x - h.x)
+  p.arc(h.x, h.y, (w(0) * k) / 2, angH - Math.PI / 2, angH + Math.PI / 2, true)
+  p.closePath()
+  return p
 }
 
 /**
@@ -771,7 +921,11 @@ function rampAt(stops, s) {
 }
 
 // The heat colours of a channel's glow, vent to toe, as [position, r, g, b, a] (the same ramp flowRamp paints).
-const BODY_STOPS = [[0, 255, 196, 110, 1], [0.25, 255, 138, 61, 1], [0.6, 224, 67, 29, 1], [0.92, 150, 40, 18, 0.6], [1, 100, 26, 12, 0]]
+const BODY_STOPS = [[0, 255, 196, 110, 1], [0.25, 255, 138, 61, 1], [0.6, 224, 67, 29, 1], [0.92, 150, 40, 18, 0.6], [1, 110, 28, 12, 0.3]]
+// The rubble levee either side of a channel, a shade lighter than the rock, and the crust skin that closes over it.
+const LEVEE_FILL = 'rgba(52,40,34,0.5)'
+const SHOULDER_FILL = 'rgba(62,50,44,0.22)'
+const SKIN_RGB = '20,11,7'
 const CORE_STOPS = [[0, 255, 226, 150, 1], [0.2, 255, 190, 100, 0.9], [0.42, 255, 150, 70, 0], [1, 255, 150, 70, 0]]
 // How many places along a channel its glow is sampled; the gradient between them is smooth.
 const GLOW_STOPS = 12
@@ -967,7 +1121,7 @@ function layout() {
   seedForRoute()
   mountain = buildMountain(w, h)
   ridges = buildRidges(w, h)
-  flows = buildFlows(flows)
+  flows = buildFlows(flows, w)
   lip = buildLip(mountain)
   moon = buildMoon(w, h)
   silhouette = buildSilhouette(w, h)
@@ -1168,8 +1322,9 @@ function draw(dt) {
   }
   calmShift = calmScroll - window.scrollY
 
-  // 4. Lava running down the flanks, drawn over the rock as channels through it.
-  ctx.globalCompositeOperation = 'lighter'
+  // 4. Lava running down the flanks, drawn over the rock as channels cut through it: for each, the rubble levee, then
+  // the glow in three ribbons (bloom, body, core), then the crust skin closing over the middle, so the margins stay
+  // brightest, which is where real channels shear and glow.
   ctx.lineCap = 'round'
   ctx.lineJoin = 'round'
   for (const f of flows) {
@@ -1183,9 +1338,6 @@ function draw(dt) {
     f._heat = heat // read by the chunk pass below, after this loop's dash state is gone
     if (heat <= 0.01) continue
     const ramp = (f.ramp ??= flowRamp(ctx, f))
-    ctx.beginPath()
-    ctx.moveTo(f.pts[0].x, f.pts[0].y)
-    for (const p of f.pts) ctx.lineTo(p.x, p.y)
 
     // Where text sits over the channel its glow steps aside: how much it keeps at each sampled place.
     let calmSum = 0
@@ -1193,7 +1345,18 @@ function draw(dt) {
       f.calm[gi] = calmFactor(f.gx[gi], f.gy[gi])
       calmSum += f.calm[gi]
     }
+    // The levee: rubble banks either side of the cut, a wide faint shoulder and a nearer bank.
+    ctx.globalCompositeOperation = 'source-over'
+    ctx.globalAlpha = Math.min(1, 0.5 + heat * 0.5)
+    ctx.fillStyle = SHOULDER_FILL
+    ctx.fill(f.shoulder)
+    ctx.fillStyle = LEVEE_FILL
+    ctx.fill(f.levee)
     // The bloom: one soft stroke along the whole channel, dimmed by how much of it is under text.
+    ctx.globalCompositeOperation = 'lighter'
+    ctx.beginPath()
+    ctx.moveTo(f.pts[0].x, f.pts[0].y)
+    for (const p of f.pts) ctx.lineTo(p.x, p.y)
     ctx.globalAlpha = Math.max(0, heat * 0.22 * (calmSum / GLOW_STOPS))
     ctx.strokeStyle = ramp.bloom
     ctx.lineWidth = f.width * 6
@@ -1214,6 +1377,7 @@ function draw(dt) {
     const tail = f.pts[f.pts.length - 1]
     const body = ctx.createLinearGradient(f.pts[0].x, f.pts[0].y, tail.x, tail.y)
     const core = ctx.createLinearGradient(f.pts[0].x, f.pts[0].y, tail.x, tail.y)
+    const skin = ctx.createLinearGradient(f.pts[0].x, f.pts[0].y, tail.x, tail.y)
     for (let gi = 0; gi < GLOW_STOPS; gi++) {
       const s = gi / (GLOW_STOPS - 1)
       const x = f.phs[gi] - f.D
@@ -1230,27 +1394,33 @@ function draw(dt) {
         b += Math.min(1, 0.3 + 0.1 * c.size) * Math.min(1, Math.min(c.u, 1 - c.u) * 8) * (Math.exp(-ahead * ahead) + wake)
       }
       b = Math.min(1, b)
+      let fresh = 0
       if (f.surge >= 0) {
         const d = (s - f.surge) / (0.07 + 0.2 * f.surge)
-        b = Math.min(1, b + (1 - Math.min(1, f.surge)) * Math.exp(-d * d))
+        fresh = (1 - Math.min(1, f.surge)) * Math.exp(-d * d)
+        b = Math.min(1, b + fresh)
       }
       b *= f.calm[gi]
       const o = gi * 4
       body.addColorStop(s, `rgba(${f.bodyA[o]},${f.bodyA[o + 1]},${f.bodyA[o + 2]},${(f.bodyA[o + 3] * b).toFixed(3)})`)
       core.addColorStop(s, `rgba(${f.coreA[o]},${f.coreA[o + 1]},${f.coreA[o + 2]},${(f.coreA[o + 3] * b * b).toFixed(3)})`)
+      // The crust: where the noise falls under the threshold the skin has closed over the middle of the channel, as
+      // plates that drift with the pattern. Little of it near the vent, most toward the toe; fresh lava breaks it.
+      const crust = sstep((f.thrs[gi] - n) / 0.3 + 0.5) * (1 - fresh) * (0.25 + 0.75 * s)
+      skin.addColorStop(s, `rgba(${SKIN_RGB},${(crust * 0.9).toFixed(3)})`)
     }
-    ctx.beginPath()
-    ctx.moveTo(f.pts[0].x, f.pts[0].y)
-    for (const p of f.pts) ctx.lineTo(p.x, p.y)
     ctx.globalAlpha = Math.max(0, heat * 0.8)
-    ctx.strokeStyle = body
-    ctx.lineWidth = f.width * 1.8
-    ctx.stroke()
+    ctx.fillStyle = body
+    ctx.fill(f.ribbon)
     ctx.globalAlpha = Math.max(0, heat)
-    ctx.strokeStyle = core
-    ctx.lineWidth = f.width * 0.55
-    ctx.stroke()
+    ctx.fillStyle = core
+    ctx.fill(f.core)
+    ctx.globalCompositeOperation = 'source-over'
+    ctx.globalAlpha = 1
+    ctx.fillStyle = skin
+    ctx.fill(f.skin)
   }
+  ctx.globalCompositeOperation = 'lighter'
 
   // 4b. Rock chunks tumbling in the flow — dark against the lava, so this
   // runs source-over rather than the additive blend everything else uses.
@@ -1306,6 +1476,18 @@ function draw(dt) {
       lip.pts[i].y = lip.base[i].y + (Math.sin(t * 1.3 + i * 0.9) + Math.sin(t * 0.7 - i * 0.4) * 0.6) * heave * lip.w[i]
     }
     const g = (lip.g ??= lipGlow(ctx, lip, m))
+    // The pool: the breach filled with lava to the lip's surface, the walls closing it below.
+    ctx.beginPath()
+    ctx.moveTo(lip.pts[0].x, lip.pts[0].y)
+    for (const p of lip.pts) ctx.lineTo(p.x, p.y)
+    for (let i = lip.walls.length - 1; i >= 0; i--) ctx.lineTo(lip.walls[i].x, lip.walls[i].y)
+    ctx.closePath()
+    ctx.globalAlpha = Math.max(0, calderaHeat * 0.7 * lipCalm)
+    ctx.fillStyle = g.body
+    ctx.fill()
+    ctx.globalAlpha = Math.max(0, calderaHeat * 0.5 * lipCalm)
+    ctx.fillStyle = g.core
+    ctx.fill()
     ctx.lineCap = 'butt' // the ends meet the rock outline instead of poking out past it
     ctx.beginPath()
     ctx.moveTo(lip.pts[0].x, lip.pts[0].y)
@@ -1325,7 +1507,7 @@ function draw(dt) {
     ctx.lineCap = 'round'
   }
   for (const f of flows) {
-    if (f._heat <= 0.01 || f.pts.length < 3) continue
+    if (!f.head || f._heat <= 0.01 || f.pts.length < 3) continue
     // How far the lava has spilled over the lip: it surges with the caldera, and every channel keeps its own rhythm.
     const spill = 0.06 + 0.05 * breathe + 0.03 * Math.sin(t * f.rate * 3 + f.phase)
     const spillCalm = calmFactor(f.pts[1].x, f.pts[1].y)

@@ -44,8 +44,9 @@ export const DEFAULTS = {
     // How far a page's seed may wander from that centre. This is the *random*
     // component only; a page's deliberate position is its profile bearing.
     faceSpread: 0.16,
-    // Lava channels running down the flanks. Eleven fat channels (seven on phones) read as lava; the old 24 read as wires.
-    flows: 11,
+    // How many distributaries the sheet from the breach splits into; each may braid around an island or throw a
+    // side stream. Three on a desktop, one and its side stream on a phone (the USGS record: a few wide channels).
+    flows: 3,
     flowHeat: 1.1,
     // Light in the crater mouth.
     caldera: 1.3,
