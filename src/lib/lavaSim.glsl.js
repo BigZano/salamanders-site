@@ -54,7 +54,8 @@ const float SPEED0 = 0.06;        // along units per second at the sheet head, a
 const float SRC_ROW = 0.03;       // the vent row: the first 3% of the sheet's along
 const float FLICKER = 0.15;       // share of the vent heat that flickers
 const float SURGE_V = 1.6;        // velocity scale at the start of a surge
-const float COOL0 = 0.012;         // cooling scale: the spec's rate was far too fast for a 10-20 s trip
+const float COOL0 = 0.012;        // cooling scale: the spec's rate was far too fast for a 10-20 s trip
+const float Q = 1.0 / 255.0;      // one level of the narrowest render target (RGBA8): the unit cooling is rounded in
 
 float hash(vec3 p) {              // Hoskins' hash13
   p = fract(p * 0.1031);
@@ -85,7 +86,7 @@ void main() {
   int row = p.y - id * ACROSS;
   float across = float(row) / float(ACROSS - 1) * 2.0 - 1.0;
   float along = float(p.x) / float(ALONG - 1);
-  float seed = uTime * 60.0;      // a frame is one hash step; the fractions below keep the three draws apart
+  float seed = uTime * 60.0;      // a frame is one hash step; the fractions below keep the four draws apart
   vec2 c = vec2(p);
   vec4 prev = texelFetch(uPrev, p, 0);
   bool sheet = uParent[id] < 0.0;
@@ -110,8 +111,12 @@ void main() {
     heat = uSource * (1.0 - FLICKER + FLICKER * hash(vec3(c, seed + 0.37))) + spike;
     crust = 0.0;
   }
-  // 3. Cool: faster at the banks and downstream, with Doom's random decay.
-  heat -= uDt * COOL0 * (0.4 + 0.8 * uCool) * (0.6 + 0.8 * abs(across)) * (1.0 + 0.5 * along) * (0.7 + 0.6 * hash(vec3(c, seed + 0.71)));
+  // 3. Cool: faster at the banks and downstream, with Doom's random decay. One frame's cooling is far below a
+  // render target level (about 1e-4 against 4e-3 in RGBA8), so a plain subtraction rounds away and a hot plateau
+  // never cools. Take whole levels, plus one more with the fractional part as its probability: as Doom does, the
+  // expected cooling is the formula's at any precision and frame rate.
+  float cool = uDt * COOL0 * (0.4 + 0.8 * uCool) * (0.6 + 0.8 * abs(across)) * (1.0 + 0.5 * along) * (0.7 + 0.6 * hash(vec3(c, seed + 0.71)));
+  heat -= Q * (floor(cool / Q) + step(hash(vec3(c, seed + 0.53)), fract(cool / Q)));
   heat = clamp(heat, 0.0, 1.0);
   // 4. Crust: grows where the lava is cold, melts where hot lava arrives, and ages while it stays.
   if (heat < T_CRUST) crust += uDt * K_CRUST * (T_CRUST - heat);

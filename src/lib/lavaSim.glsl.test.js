@@ -22,7 +22,7 @@ describe('the sim shaders', () => {
     }
   })
   it('names the constants with the spec values, and a crust step clears one 8-bit level', () => {
-    const want = { T_CRUST: 0.35, T_MELT: 0.55, K_CRUST: 1.2, K_MELT: 2.5, K_P: 0.8, P_BREAK: 0.6, SPEED0: 0.06, SRC_ROW: 0.03, FLICKER: 0.15, SURGE_V: 1.6, COOL0: 0.012 }
+    const want = { T_CRUST: 0.35, T_MELT: 0.55, K_CRUST: 1.2, K_MELT: 2.5, K_P: 0.8, P_BREAK: 0.6, SPEED0: 0.06, SRC_ROW: 0.03, FLICKER: 0.15, SURGE_V: 1.6, COOL0: 0.012, Q: '1.0 / 255.0' }
     for (const [k, v] of Object.entries(want)) expect(SIM_FRAG).toMatch(new RegExp(`const float ${k} = ${v}`))
     expect(want.K_CRUST * (1 / 30) * want.T_CRUST).toBeGreaterThan(1 / 255)
   })
