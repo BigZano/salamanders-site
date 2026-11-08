@@ -16,8 +16,8 @@ const clamp = (v, lo, hi) => Math.min(hi, Math.max(lo, v))
 
 // Cells per channel: `along` runs vent to toe, `across` runs bank to bank. A
 // phone gets half the resolution on each axis, which is a quarter of the work.
-const DESKTOP_SIZE = { along: 256, across: 32 }
-const PHONE_SIZE = { along: 128, across: 16 }
+const DESKTOP_SIZE = Object.freeze({ along: 256, across: 32 })
+const PHONE_SIZE = Object.freeze({ along: 128, across: 16 })
 
 /** The simulation grid size for this device. The returned objects are shared. */
 export function simSize(phone) {

@@ -205,9 +205,9 @@ export function createLavaLayer({ win = typeof window === 'undefined' ? undefine
     packArgs.density = frame.density
     packArgs.t = frame.t
     const u = packUniforms(packArgs)
-    // The sim runs even with nothing to show, so it is warm when the channels come back. A caller that gives
-    // no frame time gets a sixtieth of a second, not a NaN in the sim's state.
-    simStep(frame.secs ?? 1 / 60, u)
+    // The sim runs even with nothing to show, so it is warm when the channels come back. A caller that gives no
+    // frame time, or one that is not a number or is negative, gets a sixtieth of a second, not a NaN in the sim's state.
+    simStep(frame.secs >= 0 ? frame.secs : 1 / 60, u)
 
     // A draw before the first field pass has no target to sample either.
     if (!gpu.target || tooSmall() || frame.flows.length === 0) return

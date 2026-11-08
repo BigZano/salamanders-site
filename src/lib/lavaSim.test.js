@@ -7,6 +7,10 @@ describe('simSize', () => {
     expect(simSize(false)).toEqual({ along: 256, across: 32 })
     expect(simSize(true)).toEqual({ along: 128, across: 16 })
   })
+  it('hands out frozen objects, since the layer shares them with every caller', () => {
+    expect(Object.isFrozen(simSize(false))).toBe(true)
+    expect(Object.isFrozen(simSize(true))).toBe(true)
+  })
 })
 describe('paletteBytes', () => {
   it('flattens the 37-step Doom palette in order', () => {

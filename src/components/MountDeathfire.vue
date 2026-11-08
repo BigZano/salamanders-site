@@ -713,7 +713,7 @@ function buildFlows(prev, w) {
   }
   const widths = (w0, lobe) => (s) => w0 * (1 - 0.28 * s + (lobe ? 0.45 * sstep((s - 0.82) / 0.12) : 0))
 
-  const push = (pts, w, kind, head, seg) => {
+  const push = (pts, w, kind, head, seg, parent, attach) => {
     if (pts.length < 2) return
     // The glow is sampled at GLOW_STOPS places along the channel. Where each sits in the pattern, how much crust it
     // carries (little near the vent, more toward the toe), and its heat colours depend only on its place: worked out once.
@@ -761,6 +761,8 @@ function buildFlows(prev, w) {
       phase: grand(0, Math.PI * 2),
       rate: grand(0.12, 0.4),
       heat: seg,
+      parent, // the channel this one starts on, as an index into the flow list: -1 for the sheet, which starts at the vent
+      attach, // how far along that channel, 0 to 1, this one leaves it: the lava layer's heat sim feeds it from there
       ...riders,
     })
   }
@@ -775,7 +777,8 @@ function buildFlows(prev, w) {
   // the head is the vent itself, so the sheet pours from the floor of the breach
   sheet.unshift({ x: m.vent.x, y: m.vent.y, u: uVent })
   const w0 = W0
-  push(sheet, (s) => w0 * (0.75 + 0.25 * s), 'sheet', true, grand(0.85, 1))
+  push(sheet, (s) => w0 * (0.75 + 0.25 * s), 'sheet', true, grand(0.85, 1), -1, 0)
+  const sheetAt = out.length - 1 // -1 if the sheet was too short to push: the arms then start on open ground
 
   // The distributaries: they leave the sheet's toe together and fan out. The first braids around an island, the
   // second throws a side stream, a third does either or runs plain; the seed may swap the first two. A lone arm
@@ -792,7 +795,10 @@ function buildFlows(prev, w) {
     const wa = w0 * (arms === 1 ? 0.85 : grand(0.72, 0.88))
     const kind = kinds[i] || 'plain'
     const heat = grand(0.7, 1)
-    push(pts, widths(wa, true), 'arm', false, heat)
+    // An arm leaves the sheet at its toe, the last point of the sheet's centreline, so it starts at 1 along the sheet.
+    // (splitAt is a fraction of the mountain's height, not of the sheet's length.)
+    const armAt = out.length
+    push(pts, widths(wa, true), 'arm', false, heat, sheetAt, 1)
     const n = pts.length
     if (kind === 'braid' && n > 12) {
       // splits around an island and rejoins: a bulge to one side between two points of the arm
@@ -801,7 +807,7 @@ function buildFlows(prev, w) {
       const side = grand(0, 1) < 0.5 ? -1 : 1
       const bulge = wa * grand(1.8, 2.6)
       const bp = offshoot(pts, ia, ib, side, bulge, (f) => Math.sin(Math.PI * f))
-      push(bp, widths(wa * 0.55, false), 'braid', false, heat * grand(0.8, 1))
+      push(bp, widths(wa * 0.55, false), 'braid', false, heat * grand(0.8, 1), armAt, ia / (n - 1))
     } else if (kind === 'side' && n > 10) {
       // a side stream: leaves the arm, runs away from it down the flank and runs out
       const ia = Math.round(n * grand(0.3, 0.5))
@@ -810,7 +816,7 @@ function buildFlows(prev, w) {
       // a side stream is a long loop: it leaves its host, swings wide down the flank and returns to it
       const reach = wa * grand(2.2, 3.2)
       const sp = offshoot(pts, ia, ib, side, reach, (f) => Math.sin(Math.PI * f) * (0.85 + 0.15 * Math.sin(f * 7)))
-      push(sp, widths(wa * 0.55, false), 'side', false, heat * grand(0.7, 0.95))
+      push(sp, widths(wa * 0.55, false), 'side', false, heat * grand(0.7, 0.95), armAt, ia / (n - 1))
     }
   }
   return out
@@ -1116,14 +1122,15 @@ const isPhone = () => window.matchMedia?.('(max-width: 768px)').matches
 
 // The shader's per-frame arguments: two objects rewritten each frame, so handing it a frame allocates nothing.
 const lavaTuning = { crust: 0, heat: 0, viscosity: 0, cracks: 0, foldScale: 0, breakoutRate: 0 }
-const lavaFrame = { t: 0, flows: null, calmRects: null, calmShift: 0, tune: lavaTuning, density: 1 }
+const lavaFrame = { t: 0, secs: 0, flows: null, calmRects: null, calmShift: 0, tune: lavaTuning, density: 1 }
 
 /**
  * What the shader draws this frame. Its heat takes everything the ribbons' heat does that is not per channel: the tuner's
  * Lava heat, this page's own lava heat, the old Lava heat slider (against its default) and the caldera's breathing and
- * flare, so a flare lights the channels whichever paints them.
+ * flare, so a flare lights the channels whichever paints them. `secs` is this frame's length in seconds: the heat
+ * simulation advances by it.
  */
-function lavaArgs(breathe, flare) {
+function lavaArgs(breathe, flare, secs) {
   const l = fireTuning.lava
   lavaTuning.crust = l.crust
   lavaTuning.heat = l.heat * (prof.lavaHeat ?? 1) * (tune.flowHeat / DEFAULTS.bed.flowHeat) * (0.82 + 0.18 * breathe + flare * 0.5)
@@ -1132,6 +1139,7 @@ function lavaArgs(breathe, flare) {
   lavaTuning.foldScale = l.foldScale
   lavaTuning.breakoutRate = l.breakoutRate
   lavaFrame.t = t
+  lavaFrame.secs = secs
   lavaFrame.flows = flows
   lavaFrame.calmRects = calmRects
   lavaFrame.calmShift = calmShift
@@ -1174,6 +1182,17 @@ function loadLava() {
       if (lava && (mode.value === 'still' || forge?.frozen)) {
         lavaFade = 1
         draw(1)
+        // The still frame has to have burned: the sim starts cold, so run ten seconds of flow (300 steps) before the
+        // repaint. The draw above comes first because it hands the layer this page's tune and channels. A frozen
+        // playground is parked at a moment of its own choosing, so it keeps the sim as it is.
+        if (lava && mode.value === 'still' && !forge?.frozen) {
+          try {
+            lava.stepN(300)
+          } catch (err) {
+            dropLava(err)
+          }
+          draw(1)
+        }
       }
     })
     .catch(dropLava)
@@ -1416,7 +1435,7 @@ function draw(dt) {
   // context is lost) leaves the ribbons at full strength until it can.
   if (lava?.ok) {
     try {
-      lava.draw(lavaArgs(breathe, flare))
+      lava.draw(lavaArgs(breathe, flare, secs))
     } catch (err) {
       dropLava(err)
     }
