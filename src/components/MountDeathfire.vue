@@ -1164,6 +1164,19 @@ function lavaResize(w, h) {
 }
 
 /**
+ * Burns the sim for a still frame: the sim starts cold and a still page has no frames to warm it, so run ten seconds of
+ * flow (300 steps) and repaint. The caller draws once before this, which hands the layer this page's tune and channels.
+ */
+function burnStill() {
+  try {
+    lava.stepN(300)
+  } catch (err) {
+    dropLava(err)
+  }
+  draw(1)
+}
+
+/**
  * Fetches the WebGL lava layer once the first frame is up, so the page never waits on it: until it lands, and anywhere it
  * cannot run (no WebGL2, no context, ?lava=0), the ribbons paint the channels. ?lava=0 is read here, before the import,
  * because the shader's own switch (supportsLavaShader) lives in the chunk this would fetch.
@@ -1182,17 +1195,9 @@ function loadLava() {
       if (lava && (mode.value === 'still' || forge?.frozen)) {
         lavaFade = 1
         draw(1)
-        // The still frame has to have burned: the sim starts cold, so run ten seconds of flow (300 steps) before the
-        // repaint. The draw above comes first because it hands the layer this page's tune and channels. A frozen
-        // playground is parked at a moment of its own choosing, so it keeps the sim as it is.
-        if (lava && mode.value === 'still' && !forge?.frozen) {
-          try {
-            lava.stepN(300)
-          } catch (err) {
-            dropLava(err)
-          }
-          draw(1)
-        }
+        // The still frame has to have burned, and the draw above comes first because it hands the layer this page's tune
+        // and channels. A frozen playground is parked at a moment of its own choosing, so it keeps the sim as it is.
+        if (lava && mode.value === 'still' && !forge?.frozen) burnStill()
       }
     })
     .catch(dropLava)
@@ -1263,7 +1268,12 @@ function relayout() {
   relayoutPending = requestAnimationFrame(() => {
     relayoutPending = 0
     if (window.innerWidth === lastW && window.innerHeight === lastH) return
-    if (layout()) draw(1)
+    if (layout()) {
+      draw(1)
+      // A still page runs no frames, and a resize across the phone breakpoint changes the channel count, which lights
+      // the sim cold again: burn it once more, or the page would show grey crust for good.
+      if (lava && mode.value === 'still' && !forge?.frozen) burnStill()
+    }
   })
 }
 
@@ -1883,11 +1893,15 @@ onMounted(() => {
       },
       time: () => t,
       snapshot: () => canvas.value,
+      // The heat sim's cells as RGBA bytes (the Sim view): size it from simSize, which is the layer's own grid and
+      // undefined until the layer is up. The grid is fixed when the layer is made, so it can differ from a phone's now.
+      readSim: (out) => lava?.readSim(out),
+      simSize: () => (lava?.ok ? lava.simSize : undefined),
       // Where the channels are, in viewport px, for the render harness's smoke probes (scripts/forge-render.mjs).
       geometry: () => ({
         lava: Boolean(lava?.ok) && lavaFade > 0, // the shader is built, running and painting, so a picture is of it and not the ribbons
         vent: mountain?.vent,
-        flows: flows.map((f) => ({ pts: f.pts, head: f.head, widthAt0: f.widthAt?.(0), widthMid: f.widthAt?.(0.5) })),
+        flows: flows.map((f) => ({ kind: f.kind, pts: f.pts, head: f.head, widthAt0: f.widthAt?.(0), widthMid: f.widthAt?.(0.5) })),
       }),
     }
     window.__forge = forge

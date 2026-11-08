@@ -484,6 +484,14 @@ describe('the layer and the heat simulation', () => {
     expect(rec.by.sim.uDt).toBeCloseTo(1 / 60)
   })
 
+  it('steps the sim by a sixtieth of a second when the frame time is negative', () => {
+    const { win, rec } = fakeGL()
+    const layer = createLavaLayer({ win, phone: false })
+    layer.resize(800, 600, [flow])
+    layer.draw(frame([flow], { secs: -1 }))
+    expect(rec.by.sim.uDt).toBeCloseTo(1 / 60)
+  })
+
   it('feeds the sim the tuner values, the surges and the channel parentage', () => {
     const { win, rec } = fakeGL()
     const layer = createLavaLayer({ win, phone: false })

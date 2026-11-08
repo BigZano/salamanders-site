@@ -8,10 +8,12 @@ import ForgePerf from '../../components/dev/ForgePerf.vue'
 import ForgePresets from '../../components/dev/ForgePresets.vue'
 import ForgeGrid from '../../components/dev/ForgeGrid.vue'
 import ForgeRefs from '../../components/dev/ForgeRefs.vue'
+import ForgeSim from '../../components/dev/ForgeSim.vue'
 
 /**
  * The forge playground, /dev/forge, dev only: the volcano behind, a rail of controls on the left, the fire tuner
- * on the right, and a main area that is empty (Live: look at the volcano), a grid of viewports, or the references.
+ * on the right, and a main area that is empty (Live: look at the volcano), a grid of viewports, the references, or
+ * the lava's heat simulation (Sim).
  * Nothing here ships: the route exists only under `import.meta.env.DEV`.
  */
 const { snap } = useForge()
@@ -36,7 +38,7 @@ async function snapLive() {
     <aside class="fg-rail" data-forge aria-label="Forge controls">
       <h2 class="fg-title">Forge</h2>
       <nav class="fg-row" aria-label="View">
-        <button v-for="t in ['live', 'grid', 'refs']" :key="t" type="button" class="fg-btn fg-btn-sm" :aria-pressed="tab === t" @click="tab = t">
+        <button v-for="t in ['live', 'grid', 'refs', 'sim']" :key="t" type="button" class="fg-btn fg-btn-sm" :aria-pressed="tab === t" @click="tab = t">
           {{ t }}
         </button>
       </nav>
@@ -57,6 +59,7 @@ async function snapLive() {
     <main class="fg-main" data-forge>
       <ForgeGrid v-if="tab === 'grid'" ref="grid" />
       <ForgeRefs v-else-if="tab === 'refs'" />
+      <ForgeSim v-else-if="tab === 'sim'" />
     </main>
     <component :is="FireTuner" v-if="FireTuner" />
   </div>
@@ -90,7 +93,8 @@ async function snapLive() {
   display: none;
 }
 .forge-grid .fg-main,
-.forge-refs .fg-main {
+.forge-refs .fg-main,
+.forge-sim .fg-main {
   background: rgba(5, 10, 8, 0.7);
   min-height: 100svh;
   margin-right: 19rem; /* the tuner sits on the right */
