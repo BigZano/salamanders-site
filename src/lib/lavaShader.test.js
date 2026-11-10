@@ -764,6 +764,35 @@ describe('the layer and the heat simulation', () => {
     expect(rec.deletedTargets).toBe(3)
   })
 
+  it('is cold while the next step writes the cold state: true at the start and after a change in the channel count, false after a step', () => {
+    const { win, rec, fire } = fakeGL()
+    const layer = createLavaLayer({ win, phone: false })
+    expect(layer.cold).toBe(true)
+    layer.resize(800, 600, [flow])
+    expect(layer.cold).toBe(true)
+    layer.stepN(1)
+    expect(layer.cold).toBe(false)
+    // The same number of channels at another size leaves the sim lit: this is what lets a still page skip its burn.
+    layer.resize(900, 700, [flow])
+    expect(layer.cold).toBe(false)
+    layer.resize(900, 700, [flow, flow])
+    expect(layer.cold).toBe(true)
+    // A drawn frame steps the sim once and so clears it, which is why the caller reads cold before it draws.
+    layer.draw(frame([flow, flow]))
+    expect(layer.cold).toBe(false)
+    layer.ignite()
+    expect(layer.cold).toBe(true)
+    layer.stepN(1)
+    expect(layer.cold).toBe(false)
+    // A context restore lights it cold again; the cold flag is what the sim pass then carries.
+    fire('webglcontextlost')
+    fire('webglcontextrestored')
+    expect(layer.cold).toBe(true)
+    layer.stepN(1)
+    expect(layer.cold).toBe(false)
+    expect(simPassesOf(rec).at(-1).uniforms.uIgnite).toBe(1)
+  })
+
   it('re-ignites on context restore and never reads a deleted target', () => {
     const { win, rec, fire } = fakeGL()
     const layer = createLavaLayer({ win, phone: false })

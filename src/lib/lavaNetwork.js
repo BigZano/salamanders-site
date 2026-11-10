@@ -45,8 +45,8 @@ const FLARE = 0.2 // and flares another 20% over its last two rows as it enters 
 const FLARE_ROWS = 2
 const POOL_RX = 0.45 // the pool's width, as a fraction of the cone's base width
 const SOLO_ENTRY = [0.45, 0.8] // a stream on its own enters the pool this far out, as a fraction of its half width
-const POOL_SINK = 0.2 // how far, in pool heights, the centre sits above the lowest row: on the foreground ridge line
-const PHONE_POOL_SINK = 0.4 // on a phone the centre sits this far, in pool heights, below the screen's bottom edge
+const POOL_SINK = 0.2 // how far, in pool half heights (ry), the centre sits above the lowest row: on the foreground ridge line
+const PHONE_POOL_SINK = 0.4 // on a phone the centre sits this far, in pool half heights (ry), below the screen's bottom edge
 const PHONE_POOL_ROWS = 1 // ...but its arc stays at least this many rows above the cone's foot, so the streams reach it
 const FISSURE_GAP_ROWS = 6 // a fissure source sits at least this many rows above the pool's upper arc
 const JOIN_RUN_ROWS = 3 // a tributary has at least this many rows between its source and its meeting with the trunk
@@ -559,9 +559,9 @@ const meander = (a0, freq, phase, w0f) => (dist) => {
 
 /**
  * The pool's size and height from the cone: an ellipse 0.45 of the base wide (S5.6 asks 0.4 to 0.5; `rx` is half that) and a
- * quarter of that tall. On desktop its centre sits on the foreground ridge line (the lowest row's y, a fifth of a pool
- * height above it), so the ridges cover its far half. On a phone it sits below the screen's bottom edge `h` (0.4 pool
- * heights below it, so the arc's top is 0.6 above): the glow shows and the surface mostly does not; its top is kept at
+ * quarter of that tall. On desktop its centre sits on the foreground ridge line (the lowest row's y, a fifth of the
+ * pool's half height `ry` above it), so the ridges cover its far half. On a phone it sits below the screen's bottom edge
+ * `h` (0.4 `ry` below it, so the arc's top is 0.6 `ry` above): the glow shows and the surface mostly does not; its top is kept at
  * least a row above the cone's foot, so every stream can land on it.
  */
 function poolShape(baseW, yBot, rowH, phone, h) {

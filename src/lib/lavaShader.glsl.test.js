@@ -3,7 +3,7 @@ import { FIELD_VERT, FIELD_FRAG, LAVA_VERT, LAVA_FRAG, UNIFORMS } from './lavaSh
 
 const balanced = (s) => (s.match(/\{/g) || []).length === (s.match(/\}/g) || []).length
 const noComments = (s) => s.replace(/\/\/.*$/gm, '')
-// GLSL's smoothstep, as every GPU runs it: reversed edges give the falling ramp (the caps use it too).
+// GLSL's smoothstep as the spec defines it (edge0 < edge1; a reversed pair is undefined). The shader's falling ramps are 1 - smoothstep.
 const smoothstep = (e0, e1, x) => {
   const t = Math.min(1, Math.max(0, (x - e0) / (e1 - e0)))
   return t * t * (3 - 2 * t)
@@ -43,7 +43,7 @@ describe('the GLSL sources', () => {
     const sums = ['e * e + a * a * step(0.001, e)', 'h * h + a * a * step(0.001, h)']
     for (const sum of sums) {
       expect(FIELD_FRAG).toContain(`${sum} >= 1.0`)
-      expect(LAVA_FRAG).toContain(`smoothstep(1.0, 0.8, ${sum})`)
+      expect(LAVA_FRAG).toContain(`(1.0 - smoothstep(0.8, 1.0, ${sum}))`)
     }
     expect(FIELD_FRAG).toMatch(/discard;/)
   })
@@ -84,7 +84,7 @@ describe('the levee and the bank', () => {
     expect(LAVA_FRAG).toContain('RUBBLE * 1.4 + col * 0.12')
   })
   it('make the fragment transparent past the bank, except the feather on alpha', () => {
-    const feather = 'smoothstep(1.0 + BANK_PX / hw, 1.0 - BANK_PX / hw, a)'
+    const feather = '(1.0 - smoothstep(1.0 - BANK_PX / hw, 1.0 + BANK_PX / hw, a))'
     expect(LAVA_FRAG).toContain(feather)
     const alpha = /float alpha = ([^;]+);/.exec(LAVA_FRAG)[1]
     expect(alpha).toContain(feather)

@@ -337,5 +337,8 @@ export function createLavaLayer({ win = typeof window === 'undefined' ? undefine
     get drawCalls() { return drawCalls },
     get simPasses() { return simPasses },
     get simSize() { return size },
+    // True while the next sim step writes the cold state (the start, a restore, a change in the number of channels):
+    // a caller that has to settle a still frame burns the sim only then.
+    get cold() { return igniteNext },
   }
 }

@@ -1262,10 +1262,10 @@ function lavaResize(w, h) {
   }
 }
 
-// Steps of 1/30 s a still frame burns: 24 s of flow. The front reaches the sheet's toe at about 11.5 s and the arms,
-// braids and side streams are lit to nine tenths of their reach by about 23 s (task-7a-report.md), measured on the old
-// sheet-and-arms layout; the network's streams and the pool are checked against it in task-8-report.md. About 1.2 s on
-// SwiftShader at the desktop grid, a quarter of that on a phone's, once at mount.
+// Steps of 1/30 s a still frame burns: 24 s of flow. The front reaches the sheet's toe at about 11.5 s and the arms
+// and side streams are lit to nine tenths of their reach by about 23 s (heat-sim spec 10.1 and 10.2), measured on the
+// old sheet-and-arms layout; the network's streams and the pool are checked against it in the network spec 13.4 and
+// 13.6. About 1.2 s on SwiftShader at the desktop grid, a quarter of that on a phone's, once at mount.
 const STILL_STEPS = 720
 
 /**
@@ -1389,10 +1389,13 @@ function relayout() {
     relayoutPending = 0
     if (window.innerWidth === lastW && window.innerHeight === lastH) return
     if (layout()) {
+      // Asked before the draw: a draw steps the sim once, and that step writes the cold state and clears the flag.
+      const cold = !!lava?.cold
       draw(1)
       // A still page runs no frames, and a resize across the phone breakpoint changes the channel count, which lights
-      // the sim cold again: burn it once more, or the page would show grey crust for good.
-      if (lava && mode.value === 'still' && !forge?.frozen) burnStill()
+      // the sim cold again: burn it once more, or the page would show grey crust for good. Only then: a resize that
+      // keeps the channel count (a phone's URL bar sliding) leaves the sim lit, and a burn would be wasted passes.
+      if (cold && mode.value === 'still' && !forge?.frozen) burnStill()
     }
   })
 }
@@ -1943,10 +1946,11 @@ const onVisibility = () => (hidden = document.hidden)
 
 watch(() => route.path, () => {
   if (!layout()) return
+  const cold = !!lava?.cold // before the draw, as in relayout
   draw(1)
   // A new page can have a different number of channels, which lights the sim cold again: a still page burns it once
-  // more, as relayout does, or it would show grey crust until the next reload.
-  if (lava && mode.value === 'still' && !forge?.frozen) burnStill()
+  // more, as relayout does, or it would show grey crust until the next reload. Only when cold, as relayout does.
+  if (cold && mode.value === 'still' && !forge?.frozen) burnStill()
 })
 
 watch(

@@ -394,8 +394,10 @@ shader and network (2026-11-09, `node scripts/forge-render.mjs --sizes phone --t
 and 2.9ms worst per frame on the home page (2.50ms and 4.0ms in the two seconds after load; that ignition figure exists
 only with `--smoke`). Unthrottled, with software GL (SwiftShader, the harness default; `node scripts/forge-render.mjs --paths /
 --sizes phone,desktop --phases 0.42 --presets crust=0.75 --smoke`): 0.68ms on a phone and 1.12ms on a 1600px desktop at the grid frame (0.82ms and 1.40ms in the ignition frame).
-The network builder (`src/lib/lavaNetwork.js`) runs once per layout, not per frame: about 1.4ms on the hero cone (a node
-timing of the builder alone from its tests, 60 rows, mean 1.39ms; not a harness figure), against a 2ms budget; the strips add the pool's 25 x 7 grid and 15 vertices a join, a few hundred in all. A live reading on a
+The network builder (`src/lib/lavaNetwork.js`) runs once per layout, not per frame: about 0.9ms on a cone made the way the hero's is
+(27 rows, jittered: a node timing of the builder alone from its tests, with the delta fork, mean 0.93ms and median 0.75ms over 100
+builds, 2026-11-10; not a harness figure; the 60-row test fixture those tests default to, not a real mountain, reads 1.27ms), against a
+2ms budget (the tests bound it at 5ms a median, and skip that bound under CI); the strips add the pool's 25 x 7 grid and 15 vertices a join, a few hundred in all. A live reading on a
 desktop GPU was 1.05ms average and 1.9ms worst at 1445px (live, 7800 XT, before the 7b look pass and the network); it is
 not a harness figure. The volcano is meant to draw at most 30 frames a second; a 60Hz screen shows about 25, which is a
 known frame-gate defect, not a design.

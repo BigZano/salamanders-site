@@ -27,7 +27,7 @@ describe('the sim shaders', () => {
     }
   })
   it('names the constants with the spec values, and a crust step clears one 8-bit level', () => {
-    // The spec's first cut, as tuned in Task 7a against the sim harness (task-7a-report.md has the before and after).
+    // The spec's first cut, as tuned in Task 7a against the sim harness (heat-sim spec section 10.1 has each built value and why).
     const want = {
       T_CRUST: '0.42', T_MELT: '0.55', K_CRUST: '5.0', K_MELT: '2.5', K_P: '0.8', P_BREAK: '0.6', SPEED0: '0.28', SRC_ROW: '0.03',
       FLICKER: '0.15', SURGE_V: '1.6', COOL0: '0.02', COOL_CORE: '0.3', COOL_BANK: '4.0', COOL_HEAD: '0.3', COOL_TOE: '3.0',
@@ -122,7 +122,7 @@ describe('the sim shaders', () => {
   })
   it('gives the pool a source row of the feeders\' entry fans, no breakouts, no surge, and an outward drift', () => {
     const code = SIM_FRAG.replace(/\/\/.*$/gm, '')
-    // 1.2, not the 0.6 first tried: at 0.6 the front stalled at 0.69 of the radius on the GPU harness (task-6-report.md).
+    // 1.2, not the 0.6 first tried: at 0.6 the front stalled at 0.69 of the radius on the GPU harness (network spec 13.4).
     expect(code).toMatch(/const float POOL_SPEED = 1\.2 \* SPEED0;/)
     expect(code).toMatch(/const float POOL_COOL = 2\.0;/)
     // The pool cools POOL_COOL times as fast along its radius; no other block does.

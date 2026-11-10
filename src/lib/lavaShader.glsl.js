@@ -254,8 +254,8 @@ void main() {
   // 9 was the rubble past the bank, gone: the bank is the sim's crusted outer rows, and the alpha feather ends it.
   // 10. Calm band, 1 px feather at the field's end, the bank's feather, flat strip ends cut to soft ellipses (not on the sheet or pool).
   float e = max(0.0, (along - 0.9) * 10.0), h = id == 0 || pool ? 0.0 : max(0.0, (0.1 - along) * 10.0);
-  float caps = smoothstep(1.0, 0.8, e * e + a * a * step(0.001, e)) * smoothstep(1.0, 0.8, h * h + a * a * step(0.001, h));
-  float alpha = calm(vPx) * clamp((LEVEE - a) * hw, 0.0, 1.0) * smoothstep(1.0 + BANK_PX / hw, 1.0 - BANK_PX / hw, a) * caps;
+  float caps = (1.0 - smoothstep(0.8, 1.0, e * e + a * a * step(0.001, e))) * (1.0 - smoothstep(0.8, 1.0, h * h + a * a * step(0.001, h)));
+  float alpha = calm(vPx) * clamp((LEVEE - a) * hw, 0.0, 1.0) * (1.0 - smoothstep(1.0 - BANK_PX / hw, 1.0 + BANK_PX / hw, a)) * caps;
   fragColor = vec4(col * alpha, alpha); // 11. Premultiplied, for the 2D canvas to add with lighter.
 }
 `
