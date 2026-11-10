@@ -3,7 +3,7 @@ import { ref, computed, watch, onMounted, onBeforeUnmount } from 'vue'
 import { forge, forgeAdvance, forgeSample, devNumber } from '../lib/forge'
 import { useRoute } from 'vue-router'
 import { motionAllowed } from '../lib/doomfire'
-import { buildNetwork } from '../lib/lavaNetwork'
+import { buildNetwork, CROWN_BASE } from '../lib/lavaNetwork'
 import { fireTuning, randomize, profileFor, NEUTRAL_PROFILE, DEFAULTS } from '../lib/fireTuning'
 import { deathfireHeat } from '../lib/deathfireHeat'
 
@@ -445,10 +445,6 @@ function buildMoon(w, h) {
   return { sprites: sprites.map((s) => s.cv), r }
 }
 
-// How far in from the rim corner each crest's base reaches, in crater widths: the rest of the rim is the mouth.
-// lib/lavaNetwork.js holds the same 0.55 (its trunk leaves through this mouth) and does not export it yet: keep the two together.
-const CROWN_BASE = 0.55
-
 /**
  * The broken crown of the summit, built as the top of the mountain and not something set on it. Each crest rises from a
  * rim corner along the line of its own flank, so the cliff face simply carries on upward, with a thick base, a jagged
@@ -738,7 +734,7 @@ function buildFlows(prev, w) {
       // The source's share of the vent heat: 1 for the trunk, less for the others. The sim scales each vent by it
       // (uVentHeat), so it is passed on as it is: the tuner's heat, the page's density and the breathing do not belong in it.
       heat: nf.heat,
-      parent: nf.parent, // the channel this one starts on, as an index into the flow list: -1, every source is a vent row of its own
+      parent: nf.parent, // the channel this one starts on, as an index into the flow list: -1 for a source with a vent row of its own, 0 for the fork's arm (it leaves the trunk)
       attach: nf.attach, // how far along that channel, 0 to 1, this one leaves it
       drain: nf.drain, // where it ends: a flow's index (the trunk it joins), or -1 for the pool
       drainAt: nf.drainAt, // how far along that flow it joins (0 to 1), or where it enters the pool's arc (-1 to 1)

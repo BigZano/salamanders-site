@@ -22,11 +22,18 @@
  * place along it), and the trunk widens below the join (`joinWidthProfile`, composed in join order). A tributary no trunk
  * row in its window suits, whose approach is over 30 degrees (drawn or aimed), or that cannot turn in the room it has, is
  * traced again as a stream of its own and runs to the pool, and the builder says so in dev (S5.3).
+ *
+ * Last, on desktop, the fork (S5.3): 2.5 to 3.5 trunk widths above the pool the trunk splits in two and both streams run
+ * into the pool, each by its own entry, with an island of dark ground between them that ends at the pool's arc. The arm is a
+ * flow of its own, fed from the trunk at `attach`; the trunk narrows from the split to the pool. (A split-and-rejoin braid
+ * needs about 5 widths below the last join, and the S5.3 windows leave 3.1 to 4.5: it cannot fit, so the arm does not rejoin.)
+ * A trunk with under 2.5 widths between its last join (and half a width of clear trunk below it) and the arc gets no fork, and
+ * the builder says so in dev.
  */
 
 // How far in from the rim corner each crest's base reaches, in crater widths: the rest of the rim is the mouth the
-// trunk leaves by. The same constant as MountDeathfire.vue's CROWN_BASE (the mountain data does not carry it).
-const CROWN_BASE = 0.55
+// trunk leaves by. MountDeathfire.vue builds the crown with it and imports it from here (the mountain data does not carry it).
+export const CROWN_BASE = 0.55
 // A stream stays inside this fraction of the face's half width, as the old `trace` did.
 const U_MAX = 0.94
 
@@ -62,6 +69,18 @@ const BULGE = 1.1 // the trunk's outer bank swells to this much of the joined wi
 const BULGE_RISE = 1 // ...one width below the join (the swell starts one width above it),
 const BULGE_SETTLE = 3 // ...then settles to the joined width over three more widths
 const MAX_TILT = (15 * Math.PI) / 180 // a fissure leans at most this far from vertical
+// The fork (S5.3, as ruled after the braid could not fit): low on the trunk, below its last join, the trunk splits in two and
+// both streams run into the pool, each by its own entry, with an island of dark ground between them that ends at the pool's
+// arc. Lengths in trunk widths (`W`: the trunk's composed width at the split) unless said otherwise.
+const FORK_GAP = 0.5 // ...with this much clear trunk between the last join's landing and the split (the join's swell is not narrowed away, and the arm does not leave from the feeder's node)
+const FORK_WIDTH = 0.5 // the fork's arm is this much of W at the split (and grows 15% as any stream does)
+const FORK_NARROW = 0.6 // the trunk is this much of its composed width from the split to the pool
+const FORK_ABOVE = [2.5, 3.5] // the split is this far above the pool arc: as far up as the room below the last join allows, at most the larger
+const FORK_OFFSET = 0.9 // the arm ends this far from the trunk's line (square on), where the trunk meets the arc
+const FORK_EASE = 0.8 // the arm leaves the trunk's heading over this far, and the trunk narrows over it
+const FORK_CHORD = 0.12 // the arm is cut at this much of W, or half a row if that is less, so its bends can be as tight as its size
+const FORK_APART = 0.15 // the two entries are at least this far apart, in pool half widths
+const FORK_EDGE = 0.95 // ...and the arm's entry is no further out than this, in pool half widths
 // Where on the trunk, as a fraction of its length, each tributary is to join (the S5.3 windows).
 const JOIN_AT = { rim: [0.2, 0.35], upper: [0.45, 0.6], mid: [0.65, 0.8] }
 // A phone's one join: S5.3's mid window with its end moved to 0.85, because the join is where the turn lands, a little
@@ -248,6 +267,20 @@ function nearestIndex(pts, q) {
   for (let i = 0; i < pts.length; i++) {
     const d = (pts[i].x - q.x) ** 2 + (pts[i].y - q.y) ** 2
     if (d < bd) [best, bd] = [i, d]
+  }
+  return best
+}
+
+// The nearest distance from the point `q` to the polyline `pts`.
+function distToLine(pts, q) {
+  let best = Infinity
+  for (let i = 1; i < pts.length; i++) {
+    const a = pts[i - 1]
+    const dx = pts[i].x - a.x
+    const dy = pts[i].y - a.y
+    const l2 = dx * dx + dy * dy
+    const r = l2 ? clamp(((q.x - a.x) * dx + (q.y - a.y) * dy) / l2, 0, 1) : 0
+    best = Math.min(best, Math.hypot(q.x - (a.x + dx * r), q.y - (a.y + dy * r)))
   }
   return best
 }
@@ -462,6 +495,58 @@ function turnOnto(F, T, at, wf) {
   return { why: 'it cannot turn in the room it has' }
 }
 
+// Where along a polyline, by arc length. `cum[i]` is the length up to point i.
+function arcTable(pts) {
+  const cum = [0]
+  for (let i = 1; i < pts.length; i++) cum.push(cum[i - 1] + Math.hypot(pts[i].x - pts[i - 1].x, pts[i].y - pts[i - 1].y))
+  return cum
+}
+
+// The point at arc length `s` along `pts`, with its unit tangent (the chords' mean either side, so a bend is mitred) and
+// `at` (0 to 1, by point index, the `along` everything else reads). Past the end it carries straight on.
+function atArc(pts, cum, s) {
+  const n = pts.length
+  let i
+  if (s >= cum[n - 1]) i = n - 2
+  else {
+    let lo = 0
+    let hi = n - 1
+    while (hi - lo > 1) {
+      const mid = (lo + hi) >> 1
+      if (cum[mid] <= s) lo = mid
+      else hi = mid
+    }
+    i = lo
+  }
+  const len = cum[i + 1] - cum[i] || 1
+  const r = Math.max(0, (s - cum[i]) / len)
+  const rc = Math.min(r, 1)
+  const a = tangentAt(pts, i)
+  const b = tangentAt(pts, i + 1)
+  const tx = a.x * (1 - rc) + b.x * rc
+  const ty = a.y * (1 - rc) + b.y * rc
+  const tl = Math.hypot(tx, ty) || 1
+  const p = pts[i]
+  const q = pts[i + 1]
+  return { x: p.x + (q.x - p.x) * r, y: p.y + (q.y - p.y) * r, tx: tx / tl, ty: ty / tl, at: (i + rc) / (n - 1) }
+}
+
+/**
+ * The fork arm's centreline as a distance `d(s)` from the trunk's, `s` px down the trunk from the split: it leaves the
+ * trunk's heading (slope 0), eases to a climb of slope `m` over `e` px, and keeps that slope, so it ends `peak` px off the
+ * trunk's line `len` px down (where the trunk meets the pool arc), still leaning away: two streams, not one that bends back.
+ * Returns `{ d(s), slope }`: `slope` is the steady lean, as a tangent.
+ */
+function forkProfile(peak, e, len) {
+  const m = peak / (len - e / 2)
+  const d = (s) => {
+    if (s <= 0) return 0
+    if (s < e) return (m * s * s) / (2 * e)
+    return (m * e) / 2 + m * (s - e)
+  }
+  return { d, slope: m }
+}
+
 // One slow meander per stream, as an offset in u at `dist` (the fraction of the stream's length run). Its amplitude grows
 // with the distance from the source and shrinks with the width, so a thin tributary wanders more than the trunk:
 // amp = a0 (1 + dist) / (0.5 + width / W0). It is zero at the source, so the stream leaves where it should; `freq` is in
@@ -570,13 +655,15 @@ function smoothStream(traced, pool, rowH) {
  *
  * `mountain`: `left` and `right`, one `{x, y}` per row from the peak down; `peakX`, `craterHalf`, `vent {x, y}` (the
  * valley floor's low point, where the lava leaves). `opts`: `w` the viewport width (which face the page shows), `h` its
- * height (where a phone's pool sits), `phone`, `rng` (a function returning 0..1).
+ * height (where a phone's pool sits), `phone`, `rng` (a function returning 0..1), `braid` (false leaves the fork out; a
+ * test hook, so the same seed can be built with and without it: everything else is laid down first and does not change).
  *
  * Returns `{ flows, pool, fissures, joins }`.
  * - `flows[i]`: `{ pts [{x, y, u}], widthAt(s), head, kind, role, heat, parent: -1, attach: 0, drain, drainAt, sourceIndex, aim }`.
  *   `kind` is 'trunk' | 'rim' | 'fissure' | 'braid'; `head` is true only for the trunk. `role` names the source:
- *   'trunk' | 'rim' | 'upper' | 'mid' | 'lower' (the three desktop fissures) | 'phone-fissure'. Every source is its own sim
- *   channel (`parent: -1`). `drain` is the flow this one ends on (0, the trunk, for a tributary that joins it), -1 for the
+ *   'trunk' | 'rim' | 'upper' | 'mid' | 'lower' (the three desktop fissures) | 'phone-fissure' | 'fork' (the arm of the
+ *   trunk's fork, kind 'braid'). Every source is its own sim channel (`parent: -1`), the fork's arm excepted: it leaves the
+ *   trunk (`parent: 0`, `attach` how far along the trunk, 0 to 1, by point index) and runs into the pool. `drain` is the flow this one ends on (0, the trunk, for a tributary that joins it), -1 for the
  *   pool; `drainAt` how far along the trunk (0 to 1) it joins, or, for a stream into the pool, where it enters across the
  *   arc (-1 to 1, 0 under the trunk's end). `sourceIndex` is the index into `fissures` for a fissure flow, else -1. `aim` is where
  *   a tributary meets the trunk, `{ row, at }` (the trunk's nearest mountain row and how far along the trunk, 0 to 1, in
@@ -588,8 +675,9 @@ function smoothStream(traced, pool, rowH) {
  *   hold three fissures six rows above the pool, one to a row, holds fewer.
  * - `joins`: one per tributary that meets the trunk, in order down it: `{ feeder (flow index), trunk (0), at (along the
  *   trunk, 0 to 1, by point index), wf, wt, wj (px: the feeder at its end, the trunk just above the join, the two as
- *   one), angle (degrees: the feeder's approach before it turns) }`.
- * Desktop makes a trunk, one rim overflow and three fissures; a phone makes a trunk and one fissure.
+ *   one), angle (degrees: the feeder's approach before it turns) }`. The fork's arm is not a join: no entry, no fillet.
+ * Desktop makes a trunk, one rim overflow, three fissures and, where the trunk has room, the fork's arm; a phone makes a
+ * trunk and one fissure.
  */
 export function buildNetwork(mountain, opts) {
   const m = mountain
@@ -918,6 +1006,140 @@ export function buildNetwork(mountain, opts) {
       return wd
     }
   }
+
+  // ---- the fork (desktop): low on the trunk, below its last join, the trunk splits and both streams run into the pool (S5.3).
+  // The arm is a flow of its own, fed from the trunk's cell at `attach` (the sim's parent/attach) and entering the pool by its
+  // own entry like any stream (`drain` -1, `drainAt` across the arc). Its centreline is the trunk's pushed out to one side by
+  // `forkProfile`, cut where it meets the arc. The arm is FORK_WIDTH of the trunk's width at the split, and the trunk narrows
+  // to FORK_NARROW of its width from the split to the pool. Returns why there is none, or null.
+  const trunkWidth = flows[0].widthAt // the trunk's width with its joins and flare, before the fork narrows it
+  const uOf = (x, y) => {
+    const f = clamp((y - yTop) / rowH, 0, last)
+    const i = Math.min(last - 1, Math.floor(f))
+    const r = f - i
+    return (x - (rowCx(i) + (rowCx(i + 1) - rowCx(i)) * r)) / (rowHalf(i) + (rowHalf(i + 1) - rowHalf(i)) * r)
+  }
+  const layFork = () => {
+    const T = flows[0].pts
+    const cum = arcTable(T)
+    const LT = cum[cum.length - 1]
+    const arcOf = (at) => {
+      const f = clamp(at, 0, 1) * (T.length - 1)
+      const i = Math.min(T.length - 2, Math.floor(f))
+      return cum[i] + (cum[i + 1] - cum[i]) * (f - i)
+    }
+    // as far up as the room below the last join allows, at most FORK_ABOVE[1] widths above the arc (the trunk ends on it), and
+    // FORK_GAP widths (of the trunk at the join) of clear trunk below the join's landing; the width at the split depends on
+    // where it is, so settle it in a few steps
+    const lastAt = joins.reduce((a, j) => Math.max(a, j.at), 0)
+    const wJoin = trunkWidth(clamp(lastAt, 0, 1))
+    const room = LT - arcOf(lastAt) - FORK_GAP * wJoin
+    let W = wJoin
+    let s0 = LT
+    for (let it = 0; it < 8; it++) {
+      s0 = LT - Math.min(FORK_ABOVE[1], room / W) * W
+      W = trunkWidth(atArc(T, cum, s0).at)
+    }
+    const p0 = atArc(T, cum, s0)
+    W = trunkWidth(p0.at) // the width where it really is
+    const above = (LT - s0) / W
+    // the room is counted in the widths the trunk has at the join (the swell below it makes the trunk up to 10% wider where the
+    // fork leaves, which would turn a near thing away)
+    if (room / wJoin < FORK_ABOVE[0]) {
+      return 'only ' + ((LT - arcOf(lastAt)) / wJoin).toFixed(1) + ' trunk widths between the last join and the pool, the fork needs ' + FORK_ABOVE[0] + ' and ' + FORK_GAP + ' clear below the join'
+    }
+    const wA = FORK_WIDTH * W
+    const e = FORK_EASE * W
+    const chord = Math.min(rowH * RESAMPLE_ROWS, FORK_CHORD * W)
+    const sh = forkProfile(FORK_OFFSET * W, e, above * W)
+    const trunkEnd = T[T.length - 1]
+    // the other streams into the pool, where they enter, in pool half widths
+    const others = flows.filter((f) => f.drain === -1 && f.role !== 'trunk')
+    const entryOf = (p) => (p.x - pool.cx) / pool.rx
+    const trunkEntry = entryOf(trunkEnd)
+    // each side the arm can leave by, and how much room it leaves it: to the arc's edge and to the streams already entering that way
+    const roomOn = (dir) => {
+      let r = dir > 0 ? 1 - trunkEntry : 1 + trunkEntry
+      for (const f of others) {
+        const d = (entryOf(f.pts[f.pts.length - 1]) - trunkEntry) * dir
+        if (d > 0) r = Math.min(r, d)
+      }
+      return r
+    }
+    let why = 'it does not fit'
+    const made = []
+    for (const sg of [1, -1]) {
+      const dense = []
+      for (let s = 0; s <= above * W + 2 * W; s += chord / 2) {
+        const q = atArc(T, cum, s0 + s)
+        const off = sg * sh.d(s)
+        const x = q.x - q.ty * off
+        const y = q.y + q.tx * off
+        dense.push({ x, y, u: uOf(x, y) })
+      }
+      const pts = resample(landOnArc(dense, pool, rowH), chord)
+      const end = pts[pts.length - 1]
+      if (Math.abs(end.y - pool.arcY(end.x)) > 1e-3) {
+        why = 'it does not reach the pool'
+        continue
+      }
+      for (const p of pts) p.u = uOf(p.x, p.y)
+      if (pts.some((p) => Math.abs(p.u) > U_MAX)) {
+        why = 'it leaves the face'
+        continue
+      }
+      let down = true
+      for (let i = 1; i < pts.length; i++) if (!(pts[i].y > pts[i - 1].y)) down = false
+      if (!down || maxTurnDeg(pts) > HARD_TURN_DEG - 0.1) {
+        why = 'it bends too hard'
+        continue
+      }
+      if (drawnAngleDeg(pts, T, polylineLength(pts)) > CONFLUENCE_MAX_DEG - 0.5) {
+        why = 'it leans more than ' + CONFLUENCE_MAX_DEG + ' degrees off the trunk'
+        continue
+      }
+      // its entry is inside the arc, apart from the trunk's and from every other stream's
+      const entry = entryOf(end)
+      if (Math.abs(entry) > FORK_EDGE || Math.abs(entry - trunkEntry) < FORK_APART || others.some((f) => Math.abs(entry - entryOf(f.pts[f.pts.length - 1])) < FORK_APART)) {
+        why = 'its entry is too near the arc edge or another stream'
+        continue
+      }
+      // and it keeps its distance from the streams that run into the pool alone
+      if (others.some((f) => pts.some((p, j) => j % 2 === 0 && distToLine(f.pts, p) < 0.5 * W))) {
+        why = 'it crosses another stream'
+        continue
+      }
+      made.push({ pts, entry, room: roomOn(Math.sign(entry - trunkEntry)) })
+    }
+    if (!made.length) return why
+    // the side with more room
+    const { pts, entry } = made.reduce((a, c) => (c.room > a.room ? c : a))
+    // it stands: the trunk narrows over the first of the arm and stays narrow to the pool
+    const aSplit = p0.at
+    const aNarrow = atArc(T, cum, s0 + e).at
+    const narrow = (s) => (s <= aSplit ? 1 : s < aNarrow ? 1 - (1 - FORK_NARROW) * sstep((s - aSplit) / (aNarrow - aSplit)) : FORK_NARROW)
+    flows[0].widthAt = (s) => trunkWidth(s) * narrow(clamp(s, 0, 1))
+    flows.push({
+      pts,
+      widthAt: (s) => wA * (1 + GROWTH * clamp(s, 0, 1)),
+      head: false,
+      kind: 'braid',
+      role: 'fork',
+      heat: 1,
+      parent: 0,
+      attach: aSplit,
+      drain: -1,
+      drainAt: clamp(entry, -1, 1),
+      sourceIndex: -1,
+      aim: null,
+    })
+    return null
+  }
+  if (!phone && opts.braid !== false) {
+    const why = layFork()
+    if (why && import.meta.env?.DEV) console.debug('lavaNetwork: no fork:', why)
+  }
+
   // a stream into the pool says where it enters across its arc, -1 to 1 (0 under the trunk's end)
   for (const f of flows) {
     if (f.drain === -1) f.drainAt = clamp((f.pts[f.pts.length - 1].x - pool.cx) / pool.rx, -1, 1)

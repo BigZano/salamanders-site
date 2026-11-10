@@ -55,8 +55,8 @@ const channels = { parent: PARENT, attach: ATTACH, drain: DRAIN, drainAt: DRAIN_
  *
  * `parent[i]` is the index into `flows` of the channel that channel `i` starts on, or -1 when it starts on a
  * vent row of its own: no parent, or an index that does not name a channel. `attach[i]` is how far along that
- * parent, 0..1, the branch starts, and 0 when the flow does not say. A braid has both a parent it starts on and a
- * drain back into it.
+ * parent, 0..1, the branch starts, and 0 when the flow does not say. The fork's arm has both a parent it starts on (the
+ * trunk) and a drain of its own into the pool.
  *
  * `drain[i]` is the channel that channel `i` ends in: its index, or -1 for the pool, or NO_CHANNEL when the flow
  * names none (or names a channel that is not there, or itself). `drainAt[i]` means two things. For a channel that

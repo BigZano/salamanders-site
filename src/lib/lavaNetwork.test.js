@@ -106,17 +106,55 @@ function expectEnd(f, flows, pool, withinPool = true) {
   }
 }
 
+// The steepest angle, in degrees, a drawn feeder makes with its trunk over its last `span` px: each chord against the
+// direction of the trunk's nearest segment (the stretch above the turn counts, not the aim, and not the very end where the
+// turn has made it 0).
+function drawnWorst(f, T, span) {
+  const unit = (a, b) => {
+    const l = Math.hypot(b.x - a.x, b.y - a.y) || 1
+    return { x: (b.x - a.x) / l, y: (b.y - a.y) / l }
+  }
+  const nearestSeg = (p) => {
+    let best = Infinity
+    let bi = 0
+    for (let i = 1; i < T.length; i++) {
+      const a = T[i - 1]
+      const b = T[i]
+      const l2 = (b.x - a.x) ** 2 + (b.y - a.y) ** 2
+      const r = l2 ? Math.max(0, Math.min(1, ((p.x - a.x) * (b.x - a.x) + (p.y - a.y) * (b.y - a.y)) / l2)) : 0
+      const d = Math.hypot(p.x - (a.x + (b.x - a.x) * r), p.y - (a.y + (b.y - a.y) * r))
+      if (d < best) [best, bi] = [d, i - 1]
+    }
+    return bi
+  }
+  let arc = 0
+  let worst = 0
+  for (let k = f.pts.length - 1; k >= 1; k--) {
+    arc += Math.hypot(f.pts[k].x - f.pts[k - 1].x, f.pts[k].y - f.pts[k - 1].y)
+    if (arc > span) break
+    const a = unit(f.pts[k - 1], f.pts[k])
+    const i = nearestSeg(f.pts[k])
+    const b = unit(T[i], T[i + 1])
+    worst = Math.max(worst, (Math.acos(Math.max(-1, Math.min(1, a.x * b.x + a.y * b.y))) * 180) / Math.PI)
+  }
+  return worst
+}
+
 describe('buildNetwork sources', () => {
-  test('desktop has a trunk, one rim overflow and three fissures', () => {
+  test('desktop has a trunk, one rim overflow, three fissures and the fork arm', () => {
     const { flows, fissures, joins } = buildNetwork(cone(), opts(7))
-    expect(flows).toHaveLength(5)
+    // the sixth is the arm of the trunk's fork (the standard cone has the room for it)
+    expect(flows).toHaveLength(6)
     expect(count(flows, 'trunk')).toBe(1)
     expect(count(flows, 'rim')).toBe(1)
     expect(count(flows, 'fissure')).toBe(3)
+    expect(count(flows, 'braid')).toBe(1)
     expect(flows.filter((f) => f.head)).toHaveLength(1)
     expect(flows.find((f) => f.head).kind).toBe('trunk')
     expect(fissures).toHaveLength(3)
     expect(Array.isArray(joins)).toBe(true)
+    // and without it, the five
+    expect(buildNetwork(cone(), opts(7, { braid: false })).flows).toHaveLength(5)
   })
 
   test('phone has a trunk and one fissure', () => {
@@ -135,8 +173,15 @@ describe('buildNetwork sources', () => {
         expect(Math.abs(p.u)).toBeLessThanOrEqual(0.94 + 1e-9)
       }
       expect(typeof f.widthAt).toBe('function')
-      expect(f.parent).toBe(-1)
-      expect(f.attach).toBe(0)
+      // every source is a vent row of its own, the fork's arm excepted: it leaves the trunk part way down
+      if (f.role === 'fork') {
+        expect(f.parent).toBe(0)
+        expect(f.attach).toBeGreaterThan(0)
+        expect(f.attach).toBeLessThan(1)
+      } else {
+        expect(f.parent).toBe(-1)
+        expect(f.attach).toBe(0)
+      }
       // into the pool (-1, `drainAt` the entry across its arc) or onto the trunk (0, `drainAt` the place along it)
       expect([-1, 0]).toContain(f.drain)
       if (f.drain === -1) expect(Math.abs(f.drainAt)).toBeLessThanOrEqual(1)
@@ -270,7 +315,9 @@ describe('buildNetwork pool', () => {
     for (const m of [cone({ w: 390, height: 500, rows: 27, craterHalf: 18 }), cone({ rows: 27, terraces: true })]) {
       for (const phone of [false, true]) {
         const { flows, pool } = buildNetwork(m, { w: 390, h: 844, phone, rng: mulberry32(3) })
-        expect(flows.length).toBe(phone ? 2 : 5)
+        // five on desktop, and the fork's arm where the trunk has the room
+        expect(flows.filter((f) => f.kind !== 'braid').length).toBe(phone ? 2 : 5)
+        expect(flows.length).toBeLessThanOrEqual(phone ? 2 : 6)
         for (const f of flows) expectEnd(f, flows, pool)
       }
     }
@@ -315,6 +362,8 @@ describe('buildNetwork pool', () => {
           expect(Math.abs(e)).toBeLessThanOrEqual(1)
           expect(f.drainAt).toBeCloseTo(e, 9)
           if (f.role === 'trunk') expect(Math.abs(e)).toBeLessThan(0.05)
+          // the fork's arm enters 0.15 or more from the trunk's, inside the arc (its own tests say more)
+          else if (f.role === 'fork') expect(Math.abs(e)).toBeGreaterThanOrEqual(0.15)
           // the others (the lower fissure, and any tributary that drains alone) come in 0.4 to 0.9 out, never at the trunk's entry
           else {
             expect(Math.abs(e)).toBeGreaterThanOrEqual(0.4)
@@ -496,7 +545,8 @@ describe('roles and aims', () => {
   const mountains = [cone(), cone({ jitter: 20 }), cone({ rows: 27, jitter: 20 }), cone({ rows: 27, terraces: true, jitter: 20 }), cone({ rows: 30 })]
 
   test('every flow names its role', () => {
-    expect(buildNetwork(cone(), opts(7)).flows.map((f) => f.role)).toEqual(['trunk', 'rim', 'upper', 'mid', 'lower'])
+    expect(buildNetwork(cone(), opts(7)).flows.map((f) => f.role)).toEqual(['trunk', 'rim', 'upper', 'mid', 'lower', 'fork'])
+    expect(buildNetwork(cone(), opts(7, { braid: false })).flows.map((f) => f.role)).toEqual(['trunk', 'rim', 'upper', 'mid', 'lower'])
     expect(buildNetwork(cone(), opts(7, { phone: true })).flows.map((f) => f.role)).toEqual(['trunk', 'phone-fissure'])
   })
 
@@ -873,11 +923,12 @@ describe('confluences', () => {
   test('after the last join the growth and the pool flare continue from the joined width', () => {
     // widthAt(1) = the trunk's own growth and flare (1.15 and 1.2 of W0), each join's step taken as the product says; no
     // case skipped, so a swell still settling at the pool is counted too
+    // (the fork narrows the trunk below the last join to 0.6: it has its own tests, so it is left out here)
     let checked = 0
     for (const [name, m] of mountains) {
       for (const phone of [false, true]) {
         for (const seed of seeds) {
-          const net = buildNetwork(m, opts(seed, { phone }))
+          const net = buildNetwork(m, opts(seed, { phone, braid: false }))
           if (!net.joins.length) continue
           const trunk = net.flows[0]
           const L = length(trunk.pts)
@@ -1005,44 +1056,14 @@ describe('confluences', () => {
   })
 
   test('the DRAWN feeder keeps to 30 degrees to the local trunk tangent over its last 8 feeder widths', () => {
-    // read on the finished feeder, chord by chord, against the direction of the trunk's nearest segment: not at the aim
-    // (where the scaffold ends), not at the very end (where the turn has made it 0), but the stretch above the turn
-    const unit = (a, b) => {
-      const l = Math.hypot(b.x - a.x, b.y - a.y) || 1
-      return { x: (b.x - a.x) / l, y: (b.y - a.y) / l }
-    }
-    const nearestSeg = (T, p) => {
-      let best = Infinity
-      let bi = 0
-      for (let i = 1; i < T.length; i++) {
-        const a = T[i - 1]
-        const b = T[i]
-        const l2 = (b.x - a.x) ** 2 + (b.y - a.y) ** 2
-        const r = l2 ? Math.max(0, Math.min(1, ((p.x - a.x) * (b.x - a.x) + (p.y - a.y) * (b.y - a.y)) / l2)) : 0
-        const d = Math.hypot(p.x - (a.x + (b.x - a.x) * r), p.y - (a.y + (b.y - a.y) * r))
-        if (d < best) [best, bi] = [d, i - 1]
-      }
-      return bi
-    }
+    // read on the finished feeder (see drawnWorst): not at the aim, not at the very end, but the stretch above the turn
     for (const [name, m, phone] of angleCases) {
       let n = 0
       for (let seed = 1; seed <= 100; seed++) {
         const { flows, joins } = buildNetwork(m, opts(seed, { phone }))
-        const T = flows[0].pts
         for (const j of joins) {
-          const f = flows[j.feeder]
-          let arc = 0
-          let worst = 0
-          for (let k = f.pts.length - 1; k >= 1; k--) {
-            arc += Math.hypot(f.pts[k].x - f.pts[k - 1].x, f.pts[k].y - f.pts[k - 1].y)
-            if (arc > 8 * j.wf) break
-            const a = unit(f.pts[k - 1], f.pts[k])
-            const i = nearestSeg(T, f.pts[k])
-            const b = unit(T[i], T[i + 1])
-            worst = Math.max(worst, (Math.acos(Math.max(-1, Math.min(1, a.x * b.x + a.y * b.y))) * 180) / Math.PI)
-          }
           n++
-          expect(worst, name + ' seed ' + seed).toBeLessThanOrEqual(30)
+          expect(drawnWorst(flows[j.feeder], flows[0].pts, 8 * j.wf), name + ' seed ' + seed).toBeLessThanOrEqual(30)
         }
       }
       expect(n, name).toBeGreaterThan(50)
@@ -1096,6 +1117,267 @@ describe('confluences', () => {
     expect(approachAngleDeg(feeder(25), trunk, 0.5)).toBeCloseTo(25, 6)
     expect(approachAngleDeg(feeder(40), trunk, 0.5)).toBeCloseTo(40, 6)
     expect(approachAngleDeg(feeder(90), trunk, 0.5)).toBeCloseTo(90, 6)
+  })
+})
+
+describe('the fork', () => {
+  // The trunk splits 2.5 to 3.5 trunk widths above the pool arc and both streams run into the pool, each by its own entry.
+  // The hero and the two 27-row cones are the standard desktop cones; the 276 px cone is a low route, where the room
+  // below the trunk's last join is often short of 2.5 widths.
+  const standard = [
+    ['60 rows', cone()],
+    ['27 rows jittered', cone({ rows: 27, jitter: 20 })],
+    ['27 rows terraced', cone({ rows: 27, terraces: true, jitter: 20 })],
+  ]
+  const forkOf = (net) => net.flows.find((f) => f.role === 'fork')
+  const ofSeeds = (m, extra, n = 40) => Array.from({ length: n }, (_, i) => buildNetwork(m, opts(i + 1, extra)))
+  // how far above the arc the arm leaves the trunk, in trunk widths (the trunk ends on the arc); `at` is by point index
+  const aboveArc = (net) => {
+    const T = net.flows[0]
+    const f = forkOf(net)
+    const i = Math.floor(f.attach * (T.pts.length - 1))
+    return (length(T.pts.slice(i)) - Math.hypot(T.pts[i].x - along(T.pts, f.attach).x, T.pts[i].y - along(T.pts, f.attach).y)) / T.widthAt(f.attach)
+  }
+  const lastJoinOf = (net) => Math.max(0, ...net.joins.map((j) => j.at))
+  // the arc length down a polyline to `at` (0 to 1, by point index)
+  const arcAt = (pts, at) => {
+    const k = Math.max(0, Math.min(1, at)) * (pts.length - 1)
+    const i = Math.min(pts.length - 2, Math.floor(k))
+    return length(pts.slice(0, i + 1)) + (k - i) * Math.hypot(pts[i + 1].x - pts[i].x, pts[i + 1].y - pts[i].y)
+  }
+
+  test('desktop forks on at least 90% of seeds on the hero and both 27-row cones: one arm, below the last join, 2.5 to 3.5 widths above the arc', () => {
+    for (const [name, m] of standard) {
+      let forked = 0
+      const nets = ofSeeds(m, {}, 100)
+      for (const net of nets) {
+        const arms = net.flows.filter((f) => f.kind === 'braid')
+        expect(arms.length, name).toBeLessThanOrEqual(1)
+        if (!arms.length) continue
+        forked++
+        const f = arms[0]
+        // the sixth flow: the rim, three fissures and the arm after the trunk
+        expect(net.flows, name).toHaveLength(6)
+        expect(net.flows[5], name).toBe(f)
+        expect(f.role).toBe('fork')
+        expect(f.head).toBe(false)
+        expect(f.heat).toBe(1)
+        expect(f.sourceIndex).toBe(-1)
+        expect(f.aim).toBeNull()
+        // fed from the trunk where it leaves it, and into the pool by its own entry
+        expect(f.parent).toBe(0)
+        expect(f.drain).toBe(-1)
+        expect(f.attach, name).toBeGreaterThan(lastJoinOf(net))
+        expect(f.attach, name).toBeLessThan(1)
+        // 2.5 to 3.5 widths above the arc: the cap in the trunk's width at the split, the room (as the skip rule counts it) in its
+        // width at the join, which the swell below the join makes up to 10% less than the width at the split
+        const above = aboveArc(net)
+        expect(above, name).toBeLessThanOrEqual(3.5 + 0.05)
+        expect((above * net.flows[0].widthAt(f.attach)) / net.flows[0].widthAt(lastJoinOf(net)), name).toBeGreaterThanOrEqual(2.5 - 0.05)
+        // half a width (the trunk's, at the join) of clear trunk between the last join's landing and the split, and as far up
+        // as the room allows: either 3.5 above the arc, or exactly that half width below the join
+        const T = net.flows[0]
+        const clear = (arcAt(T.pts, f.attach) - arcAt(T.pts, lastJoinOf(net))) / T.widthAt(lastJoinOf(net))
+        expect(clear, name).toBeGreaterThanOrEqual(0.5 - 0.03)
+        if (above < 3.5 - 0.05) expect(clear, name).toBeLessThan(0.5 + 0.1)
+        // it leaves the trunk's centreline where `attach` says
+        const s = along(T.pts, f.attach)
+        expect(Math.hypot(f.pts[0].x - s.x, f.pts[0].y - s.y), name).toBeLessThan(1e-6)
+        // and the fork is not a join: no entry in joins[], so no fillet
+        expect(net.joins.every((j) => net.flows[j.feeder] !== f)).toBe(true)
+        expectEnd(f, net.flows, net.pool)
+      }
+      expect(forked / nets.length, name).toBeGreaterThanOrEqual(0.9)
+    }
+  })
+
+  test('both entries are inside the arc, unclamped, and at least 0.15 of the half width apart', () => {
+    for (const [name, m] of standard) {
+      for (const net of ofSeeds(m, {}, 60)) {
+        const f = forkOf(net)
+        if (!f) continue
+        const T = net.flows[0]
+        const { pool } = net
+        const entry = (fl) => (fl.pts[fl.pts.length - 1].x - pool.cx) / pool.rx
+        for (const fl of [f, T]) {
+          expect(Math.abs(entry(fl)), name).toBeLessThan(1)
+          expect(fl.drainAt, name).toBeCloseTo(entry(fl), 9)
+          const end = fl.pts[fl.pts.length - 1]
+          expect(Math.abs(end.y - pool.arcY(end.x)), name).toBeLessThan(1e-3)
+        }
+        expect(Math.abs(f.drainAt - T.drainAt), name).toBeGreaterThanOrEqual(0.15)
+        // and from the other streams that run into the pool
+        for (const o of net.flows.filter((x) => x.drain === -1 && x !== f && x !== T)) expect(Math.abs(f.drainAt - o.drainAt), name).toBeGreaterThanOrEqual(0.15)
+      }
+    }
+  })
+
+  test('the arm is half the trunk wide at the split and only grows; the trunk is 0.6 of its width from the split to the pool', () => {
+    let n = 0
+    for (const [name, m] of standard) {
+      for (let seed = 1; seed <= 40; seed++) {
+        const net = buildNetwork(m, opts(seed))
+        const f = forkOf(net)
+        if (!f) continue
+        n++
+        const without = buildNetwork(m, opts(seed, { braid: false })).flows[0]
+        const T = net.flows[0]
+        const L = length(T.pts)
+        const W = T.widthAt(f.attach)
+        // the arm: half the trunk's width at the split, 15% more by its end (no flare), never narrower on the way
+        expect(f.widthAt(0), name).toBeCloseTo(0.5 * W, 9)
+        expect(f.widthAt(1), name).toBeCloseTo(0.5 * W * 1.15, 9)
+        let prev = 0
+        for (let s = 0; s <= 1; s += 0.05) {
+          expect(f.widthAt(s)).toBeGreaterThanOrEqual(prev)
+          prev = f.widthAt(s)
+        }
+        // the trunk against the same trunk without the fork
+        const ratio = (s) => T.widthAt(s) / without.widthAt(s)
+        for (let s = 0; s <= f.attach; s += 0.02) expect(ratio(s), name).toBeCloseTo(1, 9)
+        // it narrows over the first 0.8 widths of the arm (the ease is by point index, so read from 1.1 on), then holds 0.6 to the pool
+        let prevRatio = 1
+        for (let s = f.attach; s <= 1; s += 0.002) {
+          expect(ratio(s), name).toBeLessThanOrEqual(prevRatio + 1e-9)
+          expect(ratio(s), name).toBeGreaterThanOrEqual(0.6 - 1e-9)
+          prevRatio = ratio(s)
+        }
+        for (let s = f.attach + (1.1 * W) / L; s <= 1; s += 0.01) expect(ratio(s), name).toBeCloseTo(0.6, 9)
+        expect(ratio(1), name).toBeCloseTo(0.6, 9)
+      }
+    }
+    expect(n).toBeGreaterThan(100)
+  })
+
+  test('the arm leans off the trunk at 30 degrees or less over its whole length, to one side, and never crosses it', () => {
+    let n = 0
+    for (const [name, m] of standard) {
+      for (const net of ofSeeds(m, {}, 40)) {
+        const f = forkOf(net)
+        if (!f) continue
+        n++
+        const T = net.flows[0].pts
+        expect(drawnWorst(f, T, length(f.pts)), name).toBeLessThanOrEqual(CONFLUENCE_MAX_DEG)
+        // the side: the sign of the cross product of the trunk's direction and the way to the arm, at each point past the split
+        const side = (p) => {
+          let best = Infinity
+          let sg = 0
+          for (let i = 1; i < T.length; i++) {
+            const a = T[i - 1]
+            const c = T[i]
+            const dx = c.x - a.x
+            const dy = c.y - a.y
+            const r = Math.max(0, Math.min(1, ((p.x - a.x) * dx + (p.y - a.y) * dy) / (dx * dx + dy * dy)))
+            const d = Math.hypot(p.x - (a.x + dx * r), p.y - (a.y + dy * r))
+            if (d < best) [best, sg] = [d, (dx * (p.y - a.y) - dy * (p.x - a.x)) / Math.hypot(dx, dy)]
+          }
+          return sg
+        }
+        const sides = f.pts.slice(2).map(side)
+        expect(sides.every((x) => x > 0) || sides.every((x) => x < 0), name).toBe(true)
+        // and it gets further from the trunk the whole way down (two streams, not one that bends back)
+        const gap = f.pts.map((p) => distTo(T, p))
+        for (let i = 1; i < gap.length; i++) expect(gap[i], name).toBeGreaterThanOrEqual(gap[i - 1] - 0.5)
+      }
+    }
+    expect(n).toBeGreaterThan(100)
+  })
+
+  test('it runs downhill, on the face, no chord turns over 12 degrees, its points are evenly spaced no further than half a row, and it keeps clear of the other pool streams', () => {
+    for (const [name, m] of standard) {
+      for (const net of ofSeeds(m, {}, 25)) {
+        const f = forkOf(net)
+        if (!f) continue
+        for (let i = 1; i < f.pts.length; i++) expect(f.pts[i].y, name).toBeGreaterThan(f.pts[i - 1].y)
+        for (const p of f.pts) {
+          expect(Number.isFinite(p.x) && Number.isFinite(p.y) && Number.isFinite(p.u)).toBe(true)
+          expect(Math.abs(p.u), name).toBeLessThanOrEqual(0.94 + 1e-9)
+        }
+        for (let i = 1; i < f.pts.length - 1; i++) {
+          const a = f.pts[i - 1]
+          const c = f.pts[i]
+          const d = f.pts[i + 1]
+          const cos = ((c.x - a.x) * (d.x - c.x) + (c.y - a.y) * (d.y - c.y)) / (Math.hypot(c.x - a.x, c.y - a.y) * Math.hypot(d.x - c.x, d.y - c.y))
+          expect((Math.acos(Math.max(-1, Math.min(1, cos))) * 180) / Math.PI, name).toBeLessThanOrEqual(12)
+        }
+        const d = f.pts.slice(1).map((p, i) => Math.hypot(p.x - f.pts[i].x, p.y - f.pts[i].y))
+        expect(Math.max(...d), name).toBeLessThanOrEqual(0.5 * rowHeight(m) + 1e-6)
+        expect(Math.max(...d) - Math.min(...d), name).toBeLessThan(0.3 * rowHeight(m))
+        for (const o of net.flows.filter((x) => x.drain === -1 && x.role !== 'trunk' && x !== f)) {
+          for (const p of f.pts) expect(distTo(o.pts, p), name).toBeGreaterThan(0.5 * net.flows[0].widthAt(f.attach))
+        }
+      }
+    }
+  })
+
+  test('everything else is as it was without the fork, and the same seed gives the same fork', () => {
+    for (const [name, m] of standard) {
+      for (let seed = 1; seed <= 20; seed++) {
+        const net = buildNetwork(m, opts(seed))
+        const f = forkOf(net)
+        if (!f) continue
+        const without = buildNetwork(m, opts(seed, { braid: false }))
+        expect(without.flows.every((x) => x.kind !== 'braid')).toBe(true)
+        expect(net.flows.slice(0, 5).map((x) => x.pts), name).toEqual(without.flows.map((x) => x.pts))
+        expect(net.fissures).toEqual(without.fissures)
+        expect(net.joins).toEqual(without.joins)
+        expect(net.pool.cx).toBe(without.pool.cx)
+        const again = buildNetwork(m, opts(seed))
+        expect(forkOf(again).pts).toEqual(f.pts)
+        expect(forkOf(again).attach).toBe(f.attach)
+        expect(forkOf(again).drainAt).toBe(f.drainAt)
+        expect(again.flows[0].widthAt(0.9)).toBe(net.flows[0].widthAt(0.9))
+      }
+    }
+    // another seed, another fork
+    const m = standard[1][1]
+    expect(forkOf(buildNetwork(m, opts(7))).pts).not.toEqual(forkOf(buildNetwork(m, opts(8))).pts)
+  })
+
+  test('a phone never has one', () => {
+    for (const [name, m] of standard) {
+      for (const net of ofSeeds(m, { phone: true }, 10)) {
+        expect(net.flows.map((f) => f.kind), name).toEqual(['trunk', 'fissure'])
+      }
+    }
+  })
+
+  test('a trunk with under 2.5 widths between its last join and the arc gets no fork, and says so in dev', () => {
+    // a cone so short its trunk is about a width long
+    const spy = vi.spyOn(console, 'debug').mockImplementation(() => {})
+    for (const m of [cone({ rows: 14, height: 120, craterHalf: 90 }), cone({ rows: 12, height: 100, craterHalf: 60 })]) {
+      for (let seed = 1; seed <= 10; seed++) {
+        spy.mockClear()
+        const net = buildNetwork(m, opts(seed))
+        expect(forkOf(net)).toBeUndefined()
+        expect(net.flows.every((f) => f.kind !== 'braid')).toBe(true)
+        const said = spy.mock.calls.filter((c) => c.join(' ').includes('no fork'))
+        expect(said).toHaveLength(1)
+        expect(said[0].join(' ')).toMatch(/trunk widths between the last join and the pool/)
+        // left out on purpose, nothing is said
+        spy.mockClear()
+        buildNetwork(m, opts(seed, { braid: false }))
+        expect(spy.mock.calls.filter((c) => c.join(' ').includes('no fork'))).toHaveLength(0)
+      }
+    }
+    // on a low route (276 px) the room is short on some seeds and not on others: the ones that skip say so, the rest fork
+    const low = cone({ rows: 27, height: 276, jitter: 20 })
+    let skipped = 0
+    let forked = 0
+    for (let seed = 1; seed <= 60; seed++) {
+      spy.mockClear()
+      const net = buildNetwork(low, opts(seed))
+      const said = spy.mock.calls.filter((c) => c.join(' ').includes('no fork'))
+      if (forkOf(net)) {
+        forked++
+        expect(said).toHaveLength(0)
+      } else {
+        skipped++
+        expect(said).toHaveLength(1)
+      }
+    }
+    expect(skipped).toBeGreaterThan(0)
+    expect(forked).toBeGreaterThan(0)
   })
 })
 
@@ -1234,9 +1516,10 @@ describe('widths', () => {
   })
 
   test('widths grow 15% source to end before any join', () => {
+    // (without the fork: its arm grows 15% with no flare and the trunk narrows below it, both in the fork's own tests)
     const m = cone()
     for (const seed of seeds) {
-      const { flows, joins } = buildNetwork(m, opts(seed))
+      const { flows, joins } = buildNetwork(m, opts(seed, { braid: false }))
       for (const f of flows) {
         if (f.drain === 0) {
           // a feeder ends at its join: 15% wider there than at its source, and no flare (it never reaches the pool)
@@ -1263,7 +1546,7 @@ describe('widths', () => {
   test('the last two rows flare 20% as a stream enters the pool', () => {
     // the full cone (the trunk and the lower fissure reach the pool, the rest join) and a short one where nothing joins
     for (const m of [cone(), cone({ rows: 14, height: 200 })]) {
-      const { flows, joins } = buildNetwork(m, opts(7))
+      const { flows, joins } = buildNetwork(m, opts(7, { braid: false }))
       let flared = 0
       for (const f of flows) {
         if (f.drain !== -1 || (f.role === 'trunk' && joins.length)) continue
