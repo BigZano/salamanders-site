@@ -133,6 +133,29 @@ describe('judge', () => {
     expect(judge({ head: bright, toe: dark, toeWide: dark, levee: grey })).toMatchObject({ toe: false, ok: false })
     expect(judge({ head: bright, toe: dark, toeWide: bright, levee: bright })).toMatchObject({ levee: false, ok: false })
   })
+
+  // a 4 x 4 box of RGBA pixels, every one `base`, with the given pixels (index -> rgb) swapped in
+  const box = (base, swaps = {}) => {
+    const px = new Uint8Array(4 * 4 * 4)
+    for (let i = 0; i < 16; i++) px.set([...(swaps[i] ?? base), 255], i * 4)
+    return probe(px, 4, 4, { x: 0, y: 0, w: 4, h: 4 })
+  }
+
+  it('judges the levee on the mean: grey rubble with one ember pixel passes', () => {
+    const levee = box([55, 45, 40], { 5: [171, 45, 40] })
+    expect(levee.max).toBe(171) // the old single-pixel test (max under 160) failed this box
+    expect(judge({ head: bright, toe: dark, toeWide: bright, levee })).toMatchObject({ levee: true, ok: true })
+    // the box that flaked the smoke run: an ember over rubble, mean rgb 78,60,45
+    expect(judge({ head: bright, toe: dark, toeWide: bright, levee: { mean: [78, 60, 45], max: 200, bright: false } })).toMatchObject({ levee: true })
+  })
+
+  it('judges the levee on the mean: lava fails it, even when it is evenly yellow-red', () => {
+    const lava = box([230, 120, 30])
+    expect(judge({ head: bright, toe: dark, toeWide: bright, levee: lava })).toMatchObject({ levee: false, ok: false })
+    // red and green close together, so only the mean red can tell this from rubble
+    const glow = box([150, 130, 60])
+    expect(judge({ head: bright, toe: dark, toeWide: bright, levee: glow })).toMatchObject({ levee: false, ok: false })
+  })
 })
 
 describe('judgeIgnition', () => {
@@ -142,8 +165,20 @@ describe('judgeIgnition', () => {
   it('passes a lit head over a dark first arm toe, and fails lava already at the toe', () => {
     expect(judgeIgnition({ head: bright, toe: dark, toeWide: bright })).toEqual({ head: true, toe: true, ok: true })
     expect(judgeIgnition({ head: dark, toe: dark })).toMatchObject({ head: false, ok: false })
-    expect(judgeIgnition({ head: bright, toe: { ...dark, bright: true } })).toMatchObject({ toe: false, ok: false })
     expect(judgeIgnition({ head: bright, toe: { ...bright, bright: false } })).toMatchObject({ toe: false, ok: false })
+  })
+
+  it('judges the toe on the mean: a drifting ember passes, a box of lava fails', () => {
+    const px = (swaps) => {
+      const a = new Uint8Array(24 * 24 * 4)
+      for (let i = 0; i < 24 * 24; i++) a.set([...(swaps(i) ?? [60, 40, 30]), 255], i * 4)
+      return probe(a, 24, 24, { x: 0, y: 0, w: 24, h: 24 })
+    }
+    const ember = px((i) => (i === 100 ? [230, 120, 30] : null))
+    expect(ember.bright).toBe(true) // the old single-pixel flag failed this
+    expect(judgeIgnition({ head: bright, toe: ember })).toMatchObject({ toe: true, ok: true })
+    const lava = px((i) => (i % 2 ? [230, 120, 30] : null)) // half the box is lava: mean red 145
+    expect(judgeIgnition({ head: bright, toe: lava })).toMatchObject({ toe: false, ok: false })
   })
 })
 

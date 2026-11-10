@@ -147,6 +147,9 @@ const LEVEE_BOX = 4
 // How far beside the sheet the levee box sits, in half widths. The rubble runs from 1 (the bank) to 2.2 (where it has
 // faded out, the shader's LEVEE), so 1.6 is in the middle of it; at 2.2 the box would see bare rock and prove nothing.
 const LEVEE_AT = 1.6
+// A small probe box whose mean red is under this holds no lava. Real lava reads over 150 there; the one flaky run in 20
+// that taught this was an ember over rubble, mean rgb 78,60,45.
+export const EMBER_RED = 110
 
 /**
  * The three rects the smoke probes read, in viewport CSS px, worked out from the volcano's `geometry()`:
@@ -192,13 +195,15 @@ export function probeRects(geometry) {
  * Whether the three probes pass, given the `probe()` result for each rect:
  *   head     something is bright: lava is pouring from the breach
  *   toe      mostly crust (mean red under 140) with some bright pixel along the lower arm: cooled at the end, alive behind it
- *   levee    roughly grey (red and green within 40 of each other, nothing above 160): rubble, not glowing lava
+ *   levee    roughly grey (red and green within 40 of each other, mean red under EMBER_RED): rubble, not glowing lava.
+ *            Judged on the mean, not the brightest pixel: a drifting ember can land in a 4 px box (it did, 1 run in 20)
+ *            and one pixel of it proves nothing about the rubble.
  */
 export function judge({ head, toe, toeWide, levee }) {
   const result = {
     head: head.bright,
     toe: toe.mean[0] < 140 && toeWide.bright,
-    levee: Math.abs(levee.mean[0] - levee.mean[1]) < 40 && levee.max < 160,
+    levee: Math.abs(levee.mean[0] - levee.mean[1]) < 40 && levee.mean[0] < EMBER_RED,
   }
   return { ...result, ok: result.head && result.toe && result.levee }
 }
@@ -206,11 +211,12 @@ export function judge({ head, toe, toeWide, levee }) {
 /**
  * Whether the ignition entry passes, two seconds after a cold load:
  *   head     something is bright: the front has left the breach
- *   toe      the first arm's toe box is dark: mean red under 140 and no pixel bright. Not the wide box: on a desktop it is
- *            big enough to catch a drifting ember, and at two seconds the arm is cold all along anyway.
+ *   toe      the first arm's toe box is cold: mean red under EMBER_RED. Judged on the mean, so a drifting ember (one or
+ *            two bright pixels) does not fail it, and lava covering a good part of the box does. Not the wide box: on
+ *            a desktop it is big enough to catch an ember, and at two seconds the arm is cold all along anyway.
  */
 export function judgeIgnition({ head, toe }) {
-  const result = { head: head.bright, toe: toe.mean[0] < 140 && !toe.bright }
+  const result = { head: head.bright, toe: toe.mean[0] < EMBER_RED }
   return { ...result, ok: result.head && result.toe }
 }
 

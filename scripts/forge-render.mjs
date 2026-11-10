@@ -377,10 +377,7 @@ async function main() {
   mkdirSync(out, { recursive: true })
   const profile = mkdtempSync(join(tmpdir(), 'forge-render-'))
   const { chrome, ready } = launch(chromePath, profile, opts.gpu)
-  // A second after the spawn, drop every process of this run (Chrome's own children included) to below-normal.
-  await sleep(1000)
-  await lowerPriority(basename(profile))
-  // The belt: however this process ends, Chrome does not outlive it.
+  // The belt: however this process ends, Chrome does not outlive it. Registered at once, before anything is awaited.
   process.on('exit', () => {
     try {
       chrome.kill()
@@ -394,7 +391,16 @@ async function main() {
   let cdp = null
   const results = []
   try {
-    cdp = await connect(await ready)
+    // `ready` is awaited first, inside the try, so a Chrome that exits at once is reported cleanly and the profile
+    // folder is still removed by the finally below.
+    const wsUrl = await ready
+    // Chrome has started its children by now: drop every process of this run to below-normal. Windows only, so no
+    // wait anywhere else.
+    if (lowerPriorityCommand(basename(profile), process.platform)) {
+      await sleep(1000)
+      await lowerPriority(basename(profile))
+    }
+    cdp = await connect(wsUrl)
     const nameWidth = Math.max(4, ...entries.map((e) => e.name.length))
     console.log(`${'name'.padEnd(nameWidth)}  ${'draw-mean'.padStart(10)}  ${'draw-worst'.padStart(10)}  ${'fps'.padStart(8)}${opts.smoke ? '  probes' : ''}`)
     for (const entry of entries) {
