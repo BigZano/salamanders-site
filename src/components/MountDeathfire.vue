@@ -3,6 +3,7 @@ import { ref, computed, watch, onMounted, onBeforeUnmount } from 'vue'
 import { forge, forgeAdvance, forgeSample, devNumber } from '../lib/forge'
 import { useRoute } from 'vue-router'
 import { motionAllowed } from '../lib/doomfire'
+import { buildNetwork } from '../lib/lavaNetwork'
 import { fireTuning, randomize, profileFor, NEUTRAL_PROFILE, DEFAULTS } from '../lib/fireTuning'
 import { deathfireHeat } from '../lib/deathfireHeat'
 
@@ -47,6 +48,9 @@ let hidden = false
 let mountain = null // { peak, left, right, profile, crater }
 let ridges = [] // distant silhouettes, for depth
 let flows = [] // lava running down the flanks
+let fissures = [] // the cracks the flank streams start from: { x, y, rows, tilt, len, bloom, heat }, the lower end first
+let lavaPool = null // the pool at the foot of the cone every stream ends in: { cx, cy, rx, ry, arcTop, arcY(x) }, or null
+let joins = [] // where a tributary meets the trunk, for the lava layer's fillets
 let lava = null // the WebGL lava layer (lib/lavaShader), once loaded; null while loading and where WebGL2 is missing
 let lavaFade = 0 // how much of the channels the shader paints, 0 (the ribbons alone) to 1; rises over a second
 let lavaWanted = false // cleared on unmount, so a chunk that arrives late does not build a layer for a gone volcano
@@ -442,6 +446,7 @@ function buildMoon(w, h) {
 }
 
 // How far in from the rim corner each crest's base reaches, in crater widths: the rest of the rim is the mouth.
+// lib/lavaNetwork.js holds the same 0.55 (its trunk leaves through this mouth) and does not export it yet: keep the two together.
 const CROWN_BASE = 0.55
 
 /**
@@ -654,67 +659,38 @@ function traceSlice(ctx, f, lo, hi) {
 }
 
 /**
- * Lava spilling from the crater and running down the face of the cone, as the USGS record of Kilauea 2018 and Mauna
- * Loa 2022 shows channels: a few wide ones leave the vent, cut between rubble levees, braid around an island and
- * rejoin, or throw a side stream that runs out on the flank. Each channel is a segment: a centreline (`pts`), a width
- * profile along it, and three ribbons built from both, the levee under, the body, and the crust skin over. A trunk
- * starts at the mouth (`head`); a branch starts on its trunk and shares that point.
+ * Lava running down the face of the cone as a network, as the USGS record of Kilauea 2018 and Mauna Loa 2022 shows it:
+ * the breach stream is the trunk, a rim overflow and flank fissures start streams of their own, tributaries meet the trunk
+ * at a shallow angle and the trunk widens below each join, and every stream that is left ends in the pool at the foot.
+ * Where they run, how wide they are and where they meet is lib/lavaNetwork's (pure, and tested without a canvas); this
+ * keeps what the page draws from it. Each channel is a segment: a centreline (`pts`), a width profile along it
+ * (`widthAt`), and three ribbons built from both, the body, the core and the crust skin over it. The ribbons are the
+ * fallback where the WebGL layer is not running. There are no painted banks: the layer's strips and its heat sim make
+ * the banks (the crusted outer rows), so a channel here is only the lava.
  *
- * Positions are expressed as a fraction across the mountain's width at each height, not as an offset from a flank.
- * Offsetting from the flank line pushed the channels off the silhouette entirely and left the front face bare, which
- * is where lava is actually visible.
+ * `fissures` (the cracks the flank streams start from), `lavaPool` and `joins` are set beside the flows, from the same
+ * network, and the layer is handed the last two. A trunk starts at the mouth (`head`).
  *
  * `prev` is the outgoing flow list, if any. The geometry doesn't need it: the seed is fixed per route, so re-running
- * this after a resize retraces the same channels against the new mountain. But the riders (buildRiders) use unseeded
+ * this after a resize retraces the same network against the new mountain. But the riders (buildRiders) use unseeded
  * progress so rockfall and the crust pattern never repeat in lockstep, and without carrying that progress across,
  * every rider would snap back to a fresh random position the moment the window resizes.
  */
 function buildFlows(prev, w) {
   const out = []
-  const phone = isPhone()
-  // tune.flows is the number of distributaries the sheet splits into; a phone gets one, and its side stream
-  const arms = Math.max(0, Math.round(phone ? Math.min(1, tune.flows) : tune.flows))
-  if (!arms) return out
-  const rows = mountain.left.length
-  const m = mountain
-  // the sheet leaves the vent as wide as the valley floor
-  const W0 = Math.max(12, Math.min(40, m.craterHalf * 0.56))
-  const towardFace = m.peakX < w / 2 ? 1 : -1
+  fissures = []
+  joins = []
+  lavaPool = null
+  // tune.flows used to be the number of distributaries; the network decides that now (a phone gets a trunk and one
+  // fissure), so it is only the switch for the lava: 0 puts it out.
+  if (!Math.round(tune.flows)) return out
+  // The seeded rng is reassigned for each route (seedForRoute, which has already run), so it is read through a wrapper.
+  const net = buildNetwork(mountain, { w, h: lastH, phone: isPhone(), rng: () => rng() })
+  // A stream with no length would shift the indices the drains and the joins name; the network never makes one.
+  if (!net.flows.length || net.flows.some((f) => f.pts.length < 2)) return out
 
-  // The centreline of a channel from row `from` to fraction `to` of the height: u is its place across the mountain's
-  // width (-1 left, 1 right), continuous with `u0` at its start, leaning away as the slope broadens with one slow
-  // wander, so it is smooth by construction. Each point carries its u so a branch can leave from it.
-  const trace = (u0, from, lean, wob, to) => {
-    const pts = []
-    const f0 = from / (rows - 1)
-    const w0 = wob.amp * Math.sin(f0 * wob.freq + wob.phase)
-    for (let s = from; s < rows; s++) {
-      const f = s / (rows - 1)
-      if (f > to) break
-      const l = m.left[s]
-      const r = m.right[s]
-      const cx = (l.x + r.x) / 2
-      const halfW = (r.x - l.x) / 2
-      let u = u0 + lean * (f - f0) + wob.amp * Math.sin(f * wob.freq + wob.phase) - w0
-      u = Math.max(-0.94, Math.min(0.94, u))
-      // the channels leave through the mouth, then fan out over the face
-      pts.push({ x: cx + u * (1 - CROWN_BASE + CROWN_BASE * Math.min(1, s / 6)) * halfW, y: (l.y + r.y) / 2, u })
-    }
-    return pts
-  }
-  // a branch follows its trunk between two of its points, pushed sideways by a profile over its length
-  const offshoot = (trunk, ia, ib, side, px, profile) => {
-    const pts = []
-    for (let k = ia; k <= ib; k++) {
-      const f = (k - ia) / Math.max(1, ib - ia)
-      pts.push({ x: trunk[k].x + side * px * profile(f), y: trunk[k].y })
-    }
-    return pts
-  }
-  const widths = (w0, lobe) => (s) => w0 * (1 - 0.28 * s + (lobe ? 0.45 * sstep((s - 0.82) / 0.12) : 0))
-
-  const push = (pts, w, kind, head, seg, parent, attach) => {
-    if (pts.length < 2) return
+  const push = (nf) => {
+    const { pts, widthAt, head } = nf
     // The glow is sampled at GLOW_STOPS places along the channel. Where each sits in the pattern, how much crust it
     // carries (little near the vent, more toward the toe), and its heat colours depend only on its place: worked out once.
     const phs = new Float32Array(GLOW_STOPS)
@@ -739,14 +715,13 @@ function buildFlows(prev, w) {
     const riders = prev?.[i] ? { chunks: prev[i].chunks, seed: prev[i].seed } : { ...(head ? buildRiders() : buildRiders(1, 3)), seed: rand(0, 900) }
     out.push({
       pts,
-      kind,
-      widthAt: w, // the channel's width in px at s along it (0 to 1): the shader cuts its strips from it
+      kind: nf.kind, // 'trunk' | 'rim' | 'fissure' | 'braid'
+      role: nf.role,
+      widthAt, // the channel's width in px at s along it (0 to 1): the shader cuts its strips from it
       head, // starts at the vent: gets the spill, the pool and the full rider count
-      levee: ribbon(pts, w, 2.2, 0.22, 0.8, i * 3),
-      shoulder: ribbon(pts, w, 4, 0.4, 0.5, i * 3 + 1),
-      ribbon: ribbon(pts, w, 1, 0.08, 1.1, i * 3 + 2),
-      core: ribbon(pts, w, 0.42),
-      skin: ribbon(pts, w, 0.6, 0.6, 1.5, i * 3 + 2),
+      ribbon: ribbon(pts, widthAt, 1, 0.08, 1.1, i * 3 + 2),
+      core: ribbon(pts, widthAt, 0.42),
+      skin: ribbon(pts, widthAt, 0.6, 0.6, 1.5, i * 3 + 2),
       phs,
       thrs,
       bodyA,
@@ -757,68 +732,41 @@ function buildFlows(prev, w) {
       D: rand(0, 40), // how far the pattern has been carried: it moves at a speed that wanders
       tau: rand(0, 40), // how far it has evolved
       surge: -1, // where a pulse from an eruption has got to, 0 at the vent to 1 at the toe; -1 when none
-      width: w(0) * 0.3, // the spill, the pool and the bloom at the head are sized from this
+      width: widthAt(0) * 0.3, // the spill, the pool and the bloom at the head are sized from this
       phase: grand(0, Math.PI * 2),
       rate: grand(0.12, 0.4),
-      heat: seg,
-      parent, // the channel this one starts on, as an index into the flow list: -1 for the sheet, which starts at the vent
-      attach, // how far along that channel, 0 to 1, this one leaves it: the lava layer's heat sim feeds it from there
+      // The source's share of the vent heat: 1 for the trunk, less for the others. The sim scales each vent by it
+      // (uVentHeat), so it is passed on as it is: the tuner's heat, the page's density and the breathing do not belong in it.
+      heat: nf.heat,
+      parent: nf.parent, // the channel this one starts on, as an index into the flow list: -1, every source is a vent row of its own
+      attach: nf.attach, // how far along that channel, 0 to 1, this one leaves it
+      drain: nf.drain, // where it ends: a flow's index (the trunk it joins), or -1 for the pool
+      drainAt: nf.drainAt, // how far along that flow it joins (0 to 1), or where it enters the pool's arc (-1 to 1)
+      sourceIndex: nf.sourceIndex,
       ...riders,
     })
   }
+  for (const nf of net.flows) push(nf)
 
-  // The sheet: from the vent, straight-ish down the upper face, to the split.
-  const uVent = (m.vent.x - m.peakX) / ((1 - CROWN_BASE) * m.craterHalf)
-  let from = 0
-  while (from < rows - 1 && m.left[from].y < m.vent.y) from++
-  const splitAt = grand(0.26, 0.36)
-  const sheetLean = (arms === 1 ? towardFace : Math.sign(uVent || 1)) * grand(0.02, 0.1)
-  const sheet = trace(uVent, from, sheetLean, { amp: grand(0.01, 0.03), freq: grand(3, 5), phase: grand(0, Math.PI * 2) }, splitAt)
-  // the head is the vent itself, so the sheet pours from the floor of the breach
-  sheet.unshift({ x: m.vent.x, y: m.vent.y, u: uVent })
-  const w0 = W0
-  push(sheet, (s) => w0 * (0.75 + 0.25 * s), 'sheet', true, grand(0.85, 1), -1, 0)
-  const sheetAt = out.length - 1 // -1 if the sheet was too short to push: the arms then start on open ground
-
-  // The distributaries: they leave the sheet's toe together and fan out. The first braids around an island, the
-  // second throws a side stream, a third does either or runs plain; the seed may swap the first two. A lone arm
-  // throws the side stream toward the face the page shows.
-  const kinds = arms === 1 ? ['side'] : ['braid', 'side', grand(0, 1) < 0.5 ? 'braid' : 'plain']
-  if (arms > 1 && grand(0, 1) < 0.5) [kinds[0], kinds[1]] = [kinds[1], kinds[0]]
-  const tail = sheet[sheet.length - 1]
-  const fromArm = from + sheet.length - 2
-  for (let i = 0; i < arms; i++) {
-    const fan = arms === 1 ? towardFace * grand(0.05, 0.15) : (i - (arms - 1) / 2) * grand(0.55, 0.75) + grand(-0.06, 0.06)
-    const wob = { amp: grand(0.03, 0.07), freq: grand(3, 6), phase: grand(0, Math.PI * 2) }
-    const endAt = grand(0.74, 1)
-    const pts = trace(tail.u, fromArm, fan, wob, endAt)
-    const wa = w0 * (arms === 1 ? 0.85 : grand(0.72, 0.88))
-    const kind = kinds[i] || 'plain'
-    const heat = grand(0.7, 1)
-    // An arm leaves the sheet at its toe, the last point of the sheet's centreline, so it starts at 1 along the sheet.
-    // (splitAt is a fraction of the mountain's height, not of the sheet's length.)
-    const armAt = out.length
-    push(pts, widths(wa, true), 'arm', false, heat, sheetAt, 1)
-    const n = pts.length
-    if (kind === 'braid' && n > 12) {
-      // splits around an island and rejoins: a bulge to one side between two points of the arm
-      const ia = Math.round(n * grand(0.25, 0.45))
-      const ib = Math.min(n - 2, ia + Math.round(n * grand(0.22, 0.34)))
-      const side = grand(0, 1) < 0.5 ? -1 : 1
-      const bulge = wa * grand(1.8, 2.6)
-      const bp = offshoot(pts, ia, ib, side, bulge, (f) => Math.sin(Math.PI * f))
-      push(bp, widths(wa * 0.55, false), 'braid', false, heat * grand(0.8, 1), armAt, ia / (n - 1))
-    } else if (kind === 'side' && n > 10) {
-      // a side stream: leaves the arm, runs away from it down the flank and runs out
-      const ia = Math.round(n * grand(0.3, 0.5))
-      const ib = Math.min(n - 2, ia + Math.round(n * grand(0.35, 0.5)))
-      const side = arms === 1 ? towardFace : fan >= 0 ? 1 : -1
-      // a side stream is a long loop: it leaves its host, swings wide down the flank and returns to it
-      const reach = wa * grand(2.2, 3.2)
-      const sp = offshoot(pts, ia, ib, side, reach, (f) => Math.sin(Math.PI * f) * (0.85 + 0.15 * Math.sin(f * 7)))
-      push(sp, widths(wa * 0.55, false), 'side', false, heat * grand(0.7, 0.95), armAt, ia / (n - 1))
+  // The cracks the flank streams start from. A crack is `rows` mountain rows tall, but a row is 25 to 50 px on a real cone,
+  // so it is also held to 2.5 breach widths (the trunk's first width): a seam, not a wire. Each carries its stream's heat,
+  // its jagged seam (crackShape) and a bloom the width of the stream it feeds.
+  const last = mountain.left.length - 1
+  const rowH = (mountain.left[last].y + mountain.right[last].y - mountain.left[0].y - mountain.right[0].y) / 2 / last
+  const breach = net.flows[0].widthAt(0)
+  fissures = net.fissures.map((c, i) => {
+    const stream = net.flows.find((f) => f.sourceIndex === i)
+    const len = Math.min(c.rows * rowH, 2.5 * breach)
+    return {
+      ...c,
+      len,
+      ...crackShape(c, i, len),
+      bloom: Math.max(14, 2.2 * (stream?.widthAt(0) ?? 0.35 * breach)),
+      heat: stream?.heat ?? 0.8,
     }
-  }
+  })
+  joins = net.joins
+  lavaPool = net.pool
   return out
 }
 
@@ -839,7 +787,7 @@ function ribbon(pts, w, k, jit = 0, freq = 0.7, seed = 0) {
     const len = Math.hypot(nx, ny) || 1
     nx /= len
     ny /= len
-    // a ragged edge where asked: rubble on the shoulders, plates on the skin
+    // a ragged edge where asked: plates on the skin
     const jl = jit ? 1 + jit * (vnoise(i * freq + seed, 1.7) - 0.5) * 2 : 1
     const jr = jit ? 1 + jit * (vnoise(i * freq + seed, 9.3) - 0.5) * 2 : 1
     const hw = (w(i / (n - 1)) * k) / 2
@@ -945,9 +893,7 @@ function rampAt(stops, s) {
 
 // The heat colours of a channel's glow, vent to toe, as [position, r, g, b, a] (the same ramp flowRamp paints).
 const BODY_STOPS = [[0, 255, 196, 110, 1], [0.25, 255, 138, 61, 1], [0.6, 224, 67, 29, 1], [0.92, 150, 40, 18, 0.6], [1, 110, 28, 12, 0.3]]
-// The rubble levee either side of a channel, a shade lighter than the rock, and the crust skin that closes over it.
-const LEVEE_FILL = 'rgba(52,40,34,0.5)'
-const SHOULDER_FILL = 'rgba(62,50,44,0.22)'
+// The crust skin that closes over a channel (the banks are the layer's: the sim's crusted outer rows).
 const SKIN_RGB = '20,11,7'
 const CORE_STOPS = [[0, 255, 226, 150, 1], [0.2, 255, 190, 100, 0.9], [0.42, 255, 150, 70, 0], [1, 255, 150, 70, 0]]
 // How many places along a channel its glow is sampled; the gradient between them is smooth.
@@ -991,6 +937,163 @@ function pointOnFlow(f, u) {
   const a = f.pts[i0]
   const b = f.pts[i0 + 1] || a
   return { x: a.x + (b.x - a.x) * frac, y: a.y + (b.y - a.y) * frac }
+}
+
+/**
+ * The seam of a crack, built once: from its lower end (where the stream leaves) up `len` px along its lean, as 4 to 6
+ * segments with lateral jags, a polygon that tapers from 2 px to 1 px. The jags come from `hash2` of this route and the
+ * crack's index, so they are the same on every visit and a resize, and the seeded stream is not drawn from.
+ */
+function crackShape(c, i, len) {
+  const key = (hashString(route.path || '/') % 9973) + i * 131
+  const h = (k) => hash2(key, k)
+  const n = 4 + Math.floor(h(0) * 3)
+  const dx = Math.sin(c.tilt)
+  const dy = -Math.cos(c.tilt)
+  const jag = len * 0.09
+  const pts = []
+  for (let k = 0; k <= n; k++) {
+    const along = k === 0 || k === n ? k / n : (k + (h(10 + k) - 0.5) * 0.6) / n
+    // the lower end stays on the stream's head; the kinks alternate sides so the seam zigzags
+    const side = k === 0 ? 0 : (k % 2 ? 1 : -1) * (0.45 + 0.55 * h(20 + k)) * (k === n ? 0.6 : 1)
+    pts.push({
+      x: c.x + dx * len * along - dy * side * jag,
+      y: c.y + dy * len * along + dx * side * jag,
+      hw: (2 - along) / 2,
+    })
+  }
+  const L = []
+  const R = []
+  for (let k = 0; k <= n; k++) {
+    const a = pts[Math.max(0, k - 1)]
+    const b = pts[Math.min(n, k + 1)]
+    const tl = Math.hypot(b.x - a.x, b.y - a.y) || 1
+    const nx = -(b.y - a.y) / tl
+    const ny = (b.x - a.x) / tl
+    L.push([pts[k].x + nx * pts[k].hw, pts[k].y + ny * pts[k].hw])
+    R.push([pts[k].x - nx * pts[k].hw, pts[k].y - ny * pts[k].hw])
+  }
+  const path = new Path2D()
+  path.moveTo(L[0][0], L[0][1])
+  for (let k = 1; k <= n; k++) path.lineTo(L[k][0], L[k][1])
+  for (let k = n; k >= 0; k--) path.lineTo(R[k][0], R[k][1])
+  path.closePath()
+  return { path, topX: pts[n].x, topY: pts[n].y }
+}
+
+/**
+ * The cracks the flank streams start from: a jagged seam (see crackShape) a few stream widths long, lit brightest over
+ * its lower third where the stream leaves it, with a small bloom there. Under the channels, over the rock. They are painted
+ * here whatever paints the channels, since the layer draws streams and not cracks. Where reading text sits over one it steps aside.
+ */
+function drawFissures(ctx, breathe, flare) {
+  if (!fissures.length) return
+  const k = tune.flowHeat * prof.density * (0.82 + 0.18 * breathe + flare * 0.5)
+  ctx.globalCompositeOperation = 'lighter'
+  for (const c of fissures) {
+    const a = Math.min(1, c.heat * k * ((calmFactor(c.x, c.y) + calmFactor(c.topX, c.topY)) / 2))
+    if (a <= 0.01) continue
+    const seam = (c.seam ??= (() => {
+      const g = ctx.createLinearGradient(c.x, c.y, c.topX, c.topY)
+      g.addColorStop(0, 'rgba(255,196,110,1)')
+      g.addColorStop(0.33, 'rgba(255,150,70,0.9)')
+      g.addColorStop(1, 'rgba(224,67,29,0.3)')
+      return g
+    })())
+    ctx.globalAlpha = a
+    ctx.fillStyle = seam
+    ctx.fill(c.path)
+    ctx.globalAlpha = Math.min(1, a * 0.8)
+    ctx.drawImage(spriteGlow, c.x - c.bloom / 2, c.y - c.bloom / 2, c.bloom, c.bloom)
+  }
+  ctx.globalAlpha = 1
+}
+
+/**
+ * The pool's paint for the canvas fallback, built once per layout from the ribbons' own colours (BODY_STOPS, SKIN_RGB):
+ * the body from red-orange at the arc to the deep red of a cooled toe, a hot fan on the arc where the trunk comes in, a
+ * crust gradient toward the far shore, and the bloom (a gradient in a space centred on the arc's top with 1.1 pool half
+ * widths as its radius).
+ */
+function makePoolPaint(ctx, p) {
+  const rgba = (s, a) => `rgba(${s[1]},${s[2]},${s[3]},${a})`
+  const trunk = flows[0]?.pts
+  const end = trunk && trunk[trunk.length - 1]
+  const entryX = Math.min(p.cx + p.rx, Math.max(p.cx - p.rx, end ? end.x : p.cx))
+  const fanR = 0.55 * p.rx
+  const base = ctx.createLinearGradient(0, p.arcTop, 0, p.cy + p.ry)
+  base.addColorStop(0, rgba(BODY_STOPS[2], 1))
+  base.addColorStop(1, rgba(BODY_STOPS[3], 1))
+  const fan = ctx.createRadialGradient(0, 0, 0, 0, 0, fanR)
+  fan.addColorStop(0, rgba(BODY_STOPS[0], 1))
+  fan.addColorStop(0.4, rgba(BODY_STOPS[1], 0.9))
+  fan.addColorStop(1, rgba(BODY_STOPS[2], 0))
+  const crust = ctx.createLinearGradient(0, p.arcTop + 0.35 * p.ry, 0, p.cy + 0.3 * p.ry)
+  crust.addColorStop(0, `rgba(${SKIN_RGB},0)`)
+  crust.addColorStop(1, `rgba(${SKIN_RGB},1)`)
+  const bloom = ctx.createRadialGradient(0, 0, 0, 0, 0, 1.1 * p.rx)
+  bloom.addColorStop(0, 'rgba(255,150,70,0.55)')
+  bloom.addColorStop(0.45, 'rgba(224,67,29,0.24)')
+  bloom.addColorStop(1, 'rgba(140,35,15,0)')
+  return { entryX, fanR, fanSy: (1.6 * p.ry) / fanR, base, fan, crust, bloom }
+}
+
+/**
+ * The pool at the foot of the cone, the ribbons' fallback, and what it must look like for the first second of every load
+ * and under ?lava=0: the shader's pool, flatter. Inside the ellipse: the body (red-orange at the arc to deep red), a hot fan
+ * on the arc where the trunk comes in, and the crust (the ribbons' skin colour) laid over the far half. Those are at 0.8 of the
+ * ribbons' body alpha times `keep` (1 where the layer is not painting, falling to 0 as the layer's own pool takes over).
+ * Then the bloom: an orange glow on the rock above the arc, clipped so it never lights the pool itself, at full strength
+ * always, since the layer makes no bloom into the rock. Drawn after the channels. Nothing is laid over the lava after the
+ * rock, so the far half of the ellipse is the part below the canvas: the pool sits on the bottom edge (a phone's below it).
+ */
+function drawPool(ctx, keep, breathe, flare) {
+  const p = lavaPool
+  if (!p) return
+  // the page's dimming and the caldera's breathing reach it as they reach the channels, and reading text parts it (three samples)
+  const k = Math.min(1, tune.flowHeat * prof.density * (0.82 + 0.18 * breathe + flare * 0.5))
+  const calm = (calmFactor(p.cx - p.rx / 2, p.cy) + calmFactor(p.cx, p.cy) + calmFactor(p.cx + p.rx / 2, p.cy)) / 3
+  const paint = (p.paint ??= makePoolPaint(ctx, p))
+  if (keep > 0) {
+    ctx.save()
+    ctx.beginPath()
+    ctx.ellipse(p.cx, p.cy, p.rx, p.ry, 0, 0, Math.PI * 2)
+    ctx.clip()
+    ctx.globalCompositeOperation = 'lighter'
+    ctx.globalAlpha = Math.max(0, 0.8 * keep * k * calm)
+    ctx.fillStyle = paint.base
+    ctx.fillRect(p.cx - p.rx, p.arcTop, 2 * p.rx, 2 * p.ry)
+    ctx.save()
+    ctx.translate(paint.entryX, p.arcTop)
+    ctx.scale(1, paint.fanSy)
+    ctx.fillStyle = paint.fan
+    ctx.fillRect(-paint.fanR, -paint.fanR, 2 * paint.fanR, 2 * paint.fanR)
+    ctx.restore()
+    // the crust: a second ellipse a little toward the far shore, fading in from the middle of the pool
+    ctx.globalCompositeOperation = 'source-over'
+    ctx.globalAlpha = 0.5 * keep
+    ctx.fillStyle = paint.crust
+    ctx.beginPath()
+    ctx.ellipse(p.cx, p.cy + 0.3 * p.ry, 0.98 * p.rx, 0.95 * p.ry, 0, 0, Math.PI * 2)
+    ctx.fill()
+    ctx.restore()
+  }
+  // The bloom, in a space centred on the arc's top and squashed to the pool's height. The pool in that space is the
+  // ellipse centred half a pool width down (ry / scale = rx / 2), and it is cut out of the clip: the bloom is the rock's.
+  ctx.save()
+  ctx.translate(p.cx, p.arcTop)
+  ctx.scale(1, (2 * p.ry) / p.rx)
+  const R = 1.1 * p.rx
+  ctx.beginPath()
+  ctx.rect(-R, -R, 2 * R, 2 * R)
+  ctx.ellipse(0, p.rx / 2, p.rx, p.rx / 2, 0, 0, Math.PI * 2)
+  ctx.clip('evenodd')
+  ctx.globalCompositeOperation = 'lighter'
+  ctx.globalAlpha = Math.max(0, k * calm)
+  ctx.fillStyle = paint.bloom
+  ctx.fillRect(-R, -R, 2 * R, 2 * R)
+  ctx.restore()
+  ctx.globalAlpha = 1
 }
 
 /** Sparks and embers leave from the crater, or off a lava channel. */
@@ -1157,14 +1260,15 @@ function dropLava(err) {
 
 function lavaResize(w, h) {
   try {
-    lava?.resize(w, h, flows)
+    lava?.resize(w, h, flows, { joins, pool: lavaPool })
   } catch (err) {
     dropLava(err)
   }
 }
 
 // Steps of 1/30 s a still frame burns: 24 s of flow. The front reaches the sheet's toe at about 11.5 s and the arms,
-// braids and side streams are lit to nine tenths of their reach by about 23 s (task-7a-report.md). About 1.2 s on
+// braids and side streams are lit to nine tenths of their reach by about 23 s (task-7a-report.md), measured on the old
+// sheet-and-arms layout; the network's streams and the pool are checked against it in task-8-report.md. About 1.2 s on
 // SwiftShader at the desktop grid, a quarter of that on a phone's, once at mount.
 const STILL_STEPS = 720
 
@@ -1175,6 +1279,20 @@ const STILL_STEPS = 720
 function burnStill() {
   try {
     lava.stepN(STILL_STEPS)
+  } catch (err) {
+    dropLava(err)
+  }
+  draw(1)
+}
+
+/**
+ * Dev, for the forge's seek: the sim as it stands `sec` seconds after a cold start, run as one batch (30 steps a second, no
+ * more than a still frame burns) and not a frame at a time, so a page parked at a late second is ready at once.
+ */
+function forgeBurn(sec) {
+  try {
+    lava.ignite()
+    lava.stepN(Math.min(Math.round(sec * 30), STILL_STEPS))
   } catch (err) {
     dropLava(err)
   }
@@ -1201,7 +1319,8 @@ function loadLava() {
         lavaFade = 1
         draw(1)
         // The still frame has to have burned, and the draw above comes first because it hands the layer this page's tune
-        // and channels. A frozen playground is parked at a moment of its own choosing, so it keeps the sim as it is.
+        // and channels. A frozen playground is parked at a moment of its own choosing, so it keeps the sim as it is (the
+        // render harness steps it to its second itself; the forge's seek burns it, see forgeBurn).
         if (lava && mode.value === 'still' && !forge?.frozen) burnStill()
       }
     })
@@ -1441,9 +1560,12 @@ function draw(dt) {
   }
   calmShift = calmScroll - window.scrollY
 
-  // 4. Lava running down the flanks, drawn over the rock as channels cut through it: for each, the rubble levee, then
-  // the glow in three ribbons (bloom, body, core), then the crust skin closing over the middle, so the margins stay
-  // brightest, which is where real channels shear and glow.
+  // 4. Lava running down the flanks, drawn over the rock as channels cut through it: the cracks the flank streams start
+  // from (under the channels), then for each channel the glow in three ribbons (bloom, body, core) and the crust skin
+  // closing over the middle, so the margins stay brightest, which is where real channels shear and glow, and last the pool
+  // they end in. The rock (the cone and the far ridges, one cached canvas) is already down, and nothing is laid over the
+  // lava after it but the lip and the particles, so no foreground hides the pool's far half: the bottom edge of the canvas
+  // does (the pool's centre sits on the cone's lowest row, a phone's below the screen).
   // Once the WebGL layer has loaded it paints the channels instead (composited below, after the ribbons). The two
   // cross-fade over a second, the ribbons at `keep` and the shader at `lavaFade`, so the channels are never dark between
   // them. The shader draws first, and the fade only runs once it has drawn something: a layer that never does (or whose
@@ -1459,6 +1581,7 @@ function draw(dt) {
   const keep = 1 - lavaFade
   ctx.lineCap = 'round'
   ctx.lineJoin = 'round'
+  drawFissures(ctx, breathe, flare)
   for (const f of flows) {
     // Floored well clear of zero — this used to run 0.45 +/- 0.55, which
     // touches negative for part of every cycle. heat <= 0.01 then skipped the
@@ -1487,13 +1610,6 @@ function draw(dt) {
       f.calm[gi] = calmFactor(f.gx[gi], f.gy[gi])
       calmSum += f.calm[gi]
     }
-    // The levee: rubble banks either side of the cut, a wide faint shoulder and a nearer bank.
-    ctx.globalCompositeOperation = 'source-over'
-    ctx.globalAlpha = Math.min(1, 0.5 + heat * 0.5) * keep
-    ctx.fillStyle = SHOULDER_FILL
-    ctx.fill(f.shoulder)
-    ctx.fillStyle = LEVEE_FILL
-    ctx.fill(f.levee)
     // The bloom: one soft stroke along the whole channel, dimmed by how much of it is under text. It is the glow bleeding
     // into the rock, which the shader does not make, so it stays at full strength under the shader too.
     ctx.globalCompositeOperation = 'lighter'
@@ -1570,6 +1686,9 @@ function draw(dt) {
     }
     ctx.globalAlpha = 1
   }
+  // The pool the streams end in: the ribbons' fallback (at `keep`, so it gives way as the layer's own pool comes in) and the
+  // bloom into the rock above it, over everything the channels drew.
+  drawPool(ctx, keep, breathe, flare)
   ctx.globalCompositeOperation = 'lighter'
 
   // 4b. Rock chunks tumbling in the flow — dark against the lava, so this
@@ -1898,7 +2017,9 @@ onMounted(() => {
       },
       seek: (sec) => {
         t = sec
-        draw(1)
+        // The flow at that second comes from the sim run cold to it in one batch, not from stepping frames.
+        if (lava?.ok) forgeBurn(sec)
+        else draw(1)
       },
       time: () => t,
       snapshot: () => canvas.value,
@@ -1906,11 +2027,15 @@ onMounted(() => {
       // undefined until the layer is up. The grid is fixed when the layer is made, so it can differ from a phone's now.
       readSim: (out) => lava?.readSim(out),
       simSize: () => (lava?.ok ? lava.simSize : undefined),
-      // Where the channels are, in viewport px, for the render harness's smoke probes (scripts/forge-render.mjs).
+      // Where the channels are, in viewport px, for the render harness's smoke probes (scripts/forge-render.mjs). The pool
+      // is its ellipse without `arcY` (a function does not survive the harness's JSON).
       geometry: () => ({
         lava: Boolean(lava?.ok) && lavaFade > 0, // the shader is built, running and painting, so a picture is of it and not the ribbons
         vent: mountain?.vent,
-        flows: flows.map((f) => ({ kind: f.kind, pts: f.pts, head: f.head, widthAt0: f.widthAt?.(0), widthMid: f.widthAt?.(0.5) })),
+        flows: flows.map((f) => ({ kind: f.kind, role: f.role, pts: f.pts, head: f.head, drain: f.drain, widthAt0: f.widthAt?.(0), widthMid: f.widthAt?.(0.5) })),
+        joins,
+        pool: lavaPool && { cx: lavaPool.cx, cy: lavaPool.cy, rx: lavaPool.rx, ry: lavaPool.ry, arcTop: lavaPool.arcTop },
+        fissures,
       }),
     }
     window.__forge = forge
@@ -1944,6 +2069,9 @@ onBeforeUnmount(() => {
   mountain = null
   ridges = []
   flows = []
+  fissures = []
+  joins = []
+  lavaPool = null
   lip = null
   moon = null
   calmRects = []

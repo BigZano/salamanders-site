@@ -44,8 +44,9 @@ export const DEFAULTS = {
     // How far a page's seed may wander from that centre. This is the *random*
     // component only; a page's deliberate position is its profile bearing.
     faceSpread: 0.16,
-    // How many distributaries the sheet from the breach splits into; each may braid around an island or throw a
-    // side stream. Three on a desktop, one and its side stream on a phone (the USGS record: a few wide channels).
+    // The lava's switch: 0 puts it out, anything else lays the network (lib/lavaNetwork). It used to be the number of
+    // distributaries; how many streams there are is the network's now: on a desktop the breach trunk, a rim overflow and
+    // three flank fissures, on a phone the trunk and one fissure, all running down to the pool at the foot of the cone.
     flows: 3,
     flowHeat: 1.1,
     // Light in the crater mouth.
@@ -80,9 +81,9 @@ export const DEFAULTS = {
     // 0 stays molten farther down the channels and 1 crusts the lower reaches sooner. Not a crust threshold.
     crust: 0.75,
     // The vent's heat: the sim's source is 0.9 x this, and the heat then runs down the channels. Heat counts ONCE, here,
-    // in the sim's source; the lava pass does not multiply by it again (it declares uHeat and never reads it). So this
-    // is also how far the lava reaches before it crusts: the arms melt a path only where the sim's heat passes 0.55
-    // (T_MELT), and a source near 0.6 cannot, so do not take it much under 1. To dim a page, lower its profile's
+    // in the sim's source; the lava pass does not multiply by it again (it has no heat uniform). So this is also how far
+    // the lava reaches before it crusts: a stream melts a path only where the sim's heat passes 0.55 (T_MELT), and a
+    // source near 0.6 cannot, so do not take it much under 1. To dim a page, lower its profile's
     // density, which scales the whole lava pass (heat, margins, folds, cracks, seams) and leaves the flow alone.
     heat: 1,
     // Stiffer lava runs as a narrower fast core with the banks sticking (the sim's velocity profile), and its plates

@@ -107,6 +107,8 @@ export function createLavaLayer({ win = typeof window === 'undefined' ? undefine
   // number of channels.
   let igniteNext = true
   let channels = 0
+  // The pool the last resize kept (null when there is none, or the flows left it no channel): the sim flags its block.
+  let simPool = null
   let strips = buildStrips([], { levee: LEVEE })
   const lengths = new Float32Array(MAX_CHANNELS)
   // Calm rects are scaled into these slots each frame, so a frame allocates nothing of its own.
@@ -172,6 +174,7 @@ export function createLavaLayer({ win = typeof window === 'undefined' ? undefine
     strips = buildStrips(scaled, { levee: LEVEE, joins: scaleJoins(joins, scale), pool: poolPx })
     // The pool is a block only if the strips kept it: a pool with no size is dropped there.
     const hasPool = strips.poolId !== null
+    simPool = hasPool ? poolPx : null
     const blocks = scaled.length + (hasPool ? 1 : 0)
     if (blocks !== channels) igniteNext = true
     channels = blocks
@@ -209,8 +212,8 @@ export function createLavaLayer({ win = typeof window === 'undefined' ? undefine
   // that the latest. The clock moves on first, so every step, stepN's too, gets its own noise.
   function simStep(dt, packed) {
     const s = simUniforms(packArgs.tune, dt, phone)
-    // No pool yet: the volcano hands the layer one with its flows in Task 8, and the map then flags its block.
-    const map = channelMap(packArgs.flows, null)
+    // The pool the last resize came with, so the map flags its block (the slot after the last flow).
+    const map = channelMap(packArgs.flows, simPool)
     simClock += s.uDt
     simExtras.time = simClock
     simExtras.ignite = igniteNext

@@ -2,7 +2,7 @@ import { describe, it, expect, vi, afterEach } from 'vitest'
 import { supportsLavaShader, hasWebGL2, createLavaLayer } from './lavaShader'
 import { UNIFORMS, LAVA_FRAG } from './lavaShader.glsl'
 import { SIM_UNIFORMS, SIM_FRAG } from './lavaSim.glsl'
-import { simUniforms, paletteBytes } from './lavaSim'
+import { simUniforms, paletteBytes, POOL } from './lavaSim'
 import { DEFAULTS } from './fireTuning'
 import { compileProgram, createSimTargets, deleteSimTargets } from './lavaGl'
 
@@ -671,6 +671,34 @@ describe('the layer and the heat simulation', () => {
     expect(sim.uVentHeat.slice(0, 5).map((v) => Math.round(v * 100) / 100)).toEqual([1, 0.8, 1, 0.72, 0])
     expect(sim.uParent.slice(0, 4)).toEqual([-1, -1, 0, -1])
     expect(sim.uAttach[2]).toBeCloseTo(0.8)
+  })
+
+  it('keeps the pool from resize and flags its block in the sim: uParent = POOL and a full vent share at the slot after the flows', () => {
+    const pool = { cx: 100, cy: 330, rx: 60, ry: 15, arcTop: 315, arcY: () => 315 }
+    const withPool = fakeGL()
+    const layer = createLavaLayer({ win: withPool.win, phone: false })
+    layer.resize(800, 600, [flow, straight], { pool })
+    // A draw and a stepN both run the map; neither is handed the pool again.
+    layer.draw(frame([flow, straight]))
+    layer.stepN(1)
+    for (const pass of simPassesOf(withPool.rec)) {
+      expect(pass.uniforms.uParent.slice(0, 4)).toEqual([-1, -1, POOL, -2])
+      expect(pass.uniforms.uVentHeat[2]).toBe(1)
+    }
+    expect(simPassesOf(withPool.rec)).toHaveLength(2)
+
+    // A later resize without one takes it away; so does a full house of flows, which leaves it no slot.
+    const bare = fakeGL()
+    const plain = createLavaLayer({ win: bare.win, phone: false })
+    plain.resize(800, 600, [flow, straight], { pool })
+    plain.resize(800, 600, [flow, straight])
+    plain.stepN(1)
+    expect(simPassesOf(bare.rec)[0].uniforms.uParent.slice(0, 3)).toEqual([-1, -1, -2])
+    const full = fakeGL()
+    const crowded = createLavaLayer({ win: full.win, phone: false })
+    crowded.resize(800, 600, Array.from({ length: 12 }, () => flow), { pool })
+    crowded.stepN(1)
+    expect(simPassesOf(full.rec)[0].uniforms.uParent.every((v) => v !== POOL)).toBe(true)
   })
 
   it('stepN runs sim passes only, at 1/30 s each, and the clock advances on every one', () => {
