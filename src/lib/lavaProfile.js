@@ -41,13 +41,11 @@ for (let i = 0; i < MAX_CHANNELS; i++) PHASE[i] = (i * 7.31) % 1
 // draw loop hands these straight to gl.uniform*, and allocating a handful of
 // typed arrays sixty times a second is garbage the phone does not need.
 const SURGE = new Float32Array(MAX_CHANNELS)
-const HEAT_PER = new Float32Array(MAX_CHANNELS)
 const CALM = new Float32Array(MAX_CALM * 4)
 
 const packed = {
   uTime: 0,
   uCrust: 0,
-  uHeat: 0,
   uViscosity: 0,
   uCracks: 0,
   uFoldScale: 0,
@@ -55,7 +53,6 @@ const packed = {
   uDensity: 0,
   uOctaves: 0,
   uSurge: SURGE,
-  uHeatPer: HEAT_PER,
   uPhase: PHASE,
   uFlow: FLOW,
   uCalm: CALM,
@@ -76,8 +73,10 @@ export function packUniforms({ flows, calmRects, calmShift, tune, density, t, ph
   for (let i = 0; i < MAX_CHANNELS; i++) {
     const flow = flows[i]
     SURGE[i] = flow ? (flow.surge ?? -1) : -1
+    // The slot after the last flow is the pool's, if there is one. Its clock stays at 0: the plates sit still there (no
+    // drifting plate noise, a static skin net) and the sim's own drift term moves the crust. A stale clock from a
+    // longer flow list is cleared here, which is why every slot is written.
     FLOW[i] = i < flows.length ? (flows[i].flowDist ?? 0) : 0
-    HEAT_PER[i] = flow ? (flow.heat ?? 0) : 0
   }
 
   const calmCount = Math.min(calmRects.length, MAX_CALM)
@@ -91,7 +90,6 @@ export function packUniforms({ flows, calmRects, calmShift, tune, density, t, ph
 
   packed.uTime = t
   packed.uCrust = clamp(tune.crust, 0, 1)
-  packed.uHeat = clamp(tune.heat, 0, 2)
   packed.uViscosity = clamp(tune.viscosity, 0, 1)
   packed.uCracks = clamp(tune.cracks, 0, 2)
   packed.uFoldScale = clamp(tune.foldScale, 0.25, 3)

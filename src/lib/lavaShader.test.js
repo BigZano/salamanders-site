@@ -240,8 +240,8 @@ describe('createLavaLayer', () => {
     layer.draw(frame([straight], { calmRects: [{ l: 10, t: 20, r: 30, b: 40 }], calmShift: 8 }))
     const lava = rec.by.lava
     expect(lava.uResolution).toEqual([195, 422])
-    // The centreline runs (50, 50) to (50, 150) and the pad is 2.2 * the scaled width of 10.
-    expect(lava.uBounds.map((v) => Math.round(v * 1000) / 1000)).toEqual([28, 28, 44, 144])
+    // The centreline runs (50, 50) to (50, 150) and the pad is 1.25 * the scaled width of 10.
+    expect(lava.uBounds.map((v) => Math.round(v * 1000) / 1000)).toEqual([37.5, 37.5, 25, 125])
     expect(lava.uLength[0]).toBe(100)
     expect(lava.uCalmCount).toBe(1)
     expect(lava.uCalm.slice(0, 4)).toEqual([5, 14, 15, 24])
@@ -259,6 +259,146 @@ describe('createLavaLayer', () => {
     // Each range is 12 indices of 2 bytes: channel 1 at 24 and 36, channel 0 at 0 and 12.
     expect(rec.drawElements.map((d) => d.offset)).toEqual([48, 0, 72, 24])
     expect(rec.drawElements.every((d) => d.count === 12 && d.mode === gl.TRIANGLES && d.type === gl.UNSIGNED_SHORT)).toBe(true)
+  })
+
+  it('reaches the levee 1.25 half widths past the centreline, not 2.2, and pads the box by the same factor', () => {
+    const { win, gl, rec } = fakeGL()
+    const layer = createLavaLayer({ win, phone: false })
+    layer.resize(800, 600, [straight])
+    const verts = rec.uploads.find((u) => u.target === gl.ARRAY_BUFFER).data
+    // Vertices 0-3 are the channel's (two points, two banks); vertex 4 is the levee's left bank at the first point.
+    expect([verts[4 * 7 + 2], verts[5 * 7 + 2]]).toEqual([-1.25, 1.25])
+    expect(verts[4 * 7]).toBeCloseTo(100 - 12.5) // half width 10 * 1.25
+    expect(verts[4 * 7 + 4]).toBe(10) // and it keeps the channel's half width
+    // The box pads by 1.25 * the widest the channel gets along it, here its width at the toe, not at the vent.
+    const widening = { ...straight, widthAt: (s) => 10 + 30 * s }
+    layer.resize(800, 600, [widening])
+    layer.draw(frame([widening]))
+    expect(rec.by.lava.uBounds.map((v) => Math.round(v * 1000) / 1000)).toEqual([50, 50, 100, 300])
+  })
+
+  it('takes joins and a pool as a fourth argument, in CSS pixels: the pool is one more channel drawn first, the fan last', () => {
+    const { win, gl, rec } = fakeGL()
+    const layer = createLavaLayer({ win, phone: true })
+    const trunk = { ...flow, head: true, pts: [{ x: 100, y: 100 }, { x: 100, y: 200 }, { x: 100, y: 300 }], widthAt: () => 20 }
+    const feeder = { ...flow, pts: [{ x: 40, y: 100 }, { x: 70, y: 200 }, { x: 100, y: 250 }], widthAt: () => 10 }
+    const arcY = (x) => 330 - 15 * Math.sqrt(Math.max(0, 1 - ((x - 100) / 60) ** 2))
+    const pool = { cx: 100, cy: 330, rx: 60, ry: 15, arcTop: 315, arcY }
+    const joins = [{ feeder: 1, trunk: 0, at: 0.75, wf: 10, wt: 20, wj: 26 }]
+    layer.resize(390, 844, [trunk, feeder], { joins, pool })
+    // Order: the pool, the feeder, the trunk (the head). Levees (the pool has none), then bodies, then the fan:
+    // [count, byte offset] of each draw. Per flow 24 indices (levee 12 + channel 12), the pool 864, the fan 18.
+    expect(rec.drawElements.map((d) => [d.count, d.offset])).toEqual([
+      [12, 48], [12, 0], // levees: feeder at 24, trunk at 0
+      [864, 96], [12, 72], [12, 24], // bodies: pool at 48, feeder at 36, trunk at 12
+      [54, 1824], // the fan and its feather strip (18 + 36 indices), at index 912, after every body
+    ])
+    const verts = rec.uploads.find((u) => u.target === gl.ARRAY_BUFFER).data
+    // The pool's first vertex (vertex 24, after two flows of 12) is its left tip at half scale, no height there.
+    expect(Array.from(verts.slice(24 * 7, 25 * 7))).toEqual([20, 165, -1, 0, 0, 1, 2])
+    // Its top, over the centre (column 12): the arc's top at half scale, half width ry / 2.
+    expect(Array.from(verts.slice(36 * 7, 37 * 7))).toEqual([50, 157.5, 0, 0, 7.5, 1, 2])
+    // The fan carries the trunk's id and its half width at half scale (20 / 2 / 2), after the pool's 175 vertices.
+    expect(Array.from(verts.slice(199 * 7 + 4, 199 * 7 + 7))).toEqual([5, 1, 0])
+    // Its tip sits at the bank's solid edge in canvas px (BANK_PX 1 over a half width of 5), on the feeder's left side;
+    // the feather point of the arc's first vertex (vertex 199 + 8) is at the 0-alpha edge.
+    expect(verts[199 * 7 + 2]).toBeCloseTo(-0.8, 5)
+    expect(verts[(199 + 8) * 7 + 2]).toBeCloseTo(-1.2, 5)
+
+    layer.draw(frame([trunk, feeder]))
+    // The box holds the pool: x 20 to 80, y 157.5 to 172.5 at half scale, with the flows (x 20 to 50, y 50 to 150) and a pad of 12.5.
+    expect(rec.by.lava.uBounds.map((v) => Math.round(v * 1000) / 1000)).toEqual([7.5, 37.5, 85, 147.5])
+    // The pool's length along the shader reads is its height at the centre.
+    expect(rec.by.lava.uLength[2]).toBe(15)
+  })
+
+  it('draws only the flows when there is no pool or joins, or when the shader has no channel left for the pool', () => {
+    const { win, rec } = fakeGL()
+    const layer = createLavaLayer({ win, phone: false })
+    const pool = { cx: 100, cy: 330, rx: 60, ry: 15, arcTop: 315, arcY: () => 315 }
+    layer.resize(800, 600, [flow], { joins: null, pool: null })
+    expect(rec.drawElements.map((d) => d.count)).toEqual([12, 12])
+    rec.drawElements.length = 0
+    layer.resize(800, 600, Array.from({ length: 12 }, () => flow), { pool })
+    expect(rec.drawElements).toHaveLength(24)
+    expect(rec.drawElements.every((d) => d.count === 12)).toBe(true)
+  })
+
+  it('tells both passes which channel is the pool, uPoolId = flows.length, and -1 when there is none', () => {
+    const pool = { cx: 100, cy: 330, rx: 60, ry: 15, arcTop: 315, arcY: () => 315 }
+    const withPool = fakeGL()
+    const layer = createLavaLayer({ win: withPool.win, phone: false })
+    layer.resize(800, 600, [flow, straight], { pool })
+    // The field pass is told at resize (it draws once per layout), the lava pass at every draw.
+    expect(withPool.rec.by.field.uPoolId).toBe(2)
+    layer.draw(frame([flow, straight]))
+    expect(withPool.rec.by.lava.uPoolId).toBe(2)
+
+    const bare = fakeGL()
+    const plain = createLavaLayer({ win: bare.win, phone: false })
+    plain.resize(800, 600, [flow, straight])
+    plain.draw(frame([flow, straight]))
+    expect(bare.rec.by.field.uPoolId).toBe(-1)
+    expect(bare.rec.by.lava.uPoolId).toBe(-1)
+    // Flows that fill the shader leave the pool out, so the id goes back to -1 rather than naming a channel that is not there.
+    layer.resize(800, 600, Array.from({ length: 12 }, () => flow), { pool })
+    expect(withPool.rec.by.field.uPoolId).toBe(-1)
+  })
+
+  it('keeps the plate scale off the pool: uPlateH is the flows-only box at the old pad of 2.2 vent widths', () => {
+    const trunk = { ...flow, head: true, pts: [{ x: 100, y: 100 }, { x: 100, y: 300 }], widthAt: () => 20 }
+    const pool = { cx: 100, cy: 330, rx: 60, ry: 15, arcTop: 315, arcY: () => 315 }
+    const plain = fakeGL()
+    const bare = createLavaLayer({ win: plain.win, phone: false })
+    bare.resize(800, 600, [trunk])
+    bare.draw(frame([trunk]))
+    // The centreline runs 200 px and the pad is 2.2 * 20 each side: what the box measured before the pool and the narrower levee.
+    expect(plain.rec.by.lava.uPlateH).toBe(200 + 2 * 2.2 * 20)
+
+    const pooled = fakeGL()
+    const layer = createLavaLayer({ win: pooled.win, phone: false })
+    layer.resize(800, 600, [trunk], { pool })
+    layer.draw(frame([trunk]))
+    // The pool grows the bounds quad (a pad of 1.25 * 20 and the ellipse to y 345), not the plates.
+    expect(pooled.rec.by.lava.uBounds[3]).toBeGreaterThan(plain.rec.by.lava.uBounds[3])
+    expect(pooled.rec.by.lava.uPlateH).toBe(plain.rec.by.lava.uPlateH)
+    // Scaled with the drawing buffer, as every px the GPU sees: a phone draws at half.
+    const phone = fakeGL()
+    const small = createLavaLayer({ win: phone.win, phone: true })
+    small.resize(800, 600, [trunk], { pool })
+    small.draw(frame([trunk]))
+    expect(phone.rec.by.lava.uPlateH).toBe((200 + 2 * 2.2 * 20) / 2)
+  })
+
+  it('ignites the sim again when a pool appears or goes: it is one more block', () => {
+    const { win, rec } = fakeGL()
+    const layer = createLavaLayer({ win, phone: false })
+    const pool = { cx: 100, cy: 330, rx: 60, ry: 15, arcTop: 315, arcY: () => 315 }
+    layer.resize(800, 600, [flow])
+    layer.stepN(1)
+    layer.resize(800, 600, [flow])
+    layer.stepN(1)
+    layer.resize(800, 600, [flow], { pool })
+    layer.stepN(1)
+    layer.resize(800, 600, [flow], { pool })
+    layer.stepN(1)
+    layer.resize(800, 600, [flow])
+    layer.stepN(1)
+    expect(simPassesOf(rec).map((p) => p.uniforms.uIgnite)).toEqual([1, 0, 1, 0, 1])
+  })
+
+  it('counts the pool as a block only when the strips kept it: a pool with no size is no block, no length and no box', () => {
+    const { win, rec } = fakeGL()
+    const layer = createLavaLayer({ win, phone: false })
+    const flat = { cx: 100, cy: 330, rx: 0, ry: 15, arcTop: 315, arcY: () => 315 }
+    layer.resize(800, 600, [straight])
+    layer.stepN(1)
+    layer.resize(800, 600, [straight], { pool: flat })
+    layer.stepN(1)
+    expect(simPassesOf(rec).map((p) => p.uniforms.uIgnite)).toEqual([1, 0])
+    layer.draw(frame([straight]))
+    expect(rec.by.lava.uLength[1]).toBe(0)
+    expect(rec.by.lava.uBounds.map((v) => Math.round(v * 1000) / 1000)).toEqual([75, 75, 50, 250])
   })
 
   it('stores the field as half floats when it can, else as bytes with the packed define', () => {
@@ -506,6 +646,31 @@ describe('the layer and the heat simulation', () => {
     expect(sim.uParent.slice(0, 3)).toEqual([-1, 0, -2])
     expect(sim.uAttach[1]).toBeCloseTo(0.4)
     expect(sim.uSurge).toHaveLength(12)
+    // Flows that say nothing of a drain (today's) drain nowhere: the sim's drain read stays idle.
+    expect(sim.uDrain).toEqual(Array(12).fill(-2))
+    expect(sim.uDrainAt).toEqual(Array(12).fill(0))
+  })
+
+  it('simExtras carries drain, drainAt and vent from channelMap: -1 for the pool, an index for a trunk, -2 past the flows', () => {
+    const { win, rec } = fakeGL()
+    const layer = createLavaLayer({ win, phone: false })
+    // A pool feeder's drainAt is its entry across the arc (the trunk's end 0, the fissure to its left), not an along fraction.
+    const trunk = { ...flow, drain: -1, drainAt: 0 }
+    const rim = { ...flow, parent: -1, heat: 0.8, drain: 0, drainAt: 0.3 }
+    const braid = { ...flow, parent: 0, attach: 0.8, drain: 0, drainAt: 0.95 }
+    const fissure = { ...flow, parent: -1, heat: 0.72, drain: -1, drainAt: -0.6 }
+    layer.resize(800, 600, [trunk, rim, braid, fissure])
+    layer.draw(frame([trunk, rim, braid, fissure]))
+    const sim = rec.by.sim
+    expect(sim.uDrain).toHaveLength(12)
+    expect(sim.uDrainAt).toHaveLength(12)
+    expect(sim.uVentHeat).toHaveLength(12)
+    expect(sim.uDrain.slice(0, 5)).toEqual([-1, 0, 0, -1, -2])
+    expect(sim.uDrainAt.slice(0, 5).map((v) => Math.round(v * 100) / 100)).toEqual([0, 0.3, 0.95, -0.6, 0])
+    // Each flow's heat is its vent share (the trunk's flow has heat 1); no pool is passed yet, so slot 4 is 0.
+    expect(sim.uVentHeat.slice(0, 5).map((v) => Math.round(v * 100) / 100)).toEqual([1, 0.8, 1, 0.72, 0])
+    expect(sim.uParent.slice(0, 4)).toEqual([-1, -1, 0, -1])
+    expect(sim.uAttach[2]).toBeCloseTo(0.8)
   })
 
   it('stepN runs sim passes only, at 1/30 s each, and the clock advances on every one', () => {

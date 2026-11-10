@@ -9,15 +9,21 @@
 
 import { packUniforms, MAX_CHANNELS, MAX_CALM } from './lavaProfile'
 import { buildStrips, bounds } from './lavaStrips'
-import { simSize, parents, simUniforms } from './lavaSim'
+import { simSize, channelMap, simUniforms } from './lavaSim'
 import { createFieldTarget, deleteFieldTarget, readTarget } from './lavaGl'
 import { uploadFrame, uploadSim } from './lavaUniforms'
 import { hasWebGL2, buildGpu } from './lavaGpu'
 
 export { supportsLavaShader, hasWebGL2 } from './lavaGpu'
 
-// How far past the bank the levee reaches, in channel half widths. The shader's LEVEE is the same number.
-const LEVEE = 2.2
+// How far past the bank the levee reaches, in channel half widths: room for the bank feather and the crust the sim
+// grows on the outer rows, no painted rubble. (lavaShader.glsl.js has a LEVEE of its own, also 1.25: it is the range
+// `across` is packed over in an RGBA8 field and the cap of the bank feather's alpha. Change the two together.)
+const LEVEE = 1.25
+
+// The pad, in vent widths, the lava pass's plate size is measured over (see `plateH` in resize). It is HEAD's old levee
+// ring, 2.2, kept on purpose so the approved plate size does not move when the levee narrows.
+const PLATE_PAD = 2.2
 
 // A sim step that no frame times (stepN's) lasts this long, in seconds.
 const STEP = 1 / 30
@@ -35,6 +41,23 @@ function scaleFlows(flows, k) {
     heat: f.heat,
     widthAt: f.widthAt ? (s) => f.widthAt(s) * k : undefined,
   }))
+}
+
+// The pool in drawing-buffer pixels: the ellipse scaled, and `arcY` wrapped so arcY(x) = k * original(x / k).
+function scalePool(pool, k) {
+  return {
+    cx: pool.cx * k,
+    cy: pool.cy * k,
+    rx: pool.rx * k,
+    ry: pool.ry * k,
+    arcTop: pool.arcTop * k,
+    arcY: pool.arcY ? (x) => k * pool.arcY(x / k) : undefined,
+  }
+}
+
+// The joins hold flow indices and an `at` along the trunk, which do not scale; their widths do.
+function scaleJoins(joins, k) {
+  return (joins ?? []).map((j) => ({ feeder: j.feeder, trunk: j.trunk, at: j.at, wf: j.wf * k, wt: j.wt * k, wj: j.wj * k }))
 }
 
 function lengthOf(pts) {
@@ -91,8 +114,8 @@ export function createLavaLayer({ win = typeof window === 'undefined' ? undefine
   const calm = []
   const packArgs = { flows: [], calmRects: calm, calmShift: 0, tune: DEFAULT_TUNE, density: 1, t: 0, phone }
   // What the two uploads need beyond the packed values: one object each, rewritten, so a frame allocates nothing.
-  const frameExtras = { lengths, width: 0, height: 0, box: { x: 0, y: 0, w: 0, h: 0 }, size }
-  const simExtras = { size, time: 0, ignite: false, surge: null, parent: null, attach: null }
+  const frameExtras = { lengths, width: 0, height: 0, box: { x: 0, y: 0, w: 0, h: 0 }, size, poolId: -1, plateH: 0 }
+  const simExtras = { size, time: 0, ignite: false, surge: null, parent: null, attach: null, drain: null, drainAt: null, vent: null }
   let readBuffer = null
 
   function drawRange([start, count]) {
@@ -105,7 +128,8 @@ export function createLavaLayer({ win = typeof window === 'undefined' ? undefine
   const tooSmall = () => canvas.width < 2 || canvas.height < 2
 
   // Rasterise every channel into the field texture: every levee first, then every channel body in the
-  // strips' order (sheet last), so no levee ever sits on a neighbouring body where channels meet.
+  // strips' order (the pool first, the sheet last), so no levee ever sits on a neighbouring body where channels
+  // meet; then the fillet fans over them all, so they colour the inner bank of each join as its trunk.
   function renderField() {
     if (tooSmall()) return
     const { vertices, indices, order, ranges } = strips
@@ -124,29 +148,51 @@ export function createLavaLayer({ win = typeof window === 'undefined' ? undefine
     gl.clear(gl.COLOR_BUFFER_BIT)
     gl.useProgram(gpu.fieldProgram)
     gl.uniform2f(gpu.fieldResolution, canvas.width, canvas.height)
+    gl.uniform1f(gpu.fieldPoolId, strips.poolId ?? -1)
     for (const id of order) drawRange(ranges[id].levee)
     for (const id of order) drawRange(ranges[id].channel)
+    drawRange(strips.filletRange)
     gl.bindFramebuffer(gl.FRAMEBUFFER, null)
     fieldPasses++
   }
 
-  function resize(w, h, flows) {
+  // `joins` and `pool` come with the flows from the network (both optional): the confluences, as
+  // `{ feeder, trunk, at, wf, wt, wj }`, and the pool's ellipse `{ cx, cy, rx, ry, arcTop, arcY(x) }`, in the
+  // same CSS pixels as the flows. The pool is one more channel, id `flows.length` (`strips.poolId`); it is left
+  // out if the flows already fill the shader's channels.
+  function resize(w, h, flows, { joins = [], pool = null } = {}) {
     const cw = Math.round(w * scale)
     const ch = Math.round(h * scale)
     const empty = !(cw > 0 && ch > 0)
     canvas.width = empty ? 1 : cw
     canvas.height = empty ? 1 : ch
     const scaled = scaleFlows(flows, scale)
+    const poolPx = pool && scaled.length < MAX_CHANNELS ? scalePool(pool, scale) : null
     packArgs.flows = flows
-    if (scaled.length !== channels) igniteNext = true
-    channels = scaled.length
-    strips = buildStrips(scaled, { levee: LEVEE })
+    strips = buildStrips(scaled, { levee: LEVEE, joins: scaleJoins(joins, scale), pool: poolPx })
+    // The pool is a block only if the strips kept it: a pool with no size is dropped there.
+    const hasPool = strips.poolId !== null
+    const blocks = scaled.length + (hasPool ? 1 : 0)
+    if (blocks !== channels) igniteNext = true
+    channels = blocks
+    // The box pads by the levee past the widest the channel gets anywhere along it, not just at the vent: a trunk
+    // fed by joins is widest at the pool.
     let widest = 0
     scaled.forEach((f, i) => {
       lengths[i] = lengthOf(f.pts)
-      if (f.widthAt) widest = Math.max(widest, f.widthAt(0))
+      if (f.widthAt) {
+        const last = Math.max(1, f.pts.length - 1)
+        for (let p = 0; p <= last; p++) widest = Math.max(widest, f.widthAt(p / last))
+      }
     })
-    frameExtras.box = bounds(scaled, LEVEE * widest)
+    // The pool's length along is its height at the centre, the way a channel's is its centreline.
+    if (hasPool) lengths[scaled.length] = 2 * poolPx.ry
+    frameExtras.box = bounds(scaled, LEVEE * widest, hasPool ? poolPx : null)
+    // The lava pass is told which channel is the pool (-1 for none); renderField tells the field pass.
+    frameExtras.poolId = strips.poolId ?? -1
+    // The plates scale with the flows alone, at the pad the approved look had (PLATE_PAD vent widths), not with the pool
+    // the box above now holds: the lava pass reads this, not the box height, for its plate size.
+    frameExtras.plateH = bounds(scaled, PLATE_PAD * Math.max(0, ...scaled.map((f) => (f.widthAt ? f.widthAt(0) : 0)))).h
     frameExtras.width = canvas.width
     frameExtras.height = canvas.height
     // While the context is lost the new layout is only remembered; the restore renders it.
@@ -163,13 +209,17 @@ export function createLavaLayer({ win = typeof window === 'undefined' ? undefine
   // that the latest. The clock moves on first, so every step, stepN's too, gets its own noise.
   function simStep(dt, packed) {
     const s = simUniforms(packArgs.tune, dt, phone)
-    const map = parents(packArgs.flows)
+    // No pool yet: the volcano hands the layer one with its flows in Task 8, and the map then flags its block.
+    const map = channelMap(packArgs.flows, null)
     simClock += s.uDt
     simExtras.time = simClock
     simExtras.ignite = igniteNext
     simExtras.surge = packed.uSurge
     simExtras.parent = map.parent
     simExtras.attach = map.attach
+    simExtras.drain = map.drain
+    simExtras.drainAt = map.drainAt
+    simExtras.vent = map.vent
     const { sim, simNow } = gpu
     gl.bindFramebuffer(gl.FRAMEBUFFER, sim[1 - simNow].fbo)
     // The pass covers the whole sim texture, whatever size the canvas is.

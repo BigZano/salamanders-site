@@ -2,7 +2,7 @@
  * GLSL ES 3.00 sources for the lava shader, kept apart from the layer so tests can read them.
  *
  * Two passes. The field pass rasterises every channel's triangle strips once per layout into a
- * texture: R = across (-2.2 to 2.2, 0 at the centre), G = along (0 at the vent, 1 at the toe),
+ * texture: R = across (-1.25 to 1.25, 0 at the centre), G = along (0 at the vent, 1 at the toe),
  * B = channel id / 255, A = the channel's half width in px / 255 (0 where no channel is, so coverage
  * is A > 0; the layer clears the field to zero and draws it with blending off). The lava pass then
  * runs each frame over the channels' bounding box, reads that texture and paints the lava (spec 4.2).
@@ -13,29 +13,31 @@
  *
  * If the field texture is RGBA8 rather than float, the layer inserts "#define FIELD_PACKED" on the
  * line after "#version 300 es" in FIELD_FRAG and LAVA_FRAG. across is then stored as
- * (across / 2.2) * 0.5 + 0.5, and the lava pass unpacks it. Do not put anything before #version.
+ * (across / LEVEE) * 0.5 + 0.5 with LEVEE 1.25 in both fragments, and the lava pass unpacks it. Do not put anything
+ * before #version.
  *
  * Both vertex shaders flip y (px run down the screen, clip space runs up), and the lava fragment
  * looks the field up at its own pixel, so the two passes agree on which texel is which.
  *
- * Things the layer must know. aHeat is in the vertex layout but unread (heat is uHeatPer[id]), so the
+ * Things the layer must know. aHeat is in the vertex layout but unread (heat is the sim's), so the
  * compiler drops it and getAttribLocation returns -1: skip any location below 0. The sheet is flow
  * id 0, because buildFlows pushes it first; the sim feeds it from a hot source row, so the head of the
  * sheet needs no holding. The field wants NEAREST sampling, and all px (aPos, uBounds, uResolution, the
- * calm rects) are drawing-buffer px. uLength[id] is each channel's centreline length in px.
+ * calm rects) are drawing-buffer px. uLength[id] is each channel's centreline length in px. The pool, when there is
+ * one, is channel id uPoolId (flows.length; -1 for none): both passes are told it, since it has no start cap.
  */
 
 // Every uniform the layer sets on the lava program. packUniforms supplies the per-frame floats and arrays;
-// the layer sets the rest (each channel's length, the field, sim and palette samplers, the sim size,
-// the drawing buffer size and the quad).
+// the layer sets the rest (each channel's length, the pool's id, the plate height, the field, sim and palette
+// samplers, the sim size, the drawing buffer size and the quad).
 export const UNIFORMS = [
-  'uHeat', 'uViscosity', 'uCracks', 'uFoldScale', 'uDensity', 'uOctaves', 'uHeatPer', 'uCalm', 'uCalmCount',
+  'uViscosity', 'uCracks', 'uFoldScale', 'uDensity', 'uOctaves', 'uCalm', 'uCalmCount', 'uPoolId', 'uPlateH',
   'uLength', 'uFlow', 'uField', 'uSim', 'uPalette', 'uSimSize', 'uResolution', 'uBounds',
 ]
 
 export const FIELD_VERT = `#version 300 es
 // Field pass vertex: one triangle strip vertex per call. aPos is in px, y down.
-// aHeat is part of the vertex layout but unread (the lava pass takes heat from uHeatPer), so the
+// aHeat is part of the vertex layout but unread (heat is the sim's), so the
 // compiler drops it and getAttribLocation returns -1: the layer must skip a location below 0.
 in vec2 aPos;
 in float aAcross;
@@ -61,20 +63,23 @@ void main() {
 export const FIELD_FRAG = `#version 300 es
 precision highp float;
 // Field pass fragment. With "#define FIELD_PACKED" (an RGBA8 field), across is stored as
-// (across / 2.2) * 0.5 + 0.5; along then keeps only 8 bits, which the lava pass lives with.
+// (across / LEVEE) * 0.5 + 0.5; along then keeps only 8 bits, which the lava pass lives with.
 // Alpha is the half width in px over 255, which holds any channel and doubles as coverage.
 in float across;
 in float along;
 in float halfPx;
 flat in float id;
+uniform float uPoolId;                // the pool's channel id (the strips' poolId), -1 for none: it has no start cap
+const float LEVEE = 1.25;             // across at the levee ring's outer edge: the strip builder's ring, and the lava pass's
 out vec4 fragColor;
 void main() {
   // Where the lava pass's strip-end caps (its step 10, same sums) leave a channel's flat strip end invisible, leave the
   // pixel to whatever channel was drawn there first: a braid's head over its arm then shows the arm, not a dark bar.
-  float a = abs(across), e = max(0.0, (along - 0.9) * 10.0), h = id < 0.5 ? 0.0 : max(0.0, (0.1 - along) * 10.0);
+  // The sheet (id 0) and the pool have no start cap.
+  float a = abs(across), e = max(0.0, (along - 0.9) * 10.0), h = id < 0.5 || id == uPoolId ? 0.0 : max(0.0, (0.1 - along) * 10.0);
   if (e * e + a * a * step(0.001, e) >= 1.0 || h * h + a * a * step(0.001, h) >= 1.0) discard;
 #ifdef FIELD_PACKED
-  float r = (across / 2.2) * 0.5 + 0.5;
+  float r = (across / LEVEE) * 0.5 + 0.5;
 #else
   float r = across;
 #endif
@@ -103,17 +108,17 @@ precision highp sampler2D;
 // uResolution and the calm rects share one space, and vPx is the pixel's place in it, y down.
 // The state (heat, crust, age) is the sim's; this pass only reads it, colours it and adds plate texture.
 uniform float uDensity; uniform int uOctaves;                         // the page's glow; noise octaves
-uniform float uHeat; uniform float uViscosity; uniform float uCracks; // the tuner's lava.heat (unread: see T), viscosity, cracks
-uniform float uFoldScale;                                             // and its foldScale
-uniform float uFlow[12]; uniform float uHeatPer[12]; uniform float uLength[12];  // per channel: flow clock, heat, length in px
+uniform float uViscosity; uniform float uCracks; uniform float uFoldScale;  // the tuner's viscosity, cracks and foldScale
+uniform float uPoolId; uniform float uPlateH;   // the pool's channel id (-1 for none); the flows' own box height, for the plate size
+uniform float uFlow[12]; uniform float uLength[12];  // per channel: flow clock, length in px
 uniform vec4 uCalm[8]; uniform int uCalmCount;   // calm rects as l, t, r, b; only the first uCalmCount are live
 uniform sampler2D uField; uniform sampler2D uSim; uniform sampler2D uPalette;
-uniform vec2 uSimSize; uniform vec2 uResolution; uniform vec4 uBounds;  // sim cells as ALONG, ACROSS; then px
+uniform vec2 uSimSize; uniform vec2 uResolution;  // sim cells as ALONG, ACROSS; then px
 in vec2 vPx;
 out vec4 fragColor;
 
 // Look constants, tuned by name. The px ones are for a 600 px tall scene and scale with it.
-const float LEVEE = 2.2;               // across at the outer edge of the rubble
+const float LEVEE = 1.25;              // across at the outer edge of the levee ring (the strip builder's): room for the bank feather
 const float CYCLE = 40.0;              // seconds the plate texture is carried before it starts again
 const float SPEED = 3.0;               // px per second the plug at the centre carries the plates
 const float WARP = 2.4;                // plate cells the domain warp pushes the noise along the flow, at full viscosity
@@ -123,7 +128,7 @@ const float FOLD_PX = 28.0;            // wavelength of the fold ripples in px
 const vec2 MARGIN = vec2(0.55, 0.95);  // across where the banks start and finish running hot
 const vec3 ORANGE_GLOW = vec3(255.0, 136.0, 38.0) / 255.0 * 0.6;
 const vec3 RUBBLE = vec3(52.0, 40.0, 34.0) / 255.0;
-const float BANK_PX = 1.0;             // half width of the bank's edge, lava to rubble, in canvas px: a phone's half-res
+const float BANK_PX = 1.0;             // half width of the bank's edge, lava to nothing, in canvas px: a phone's half-res
                                        // canvas is scaled up 4x, and a 1 px edge on a slant shows as a stair there
 const vec2 SOFT = vec2(0.5, 0.15);     // share of a pixel's sim state taken from the reads across and along it: softens the grid
 const float SOFT_PX = 2.0;             // how far across those reads sit, in canvas px (at least a row): a phone's half-res
@@ -133,6 +138,7 @@ const vec2 NET_HEAT = vec2(0.85, 0.35); // sim heat at which the skin starts to 
                                         // an established arm runs at .45-.65 (real GPU), so its skin is half open
 const float SEAM = 0.04;               // half width of the glowing seams between skin plates, in noise units
 const float DEEP = 0.68;               // the open core's temperature against the sim's, away from hot spots and the breach
+const float DEEP_POOL = 0.75;          // the same for the pool: a shade hotter than a trunk at the same heat
 const float HOT = 0.22;                // what a hot spot (the noise's lowest tenth) adds to the temperature
 
 float hash(vec2 p) {
@@ -192,7 +198,7 @@ vec2 plates(float u, float v, float s, float ph, float seed, float along, float 
 }
 void main() {
   vec4 f = texture(uField, gl_FragCoord.xy / uResolution);
-  float scale = max(uBounds.w, 200.0) / 600.0;
+  float scale = max(uPlateH, 200.0) / 600.0;  // the flows' own box, not the bounds quad: the pool must not resize the plates
 #ifdef FIELD_PACKED
   float across = (f.r * 2.0 - 1.0) * LEVEE;
 #else
@@ -202,6 +208,7 @@ void main() {
   if (f.a <= 0.0) discard;
   float hw = f.a * 255.0;
   int id = min(int(f.b * 255.0 + 0.5), 11);
+  bool pool = float(id) == uPoolId;
   float along = clamp(f.g, 0.0, 1.0);
   float a = abs(across);
   // 2. Lava space, in px, so noise does not stretch with the channel's length.
@@ -226,8 +233,8 @@ void main() {
   float seedShift = float(id) * 17.3, ph = fract(cyc);
   vec2 pl = plates(u, v, velocity(across, along), ph, floor(cyc) * 11.7 + seedShift, along, scale);
   pl = vec2(pl.x - 0.5, pl.y) * sin(3.14159 * ph);
-  // 5. Margins: the banks run hot where the flow shears against them.
-  float shear = smoothstep(MARGIN.x, MARGIN.y, a);
+  // 5. Margins: the banks run hot where the flow shears against them (the pool has no banks to shear against).
+  float shear = pool ? 0.0 : smoothstep(MARGIN.x, MARGIN.y, a);
   // 6. Cracks, from the sim: crust that changes steeply across the channel (plates shearing), and the edge of a melting front.
   float dAcross = abs(up.g - dn.g), dAlong = max(0.0, bk.r - c0.r);
   float crack = min(uCracks * crust * (smoothstep(0.08, 0.25, dAcross) + smoothstep(0.4, 0.6, crust) * smoothstep(0.1, 0.3, dAlong)), 1.0);
@@ -240,18 +247,15 @@ void main() {
   float skin = smoothstep(k - 0.03, k + 0.03, n) * cover, seam = (1.0 - smoothstep(0.0, SEAM, abs(n - k))) * cover;
   float hot = (1.0 - smoothstep(0.2, 0.3, n)) * (1.0 - crust), open = max(hot, smoothstep(0.8, 0.95, heat));
   // 8. Temperature and colour: the simulated heat through the title's palette, darkened by crust and by its age. Heat counts
-  //    once, in the sim's source (fireTuning.js); the page's density scales everything here, so a dim page is dim throughout.
-  float T = clamp((heat * uHeatPer[id] * mix(DEEP, 1.0, open) + HOT * hot + 0.18 * shear + 0.08 * pl.y) * uDensity, 0.0, 1.0);
+  //    once, in the sim's vents (uVentHeat); the page's density scales everything here, so a dim page is dim throughout.
+  float T = clamp((heat * mix(pool ? DEEP_POOL : DEEP, 1.0, open) + HOT * hot + 0.18 * shear + 0.08 * pl.y) * uDensity, 0.0, 1.0);
   vec3 col = texture(uPalette, vec2(T, 0.5)).rgb * (1.0 + 0.16 * pl.x) * (1.0 - 0.85 * crust) * (0.6 + 0.4 * (1.0 - age));
   col = mix(col, RUBBLE * 1.4 + col * 0.12, skin) + (crack + seam * (1.0 - crust)) * uDensity * ORANGE_GLOW;
-  // 9. Levee: grey rubble past the bank, lit toward the channel by what the bank is doing.
-  float rub = 0.7 + 0.6 * vnoise(vec2(u, v) / (3.0 * scale) + seedShift);
-  vec3 rubble = RUBBLE * rub + col * ((LEVEE - a) * T * 0.25);
-  col = mix(col, rubble, smoothstep(1.0 - BANK_PX / hw, 1.0 + BANK_PX / hw, a));
-  // 10. Calm band, 1 px feather at the field's end, rubble fading to LEVEE, and the flat strip ends cut to soft ellipses.
-  float e = max(0.0, (along - 0.9) * 10.0), h = id == 0 ? 0.0 : max(0.0, (0.1 - along) * 10.0);
+  // 9 was the rubble past the bank, gone: the bank is the sim's crusted outer rows, and the alpha feather ends it.
+  // 10. Calm band, 1 px feather at the field's end, the bank's feather, flat strip ends cut to soft ellipses (not on the sheet or pool).
+  float e = max(0.0, (along - 0.9) * 10.0), h = id == 0 || pool ? 0.0 : max(0.0, (0.1 - along) * 10.0);
   float caps = smoothstep(1.0, 0.8, e * e + a * a * step(0.001, e)) * smoothstep(1.0, 0.8, h * h + a * a * step(0.001, h));
-  float alpha = calm(vPx) * clamp((LEVEE - a) * hw, 0.0, 1.0) * (1.0 - smoothstep(1.2, LEVEE, a)) * caps;
+  float alpha = calm(vPx) * clamp((LEVEE - a) * hw, 0.0, 1.0) * smoothstep(1.0 + BANK_PX / hw, 1.0 - BANK_PX / hw, a) * caps;
   fragColor = vec4(col * alpha, alpha); // 11. Premultiplied, for the 2D canvas to add with lighter.
 }
 `

@@ -102,6 +102,7 @@ export function buildGpu(gl, grid) {
   gl.disable(gl.BLEND)
   return {
     float, fieldProgram, lavaProgram, simProgram, loc, simLoc, fieldResolution: gl.getUniformLocation(fieldProgram, 'uResolution'),
+    fieldPoolId: gl.getUniformLocation(fieldProgram, 'uPoolId'),
     vertexBuffer, indexBuffer, fieldVao, lavaVao, target: null,
     sim: createSimTargets(gl, grid.along, grid.across * MAX_CHANNELS, float), simNow: 0, palette: createPaletteTexture(gl, paletteBytes()),
   }

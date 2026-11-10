@@ -40,30 +40,56 @@ export function paletteBytes() {
 // The parent of a slot no flow fills: the sim keeps that block empty instead of running it as a second sheet.
 export const NO_CHANNEL = -2
 
+// The parent of the pool's block. The sim treats it as neither a sheet nor an arm (lavaSim.glsl.js).
+export const POOL = -3
+
 const PARENT = new Float32Array(MAX_CHANNELS)
 const ATTACH = new Float32Array(MAX_CHANNELS)
-const parentMap = { parent: PARENT, attach: ATTACH }
+const DRAIN = new Float32Array(MAX_CHANNELS)
+const DRAIN_AT = new Float32Array(MAX_CHANNELS)
+const VENT = new Float32Array(MAX_CHANNELS)
+const channels = { parent: PARENT, attach: ATTACH, drain: DRAIN, drainAt: DRAIN_AT, vent: VENT }
 
 /**
- * Which channel each channel branches from, and where along it.
+ * Where each channel gets its lava from, where it sends it, and which block is the pool.
  *
- * `parent[i]` is the index into `flows` of the channel that channel `i` starts
- * on, or -1 when it starts on the open sheet: no parent, or an index that does
- * not name a channel. `attach[i]` is how far along that parent, 0..1, the
- * branch starts, and 0 when the flow does not say. Slots past the last flow
- * read as NO_CHANNEL and 0. The returned object and its typed arrays are shared
- * between calls.
+ * `parent[i]` is the index into `flows` of the channel that channel `i` starts on, or -1 when it starts on a
+ * vent row of its own: no parent, or an index that does not name a channel. `attach[i]` is how far along that
+ * parent, 0..1, the branch starts, and 0 when the flow does not say. A braid has both a parent it starts on and a
+ * drain back into it.
+ *
+ * `drain[i]` is the channel that channel `i` ends in: its index, or -1 for the pool, or NO_CHANNEL when the flow
+ * names none (or names a channel that is not there, or itself). `drainAt[i]` means two things. For a channel that
+ * drains into another channel it is where along that channel, 0..1: the flow's own `drainAt`, 1 when it says none.
+ * For a channel that drains into the pool (`drain` -1) it is the channel's ENTRY POSITION across the pool's arc,
+ * -1..1, 0 under the trunk's end: the flow's own `drainAt` clamped to that, 0 when it says none. It is 0 for a
+ * channel that drains nowhere.
+ *
+ * `vent[i]` is the share of the vent heat the channel's vent row gets: the flow's `heat` clamped to 0..1 (1 when
+ * it has none), 1 for the pool's slot, 0 for a slot no flow fills. Only a vent-fed block (parent -1) reads it.
+ *
+ * Slots past the last flow read as NO_CHANNEL and 0, except the slot at `flows.length` when `pool` is given: it
+ * reads POOL, the sim's pool block. A full house of MAX_CHANNELS flows leaves no slot, and the pool is dropped.
+ * The returned object and its typed arrays are shared between calls.
  */
-export function parents(flows) {
+export function channelMap(flows, pool) {
   const count = Math.min(flows.length, MAX_CHANNELS)
   for (let i = 0; i < MAX_CHANNELS; i++) {
     const flow = i < count ? flows[i] : null
     const p = flow ? flow.parent : undefined
-    PARENT[i] = !flow ? NO_CHANNEL : Number.isInteger(p) && p >= 0 && p < count ? p : -1
+    const d = flow ? flow.drain : undefined
+    PARENT[i] = !flow ? (pool && i === count ? POOL : NO_CHANNEL) : Number.isInteger(p) && p >= 0 && p < count ? p : -1
     ATTACH[i] = flow ? (flow.attach ?? 0) : 0
+    DRAIN[i] = flow && (d === -1 || (Number.isInteger(d) && d >= 0 && d < count && d !== i)) ? d : NO_CHANNEL
+    const at = flow ? flow.drainAt : undefined
+    DRAIN_AT[i] = DRAIN[i] === NO_CHANNEL ? 0 : DRAIN[i] === -1 ? (Number.isFinite(at) ? clamp(at, -1, 1) : 0) : Number.isFinite(at) ? clamp(at, 0, 1) : 1
+    VENT[i] = flow ? (Number.isFinite(flow.heat) ? clamp(flow.heat, 0, 1) : 1) : pool && i === count ? 1 : 0
   }
-  return parentMap
+  return channels
 }
+
+/** The channel map without a pool: what the layer called before the pool had a block. Same arrays as `channelMap`. */
+export const parents = (flows) => channelMap(flows, null)
 
 const uniforms = {
   uDt: 0,
