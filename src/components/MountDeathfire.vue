@@ -1163,13 +1163,18 @@ function lavaResize(w, h) {
   }
 }
 
+// Steps of 1/30 s a still frame burns: 24 s of flow. The front reaches the sheet's toe at about 11.5 s and the arms,
+// braids and side streams are lit to nine tenths of their reach by about 23 s (task-7a-report.md). About 1.2 s on
+// SwiftShader at the desktop grid, a quarter of that on a phone's, once at mount.
+const STILL_STEPS = 720
+
 /**
- * Burns the sim for a still frame: the sim starts cold and a still page has no frames to warm it, so run ten seconds of
- * flow (300 steps) and repaint. The caller draws once before this, which hands the layer this page's tune and channels.
+ * Burns the sim for a still frame: the sim starts cold and a still page has no frames to warm it, so run STILL_STEPS of
+ * flow and repaint. The caller draws once before this, which hands the layer this page's tune and channels.
  */
 function burnStill() {
   try {
-    lava.stepN(300)
+    lava.stepN(STILL_STEPS)
   } catch (err) {
     dropLava(err)
   }
@@ -1822,7 +1827,11 @@ function frame(now) {
 const onVisibility = () => (hidden = document.hidden)
 
 watch(() => route.path, () => {
-  if (layout()) draw(1)
+  if (!layout()) return
+  draw(1)
+  // A new page can have a different number of channels, which lights the sim cold again: a still page burns it once
+  // more, as relayout does, or it would show grey crust until the next reload.
+  if (lava && mode.value === 'still' && !forge?.frozen) burnStill()
 })
 
 watch(

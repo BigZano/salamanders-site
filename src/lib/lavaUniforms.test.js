@@ -111,7 +111,8 @@ describe('uploadSim', () => {
     const { gl, set } = recorder()
     uploadSim(gl, locations(SIM_UNIFORMS), s, extras)
     expect(set.uSurge).toHaveLength(12)
-    expect(set.uParent.slice(0, 3)).toEqual([-1, 0, -1])
+    // Slot 2 is past the last flow: no channel's (lavaSim.js NO_CHANNEL).
+    expect(set.uParent.slice(0, 3)).toEqual([-1, 0, -2])
     expect(set.uAttach[1]).toBeCloseTo(0.3)
     expect(set.uSurge[0]).toBeCloseTo(0.4)
   })

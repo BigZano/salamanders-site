@@ -502,7 +502,8 @@ describe('the layer and the heat simulation', () => {
     expect(sim.uSource).toBeCloseTo(1.35)
     expect(sim).toMatchObject({ uCool: 0.2, uVisc: 0.9, uBreak: 2 })
     expect(sim.uSurge.slice(0, 3).map((v) => Math.round(v * 100) / 100)).toEqual([0.3, -1, -1])
-    expect(sim.uParent.slice(0, 3)).toEqual([-1, 0, -1])
+    // Slot 2 is past the last flow: no channel's (lavaSim.js NO_CHANNEL), so the sim keeps it empty.
+    expect(sim.uParent.slice(0, 3)).toEqual([-1, 0, -2])
     expect(sim.uAttach[1]).toBeCloseTo(0.4)
     expect(sim.uSurge).toHaveLength(12)
   })
@@ -601,7 +602,8 @@ describe('the layer and the heat simulation', () => {
     expect(layer.simPasses).toBe(1)
     expect(layer.drawCalls).toBe(0)
     expect(rec.passes.map((p) => p.program)).toEqual(['sim'])
-    expect(rec.by.sim.uParent.every((v) => v === -1)).toBe(true)
+    // No flow fills any slot, so every block is no channel's (lavaSim.js NO_CHANNEL) and the sim keeps it empty.
+    expect(rec.by.sim.uParent.every((v) => v === -2)).toBe(true)
   })
 
   it('leaves the default framebuffer bound after a sim pass', () => {

@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { simSize, paletteBytes, parents, simUniforms } from './lavaSim'
+import { simSize, paletteBytes, parents, simUniforms, NO_CHANNEL } from './lavaSim'
 import { DOOM_PALETTE } from './doomfire'
 
 describe('simSize', () => {
@@ -28,6 +28,15 @@ describe('parents', () => {
     expect(Array.from(p.attach.slice(0, 4))).toEqual([0, 0.3, 0.4, 0.5].map((x) => Math.fround(x)))
     expect(p.parent).toHaveLength(12)
     expect(parents(flows).parent).toBe(p.parent)
+  })
+  it('marks the slots past the last flow as no channel, so the sim keeps them empty, and clears them on a longer list', () => {
+    expect(NO_CHANNEL).toBe(-2)
+    const p = parents([{ head: true }, { parent: 0, attach: 1 }])
+    expect(Array.from(p.parent)).toEqual([-1, 0, ...Array(10).fill(NO_CHANNEL)])
+    expect(Array.from(p.attach.slice(2))).toEqual(Array(10).fill(0))
+    // A real flow whose parent index names no channel still starts on the sheet, not in an empty block.
+    expect(Array.from(parents([{ head: true }, { parent: 5 }, {}]).parent.slice(0, 4))).toEqual([-1, -1, -1, NO_CHANNEL])
+    expect(Array.from(parents([]).parent)).toEqual(Array(12).fill(NO_CHANNEL))
   })
 })
 describe('simUniforms', () => {

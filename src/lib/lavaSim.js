@@ -37,6 +37,9 @@ export function paletteBytes() {
   return PALETTE_BYTES
 }
 
+// The parent of a slot no flow fills: the sim keeps that block empty instead of running it as a second sheet.
+export const NO_CHANNEL = -2
+
 const PARENT = new Float32Array(MAX_CHANNELS)
 const ATTACH = new Float32Array(MAX_CHANNELS)
 const parentMap = { parent: PARENT, attach: ATTACH }
@@ -47,15 +50,16 @@ const parentMap = { parent: PARENT, attach: ATTACH }
  * `parent[i]` is the index into `flows` of the channel that channel `i` starts
  * on, or -1 when it starts on the open sheet: no parent, or an index that does
  * not name a channel. `attach[i]` is how far along that parent, 0..1, the
- * branch starts, and 0 when the flow does not say. Unused slots read as -1 and
- * 0. The returned object and its typed arrays are shared between calls.
+ * branch starts, and 0 when the flow does not say. Slots past the last flow
+ * read as NO_CHANNEL and 0. The returned object and its typed arrays are shared
+ * between calls.
  */
 export function parents(flows) {
   const count = Math.min(flows.length, MAX_CHANNELS)
   for (let i = 0; i < MAX_CHANNELS; i++) {
     const flow = i < count ? flows[i] : null
     const p = flow ? flow.parent : undefined
-    PARENT[i] = Number.isInteger(p) && p >= 0 && p < count ? p : -1
+    PARENT[i] = !flow ? NO_CHANNEL : Number.isInteger(p) && p >= 0 && p < count ? p : -1
     ATTACH[i] = flow ? (flow.attach ?? 0) : 0
   }
   return parentMap
