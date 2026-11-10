@@ -8,6 +8,12 @@
  *        [--paths / /armoury] [--sizes phone,tablet,desktop] [--phases 0.1,0.42,0.7]
  *        [--presets crust=0.3,crust=1] [--throttle 4] [--smoke] [--verbose] [--gpu] [--chrome <path>]
  *
+ * Each grid page is pictured at 120 s, frozen; it opens 24 s early (the lava's heat sim starts cold) and is stepped 720
+ * frozen frames to get there, so a run takes about half a minute per entry. With --smoke each path and size also gets an
+ * ignition entry: two seconds after a cold load, the sheet's head lit and the first arm's toe still dark.
+ * Chrome runs one renderer process at below-normal priority, one entry at a time. Do not edit files under the dev
+ * server's root while it runs: the server reloads the page and the burn is lost (the run then says so).
+ *
  * A preset is query params the volcano reads in dev (crust, heat, viscosity, cracks, foldScale, breakoutRate);
  * join several with & (and quote it). Exit code: 0 when every entry rendered with the lava shader live (as asked), no
  * page raised a console error and every probe passed; 2 when no Chrome was found; 1 for everything else.
@@ -16,9 +22,21 @@
  */
 import { spawn } from 'node:child_process'
 import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
-import { tmpdir } from 'node:os'
-import { join, resolve } from 'node:path'
-import { chromeCandidates, findChrome, judge, lavaWanted, parseArgs, plan, probe, probeRects } from './lib/forge-render.mjs'
+import { constants as osConstants, setPriority, tmpdir } from 'node:os'
+import { basename, join, resolve } from 'node:path'
+import {
+  chromeArgs,
+  chromeCandidates,
+  findChrome,
+  judge,
+  judgeIgnition,
+  lavaWanted,
+  lowerPriorityCommand,
+  parseArgs,
+  plan,
+  probe,
+  probeRects,
+} from './lib/forge-render.mjs'
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms))
 
@@ -26,12 +44,13 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms))
 // cross-fades over a second, and the screenshot should not catch it half way).
 const READY_MS = 15000
 const SETTLE_MS = 2000
-// Frames the frozen page is stepped to measure the draw cost: the stats are written once per 30 frames over a window of 60.
+// Frames the frozen page is stepped to measure the draw cost when its burn did not already time them: the stats are
+// written once per 30 frames over a window of 60.
 const STEP_FRAMES = 60
 const STEP_MS = 60000
-
-// Software GL, so a render looks the same on every machine and works with no GPU (CI). --gpu leaves the choice to Chrome.
-const SOFTWARE_GL = ['--use-angle=swiftshader', '--enable-unsafe-swiftshader', '--ignore-gpu-blocklist']
+// How long each burned frame may take before the burn is called stuck: a stepped frame waits for the page's 30 fps gate,
+// and a software-GL desktop under a CPU throttle runs well below that.
+const BURN_FRAME_MS = 400
 
 // ---------------------------------------------------------------------------------------------------------- DevTools
 
@@ -97,20 +116,13 @@ async function connect(url) {
 
 /** Starts Chrome and resolves with the browser's DevTools WebSocket URL, read from the line it prints on stderr. */
 function launch(chromePath, profileDir, gpu) {
-  const chrome = spawn(
-    chromePath,
-    [
-      '--headless=new',
-      '--remote-debugging-port=0',
-      '--disable-gpu-vsync',
-      ...(gpu ? [] : SOFTWARE_GL),
-      '--no-first-run',
-      '--no-default-browser-check',
-      `--user-data-dir=${profileDir}`,
-      'about:blank',
-    ],
-    { stdio: ['ignore', 'ignore', 'pipe'] },
-  )
+  const chrome = spawn(chromePath, chromeArgs({ profileDir, gpu }), { stdio: ['ignore', 'ignore', 'pipe'] })
+  // Below-normal at once: on Windows the processes Chrome starts from here on inherit it.
+  try {
+    setPriority(chrome.pid, osConstants.priority.PRIORITY_BELOW_NORMAL)
+  } catch {
+    // the process may already have gone; the ready promise below reports that
+  }
   const ready = new Promise((ok, fail) => {
     let seen = ''
     let found = false
@@ -140,8 +152,11 @@ const LAVA_FETCHED = "performance.getEntriesByType('resource').some((e) => e.nam
 const STATS = 'JSON.stringify(window.__forge.stats)'
 const GEOMETRY = 'JSON.stringify(window.__forge.actions.geometry())'
 const FROZEN = 'window.__forge.frozen'
-const STEP = `(window.__forge.step = ${STEP_FRAMES}, true)`
+const STEP = (n) => `(window.__forge.step = ${n}, true)`
 const STEPPED = 'window.__forge.step === 0'
+const LAVA_LIVE = 'window.__forge.actions.geometry().lava'
+const TIME = 'window.__forge.actions.time()'
+const HAS_STATS = 'window.__forge.stats.fps > 0'
 
 /**
  * The pixels of each rect (in viewport CSS px) from the volcano's canvas, as base64 RGBA. The canvas is copied to a
@@ -246,7 +261,20 @@ async function renderEntry(cdp, entry, opts) {
     // The shader is a lazy chunk: give it the chance to arrive, then the second it takes to fade in.
     const wantLava = lavaWanted(entry.url)
     const fetched = wantLava ? await waitFor(cdp, sessionId, LAVA_FETCHED, READY_MS) : true
+    if (wantLava) await waitFor(cdp, sessionId, LAVA_LIVE, READY_MS)
     await sleep(SETTLE_MS)
+
+    // Burn: the page opened `burn` frames before its second, with the sim cold. Step it there a frame at a time, so the
+    // picture shows the flow as it stands at that second (as far as the cap allows), not a cold sim.
+    if (entry.burn > 0 && (await evaluate(cdp, sessionId, FROZEN))) {
+      await evaluate(cdp, sessionId, STEP(entry.burn))
+      const limit = Math.max(STEP_MS, entry.burn * BURN_FRAME_MS)
+      if (!(await waitFor(cdp, sessionId, STEPPED, limit))) result.failures.push(`the burn of ${entry.burn} frames did not finish in ${limit / 1000} s`)
+    }
+    // A page that reloaded mid-burn (the dev server's hot reload, say) opens cold at its first second: say so, rather
+    // than picture a cold sim as if it were the flow at this one.
+    const clock = await evaluate(cdp, sessionId, TIME)
+    if (Math.abs(clock - entry.at) > 0.05) result.failures.push(`the clock is at ${clock.toFixed(2)} s, not ${entry.at} s: the burn did not run`)
 
     const shot = await send('Page.captureScreenshot', { format: 'png' })
     result.png = Buffer.from(shot.data, 'base64')
@@ -257,7 +285,7 @@ async function renderEntry(cdp, entry, opts) {
     if (wantLava === true && !geometry.lava) result.failures.push(fetched ? 'shader not live (the layer was not built, or was dropped)' : `shader not live (its chunk was not fetched in ${READY_MS / 1000} s)`)
     if (wantLava === false && geometry.lava) result.failures.push('shader live although the page asked for lava=0')
 
-    if (opts.smoke) {
+    if (opts.smoke || entry.kind === 'ignite') {
       const rects = probeRects(geometry)
       if (!rects) result.failures.push('smoke: the volcano has no sheet and arm to probe')
       else {
@@ -268,19 +296,20 @@ async function renderEntry(cdp, entry, opts) {
           result.probes = Object.fromEntries(
             Object.entries(pixels).map(([name, p]) => [name, probe(Buffer.from(p.data, 'base64'), p.w, p.h, { x: 0, y: 0, w: p.w, h: p.h })]),
           )
-          result.verdict = judge(result.probes)
+          const ignite = entry.kind === 'ignite'
+          result.verdict = ignite ? judgeIgnition(result.probes) : judge(result.probes)
           if (!result.verdict.ok) {
-            const failed = ['head', 'toe', 'levee'].filter((k) => !result.verdict[k])
-            result.failures.push(`smoke: ${failed.join(', ')} failed`)
+            const failed = Object.keys(result.verdict).filter((k) => k !== 'ok' && !result.verdict[k])
+            result.failures.push(`${ignite ? 'ignition' : 'smoke'}: ${failed.join(', ')} failed`)
           }
         }
       }
     }
 
-    // A page opened with ?t= is frozen and draws nothing per frame, so it has no timings yet: step it (after the
-    // screenshot, so the picture is still of the second asked for) and let the volcano time its own draws.
-    if (await evaluate(cdp, sessionId, FROZEN)) {
-      await evaluate(cdp, sessionId, STEP)
+    // The burn's frames are timed by the volcano itself. A page that burned too few to fill the stats is stepped some
+    // more (after the screenshot, so the picture is still of the second asked for).
+    if ((await evaluate(cdp, sessionId, FROZEN)) && !(await evaluate(cdp, sessionId, HAS_STATS))) {
+      await evaluate(cdp, sessionId, STEP(STEP_FRAMES))
       if (!(await waitFor(cdp, sessionId, STEPPED, STEP_MS))) result.failures.push(`${STEP_FRAMES} stepped frames did not finish in ${STEP_MS / 1000} s`)
     }
     result.stats = JSON.parse(await evaluate(cdp, sessionId, STATS))
@@ -303,7 +332,7 @@ function line(result, nameWidth, smoke) {
   const cols = [result.name.padEnd(nameWidth)]
   if (result.stats) cols.push(ms(result.stats.draw).padStart(10), ms(result.stats.max).padStart(10), `${result.stats.fps.toFixed(1)} fps`.padStart(8))
   else cols.push('-'.padStart(10), '-'.padStart(10), '-'.padStart(8))
-  if (smoke) cols.push(result.verdict ? ['head', 'toe', 'levee'].map((k) => `${k} ${result.verdict[k] ? 'ok' : 'FAIL'}`).join('  ') : 'probes -')
+  if (smoke) cols.push(result.verdict ? Object.keys(result.verdict).filter((k) => k !== 'ok').map((k) => `${k} ${result.verdict[k] ? 'ok' : 'FAIL'}`).join('  ') : 'probes -')
   if (result.failures.length || result.errors.length) cols.push('FAILED')
   return cols.join('  ')
 }
@@ -320,6 +349,20 @@ function details(result, verbose) {
 
 // ---------------------------------------------------------------------------------------------------------------- main
 
+/** Runs lowerPriorityCommand's command, if this platform has one, and waits for it; a failure only warns. */
+function lowerPriority(profileName) {
+  const command = lowerPriorityCommand(profileName, process.platform)
+  if (!command) return Promise.resolve()
+  return new Promise((done) => {
+    const p = spawn(command.cmd, command.args, { stdio: 'ignore', windowsHide: true })
+    p.once('error', (e) => {
+      console.warn(`could not lower Chrome's priority: ${e.message}`)
+      done()
+    })
+    p.once('exit', () => done())
+  })
+}
+
 async function main() {
   const opts = parseArgs(process.argv.slice(2))
   const entries = plan(opts)
@@ -334,6 +377,9 @@ async function main() {
   mkdirSync(out, { recursive: true })
   const profile = mkdtempSync(join(tmpdir(), 'forge-render-'))
   const { chrome, ready } = launch(chromePath, profile, opts.gpu)
+  // A second after the spawn, drop every process of this run (Chrome's own children included) to below-normal.
+  await sleep(1000)
+  await lowerPriority(basename(profile))
   // The belt: however this process ends, Chrome does not outlive it.
   process.on('exit', () => {
     try {

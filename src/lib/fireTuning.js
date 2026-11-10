@@ -72,14 +72,25 @@ export const DEFAULTS = {
     sparkMix: 0,
   },
   // The WebGL lava in the channels (see lib/lavaShader). Every key must be present: the shader packs a missing one as
-  // NaN, so anything that writes here must merge into these, never replace them.
+  // NaN, so anything that writes here must merge into these, never replace them. The lava is a heat simulation
+  // (lib/lavaSim.glsl.js) coloured by the lava pass (lib/lavaShader.glsl.js), and these keep their old names with the
+  // sim's meanings (spec 2026-11-07-lava-heat-sim, decision I and section 10).
   lava: {
-    crust: 0.75, // how much of a channel is closed over with cooled plates, 0 bare to 1 mostly crust
-    heat: 1, // overall brightness of the molten parts
-    viscosity: 0.7, // stiffer lava runs as a narrower fast core with the banks sticking, and folds tighter downstream
-    cracks: 0.8, // how bright the glowing cracks between the plates are
+    // How fast the lava cools and crusts over: the sim's cooling rate runs from 0.4 x its base at 0 to 1.2 x at 1, so
+    // 0 stays molten farther down the channels and 1 crusts the lower reaches sooner. Not a crust threshold.
+    crust: 0.75,
+    // The vent's heat: the sim's source is 0.9 x this, and the heat then runs down the channels. Heat counts ONCE, here,
+    // in the sim's source; the lava pass does not multiply by it again (it declares uHeat and never reads it). So this
+    // is also how far the lava reaches before it crusts: the arms melt a path only where the sim's heat passes 0.55
+    // (T_MELT), and a source near 0.6 cannot, so do not take it much under 1. To dim a page, lower its profile's
+    // density, which scales the whole lava pass (heat, margins, folds, cracks, seams) and leaves the flow alone.
+    heat: 1,
+    // Stiffer lava runs as a narrower fast core with the banks sticking (the sim's velocity profile), and its plates
+    // warp and fold tighter downstream (the lava pass).
+    viscosity: 0.7,
+    cracks: 0.8, // how bright the glowing cracks are where the sim's crust shears or a melting front passes
     foldScale: 1, // how fine the pressure folds are, as a multiple of the base: higher gives more folds along a channel
-    breakoutRate: 1, // how often a toe breaks out, as a multiple of the base rate; 0 stops them
+    breakoutRate: 1, // how easily pressure behind crust bursts it (a breakout), as a multiple of the base; 0 stops them
   },
 }
 
@@ -120,7 +131,12 @@ export const RANDOMIZE_DEFAULTS = {
  *              spaced channels.
  *   density  — how loud the mountain is: plume, ash, sky glow, and the heat of
  *              the lava and caldera. Lava is the brightest thing on screen, so
- *              a page that's mostly reading needs this well under 1.
+ *              a page that's mostly reading needs this well under 1. In the
+ *              lava pass it scales every glow term, so a dim page is dim
+ *              throughout; the flow itself is not touched.
+ *   lavaHeat — optional, default 1: multiplies lava.heat for this page. That is
+ *              the sim's source, so it shortens the flow's reach as well as
+ *              dimming it; prefer density. None of the pages set it.
  *
  * The hero is 0 / 1 / 1 / 1 by definition. Those values are algebraically
  * neutral everywhere they're applied, so `/` renders from exactly the same

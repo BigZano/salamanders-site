@@ -10,6 +10,39 @@ const CHROME_PATHS = [
   '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome',
 ]
 
+// Software GL, so a render looks the same on every machine and works with no GPU (CI). --gpu leaves the choice to Chrome.
+const SOFTWARE_GL = ['--use-angle=swiftshader', '--enable-unsafe-swiftshader', '--ignore-gpu-blocklist']
+
+/**
+ * The command line the harness starts Chrome with. One renderer process for every tab (`--renderer-process-limit=1`):
+ * the harness renders one entry at a time, and a render must never fan out across the machine's cores.
+ */
+export function chromeArgs({ profileDir, gpu }) {
+  return [
+    '--headless=new',
+    '--remote-debugging-port=0',
+    '--disable-gpu-vsync',
+    '--renderer-process-limit=1',
+    ...(gpu ? [] : SOFTWARE_GL),
+    '--no-first-run',
+    '--no-default-browser-check',
+    `--user-data-dir=${profileDir}`,
+    'about:blank',
+  ]
+}
+
+/**
+ * The command that drops every Chrome process of this run (matched by its profile folder's name) to below-normal
+ * priority, so a render never starves the desktop. Windows only (PowerShell); null elsewhere, where the harness lowers
+ * the main process alone with os.setPriority.
+ */
+export function lowerPriorityCommand(profileName, platform) {
+  if (platform !== 'win32') return null
+  if (!/^[\w.-]+$/.test(profileName)) throw new Error(`profile folder name "${profileName}" is not safe to put in a command`)
+  const script = `Get-CimInstance Win32_Process -Filter "Name='chrome.exe'" | Where-Object { $_.CommandLine -match '${profileName}' } | ForEach-Object { (Get-Process -Id $_.ProcessId).PriorityClass = 'BelowNormal' }`
+  return { cmd: 'powershell', args: ['-NoProfile', '-c', script] }
+}
+
 /** Where Chrome is looked for, in order, for the error message when none is found. */
 export const chromeCandidates = (env = {}) => (env.CHROME ? [env.CHROME, ...CHROME_PATHS] : CHROME_PATHS)
 
@@ -31,9 +64,19 @@ export const SIZES = {
   desktop: { width: 1600, height: 1000, deviceScaleFactor: 1, mobile: false },
 }
 
-// Every grid page opens frozen at the same second (?t=120) with the calm band off and the lava shader forced, so two
+// Every grid page is pictured frozen at the same second (120) with the calm band off and the lava shader forced, so two
 // renders differ only in what the grid varies: the moon's phase and the lava preset.
 const FROZEN_AT = 120
+// The heat sim starts cold on every load and a frozen page draws nothing per frame, so a page opened straight at ?t=120
+// would show cold channels. Each entry is opened BURN_CAP / 30 s early instead and stepped that many frozen frames (each
+// one 1/30 s of clock and one sim step) to land on its second: min(t * 30, cap) sim steps, as the still frame burns.
+// The cap is the volcano's STILL_STEPS (MountDeathfire.vue): change the two together.
+export const BURN_CAP = 720
+const STEP_HZ = 30
+/** Frozen frames an entry pictured at `at` seconds is stepped before its picture: min(at * 30, BURN_CAP). */
+export const burnFrames = (at) => Math.min(Math.round(at * STEP_HZ), BURN_CAP)
+// The ignition probe's second: two seconds after load the front is part way down the sheet and no arm is lit yet.
+export const IGNITE_AT = 2
 
 /** `/` is `home`; any other path is itself with its slashes taken out (`/armoury` is `armoury`). */
 const pathName = (path) => path.replace(/\//g, '') || 'home'
@@ -41,22 +84,28 @@ const pathName = (path) => path.replace(/\//g, '') || 'home'
 /**
  * Every combination of path, size, phase and preset, in that nesting order (the preset varies fastest), each with the
  * file name it renders to and the URL to open (relative to the dev server). A preset is `key=value` query params as
- * the volcano reads them in dev (`crust=0.3`, or `crust=0.3&heat=1.2`), or null for none.
+ * the volcano reads them in dev (`crust=0.3`, or `crust=0.3&heat=1.2`), or null for none. Each entry carries `at`, the
+ * second it is pictured at, and `burn`, the frozen frames it is stepped to get there from the `t` its URL opens at.
+ * With `smoke`, each path and size first gets an ignition entry (`kind: 'ignite'`, pictured at IGNITE_AT from a cold
+ * load, the first phase, no preset); the rest are `kind: 'grid'`.
  */
-export function plan({ paths, sizes, phases, presets }) {
+export function plan({ paths, sizes, phases, presets, smoke = false }) {
   const out = []
+  const entry = (path, size, phase, preset, at, kind) => {
+    const burn = burnFrames(at)
+    const open = Math.round((at - burn / STEP_HZ) * 1000) / 1000
+    const query = [`moon=${phase}`, `t=${open}`, 'calm=0', 'lava=1']
+    if (preset) query.push(preset)
+    const label = [pathName(path), size, kind === 'ignite' ? 'ignite' : `p${phase}`]
+    if (preset) label.push(preset.replace(/=/g, '').replace(/&/g, '-'))
+    return { name: label.join('-'), url: `${path}?${query.join('&')}`, at, burn, kind, ...SIZES[size] }
+  }
   for (const path of paths) {
     for (const size of sizes) {
-      const dims = SIZES[size]
-      if (!dims) throw new Error(`unknown size "${size}" (known: ${Object.keys(SIZES).join(', ')})`)
+      if (!SIZES[size]) throw new Error(`unknown size "${size}" (known: ${Object.keys(SIZES).join(', ')})`)
+      if (smoke) out.push(entry(path, size, phases[0], null, IGNITE_AT, 'ignite'))
       for (const phase of phases) {
-        for (const preset of presets) {
-          const query = [`moon=${phase}`, `t=${FROZEN_AT}`, 'calm=0', 'lava=1']
-          if (preset) query.push(preset)
-          const label = [pathName(path), size, `p${phase}`]
-          if (preset) label.push(preset.replace(/=/g, '').replace(/&/g, '-'))
-          out.push({ name: label.join('-'), url: `${path}?${query.join('&')}`, ...dims })
-        }
+        for (const preset of presets) out.push(entry(path, size, phase, preset, FROZEN_AT, 'grid'))
       }
     }
   }
@@ -152,6 +201,17 @@ export function judge({ head, toe, toeWide, levee }) {
     levee: Math.abs(levee.mean[0] - levee.mean[1]) < 40 && levee.max < 160,
   }
   return { ...result, ok: result.head && result.toe && result.levee }
+}
+
+/**
+ * Whether the ignition entry passes, two seconds after a cold load:
+ *   head     something is bright: the front has left the breach
+ *   toe      the first arm's toe box is dark: mean red under 140 and no pixel bright. Not the wide box: on a desktop it is
+ *            big enough to catch a drifting ember, and at two seconds the arm is cold all along anyway.
+ */
+export function judgeIgnition({ head, toe }) {
+  const result = { head: head.bright, toe: toe.mean[0] < 140 && !toe.bright }
+  return { ...result, ok: result.head && result.toe }
 }
 
 /** The lava tuner values a preset may set: the keys the volcano reads from the query in dev (fireTuning.lava). */

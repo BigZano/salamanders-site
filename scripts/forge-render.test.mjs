@@ -1,5 +1,18 @@
 import { describe, it, expect } from 'vitest'
-import { findChrome, plan, probe, probeRects, judge, parseArgs, lavaWanted } from './lib/forge-render.mjs'
+import {
+  findChrome,
+  plan,
+  probe,
+  probeRects,
+  judge,
+  judgeIgnition,
+  parseArgs,
+  lavaWanted,
+  burnFrames,
+  BURN_CAP,
+  chromeArgs,
+  lowerPriorityCommand,
+} from './lib/forge-render.mjs'
 
 describe('findChrome', () => {
   it('prefers CHROME, then the known installs', () => {
@@ -14,7 +27,34 @@ describe('plan', () => {
     const p = plan({ paths: ['/'], sizes: ['phone', 'desktop'], phases: [0.42], presets: ['crust=0.3'] })
     expect(p).toHaveLength(2)
     expect(p[0]).toMatchObject({ name: 'home-phone-p0.42-crust0.3', width: 390, height: 844, mobile: true, deviceScaleFactor: 2 })
-    expect(p[0].url).toBe('/?moon=0.42&t=120&calm=0&lava=1&crust=0.3')
+    // pictured at 120 s: opened 24 s early and burned 720 frozen frames to get there, so the sim is not cold
+    expect(p[0]).toMatchObject({ at: 120, burn: 720, kind: 'grid' })
+    expect(p[0].url).toBe('/?moon=0.42&t=96&calm=0&lava=1&crust=0.3')
+  })
+
+  it('burns min(t * 30, the cap) frames, the still frame\'s 720 at most', () => {
+    expect(BURN_CAP).toBe(720)
+    expect(burnFrames(2)).toBe(60)
+    expect(burnFrames(120)).toBe(720)
+    expect(burnFrames(0)).toBe(0)
+  })
+
+  it('puts an ignition entry first for each path and size with --smoke: two seconds from a cold load', () => {
+    const p = plan({ paths: ['/'], sizes: ['phone', 'desktop'], phases: [0.1, 0.7], presets: [null, 'crust=1'], smoke: true })
+    expect(p.map((e) => e.name)).toEqual([
+      'home-phone-ignite',
+      'home-phone-p0.1',
+      'home-phone-p0.1-crust1',
+      'home-phone-p0.7',
+      'home-phone-p0.7-crust1',
+      'home-desktop-ignite',
+      'home-desktop-p0.1',
+      'home-desktop-p0.1-crust1',
+      'home-desktop-p0.7',
+      'home-desktop-p0.7-crust1',
+    ])
+    expect(p[0]).toMatchObject({ kind: 'ignite', at: 2, burn: 60, url: '/?moon=0.1&t=0&calm=0&lava=1' })
+    expect(plan({ paths: ['/'], sizes: ['phone'], phases: [0.42], presets: [null] }).some((e) => e.kind === 'ignite')).toBe(false)
   })
 
   it('names other pages by their path, drops the suffix for no preset, and knows the three sizes', () => {
@@ -27,7 +67,7 @@ describe('plan', () => {
     ])
     expect(p[0]).toMatchObject({ width: 768, height: 1024, mobile: true, deviceScaleFactor: 2 })
     expect(p[2]).toMatchObject({ width: 1600, height: 1000, mobile: false, deviceScaleFactor: 1 })
-    expect(p[0].url).toBe('/armoury?moon=0.1&t=120&calm=0&lava=1')
+    expect(p[0].url).toBe('/armoury?moon=0.1&t=96&calm=0&lava=1')
   })
 
   it('refuses a size it does not know', () => {
@@ -92,6 +132,36 @@ describe('judge', () => {
     expect(judge({ head: bright, toe: bright, toeWide: bright, levee: grey })).toMatchObject({ toe: false, ok: false })
     expect(judge({ head: bright, toe: dark, toeWide: dark, levee: grey })).toMatchObject({ toe: false, ok: false })
     expect(judge({ head: bright, toe: dark, toeWide: bright, levee: bright })).toMatchObject({ levee: false, ok: false })
+  })
+})
+
+describe('judgeIgnition', () => {
+  const bright = { mean: [200, 120, 40], max: 255, bright: true }
+  const dark = { mean: [60, 40, 30], max: 120, bright: false }
+
+  it('passes a lit head over a dark first arm toe, and fails lava already at the toe', () => {
+    expect(judgeIgnition({ head: bright, toe: dark, toeWide: bright })).toEqual({ head: true, toe: true, ok: true })
+    expect(judgeIgnition({ head: dark, toe: dark })).toMatchObject({ head: false, ok: false })
+    expect(judgeIgnition({ head: bright, toe: { ...dark, bright: true } })).toMatchObject({ toe: false, ok: false })
+    expect(judgeIgnition({ head: bright, toe: { ...bright, bright: false } })).toMatchObject({ toe: false, ok: false })
+  })
+})
+
+describe('chromeArgs and lowerPriorityCommand', () => {
+  it('holds every tab to one renderer process, with software GL unless --gpu', () => {
+    const a = chromeArgs({ profileDir: 'C:\\tmp\\forge-render-x1', gpu: false })
+    expect(a).toContain('--renderer-process-limit=1')
+    expect(a).toContain('--use-angle=swiftshader')
+    expect(a).toContain('--user-data-dir=C:\\tmp\\forge-render-x1')
+    expect(chromeArgs({ profileDir: 'p', gpu: true })).not.toContain('--use-angle=swiftshader')
+  })
+
+  it('lowers this run\'s Chrome processes by profile name on Windows, and only there', () => {
+    const c = lowerPriorityCommand('forge-render-x1', 'win32')
+    expect(c.cmd).toBe('powershell')
+    expect(c.args.at(-1)).toMatch(/CommandLine -match 'forge-render-x1'.*PriorityClass = 'BelowNormal'/)
+    expect(lowerPriorityCommand('forge-render-x1', 'linux')).toBeNull()
+    expect(() => lowerPriorityCommand("x'; rm", 'win32')).toThrow(/not safe/)
   })
 })
 

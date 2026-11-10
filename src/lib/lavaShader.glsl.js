@@ -69,6 +69,10 @@ in float halfPx;
 flat in float id;
 out vec4 fragColor;
 void main() {
+  // Where the lava pass's strip-end caps (its step 10, same sums) leave a channel's flat strip end invisible, leave the
+  // pixel to whatever channel was drawn there first: a braid's head over its arm then shows the arm, not a dark bar.
+  float a = abs(across), e = max(0.0, (along - 0.9) * 10.0), h = id < 0.5 ? 0.0 : max(0.0, (0.1 - along) * 10.0);
+  if (e * e + a * a * step(0.001, e) >= 1.0 || h * h + a * a * step(0.001, h) >= 1.0) discard;
 #ifdef FIELD_PACKED
   float r = (across / 2.2) * 0.5 + 0.5;
 #else
@@ -99,7 +103,7 @@ precision highp sampler2D;
 // uResolution and the calm rects share one space, and vPx is the pixel's place in it, y down.
 // The state (heat, crust, age) is the sim's; this pass only reads it, colours it and adds plate texture.
 uniform float uDensity; uniform int uOctaves;                         // the page's glow; noise octaves
-uniform float uHeat; uniform float uViscosity; uniform float uCracks; // the tuner's lava.heat, viscosity, cracks
+uniform float uHeat; uniform float uViscosity; uniform float uCracks; // the tuner's lava.heat (unread: see T), viscosity, cracks
 uniform float uFoldScale;                                             // and its foldScale
 uniform float uFlow[12]; uniform float uHeatPer[12]; uniform float uLength[12];  // per channel: flow clock, heat, length in px
 uniform vec4 uCalm[8]; uniform int uCalmCount;   // calm rects as l, t, r, b; only the first uCalmCount are live
@@ -119,6 +123,17 @@ const float FOLD_PX = 28.0;            // wavelength of the fold ripples in px
 const vec2 MARGIN = vec2(0.55, 0.95);  // across where the banks start and finish running hot
 const vec3 ORANGE_GLOW = vec3(255.0, 136.0, 38.0) / 255.0 * 0.6;
 const vec3 RUBBLE = vec3(52.0, 40.0, 34.0) / 255.0;
+const float BANK_PX = 1.0;             // half width of the bank's edge, lava to rubble, in canvas px: a phone's half-res
+                                       // canvas is scaled up 4x, and a 1 px edge on a slant shows as a stair there
+const vec2 SOFT = vec2(0.5, 0.15);     // share of a pixel's sim state taken from the reads across and along it: softens the grid
+const float SOFT_PX = 2.0;             // how far across those reads sit, in canvas px (at least a row): a phone's half-res
+                                       // canvas gives a channel about 12 px for 16 rows, so a crust edge one row wide is a stair
+const vec2 NET_CELL = vec2(9.0, 14.0); // px of a skin plate on the molten core, across and along; carried rigidly, so no bark
+const vec2 NET_HEAT = vec2(0.85, 0.35); // sim heat at which the skin starts to close over the core, and is mostly closed:
+                                        // an established arm runs at .45-.65 (real GPU), so its skin is half open
+const float SEAM = 0.04;               // half width of the glowing seams between skin plates, in noise units
+const float DEEP = 0.68;               // the open core's temperature against the sim's, away from hot spots and the breach
+const float HOT = 0.22;                // what a hot spot (the noise's lowest tenth) adds to the temperature
 
 float hash(vec2 p) {
   vec3 q = fract(vec3(p.xyx) * 0.1031);
@@ -192,11 +207,17 @@ void main() {
   // 2. Lava space, in px, so noise does not stretch with the channel's length.
   float u = across * hw;
   float v = along * uLength[id];
-  // 3. The sim cell under this pixel. The levee (|across| > 1) reads the bank. row is one cell across.
-  float ACROSS = uSimSize.y, row = 1.0 / (12.0 * ACROSS);
-  float sx = (along * (uSimSize.x - 1.0) + 0.5) / uSimSize.x; // the sim's own column for this along (cell() in lavaSim.glsl.js)
+  // 3. The sim cell under this pixel, softened with four reads around it (SOFT_PX across, one column along): the grid is
+  //    coarse against the canvas (a phone's 16 rows span about 12 canvas px), and one bilinear read shows its steps.
+  //    row is one cell across; the across reads stay inside this channel's block of rows. The levee (|across| > 1) reads the bank.
+  float ACROSS = uSimSize.y, row = 1.0 / (12.0 * ACROSS), cw = 1.0 / uSimSize.x; // cw: one cell along
+  float sx = (along * (uSimSize.x - 1.0) + 0.5) * cw; // the sim's own column for this along (cell() in lavaSim.glsl.js)
   vec2 simUV = vec2(sx, (float(id) * ACROSS + (clamp(across, -1.0, 1.0) + 1.0) * 0.5 * (ACROSS - 1.0) + 0.5) * row);
-  vec4 sim = texture(uSim, simUV);
+  float lo = (float(id) * ACROSS + 0.5) * row, hi = (float(id + 1) * ACROSS - 0.5) * row;
+  float ds = max(1.0, SOFT_PX * (ACROSS - 1.0) / (2.0 * hw)) * row; // SOFT_PX in rows: hw px span (ACROSS - 1) / 2 rows
+  vec4 c0 = texture(uSim, simUV), up = texture(uSim, vec2(sx, min(simUV.y + ds, hi))), dn = texture(uSim, vec2(sx, max(simUV.y - ds, lo)));
+  vec4 bk = texture(uSim, vec2(sx - cw, simUV.y)), fw = texture(uSim, vec2(sx + cw, simUV.y));
+  vec4 sim = c0 * (1.0 - SOFT.x - SOFT.y) + (up + dn) * (0.5 * SOFT.x) + (bk + fw) * (0.5 * SOFT.y);
   float heat = sim.r, crust = sim.g, age = sim.a; // sim.b, the pressure, drives the sim's breakouts and is not drawn
   // 4. Plates: one layer, for a fine texture on the colour and the fold ripples. The sim does the rest.
   //    Both terms are weighted by sin(pi * ph), so they vanish where ph wraps and the seed changes and the
@@ -207,23 +228,30 @@ void main() {
   pl = vec2(pl.x - 0.5, pl.y) * sin(3.14159 * ph);
   // 5. Margins: the banks run hot where the flow shears against them.
   float shear = smoothstep(MARGIN.x, MARGIN.y, a);
-  // 6. Cracks, from the sim: crust that changes steeply across the channel (plates shearing), and the
-  //    edge of a melting front. The two neighbour reads stay inside this channel's block of rows.
-  float lo = (float(id) * ACROSS + 0.5) * row, hi = (float(id + 1) * ACROSS - 0.5) * row;
-  float dAcross = abs(texture(uSim, vec2(sx, min(simUV.y + row, hi))).g - texture(uSim, vec2(sx, max(simUV.y - row, lo))).g);
-  float dAlong = max(0.0, texture(uSim, vec2(sx - 1.0 / uSimSize.x, simUV.y)).r - heat);
+  // 6. Cracks, from the sim: crust that changes steeply across the channel (plates shearing), and the edge of a melting front.
+  float dAcross = abs(up.g - dn.g), dAlong = max(0.0, bk.r - c0.r);
   float crack = min(uCracks * crust * (smoothstep(0.08, 0.25, dAcross) + smoothstep(0.4, 0.6, crust) * smoothstep(0.1, 0.3, dAlong)), 1.0);
-  // 7. Temperature and colour: the simulated heat through the title's palette, darkened by crust and by its age.
-  float T = clamp(heat * uHeatPer[id] * uHeat * uDensity + 0.18 * shear + 0.08 * pl.y, 0.0, 1.0);
-  vec3 col = texture(uPalette, vec2(T, 0.5)).rgb * (1.0 + 0.16 * pl.x) * (1.0 - 0.85 * crust) * (0.6 + 0.4 * (1.0 - age)) + crack * ORANGE_GLOW;
-  // 8. Levee: grey rubble past the bank, lit toward the channel by what the bank is doing.
+  // 7. The skin on the molten core (USGS Kilauea 2018-06-12: grey plates netted with orange seams; Mauna Loa 2022-12-08:
+  //    open red with hot spots). Noise carried down the channel rigidly at the plug's speed, so it never shears into bark
+  //    and needs no reseed. It closes as the sim cools (bare at the breach and pool); its lowest values are hot spots.
+  vec2 q = vec2(u, v - uFlow[id] * SPEED * scale) / (NET_CELL * scale) + seedShift;
+  float n = 0.65 * vnoise(q) + 0.35 * vnoise(q * 2.3 + 5.1);
+  float cover = (1.0 - smoothstep(NET_HEAT.y, NET_HEAT.x, heat)) * (1.0 - crust), k = 1.0 - 0.75 * cover;
+  float skin = smoothstep(k - 0.03, k + 0.03, n) * cover, seam = (1.0 - smoothstep(0.0, SEAM, abs(n - k))) * cover;
+  float hot = (1.0 - smoothstep(0.2, 0.3, n)) * (1.0 - crust), open = max(hot, smoothstep(0.8, 0.95, heat));
+  // 8. Temperature and colour: the simulated heat through the title's palette, darkened by crust and by its age. Heat counts
+  //    once, in the sim's source (fireTuning.js); the page's density scales everything here, so a dim page is dim throughout.
+  float T = clamp((heat * uHeatPer[id] * mix(DEEP, 1.0, open) + HOT * hot + 0.18 * shear + 0.08 * pl.y) * uDensity, 0.0, 1.0);
+  vec3 col = texture(uPalette, vec2(T, 0.5)).rgb * (1.0 + 0.16 * pl.x) * (1.0 - 0.85 * crust) * (0.6 + 0.4 * (1.0 - age));
+  col = mix(col, RUBBLE * 1.4 + col * 0.12, skin) + (crack + seam * (1.0 - crust)) * uDensity * ORANGE_GLOW;
+  // 9. Levee: grey rubble past the bank, lit toward the channel by what the bank is doing.
   float rub = 0.7 + 0.6 * vnoise(vec2(u, v) / (3.0 * scale) + seedShift);
   vec3 rubble = RUBBLE * rub + col * ((LEVEE - a) * T * 0.25);
-  col = mix(col, rubble, smoothstep(1.0 - 0.5 / hw, 1.0 + 0.5 / hw, a));
-  // 9. Calm band, 1 px feather at the field's end, rubble fading to LEVEE, and the flat strip ends cut to soft ellipses.
+  col = mix(col, rubble, smoothstep(1.0 - BANK_PX / hw, 1.0 + BANK_PX / hw, a));
+  // 10. Calm band, 1 px feather at the field's end, rubble fading to LEVEE, and the flat strip ends cut to soft ellipses.
   float e = max(0.0, (along - 0.9) * 10.0), h = id == 0 ? 0.0 : max(0.0, (0.1 - along) * 10.0);
   float caps = smoothstep(1.0, 0.8, e * e + a * a * step(0.001, e)) * smoothstep(1.0, 0.8, h * h + a * a * step(0.001, h));
   float alpha = calm(vPx) * clamp((LEVEE - a) * hw, 0.0, 1.0) * (1.0 - smoothstep(1.2, LEVEE, a)) * caps;
-  fragColor = vec4(col * alpha, alpha); // 10. Premultiplied, for the 2D canvas to add with lighter.
+  fragColor = vec4(col * alpha, alpha); // 11. Premultiplied, for the 2D canvas to add with lighter.
 }
 `
