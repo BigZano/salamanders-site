@@ -317,6 +317,7 @@ These keep their own numbers and curves. Everything not listed here is functiona
 | `src/components/MountDeathfire.vue`, `src/components/FireText.vue`, `src/components/FireTuner.vue` | the volcano canvas, the title fire and its dev tuner | everything; the policy test skips them |
 | `src/components/MountDeathfire.vue` | the Prometheus cycle: the moon crosses the sky once every 15 minutes on a wall clock every visitor shares; at its closest pass, in live mode only, the Time of Trial: a veil that rises over 6s, holds, and falls over 40-60s, its size drawn by chance | the 15-minute shared clock; the veil eases in and out, is never darker than 0.62, and never flashes; under reduced motion the canvas is one still frame, so the moon freezes where the clock put it |
 | `src/lib/lavaSim.glsl.js`, `src/lib/lavaShader.glsl.js` | the lava's heat simulation and the pass that colours it: heat enters at the breach and runs down every channel, cooling and crusting; on load the sim starts cold, so the first hot front walks the channels (ignition, about 11 s to the sheet's toe and 15-20 s to light the arms); an eruption is a surge: the vent spikes to the palette's top for a moment while the flow speeds up, easing back over two or three seconds, and the channels do not brighten (a faster flow, not a brighter one) | the sim's rates and the 24 s burn; under reduced motion the sim is burned 720 steps (24 s) at mount, on relayout and on route change, and then frozen, so the still frame shows lit channels and nothing moves |
+| `src/lib/lavaNetwork.js`, `src/lib/lavaStrips.js` | the lava network the shader draws: a breach trunk, a rim overflow and flank fissures (three on a desktop, one on a phone), whose streams meet the trunk at confluences or run on to a pool at the cone's foot. The layout is fixed per route (a seeded rng: one page, one network), so none of it moves: the sources, the confluences, the widths, the pool and the fissures' seams (fixed jagged cracks, 2 px tapering to 1) stay where they were drawn. What moves is the heat the sim above carries through them: the streams, the joined trunk below each confluence and the pool's hot fan where the trunk enters brighten, cool and crust | the layout, which has no clock of its own; under reduced motion it is the same network with the sim burned and frozen |
 | `src/components/archive/ArchiveThread.vue` | `brand-cool`, 1.7s `cubic-bezier(0.2, 0.7, 0.3, 1)` | duration and curve |
 | `src/components/archive/ArchiveGate.vue` | `gate-glow`, the unsealing: 1.6s `ease-in-out`, infinite while the gate is unsealing | duration and curve |
 | `src/components/deathwatch/deathwatch.css` | `dw-drift` 40s and `dw-flicker` 5s, `ease-in-out`, `infinite alternate` and `infinite`, bounded by the Deathwatch backdrop: they run as long as it shows | as is |
@@ -388,13 +389,16 @@ established.
 
 ### Canvas budget
 
-Draw target: under 6ms per frame at 390px with 4x CPU throttle, measured headless. Measured with the lava's heat sim
-and shader (2026-11-09, `node scripts/forge-render.mjs --sizes phone --throttle 4 --gpu --smoke`): 2.19ms average and 3.1ms
-worst per frame on the home page (2.84ms and 5.0ms in the two seconds after load; that ignition figure exists only
-with `--smoke`). Unthrottled, with software GL (SwiftShader, the harness default): 0.62-0.71ms on a phone and
-1.03-1.29ms on a 1600px desktop. A live reading on a desktop GPU was 1.05ms average and 1.9ms worst at 1445px (live,
-7800 XT, before the 7b look pass); it is not a harness figure. The volcano is meant to draw at most 30 frames a
-second; a 60Hz screen shows about 25, which is a known frame-gate defect, not a design.
+Draw target: under 6ms per frame at 390px with 4x CPU throttle, measured headless. Measured with the lava's heat sim,
+shader and network (2026-11-09, `node scripts/forge-render.mjs --sizes phone --throttle 4 --gpu --smoke`): 1.72ms average
+and 2.9ms worst per frame on the home page (2.50ms and 4.0ms in the two seconds after load; that ignition figure exists
+only with `--smoke`). Unthrottled, with software GL (SwiftShader, the harness default; `node scripts/forge-render.mjs --paths /
+--sizes phone,desktop --phases 0.42 --presets crust=0.75 --smoke`): 0.68ms on a phone and 1.12ms on a 1600px desktop at the grid frame (0.82ms and 1.40ms in the ignition frame).
+The network builder (`src/lib/lavaNetwork.js`) runs once per layout, not per frame: about 1.4ms on the hero cone (a node
+timing of the builder alone from its tests, 60 rows, mean 1.39ms; not a harness figure), against a 2ms budget; the strips add the pool's 25 x 7 grid and 15 vertices a join, a few hundred in all. A live reading on a
+desktop GPU was 1.05ms average and 1.9ms worst at 1445px (live, 7800 XT, before the 7b look pass and the network); it is
+not a harness figure. The volcano is meant to draw at most 30 frames a second; a 60Hz screen shows about 25, which is a
+known frame-gate defect, not a design.
 
 Dragons, when they land: the engine lazy-loaded, at most 25 KB gzipped.
 

@@ -9,8 +9,14 @@
  *        [--presets crust=0.3,crust=1] [--throttle 4] [--smoke] [--verbose] [--gpu] [--chrome <path>]
  *
  * Each grid page is pictured at 120 s, frozen; it opens 24 s early (the lava's heat sim starts cold) and is stepped 720
- * frozen frames to get there, so a run takes about half a minute per entry. With --smoke each path and size also gets an
- * ignition entry: two seconds after a cold load, the sheet's head lit and the first arm's toe still dark.
+ * frozen frames to get there, so a run takes about half a minute per entry (720 steps is the 24 s of sim a reduced-motion
+ * still frame burns, and the most a frozen page runs: a live page 30 s in is further on). With --smoke each path and size
+ * also gets an ignition entry: two seconds after a cold load, the sheet's head lit and its far end (90 percent of the way down
+ * the trunk) still dark. The grid entries are probed (see probeRects and judge in lib/forge-render.mjs): the head lit; no
+ * channel ending on bare rock (each channel's last 4 px box at least as red as its middle, or at least 70 red); the levee dark;
+ * a line across the first join's inner bank lava on both its halves, the trunk's and the feeder's; the pool lit (the arc box
+ * on a desktop, the page's bottom 24 px under the pool on a phone); and, on `/`, the two hero buttons' text at least
+ * 4.5:1 against their faces (the worst of six tiles across each content box).
  * Chrome runs one renderer process at below-normal priority, one entry at a time. Do not edit files under the dev
  * server's root while it runs: the server reloads the page and the burn is lost (the run then says so).
  *
@@ -27,15 +33,22 @@ import { basename, join, resolve } from 'node:path'
 import {
   chromeArgs,
   chromeCandidates,
+  ctaMeanRatio,
+  ctaRatio,
+  decodePng,
+  faceTiles,
   findChrome,
   judge,
   judgeIgnition,
+  junctionMeans,
   lavaWanted,
   lowerPriorityCommand,
   parseArgs,
+  parseCssColor,
   plan,
   probe,
   probeRects,
+  toeRows,
 } from './lib/forge-render.mjs'
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms))
@@ -157,6 +170,28 @@ const STEPPED = 'window.__forge.step === 0'
 const LAVA_LIVE = 'window.__forge.actions.geometry().lava'
 const TIME = 'window.__forge.actions.time()'
 const HAS_STATS = 'window.__forge.stats.fps > 0'
+// The home page's two hero buttons: where they are, the colour their text is set in and how much border and padding there is
+// round the content box. Both faces are opaque today (the ember button's a gradient, the drake button's the solid obsidian
+// that .btn-planner sets over .btn-drake's 6 percent green), but what is behind the text is read from a picture of the
+// button with its text taken out (CTA_HIDE), not from a style, so a face that goes translucent is read as rendered.
+const CTA_BUTTONS = `JSON.stringify([...document.querySelectorAll('.hero .cta-row > *')].map((el) => {
+  const r = el.getBoundingClientRect()
+  const cs = getComputedStyle(el)
+  const px = (v) => parseFloat(v) || 0
+  const inset = ['Top', 'Right', 'Bottom', 'Left'].map((side) => px(cs['border' + side + 'Width']) + px(cs['padding' + side]))
+  return { label: el.textContent.trim(), x: r.x, y: r.y, w: r.width, h: r.height, color: cs.color, inset }
+}))`
+const CTA_HIDE = `(() => {
+  const s = document.createElement('style')
+  s.id = 'forge-cta-probe'
+  s.textContent = '.hero .cta-row > *, .hero .cta-row > * * { color: transparent !important; text-shadow: none !important; }'
+  document.head.appendChild(s)
+  return true
+})()`
+const CTA_SHOW = "(document.getElementById('forge-cta-probe')?.remove(), true)"
+// The probes that come in numbered sets (a join's six samples, a channel's end and middle): a box of one that is off the
+// canvas is left out, and the report gives each set one line.
+const SET = /^(junction|end|mid)\d+$/
 
 /**
  * The pixels of each rect (in viewport CSS px) from the volcano's canvas, as base64 RGBA. The canvas is copied to a
@@ -210,9 +245,41 @@ async function waitFor(cdp, sessionId, expression, ms) {
   return false
 }
 
+/**
+ * Reads the home page's hero buttons: each one's text colour (from its style) and its face as rendered, from a picture of
+ * the button with the text hidden (so the canvas showing through, a gradient and a border are all in it): `bg`, the mean
+ * of the whole picture (for the report), and `tiles`, the mean of each of six stretches across the content box, which is
+ * what is judged (the worst one: lava behind part of a label must not average away).
+ * Returns `{ buttons: [{ label, text, bg, tiles, rect }], problems }`; a button whose colour cannot be read is a problem.
+ */
+async function readCta(cdp, sessionId, send) {
+  const found = JSON.parse(await evaluate(cdp, sessionId, CTA_BUTTONS))
+  const buttons = []
+  const problems = []
+  await evaluate(cdp, sessionId, CTA_HIDE)
+  try {
+    await sleep(150)
+    for (const b of found) {
+      const text = parseCssColor(b.color)
+      if (!text) {
+        problems.push(`cta: cannot read the text colour "${b.color}" of "${b.label}"`)
+        continue
+      }
+      const shot = await send('Page.captureScreenshot', { format: 'png', clip: { x: b.x, y: b.y, width: b.w, height: b.h, scale: 1 } })
+      const img = decodePng(Buffer.from(shot.data, 'base64'))
+      const bg = probe(img.data, img.width, img.height, { x: 0, y: 0, w: img.width, h: img.height }).mean
+      const tiles = faceTiles(img, { w: b.w, h: b.h }, b.inset)
+      buttons.push({ label: b.label, text, bg, tiles, rect: { x: b.x, y: b.y, w: b.w, h: b.h } })
+    }
+  } finally {
+    await evaluate(cdp, sessionId, CTA_SHOW)
+  }
+  return { buttons, problems }
+}
+
 /** Renders one planned entry. Never throws: whatever went wrong is in `failures`, and a failed entry writes no PNG. */
 async function renderEntry(cdp, entry, opts) {
-  const result = { name: entry.name, png: null, stats: null, probes: null, rects: null, verdict: null, errors: [], ignored: [], failures: [] }
+  const result = { name: entry.name, png: null, stats: null, probes: null, rects: null, cta: null, verdict: null, errors: [], ignored: [], failures: [] }
   const baseOrigin = new URL(opts.base).origin
   let targetId = null
   let off = () => {}
@@ -286,18 +353,30 @@ async function renderEntry(cdp, entry, opts) {
     if (wantLava === false && geometry.lava) result.failures.push('shader live although the page asked for lava=0')
 
     if (opts.smoke || entry.kind === 'ignite') {
-      const rects = probeRects(geometry)
-      if (!rects) result.failures.push('smoke: the volcano has no sheet and arm to probe')
+      const ignite = entry.kind === 'ignite'
+      const all = probeRects(geometry, { width: entry.width, height: entry.height })
+      // the ignition entry reads two boxes; the grid entry reads them all
+      const rects = all && (ignite ? { head: all.head, toe: all.toe } : all)
+      if (!rects) result.failures.push('smoke: the volcano has no sheet to probe')
       else {
         result.rects = rects
         const pixels = await evaluate(cdp, sessionId, readRects(rects))
         if (!pixels) result.failures.push('smoke: no volcano canvas (.deathfire canvas)')
         else {
           result.probes = Object.fromEntries(
-            Object.entries(pixels).map(([name, p]) => [name, probe(Buffer.from(p.data, 'base64'), p.w, p.h, { x: 0, y: 0, w: p.w, h: p.h })]),
+            // a box of a numbered set that came back with no pixels (it was off the canvas) is no measurement: it is left out
+            Object.entries(pixels)
+              .filter(([name, p]) => !(SET.test(name) && (p.w <= 0 || p.h <= 0)))
+              .map(([name, p]) => [name, probe(Buffer.from(p.data, 'base64'), p.w, p.h, { x: 0, y: 0, w: p.w, h: p.h })]),
           )
-          const ignite = entry.kind === 'ignite'
-          result.verdict = ignite ? judgeIgnition(result.probes) : judge(result.probes)
+          // The home page's hero buttons, with the pool lit (the grid entry has burned the sim): their text against their face.
+          if (!ignite && entry.path === '/') {
+            const cta = await readCta(cdp, sessionId, send)
+            result.cta = cta.buttons
+            result.failures.push(...cta.problems)
+            if (cta.buttons.length < 2 && !cta.problems.length) result.failures.push(`cta: the hero shows ${cta.buttons.length} button(s), not two`)
+          }
+          result.verdict = ignite ? judgeIgnition(result.probes) : judge(result.probes, result.cta ?? null)
           if (!result.verdict.ok) {
             const failed = Object.keys(result.verdict).filter((k) => k !== 'ok' && !result.verdict[k])
             result.failures.push(`${ignite ? 'ignition' : 'smoke'}: ${failed.join(', ')} failed`)
@@ -337,13 +416,26 @@ function line(result, nameWidth, smoke) {
   return cols.join('  ')
 }
 
+/** What every probe read, one line each: the boxes by name, the junction line's six reds, each channel's end against its middle, each button's ratio. */
+function probeLines(result) {
+  const probes = result.probes ?? {}
+  const out = []
+  for (const [k, p] of Object.entries(probes)) if (!SET.test(k)) out.push(`    ${k.padEnd(8)} ${rgb(p)}  at ${box(result.rects[k])}`)
+  const line = Object.keys(probes).filter((k) => /^junction\d+$/.test(k))
+  if (line.length) out.push(`    junction red ${line.map((k) => probes[k].mean[0].toFixed(0)).join(' ')}  (trunk side ${junctionMeans(probes)[0].toFixed(0)}, feeder side ${(junctionMeans(probes)[1] ?? NaN).toFixed(0)}; each over 110) at ${box(result.rects.junction0)}`)
+  for (const r of toeRows(probes)) out.push(`    channel ${String(r.i).padEnd(2)} end red ${r.end.toFixed(0).padStart(3)}  mid red ${r.mid.toFixed(0).padStart(3)}  ${r.ok ? 'ok' : 'FAIL'}  end at ${box(result.rects[`end${r.i}`])}`)
+  for (const b of result.cta ?? [])
+    out.push(`    cta      worst tile ${ctaRatio(b).toFixed(2)}:1 (mean ${ctaMeanRatio(b).toFixed(2)}:1)  "${b.label}"  text rgb ${b.text.slice(0, 3).join(',')} on mean rgb ${b.bg.map((c) => c.toFixed(0)).join(',')}  at ${box(b.rect)}`)
+  return out
+}
+
 function details(result, verbose) {
   const out = []
-  if (verbose && result.probes) for (const [k, p] of Object.entries(result.probes)) out.push(`    ${k.padEnd(8)} ${rgb(p)}  at ${box(result.rects[k])}`)
+  if (verbose) out.push(...probeLines(result))
   for (const f of result.failures) out.push(`    ! ${f}`)
   for (const e of result.errors) out.push(`    ! ${e}`)
   if (verbose) for (const i of result.ignored) out.push(`    (ignored, other origin) ${i}`)
-  if (result.failures.length && result.probes && !verbose) for (const [k, p] of Object.entries(result.probes)) out.push(`    ${k.padEnd(8)} ${rgb(p)}  at ${box(result.rects[k])}`)
+  if (result.failures.length && result.probes && !verbose) out.push(...probeLines(result))
   return out
 }
 

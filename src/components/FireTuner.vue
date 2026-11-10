@@ -45,7 +45,9 @@ const CRUST_FIELDS = [
   { key: 'width', label: 'Base width', min: 0.2, max: 2, step: 0.02 },
   { key: 'offsetX', label: 'Peak position', min: 0, max: 1, step: 0.02 },
   { key: 'faceSpread', label: 'Face variation', min: 0, max: 0.45, step: 0.01 },
-  { key: 'flows', label: 'Lava arms', min: 0, max: 8, step: 1 },
+  // The lava network sets how many streams there are, so this is only the switch: 0 puts the lava out, anything else lets
+  // the network lay itself out. The range stays, because other code reads `tune.flows`.
+  { key: 'flows', label: 'Lava', min: 0, max: 8, step: 1, hint: '0 = off; the network sets the count' },
   { key: 'flowHeat', label: 'Lava heat', min: 0, max: 2, step: 0.05 },
   { key: 'caldera', label: 'Caldera heat', min: 0, max: 2, step: 0.05 },
   { key: 'ridges', label: 'Distant ridges', min: 0, max: 16, step: 1 },
@@ -150,7 +152,7 @@ const changed = (group, key) => fireTuning[group][key] !== DEFAULTS[group][key]
       <section>
         <h3 class="tuner-group">Mount Deathfire</h3>
         <label v-for="f in CRUST_FIELDS" :key="f.key" class="row">
-          <span class="row-label" :class="{ on: changed('bed', f.key) }">{{ f.label }}</span>
+          <span class="row-label" :class="{ on: changed('bed', f.key) }" :title="f.hint">{{ f.label }}</span>
           <input
             v-model.number="fireTuning.bed[f.key]"
             type="range"

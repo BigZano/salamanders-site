@@ -60,7 +60,10 @@ function allocate({ along, across }) {
 }
 
 function readKinds() {
-  const next = forge.actions.geometry?.()?.flows?.map((f) => f.kind) ?? []
+  const geometry = forge.actions.geometry?.()
+  const next = geometry?.flows?.map((f) => f.kind) ?? []
+  // The pool is the block after the last channel, when the network has one and a block is free (the layer's channelMap).
+  if (geometry?.pool && next.length < CHANNELS) next.push('pool')
   if (next.join() !== kinds.value.join()) kinds.value = next
 }
 
