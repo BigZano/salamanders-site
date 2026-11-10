@@ -15,10 +15,13 @@
  * independently (up to a fifth of a row either way), and a centreline that took its y from the flanks would kink at
  * every row; only the flanks' x values (where the face is) are read per row.
  *
- * This half lays out the sources, the streams, the widths and the pool; every stream drains to the pool here. The
- * confluences (a tributary turning onto the trunk, the trunk widening below each join) come after, in the same file:
- * they rewrite `drain`, `drainAt`, `joins` and the trunk's `widthAt`. Each tributary is already traced on a course that
- * meets the trunk at a shallow angle, and its flow records where (`aim`), so a join has something to land on.
+ * Then the confluences. Each tributary is traced on a course aimed at the trunk, meeting it at 18 to 26 degrees (S5.4 allows
+ * 30). Its last stretch (about three widths, a little more where the 12 degrees a chord needs it) turns its heading onto the
+ * trunk's with a cubic ease, the V between the two banks, and lands it on the trunk's centreline a little below where it
+ * was aimed (`turnOnto`): that is the join. The feeder is cut there and drains into the trunk (`drain` 0, `drainAt` the
+ * place along it), and the trunk widens below the join (`joinWidthProfile`, composed in join order). A tributary no trunk
+ * row in its window suits, whose approach is over 30 degrees (drawn or aimed), or that cannot turn in the room it has, is
+ * traced again as a stream of its own and runs to the pool, and the builder says so in dev (S5.3).
  */
 
 // How far in from the rim corner each crest's base reaches, in crater widths: the rest of the rim is the mouth the
@@ -33,19 +36,39 @@ export const CONFLUENCE_MAX_DEG = 30
 const GROWTH = 0.15 // a stream is 15% wider at its end than at its source, as the levees spread
 const FLARE = 0.2 // and flares another 20% over its last two rows as it enters the pool
 const FLARE_ROWS = 2
-const POOL_RX = 0.45 // the pool's half width, as a fraction of the cone's base width
+const POOL_RX = 0.45 // the pool's width, as a fraction of the cone's base width
+const SOLO_ENTRY = [0.45, 0.8] // a stream on its own enters the pool this far out, as a fraction of its half width
 const POOL_SINK = 0.2 // how far, in pool heights, the centre sits above the lowest row: on the foreground ridge line
 const PHONE_POOL_SINK = 0.4 // on a phone the centre sits this far, in pool heights, below the screen's bottom edge
+const PHONE_POOL_ROWS = 1 // ...but its arc stays at least this many rows above the cone's foot, so the streams reach it
 const FISSURE_GAP_ROWS = 6 // a fissure source sits at least this many rows above the pool's upper arc
 const JOIN_RUN_ROWS = 3 // a tributary has at least this many rows between its source and its meeting with the trunk
+const JOIN_MIN_ROW = 3 // ...and the trunk row it is aimed at is no higher than this (just below the mouth)
 const MAX_TURN_DEG = 10 // no stream bends more than this between one chord and the next, as far as the relaxing can get it
 const RESAMPLE_ROWS = 0.5 // the chord a stream is resampled at, in rows: half a row, so 10 degrees a chord allows twice the curvature
 const HARD_TURN_DEG = 12 // the rule itself (S10): a stream left over this is reported in dev
 const RELAX_FROM_DEG = 8 // the relaxing leaves points whose bend is under this alone (and takes full hold at twice it)
-const EASE_ROOM = 0.2 // sideways travel, in row heights per row run squared, a tributary may ease across (see joinRow)
+const ARRIVE_DEG = [18, 26] // a tributary is aimed to meet its trunk at an angle in this range, before the turn (S5.4: at most 30)
+const START_DEG = 45 // ...coming in from its source no steeper than this to the trunk
+const DRAWN_DEG = 34 // ...and no steeper than this over its last DRAWN_WIDTHS widths above the turn (a coarse gate: the drawn feeder is checked against 30 after)
+const DRAWN_WIDTHS = 8
+const PARTING = 1.3 // a feeder runs beside its trunk no nearer than this many bank-to-bank gaps (half the two widths), so the V has a mouth
+const PARTING_ROWS = 2 // ...if it has this many rows to part in
+const PARTING_TAN = 0.4 // ...and leaves the trunk no steeper than this (tangent) doing it
+const TURN_WIDTHS = 3 // a joining feeder turns onto its trunk's heading over its last three widths (S5.4)
+const TURN_EXTRA = 10 // ...and its walk starts up to this many chords higher if the turn is too sharp for that
+const LAG_WIDTHS = 2.5 // the turn lands about this many feeder widths below the aim: the S5.3 window leaves that room at its end
+const BULGE = 1.1 // the trunk's outer bank swells to this much of the joined width...
+const BULGE_RISE = 1 // ...one width below the join (the swell starts one width above it),
+const BULGE_SETTLE = 3 // ...then settles to the joined width over three more widths
 const MAX_TILT = (15 * Math.PI) / 180 // a fissure leans at most this far from vertical
 // Where on the trunk, as a fraction of its length, each tributary is to join (the S5.3 windows).
 const JOIN_AT = { rim: [0.2, 0.35], upper: [0.45, 0.6], mid: [0.65, 0.8] }
+// A phone's one join: S5.3's mid window with its end moved to 0.85, because the join is where the turn lands, a little
+// below the aim. S8 wants it clear of the title box; on a phone the box covers y 0.46 to 0.76 of the height and the cone's
+// summit stands at about 0.31 of it, so a join above the box is out of reach (the vent is 96 px above its top, and the turn
+// alone is 3 widths, 70 px, on a 582 px cone): this is the window that puts it below the box, at 0.79 to 0.90 of the height.
+const PHONE_JOIN_AT = [0.66, 0.85]
 
 const clamp = (x, lo, hi) => Math.max(lo, Math.min(hi, x))
 // An ease with the least peak curvature for its travel: two parabolas, slope zero at both ends (a smoothstep bends half again as hard in the middle).
@@ -209,6 +232,236 @@ function widthProfile(w0, sf) {
   }
 }
 
+// The unit direction of a polyline at `at` (0 to 1, by point index): the chord one point either side, so a bend is mitred.
+function tangentAlong(pts, at) {
+  const step = 1 / (pts.length - 1)
+  const a = pointAlong(pts, at - step)
+  const b = pointAlong(pts, at + step)
+  const len = Math.hypot(b.x - a.x, b.y - a.y) || 1
+  return { x: (b.x - a.x) / len, y: (b.y - a.y) / len }
+}
+
+// The index of the point of `pts` nearest to `q`.
+function nearestIndex(pts, q) {
+  let best = 0
+  let bd = Infinity
+  for (let i = 0; i < pts.length; i++) {
+    const d = (pts[i].x - q.x) ** 2 + (pts[i].y - q.y) ** 2
+    if (d < bd) [best, bd] = [i, d]
+  }
+  return best
+}
+
+/**
+ * The angle, in degrees, between a feeder and its trunk where they meet: the feeder's heading as it arrives at the point
+ * of it nearest the trunk's point `at` (0 to 1 along the trunk, by point index), against the trunk's tangent there. The
+ * feeder's heading is the chord of its last two steps up to that point, so a feeder that carries on past the join is
+ * read where it gets there; a feeder already cut at the join is read at its end.
+ */
+export function approachAngleDeg(feederPts, trunkPts, at) {
+  if (feederPts.length < 2) return 0
+  const k = nearestIndex(feederPts, pointAlong(trunkPts, at))
+  const a = feederPts[Math.max(0, k - 2)]
+  const b = feederPts[Math.max(1, k)]
+  const len = Math.hypot(b.x - a.x, b.y - a.y) || 1
+  const t = tangentAlong(trunkPts, at)
+  const cos = clamp(((b.x - a.x) * t.x + (b.y - a.y) * t.y) / len, -1, 1)
+  return (Math.acos(cos) * 180) / Math.PI
+}
+
+/**
+ * A trunk's width in px at `s` (0 to 1 along it) across one join, S5.4: the feeder `wf` joining the trunk `wt` at `sj`
+ * makes it `wj = joinedWidth(wt, wf)`. The trunk keeps `wt` until one width above the join, swells to 1.1 wj one width
+ * below it, and settles to wj over the next three widths (both moves eased with t*t*(3-2t)). "A width" is `wj`, the width
+ * of the joined channel the bulge and the settling happen in; `wScale` turns px into `s` (1 over the trunk's length).
+ */
+export function joinWidthProfile(wt, wf, sj, wScale) {
+  const wj = joinedWidth(wt, wf)
+  const one = wj * wScale
+  const peak = BULGE * wj
+  return (s) => {
+    const rise = BULGE_RISE * one
+    if (s <= sj - rise) return wt
+    if (s < sj + rise) return wt + (peak - wt) * sstep((s - (sj - rise)) / (2 * rise))
+    const settle = BULGE_SETTLE * one
+    if (s < sj + rise + settle) return peak + (wj - peak) * sstep((s - (sj + rise)) / settle)
+    return wj
+  }
+}
+
+// The segment of `pts` nearest `p`, looking from segment `hint` a few back and on a good way (both the stream and the
+// trunk run down the page, so what was found for one point is where to start for the next). `{ i, r }`: segment and place on it.
+function nearestOn(pts, p, hint) {
+  const n = pts.length - 1
+  let best = Infinity
+  let bi = 0
+  let br = 0
+  for (let i = Math.max(0, hint - 4); i <= Math.min(n - 1, hint + 12); i++) {
+    const a = pts[i]
+    const dx = pts[i + 1].x - a.x
+    const dy = pts[i + 1].y - a.y
+    const l2 = dx * dx + dy * dy
+    const r = l2 ? clamp(((p.x - a.x) * dx + (p.y - a.y) * dy) / l2, 0, 1) : 0
+    const d = Math.hypot(p.x - (a.x + dx * r), p.y - (a.y + dy * r))
+    if (d < best) [best, bi, br] = [d, i, r]
+  }
+  return { i: bi, r: br }
+}
+
+// The trunk's unit direction at the place `q` (from `nearestOn`): its segment's, blended into the next one's across the
+// segment so a bend is not stepped.
+function trunkDir(pts, q) {
+  const seg = (i) => {
+    const l = Math.hypot(pts[i + 1].x - pts[i].x, pts[i + 1].y - pts[i].y) || 1
+    return { x: (pts[i + 1].x - pts[i].x) / l, y: (pts[i + 1].y - pts[i].y) / l }
+  }
+  const d = seg(q.i)
+  const j = q.r < 0.5 ? q.i - 1 : q.i + 1
+  const o = j >= 0 && j < pts.length - 1 ? seg(j) : d
+  const w = Math.abs(q.r - 0.5)
+  const x = d.x * (1 - w) + o.x * w
+  const y = d.y * (1 - w) + o.y * w
+  const l = Math.hypot(x, y) || 1
+  return { x: x / l, y: y / l }
+}
+
+// Which side of the trunk's segment `q.i` the point `p` lies, and how far: positive on the right of its direction.
+const sideOf = (pts, q, p) => {
+  const a = pts[q.i]
+  const b = pts[q.i + 1]
+  const l = Math.hypot(b.x - a.x, b.y - a.y) || 1
+  return ((b.x - a.x) * (p.y - a.y) - (b.y - a.y) * (p.x - a.x)) / l
+}
+
+const wrapAngle = (a) => a - 2 * Math.PI * Math.round(a / (2 * Math.PI))
+
+/**
+ * The steepest angle, in degrees, the drawn feeder `pts` makes with its trunk `T` over its last `span` px: each chord's
+ * direction against the direction of the trunk's nearest segment. The 30 degree rule read on what is drawn (the angle at
+ * the join alone says nothing of the stretch above the turn).
+ */
+export function drawnAngleDeg(pts, T, span) {
+  let worst = 0
+  let arc = 0
+  let hint = 0
+  for (let k = pts.length - 1; k >= 1 && arc <= span; k--) {
+    arc += Math.hypot(pts[k].x - pts[k - 1].x, pts[k].y - pts[k - 1].y)
+    hint = Math.max(0, Math.floor(alongAtY(T, pts[k].y) * (T.length - 1)) - 1)
+    const q = nearestOn(T, pts[k], hint)
+    const dx = pts[k].x - pts[k - 1].x
+    const dy = pts[k].y - pts[k - 1].y
+    const tx = T[q.i + 1].x - T[q.i].x
+    const ty = T[q.i + 1].y - T[q.i].y
+    const cos = (dx * tx + dy * ty) / ((Math.hypot(dx, dy) * Math.hypot(tx, ty)) || 1)
+    worst = Math.max(worst, (Math.acos(clamp(cos, -1, 1)) * 180) / Math.PI)
+  }
+  return worst
+}
+
+/**
+ * Cut the feeder `F` where its turn onto the trunk `T` lands, and land it on the trunk's centreline. The feeder is
+ * aimed at `at` (a point on the trunk, which S5.3's window picked), arriving at an angle; the V is made over its last
+ * TURN_WIDTHS widths (`wf`, in px or more) by easing its heading, against the trunk's local tangent, to nothing with
+ * t*t*(3-2t) over a stretch that ends on the trunk's centreline. Every point past it is dropped.
+ *
+ * The turn is walked from a point of the feeder (`kz`), step by step, each step along the trunk's tangent plus what is
+ * left of the feeder's own angle to it. That closes about half the gap a straight line at the same angle would
+ * (the angle fades), so the walk crosses the trunk below `at`, about as far below it as `kz` is above: the stretch is
+ * solved for, by bisection on its length, so that the heading reaches the trunk's exactly where the walk reaches the
+ * centreline. Nothing before `kz` is touched (the approach keeps the angle it was aimed with), and nothing is shifted
+ * or blended to make the end meet. If the stretch bends over HARD_TURN_DEG (less a margin) a chord it is started a chord
+ * higher, up to TURN_EXTRA more. A feeder whose turn cannot be made in the room it has, or whose approach is over
+ * CONFLUENCE_MAX_DEG, comes back as `{ why }`, to run to the pool instead.
+ * Returns `{ pts, angle, at }`: the cut feeder, the angle it meets the trunk at before the turn, and where along the
+ * trunk (0 to 1, by point index) it lands.
+ */
+function turnOnto(F, T, at, wf) {
+  const J = pointAlong(T, at)
+  const angle = approachAngleDeg(F, T, at)
+  if (angle > CONFLUENCE_MAX_DEG) return { why: 'approach angle ' + angle.toFixed(1) + ' degrees' }
+  // the last point of the feeder above the join
+  let kc = -1
+  while (kc + 1 < F.length && F[kc + 1].y < J.y - 1e-6) kc++
+  if (kc < 2) return { why: 'no room above the join' }
+  const nT = T.length - 1
+  const chord = polylineLength(F) / (F.length - 1)
+  let longest = 0
+  for (let i = 1; i < F.length; i++) longest = Math.max(longest, Math.hypot(F[i].x - F[i - 1].x, F[i].y - F[i - 1].y))
+  // the walk starts about as far above the join as it will land below it: half the stretch, three widths at least
+  const n0 = Math.max(2, Math.ceil((0.5 * TURN_WIDTHS * wf) / chord))
+  const nMax = Math.min(n0 + TURN_EXTRA, kc)
+  const kLow = kc - nMax + 1
+  // the feeder's own angle to the trunk, chord by chord, from the highest start it may take down to the pool
+  const cum = new Array(F.length).fill(0)
+  const rel = new Array(F.length).fill(0)
+  let hint = Math.max(0, Math.floor(alongAtY(T, F[Math.max(0, kLow - 1)].y) * nT) - 1)
+  for (let i = 1; i < F.length; i++) {
+    cum[i] = cum[i - 1] + Math.hypot(F[i].x - F[i - 1].x, F[i].y - F[i - 1].y)
+    if (i < kLow) continue
+    const mid = { x: (F[i].x + F[i - 1].x) / 2, y: (F[i].y + F[i - 1].y) / 2 }
+    const q = nearestOn(T, mid, hint)
+    hint = q.i
+    const td = trunkDir(T, q)
+    rel[i] = wrapAngle(Math.atan2(F[i].y - F[i - 1].y, F[i].x - F[i - 1].x) - Math.atan2(td.y, td.x))
+  }
+  for (let N = n0; N <= nMax; N++) {
+    const kz = kc - N + 1
+    const start = F[kz]
+    const q0 = nearestOn(T, start, Math.max(0, Math.floor(alongAtY(T, start.y) * nT) - 1))
+    const sg = sideOf(T, q0, start) < 0 ? -1 : 1
+    // the walk, for a stretch `Z` long: its points, and how far along it crosses the trunk (Infinity if it never does)
+    const walk = (Z) => {
+      const pts = [{ x: start.x, y: start.y }]
+      let p = pts[0]
+      let h = q0.i
+      let c = kz + 1
+      for (let k = 1; k <= Math.ceil(Z / chord) + 6; k++) {
+        const mid = (k - 0.5) * chord
+        while (c < F.length - 1 && cum[c] < cum[kz] + mid) c++
+        const q = nearestOn(T, p, h)
+        h = q.i
+        const td = trunkDir(T, q)
+        const th = Math.atan2(td.y, td.x) + rel[c] * (1 - sstep(mid / Z))
+        const np = { x: p.x + Math.cos(th) * chord, y: p.y + Math.sin(th) * chord }
+        const g0 = sg * sideOf(T, q, p)
+        const g1 = sg * sideOf(T, nearestOn(T, np, h), np)
+        if (g1 <= 0) {
+          const f = g0 / (g0 - g1)
+          pts.push({ x: p.x + (np.x - p.x) * f, y: p.y + (np.y - p.y) * f })
+          return { pts, ok: true, s: (k - 1 + f) * chord, h }
+        }
+        pts.push(np)
+        p = np
+      }
+      return { pts, ok: false, s: Infinity, h }
+    }
+    let lo = chord
+    let hi = 3 * (cum[kc] - cum[kz] + Math.hypot(J.x - F[kc].x, J.y - F[kc].y)) + 4 * chord
+    if (!walk(hi).ok) continue
+    for (let it = 0; it < 12; it++) {
+      const mid = (lo + hi) / 2
+      const w = walk(mid)
+      if (w.ok && w.s <= mid) hi = mid
+      else lo = mid
+    }
+    const w = walk(hi)
+    if (!w.ok || w.s < TURN_WIDTHS * wf) continue
+    // land exactly on the trunk's line, where the walk met it
+    const cp = w.pts[w.pts.length - 1]
+    const qe = nearestOn(T, cp, Math.max(0, w.h - 1))
+    const land = (qe.i + qe.r) / nT
+    const X = pointAlong(T, land)
+    const walked = w.pts.map((p, i) => ({ x: p.x, y: p.y, u: start.u + (X.u - start.u) * (i / (w.pts.length - 1)) }))
+    walked[walked.length - 1] = { x: X.x, y: X.y, u: X.u }
+    // cut again into even pieces, the ends kept
+    const out = resample(F.slice(0, kz).concat(walked), longest)
+    let down = true
+    for (let i = 1; i < out.length; i++) if (!(out[i].y > out[i - 1].y)) down = false
+    if (down && maxTurnDeg(out) <= HARD_TURN_DEG - 0.1) return { pts: out, angle, at: land }
+  }
+  return { why: 'it cannot turn in the room it has' }
+}
+
 // One slow meander per stream, as an offset in u at `dist` (the fraction of the stream's length run). Its amplitude grows
 // with the distance from the source and shrinks with the width, so a thin tributary wanders more than the trunk:
 // amp = a0 (1 + dist) / (0.5 + width / W0). It is zero at the source, so the stream leaves where it should; `freq` is in
@@ -220,17 +473,17 @@ const meander = (a0, freq, phase, w0f) => (dist) => {
 }
 
 /**
- * The pool's size and height from the cone: an ellipse 0.45 of the base wide and a quarter of that tall. On desktop its
- * centre sits on the foreground ridge line (the lowest row's y, a fifth of a pool height above it), so the ridges
- * cover its far half. On a phone it sits below the screen's bottom edge `h` (0.4 pool heights below it, so the arc's
- * top is 0.6 above): the glow shows and the surface mostly does not. Either way its top stays two rows above the cone's
- * foot, so every stream can land on it.
+ * The pool's size and height from the cone: an ellipse 0.45 of the base wide (S5.6 asks 0.4 to 0.5; `rx` is half that) and a
+ * quarter of that tall. On desktop its centre sits on the foreground ridge line (the lowest row's y, a fifth of a pool
+ * height above it), so the ridges cover its far half. On a phone it sits below the screen's bottom edge `h` (0.4 pool
+ * heights below it, so the arc's top is 0.6 above): the glow shows and the surface mostly does not; its top is kept at
+ * least a row above the cone's foot, so every stream can land on it.
  */
 function poolShape(baseW, yBot, rowH, phone, h) {
-  const rx = POOL_RX * baseW
+  const rx = (POOL_RX * baseW) / 2
   const ry = rx / 4
   let cy = yBot - ry * POOL_SINK
-  if (phone && Number.isFinite(h)) cy = Math.min(h + ry * PHONE_POOL_SINK, yBot - FLARE_ROWS * rowH + ry)
+  if (phone && Number.isFinite(h)) cy = Math.min(h + ry * PHONE_POOL_SINK, yBot - PHONE_POOL_ROWS * rowH + ry)
   return { rx, ry, cy }
 }
 
@@ -323,16 +576,19 @@ function smoothStream(traced, pool, rowH) {
  * - `flows[i]`: `{ pts [{x, y, u}], widthAt(s), head, kind, role, heat, parent: -1, attach: 0, drain, drainAt, sourceIndex, aim }`.
  *   `kind` is 'trunk' | 'rim' | 'fissure' | 'braid'; `head` is true only for the trunk. `role` names the source:
  *   'trunk' | 'rim' | 'upper' | 'mid' | 'lower' (the three desktop fissures) | 'phone-fissure'. Every source is its own sim
- *   channel (`parent: -1`). `drain` is the flow this one ends on, -1 for the pool, `drainAt` how far along that flow
- *   (1 when it drains to the pool). `sourceIndex` is the index into `fissures` for a fissure flow, else -1. `aim` is where
- *   a tributary was eased onto the trunk, `{ row, at }` (the trunk's mountain row and how far along the trunk, 0 to 1, in
- *   its S5.3 window), or null for a stream that runs to the pool on its own.
+ *   channel (`parent: -1`). `drain` is the flow this one ends on (0, the trunk, for a tributary that joins it), -1 for the
+ *   pool; `drainAt` how far along the trunk (0 to 1) it joins, or, for a stream into the pool, where it enters across the
+ *   arc (-1 to 1, 0 under the trunk's end). `sourceIndex` is the index into `fissures` for a fissure flow, else -1. `aim` is where
+ *   a tributary meets the trunk, `{ row, at }` (the trunk's nearest mountain row and how far along the trunk, 0 to 1, in
+ *   its S5.3 window: the same `at` as `drainAt` and the join's), or null for a stream that runs to the pool on its own.
  * - `pool`: `{ cx, cy, rx, ry, arcTop, arcY(x) }`, an ellipse in the low ground at the foot; see `poolShape`. Null when the
  *   mountain is too short (under 8 rows) to lay anything out.
  * - `fissures`: `{ x, y, rows, tilt }` per fissure source: the crack's lower end (where the stream starts), its height
  *   in mountain rows and its lean from vertical in radians (positive leans to the right going up). A cone too short to
  *   hold three fissures six rows above the pool, one to a row, holds fewer.
- * - `joins`: `[]` here; the confluences fill it.
+ * - `joins`: one per tributary that meets the trunk, in order down it: `{ feeder (flow index), trunk (0), at (along the
+ *   trunk, 0 to 1, by point index), wf, wt, wj (px: the feeder at its end, the trunk just above the join, the two as
+ *   one), angle (degrees: the feeder's approach before it turns) }`.
  * Desktop makes a trunk, one rim overflow and three fissures; a phone makes a trunk and one fissure.
  */
 export function buildNetwork(mountain, opts) {
@@ -376,14 +632,11 @@ export function buildNetwork(mountain, opts) {
   while (from < last && rowY(from) < m.vent.y + 0.5 * rowH) from++ // no first chord shorter than half a row
   const trunkLean = (phone ? towardFace : breachSide) * range(0.02, 0.1)
   const trunkWander = meander(range(0.02, 0.04), range(2, 4), range(0, Math.PI * 2), 1)
-  const trunkU = new Array(rows).fill(uVent)
   // the head is the vent itself, so the trunk pours from the floor of the breach
   const trunk = [{ x: m.vent.x, y: m.vent.y, u: uVent }]
   for (let s = from; s <= last; s++) {
     const u = uVent + (trunkLean * (s - from)) / last + trunkWander((s - from) / Math.max(1, arcRow - from))
-    const p = place(s, u, true)
-    trunkU[s] = p.u
-    trunk.push(p)
+    trunk.push(place(s, u, true))
   }
   // the pool sits under the trunk's end: where the trunk's line passes the arc's top
   let cx = rowCx(last)
@@ -402,7 +655,7 @@ export function buildNetwork(mountain, opts) {
     const pts = smoothStream(traced, pool, rowH)
     // the flare covers the last two rows of the stream's length
     const sf = clamp(1 - (FLARE_ROWS * rowH) / (polylineLength(pts) || 1), 0.5, 0.999)
-    flows.push({
+    const flow = {
       pts,
       widthAt: widthProfile(w0f * W0, sf),
       head,
@@ -415,83 +668,193 @@ export function buildNetwork(mountain, opts) {
       drainAt: 1,
       sourceIndex,
       aim,
-    })
+    }
+    flows.push(flow)
+    return flow
   }
-  finish(trunk, { w0f: 1, kind: 'trunk', role: 'trunk', head: true, heat: 1, sourceIndex: -1, aim: null })
+  const trunkFlow = finish(trunk, { w0f: 1, kind: 'trunk', role: 'trunk', head: true, heat: 1, sourceIndex: -1, aim: null })
+  const baseWidth = trunkFlow.widthAt // the trunk's own growth and flare; the joins widen it (below)
   const trunkAt = (row) => alongAtY(flows[0].pts, rowY(row))
-  // The trunk was relaxed after its rows were traced, so a tributary eases onto the finished line: its u at each row,
-  // where the trunk still runs (the rows below the pool arc keep the traced u).
-  const trunkEndY = flows[0].pts[flows[0].pts.length - 1].y
-  for (let s = from; s <= last; s++) {
-    if (rowY(s) <= trunkEndY) trunkU[s] = (pointAlong(flows[0].pts, trunkAt(s)).x - rowCx(s)) / (crown(s) * rowHalf(s))
-  }
+  // The trunk was relaxed after its rows were traced, so a tributary is laid against the finished line: its x at each row
+  // (above the vent, the vent's; below the pool arc, the end's).
+  const trunkX = []
+  for (let s = 0; s <= last; s++) trunkX.push(pointAlong(flows[0].pts, trunkAt(s)).x)
 
-  // A stream aimed at the trunk: from its source at (row0, u0) it eases onto the trunk's own course by row `rowJ`, so it
-  // arrives parallel to it, at a shallow angle, with its wandering damped toward the meeting. Past `rowJ` (this half
-  // has no joins, so every stream runs on to the pool) it keeps to the trunk's line, quietly, parting from it by `off`
-  // to the `side` it came from: the confluences cut it at the meeting, so this tail is only the scaffold that ends it
-  // on the arc, and a wandering one would swing the relaxing's hold on the approach.
-  const joiner = ({ row0, u0, rowJ, side, off, w0f }) => {
+  // px of closing per row at the place `at` along the trunk: a feeder on side `sg` heads as the trunk does, turned `alpha`
+  // toward it (the trunk's heading from straight down toward +x is `a`, a lean in x per y of tan a)
+  const trunkHeading = (at) => {
+    const t = tangentAlong(flows[0].pts, at)
+    return Math.atan2(t.x, t.y)
+  }
+  const closeSlope = (at, sg, alpha) => {
+    const a = trunkHeading(at)
+    return Math.abs(Math.tan(a - sg * alpha) - Math.tan(a)) * rowH
+  }
+  // the angle to a trunk leaning `a` of a feeder on side `sg` closing `m` px of x per px of y
+  const closeAngle = (a, sg, m) => Math.abs(a - Math.atan(Math.tan(a) - sg * m))
+  const trunkLen = polylineLength(flows[0].pts) || 1
+
+  // A stream aimed at the trunk: from its source at (row0, u0) it comes down to row `rowJ` and meets the trunk there at
+  // `alpha` to it, the angle the confluence rule limits (S5.4). The gap to the trunk, measured across the face from the
+  // trunk's own line, closes along a parabola that is slope 0 where it starts and `alpha` where it ends (so a feeder with
+  // gap to spare runs beside the trunk, keeping its distance, and turns in only as late as it needs); a feeder short of
+  // run for that is shut with a quadratic that leaves its source already leaning in (the gate in `joinRow` keeps that
+  // lean under START_DEG). Its wandering is damped toward the meeting. Past `rowJ` it carries on across the trunk's line
+  // at the same slope and straightens out: the join cuts it at the meeting (`turnOnto`, which turns its last widths onto
+  // the trunk's heading to make the V), so the tail is only the scaffold that lets the relaxing and the landing treat it
+  // like any stream, and the meeting keeps the heading it was aimed with.
+  const joiner = ({ row0, u0, rowJ, w0f, alpha, bank }) => {
     const wob = meander(range(0.02, 0.04), range(2, 4), range(0, Math.PI * 2), w0f)
+    const gap0 = place(row0, u0, false).x - trunkX[row0]
+    const sg = gap0 < 0 ? -1 : 1
+    const d0 = Math.abs(gap0)
+    const slope = closeSlope(trunkAt(rowJ), sg, alpha)
+    const run = rowJ - row0
+    const reach = slope * run
+    let closing
+    if (2 * d0 <= reach) {
+      // it runs beside the trunk at `d0`, or, if that is nearer than the banks would touch, at PARTING of the gap where they
+      // would (a source on the trunk's bank would never show a V), as far as the run has room for, easing out to it, then
+      // closes along the parabola
+      const room = (slope * (run - PARTING_ROWS)) / 2 // what a parabola can close in the rows left after parting
+      let dp = Math.max(d0, Math.min(PARTING * bank, room))
+      // the parting leaves the trunk no steeper than PARTING_TAN (the sstep's steepest part is 1.5 times its mean)
+      for (let it = 0; it < 4; it++) {
+        const cap = d0 + (PARTING_TAN * (rowJ - (2 * dp) / slope - row0) * rowH) / 1.5
+        if (dp > cap) dp = Math.max(d0, cap)
+      }
+      const lc = (2 * dp) / slope
+      const sc = rowJ - lc
+      closing = (s) => (s <= sc ? d0 + (dp - d0) * sstep((s - row0) / Math.max(1e-9, sc - row0)) : dp * (1 - ((s - sc) / lc) ** 2))
+    } else {
+      closing = (s) => {
+        const t = (s - row0) / run
+        return d0 - (2 * d0 - reach) * t + (d0 - reach) * t * t
+      }
+    }
     const pts = []
     for (let s = row0; s <= last; s++) {
-      let base
+      let d
       let gain
       if (s <= rowJ) {
-        const e = ease((s - row0) / (rowJ - row0))
-        base = u0 + (trunkU[s] - u0) * e
-        gain = 1 - 0.9 * e
+        d = closing(s)
+        gain = 1 - 0.9 * ease((s - row0) / run)
       } else {
-        const e = ease((s - rowJ) / Math.max(1, arcRow - rowJ))
-        base = trunkU[s] + side * off * e
+        const x = Math.min(1, (s - rowJ) / 3)
+        d = -slope * 3 * (x - x ** 3 + (x ** 4) / 2)
         gain = 0.1
       }
-      pts.push(place(s, base + gain * wob((s - row0) / Math.max(1, arcRow - row0)), false))
+      const u = (trunkX[s] + sg * d - rowCx(s)) / rowHalf(s) + gain * wob((s - row0) / Math.max(1, arcRow - row0))
+      pts.push(place(s, u, false))
     }
     return pts
   }
-  // A stream on its own: down the face, drawing a little toward the middle as it goes, to the pool.
+  // A stream on its own: down the face, drawing in toward the pool as it goes, to enter it at SOLO_ENTRY of the pool's half
+  // width from its middle, on the side it came from (so well apart from the trunk, which enters at the middle).
   const solo = ({ row0, u0, w0f }) => {
-    const uT = u0 * range(0.7, 0.9)
+    const x0 = place(row0, u0, false).x
+    const xT = pool.cx + (x0 < pool.cx ? -1 : 1) * range(SOLO_ENTRY[0], SOLO_ENTRY[1]) * pool.rx
     const wob = meander(range(0.02, 0.04), range(2, 4), range(0, Math.PI * 2), w0f)
     const pts = []
     for (let s = row0; s <= last; s++) {
-      const lean = (uT - u0) * ((s - row0) / Math.max(1, last - row0))
-      pts.push(place(s, u0 + lean + wob((s - row0) / Math.max(1, arcRow - row0)), false))
+      const t = clamp((s - row0) / Math.max(1, arcRow - row0), 0, 1)
+      // its wandering dies away toward the pool, so the entry is where it was aimed
+      pts.push(place(s, (x0 + (xT - x0) * t - rowCx(s)) / rowHalf(s) + (1 - 0.9 * ease(t)) * wob(t), false))
     }
     return pts
   }
-  // The trunk row a tributary joins at: a row whose place along the finished trunk falls inside its S5.3 window, at least
-  // JOIN_RUN_ROWS below its source, and below the crown-ramp rows (there the trunk's u maps to a different x than a face
-  // stream's u does). It must also leave room to get there: easing across `gap` px in n rows turns the line by about
-  // 2 gap / (n^2 rowH) radians a chord (two-parabola ease, half-row chords), so `gap <= EASE_ROOM n^2 rowH` bounds the
-  // turn. 0.09 would keep it under 10 degrees outright; 0.2 lets the relaxing take up the difference (the cone's flare
-  // does some of the sideways work too), and is where the tests hold: the curve comes within a third of a row of the trunk
-  // at the aim, at under 30 degrees to it. A smaller room sends the mid fissure and the rim of a low route to the pool.
-  // -1 when no row fits: the tributary then runs to the pool on its own, as S5.3 has it when the angle rule cannot be met.
-  const joinRow = (win, srcRow, srcX) => {
-    const fit = []
-    for (let s = Math.max(6, srcRow + JOIN_RUN_ROWS); s <= arcRow - 2; s++) {
+  // The trunk rows a tributary may join at, best first: a row whose place along the finished trunk falls inside its S5.3
+  // window, at least JOIN_RUN_ROWS below its source and no higher than JOIN_MIN_ROW. It must also leave room to get there: over n rows it closes `gap` px at up to `alpha`
+  // at the end (`k` px a row), which a parabola does in `2 gap / k` rows; a run shorter than that needs the quadratic, whose
+  // lean at the source is (2 gap - k n) / (n rowH), kept under START_DEG. A source on the trunk's bank (gap under PARTING
+  // of `bank`, the gap at which the banks touch) wants its parting room as well, PARTING_ROWS and the parabola from the
+  // parted gap. The turn lands a little below the aim (`lag`), so a row with that much window left comes first. In that
+  // order: with parting room and window to spare, without parting room (the two longest runs there are) and window to
+  // spare, then the same two where the window is short. The first is picked at random, the rest follow, longest runs first
+  // (at most four rows in all: the builder tries them in turn). Empty when no row fits: the tributary then runs to the
+  // pool on its own, as S5.3 has it when the angle rule cannot be met.
+  const joinRows = (win, srcRow, srcX, alpha, bank, wf) => {
+    const lag = (LAG_WIDTHS * wf) / trunkLen
+    const tiers = [[], [], [], []]
+    const sg = srcX < trunkX[srcRow] ? -1 : 1
+    const gap = Math.abs(srcX - trunkX[srcRow])
+    const parted = Math.max(gap, PARTING * bank)
+    for (let s = Math.max(JOIN_MIN_ROW, srcRow + JOIN_RUN_ROWS); s <= arcRow - 2; s++) {
       const at = trunkAt(s)
       if (at < win[0] || at > win[1]) continue
-      const gap = Math.abs(srcX - pointAlong(flows[0].pts, at).x)
-      if (gap <= EASE_ROOM * (s - srcRow) ** 2 * rowH) fit.push(s)
+      const k = closeSlope(at, sg, alpha)
+      const n = s - srcRow
+      if (2 * gap > k * n) {
+        // the quadratic: leaning in at the source, easing to `alpha` at the aim; its lean must be under START_DEG, and
+        // where the source is within the stretch the drawn feeder is held to (the last DRAWN_WIDTHS widths) that too
+        const a = trunkHeading(at)
+        const lean = 2 * gap - k * n
+        const tw = Math.max(0, 1 - ((DRAWN_WIDTHS + 1) * wf) / (n * rowH))
+        const rad = Math.PI / 180
+        if (
+          closeAngle(a, sg, lean / (n * rowH)) > START_DEG * rad ||
+          closeAngle(a, sg, Math.abs(-lean + 2 * (gap - k * n) * tw) / (n * rowH)) > DRAWN_DEG * rad
+        )
+          continue
+      }
+      const roomy = n >= PARTING_ROWS + (2 * parted) / k
+      tiers[(at <= win[1] - lag ? 0 : 2) + (roomy ? 0 : 1)].push(s)
     }
-    return fit.length ? fit[Math.floor(rng() * fit.length)] : -1
+    const best = tiers.findIndex((t) => t.length)
+    if (best < 0) return []
+    const pool = best % 2 ? tiers[best].slice(-2) : tiers[best]
+    const first = pool[Math.floor(rng() * pool.length)]
+    const rest = []
+    tiers.forEach((t, ti) => {
+      for (const s of ti % 2 ? t.slice(-2).reverse() : t.slice().reverse()) if (s !== first) rest.push(s)
+    })
+    return [first, ...rest].slice(0, 4)
   }
-  const feeder = ({ role, kind, row0, u0, side, off, w0f, win, heat, sourceIndex }) => {
-    const rowJ = win ? joinRow(win, row0, place(row0, u0, false).x) : -1
-    if (rowJ < 0) {
-      finish(solo({ row0, u0, w0f }), { w0f, kind, role, head: false, heat, sourceIndex, aim: null })
-      return
+  // The feeders that join, in the order they were laid: `{ feeder (flow index), at, wf, angle }`. Sorted and filled out
+  // (wt, wj) once every feeder is down, because each join's trunk width counts the joins above it.
+  const pending = []
+  const feeder = ({ role, kind, row0, u0, w0f, win, heat, sourceIndex }) => {
+    const alone = () => finish(solo({ row0, u0, w0f }), { w0f, kind, role, head: false, heat, sourceIndex, aim: null })
+    const alpha = win ? (range(ARRIVE_DEG[0], ARRIVE_DEG[1]) * Math.PI) / 180 : 0
+    // it joins as wide as it has grown by the join: 15% over its length, and no flare (it never reaches the pool); the
+    // banks touch when the lines are half the two widths apart (the trunk's own growth, the joins above it left out)
+    const w0px = w0f * W0
+    const wf = w0px * (1 + GROWTH)
+    const bank = (baseWidth(clamp(win ? (win[0] + win[1]) / 2 : 0, 0, 1)) + wf) / 2
+    const tries = win ? joinRows(win, row0, place(row0, u0, false).x, alpha, bank, wf) : []
+    let why = 'no trunk row in its window fits'
+    for (const rowJ of tries) {
+      const aim = { row: rowJ, at: trunkAt(rowJ) }
+      const flow = finish(joiner({ row0, u0, rowJ, w0f, alpha, bank }), { w0f, kind, role, head: false, heat, sourceIndex, aim })
+      let turned = turnOnto(flow.pts, flows[0].pts, aim.at, wf)
+      // it lands where its turn meets the trunk, a little below the aim; that is the join, and it stays inside the window
+      if (turned.pts && (turned.at < win[0] || turned.at > win[1])) turned = { why: 'its turn lands outside the window' }
+      // and what is drawn, not only the aim, keeps to the rule over its last DRAWN_WIDTHS widths
+      if (turned.pts && drawnAngleDeg(turned.pts, flows[0].pts, DRAWN_WIDTHS * wf) > CONFLUENCE_MAX_DEG - 0.5) {
+        turned = { why: 'it comes in steeper than ' + CONFLUENCE_MAX_DEG + ' degrees above its turn' }
+      }
+      if (turned.pts) {
+        flow.pts = turned.pts
+        flow.widthAt = (s) => w0px * (1 + GROWTH * clamp(s, 0, 1))
+        flow.drain = 0
+        flow.drainAt = turned.at
+        flow.aim = { row: clamp(Math.round((pointAlong(flows[0].pts, turned.at).y - yTop) / rowH), 0, last), at: turned.at }
+        pending.push({ feeder: flows.length - 1, at: turned.at, wf, angle: turned.angle })
+        return
+      }
+      flows.pop()
+      why = turned.why
     }
-    finish(joiner({ row0, u0, rowJ, side, off, w0f }), { w0f, kind, role, head: false, heat, sourceIndex, aim: { row: rowJ, at: trunkAt(rowJ) } })
+    // S5.3's fallback: it cannot meet the trunk under the rule, so it runs to the pool on its own, traced afresh (its first
+    // course was aimed at the trunk and would cross it); a stream with no window (the lower fissure) was never to join
+    if (import.meta.env?.DEV && win) console.debug('lavaNetwork: the', role, 'stream drains to the pool:', why)
+    alone()
   }
 
   // ---- the rim overflow (desktop): over the lip on the far side of the peak from the breach, a crater width or so from it
   if (!phone) {
     const side = -breachSide
-    feeder({ role: 'rim', kind: 'rim', row0: 0, u0: side * U_MAX, side, off: range(0.05, 0.1), w0f: 0.4, win: JOIN_AT.rim, heat: 0.8, sourceIndex: -1 })
+    feeder({ role: 'rim', kind: 'rim', row0: 0, u0: side * U_MAX, w0f: 0.4, win: JOIN_AT.rim, heat: 0.8, sourceIndex: -1 })
   }
 
   // ---- the flank fissures: short cracks lit at their lower end, each the source of a stream
@@ -501,7 +864,7 @@ export function buildNetwork(mountain, opts) {
   const rTop = Math.min(Math.max(from + 3, 6), rBot)
   const fissures = []
   let prevRow = rTop - 1
-  const fissure = ({ role, side, uAbs, t, win, off, w0f }) => {
+  const fissure = ({ role, side, uAbs, t, win, w0f }) => {
     const rowsTall = 3 + Math.floor(rng() * 3)
     const row0 = Math.max(prevRow + 1, Math.round(rTop + t * (rBot - rTop)))
     // on a low route the band is used up: the lower fissures drop out rather than stack two on one row
@@ -520,18 +883,45 @@ export function buildNetwork(mountain, opts) {
     if (!topOk(tilt)) tilt = topOk(-tilt) ? -tilt : 0
     const sourceIndex = fissures.length
     fissures.push({ x: lower.x, y: lower.y, rows: rowsTall, tilt })
-    feeder({ role, kind: 'fissure', row0, u0, side, off, w0f, win, heat: range(0.7, 0.85), sourceIndex })
+    feeder({ role, kind: 'fissure', row0, u0, w0f, win, heat: range(0.7, 0.85), sourceIndex })
   }
 
   if (phone) {
-    // one fissure, mid face, on the side the page shows
-    fissure({ role: 'phone-fissure', side: towardFace, uAbs: range(0.35, 0.55), t: range(0.35, 0.6), win: JOIN_AT.mid, off: range(0.05, 0.1), w0f: 0.5 })
+    // one fissure, on the side the page shows, high enough on the face to have the run its join needs
+    fissure({ role: 'phone-fissure', side: towardFace, uAbs: range(0.35, 0.55), t: range(0.1, 0.35), win: PHONE_JOIN_AT, w0f: 0.5 })
   } else {
     // upper face on the breach side, mid face on the far side, lower on the far flank
-    fissure({ role: 'upper', side: breachSide, uAbs: range(0.35, 0.55), t: range(0.05, 0.25), win: JOIN_AT.upper, off: range(0.05, 0.1), w0f: 0.35 })
-    fissure({ role: 'mid', side: -breachSide, uAbs: range(0.3, 0.5), t: range(0.35, 0.55), win: JOIN_AT.mid, off: range(0.05, 0.1), w0f: 0.35 })
-    fissure({ role: 'lower', side: -breachSide, uAbs: range(0.58, 0.74), t: range(0.8, 1), win: null, off: 0, w0f: 0.35 })
+    fissure({ role: 'upper', side: breachSide, uAbs: range(0.35, 0.55), t: range(0.05, 0.25), win: JOIN_AT.upper, w0f: 0.35 })
+    fissure({ role: 'mid', side: -breachSide, uAbs: range(0.3, 0.5), t: range(0.35, 0.55), win: JOIN_AT.mid, w0f: 0.35 })
+    fissure({ role: 'lower', side: -breachSide, uAbs: range(0.58, 0.74), t: range(0.8, 1), win: null, w0f: 0.35 })
   }
 
-  return { flows, pool, fissures, joins: [] }
+  // ---- the confluences: each join widens the trunk below it, one after another down the trunk
+  const joins = pending
+    .slice()
+    .sort((a, b) => a.at - b.at)
+    .map((j) => ({ feeder: j.feeder, trunk: 0, at: j.at, wf: j.wf, wt: 0, wj: 0, angle: j.angle }))
+  const wScale = 1 / (polylineLength(flows[0].pts) || 1)
+  const steps = []
+  let settled = 1 // what the joins above have made of the trunk's width, once they have settled
+  for (const j of joins) {
+    j.wt = baseWidth(j.at) * settled
+    j.wj = joinedWidth(j.wt, j.wf)
+    steps.push({ wt: j.wt, step: joinWidthProfile(j.wt, j.wf, j.at, wScale) })
+    settled *= j.wj / j.wt
+  }
+  if (joins.length) {
+    flows[0].widthAt = (s) => {
+      const t = clamp(s, 0, 1)
+      let wd = baseWidth(t)
+      for (const st of steps) wd *= st.step(t) / st.wt
+      return wd
+    }
+  }
+  // a stream into the pool says where it enters across its arc, -1 to 1 (0 under the trunk's end)
+  for (const f of flows) {
+    if (f.drain === -1) f.drainAt = clamp((f.pts[f.pts.length - 1].x - pool.cx) / pool.rx, -1, 1)
+  }
+
+  return { flows, pool, fissures, joins }
 }

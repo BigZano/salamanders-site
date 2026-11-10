@@ -1,5 +1,5 @@
-import { describe, test, expect, vi } from 'vitest'
-import { buildNetwork, joinedWidth, resample, tangentAt, CONFLUENCE_MAX_DEG } from './lavaNetwork'
+import { describe, test, expect, vi, beforeEach, afterEach } from 'vitest'
+import { buildNetwork, joinedWidth, joinWidthProfile, approachAngleDeg, resample, tangentAt, CONFLUENCE_MAX_DEG } from './lavaNetwork'
 
 function mulberry32(seed) {
   let a = seed >>> 0
@@ -17,13 +17,13 @@ function mulberry32(seed) {
  * vent in the breach just off the peak's centre. `terraces` steps the flanks out as the real ones do. `jitter` moves
  * each flank's y, left and right independently, by up to that many px (as buildMountain does: up to +-20 px on rows
  * about 26 px apart), every row but the shared rim; unlike the real thing it does not taper toward the rim, so it is the
- * harsher case.
+ * harsher case. `halfBase` sets the cone's half base outright (by default the wider of the viewport's share and the slope's).
  */
-function cone({ w = 1600, rows = 60, height = 640, peakY = 240, peakFrac = 0.42, craterHalf = 40, ventSide = 1, terraces = false, jitter = 0 } = {}) {
+function cone({ w = 1600, rows = 60, height = 640, peakY = 240, peakFrac = 0.42, craterHalf = 40, ventSide = 1, terraces = false, jitter = 0, halfBase: base } = {}) {
   const jr = mulberry32(99)
   const jit = (i) => (i > 0 ? (jr() * 2 - 1) * jitter : 0)
   const peakX = w * peakFrac
-  const halfBase = Math.max((w * 0.55) / 2, height * 0.6)
+  const halfBase = base ?? Math.max((w * 0.55) / 2, height * 0.6)
   const left = []
   const right = []
   for (let i = 0; i < rows; i++) {
@@ -52,6 +52,14 @@ function cone({ w = 1600, rows = 60, height = 640, peakY = 240, peakFrac = 0.42,
   }
 }
 
+// the builder says (console.debug, in dev) when a stream falls back to the pool; the tests that do not care keep it quiet
+beforeEach(() => {
+  vi.spyOn(console, 'debug').mockImplementation(() => {})
+})
+afterEach(() => {
+  vi.restoreAllMocks()
+})
+
 const opts = (seed, extra = {}) => ({ w: 1600, h: 1000, phone: false, rng: mulberry32(seed), ...extra })
 const kinds = (flows) => flows.map((f) => f.kind)
 const count = (flows, kind) => flows.filter((f) => f.kind === kind).length
@@ -62,6 +70,41 @@ const rowHeight = (m) => {
 }
 const length = (pts) => pts.slice(1).reduce((a, p, i) => a + Math.hypot(p.x - pts[i].x, p.y - pts[i].y), 0)
 const seeds = Array.from({ length: 25 }, (_, i) => i + 1)
+// the point `at` (0 to 1, by point index) along a polyline
+const along = (pts, at) => {
+  const f = Math.max(0, Math.min(1, at)) * (pts.length - 1)
+  const i = Math.min(pts.length - 2, Math.floor(f))
+  const r = f - i
+  return { x: pts[i].x + (pts[i + 1].x - pts[i].x) * r, y: pts[i].y + (pts[i + 1].y - pts[i].y) * r }
+}
+// the nearest distance from a point to a polyline
+const distTo = (pts, q) => {
+  let best = Infinity
+  for (let i = 1; i < pts.length; i++) {
+    const a = pts[i - 1]
+    const b = pts[i]
+    const l2 = (b.x - a.x) ** 2 + (b.y - a.y) ** 2
+    const r = l2 ? Math.max(0, Math.min(1, ((q.x - a.x) * (b.x - a.x) + (q.y - a.y) * (b.y - a.y)) / l2)) : 0
+    best = Math.min(best, Math.hypot(q.x - (a.x + (b.x - a.x) * r), q.y - (a.y + (b.y - a.y) * r)))
+  }
+  return best
+}
+// where a stream ends: a stream into the pool on its arc, with `drainAt` the entry across it (-1 to 1); one that joins on
+// its trunk's centreline at `drainAt`
+function expectEnd(f, flows, pool, withinPool = true) {
+  const end = f.pts[f.pts.length - 1]
+  if (f.drain === -1) {
+    expect(Math.abs(end.y - pool.arcY(end.x))).toBeLessThan(1e-3)
+    if (withinPool) expect(Math.abs(end.x - pool.cx)).toBeLessThan(pool.rx)
+    expect(f.drainAt).toBeGreaterThanOrEqual(-1)
+    expect(f.drainAt).toBeLessThanOrEqual(1)
+    expect(f.drainAt).toBeCloseTo(Math.max(-1, Math.min(1, (end.x - pool.cx) / pool.rx)), 9)
+  } else {
+    expect(flows[f.drain].role).toBe('trunk')
+    const t = along(flows[f.drain].pts, f.drainAt)
+    expect(Math.hypot(end.x - t.x, end.y - t.y)).toBeLessThan(1e-6)
+  }
+}
 
 describe('buildNetwork sources', () => {
   test('desktop has a trunk, one rim overflow and three fissures', () => {
@@ -73,7 +116,7 @@ describe('buildNetwork sources', () => {
     expect(flows.filter((f) => f.head)).toHaveLength(1)
     expect(flows.find((f) => f.head).kind).toBe('trunk')
     expect(fissures).toHaveLength(3)
-    expect(joins).toEqual([])
+    expect(Array.isArray(joins)).toBe(true)
   })
 
   test('phone has a trunk and one fissure', () => {
@@ -94,8 +137,10 @@ describe('buildNetwork sources', () => {
       expect(typeof f.widthAt).toBe('function')
       expect(f.parent).toBe(-1)
       expect(f.attach).toBe(0)
-      expect(f.drain).toBe(-1)
-      expect(f.drainAt).toBe(1)
+      // into the pool (-1, `drainAt` the entry across its arc) or onto the trunk (0, `drainAt` the place along it)
+      expect([-1, 0]).toContain(f.drain)
+      if (f.drain === -1) expect(Math.abs(f.drainAt)).toBeLessThanOrEqual(1)
+      else expect(f.drainAt).toBeGreaterThan(0)
     }
     // fissure flows point at their crack; the others at none
     flows.forEach((f) => {
@@ -182,11 +227,13 @@ describe('buildNetwork sources', () => {
 })
 
 describe('buildNetwork pool', () => {
-  test('an ellipse on the foreground ridge line, 0.45 of the base wide and a quarter of that tall', () => {
+  test('an ellipse on the foreground ridge line, 0.45 of the base wide (rx 0.225) and a quarter of that tall', () => {
     const m = cone()
     const { pool } = buildNetwork(m, opts(7))
     const base = m.right[59].x - m.left[59].x
-    expect(pool.rx).toBeCloseTo(0.45 * base, 6)
+    expect(pool.rx).toBeCloseTo(0.225 * base, 6) // S5.6: the width is 0.4 to 0.5 of the base
+    expect(2 * pool.rx).toBeGreaterThanOrEqual(0.4 * base)
+    expect(2 * pool.rx).toBeLessThanOrEqual(0.5 * base)
     expect(pool.ry).toBeCloseTo(pool.rx / 4, 6)
     expect(pool.cy).toBeCloseTo(m.left[59].y - pool.ry * 0.2, 6)
     expect(pool.arcTop).toBeCloseTo(pool.cy - pool.ry, 6)
@@ -202,18 +249,19 @@ describe('buildNetwork pool', () => {
     }
   })
 
-  test('every stream ends on the pool arc', () => {
+  test('every stream ends on the pool arc or on the centreline of its drain at drainAt', () => {
     for (const phone of [false, true]) {
       for (const seed of seeds) {
         const { flows, pool } = buildNetwork(cone(), opts(seed, { phone }))
         for (const f of flows) {
-          const end = f.pts[f.pts.length - 1]
-          expect(Math.abs(end.y - pool.arcY(end.x))).toBeLessThan(1e-3)
-          expect(Math.abs(end.x - pool.cx)).toBeLessThan(pool.rx)
-          expect(f.drain).toBe(-1)
-          // and never runs through it first
+          expectEnd(f, flows, pool)
+          // and never runs through the pool first
           for (const p of f.pts) expect(p.y).toBeLessThanOrEqual(pool.arcY(p.x) + 1)
         }
+        // the trunk and the lower fissure never join
+        expect(flows[0].drain).toBe(-1)
+        const lower = flows.find((f) => f.role === 'lower')
+        if (lower) expect(lower.drain).toBe(-1)
       }
     }
   })
@@ -223,10 +271,7 @@ describe('buildNetwork pool', () => {
       for (const phone of [false, true]) {
         const { flows, pool } = buildNetwork(m, { w: 390, h: 844, phone, rng: mulberry32(3) })
         expect(flows.length).toBe(phone ? 2 : 5)
-        for (const f of flows) {
-          const end = f.pts[f.pts.length - 1]
-          expect(Math.abs(end.y - pool.arcY(end.x))).toBeLessThan(1e-3)
-        }
+        for (const f of flows) expectEnd(f, flows, pool)
       }
     }
   })
@@ -241,11 +286,10 @@ describe('buildNetwork pool', () => {
       expect(pool.arcTop).toBeGreaterThan(h - pool.ry)
       expect(pool.cy).toBeCloseTo(h + 0.4 * pool.ry, 6)
       expect(pool.arcTop).toBeCloseTo(h - 0.6 * pool.ry, 6)
-      // the streams still land on it, inside the cone
+      // the streams still land on it (or on the trunk above it), inside the cone
       for (const f of flows) {
-        const end = f.pts[f.pts.length - 1]
-        expect(Math.abs(end.y - pool.arcY(end.x))).toBeLessThan(1e-3)
-        expect(end.y).toBeLessThan(h)
+        expectEnd(f, flows, pool)
+        expect(f.pts[f.pts.length - 1].y).toBeLessThan(h)
       }
     }
   })
@@ -259,12 +303,34 @@ describe('buildNetwork pool', () => {
     expect(a.cy).toBeCloseTo(foot - a.ry * 0.2, 6)
   })
 
+  test('every stream into the pool enters inside its arc; the lower fissure enters well away from the trunk', () => {
+    // unclamped: the entry (end x - cx) / rx is what `drainAt` says, and it never needs clamping to -1..1
+    const cases = [cone(), cone({ rows: 27, jitter: 20 }), cone({ rows: 27, terraces: true, jitter: 20 }), cone({ rows: 27, height: 276, jitter: 20 })]
+    for (const m of cases) {
+      for (let seed = 1; seed <= 100; seed++) {
+        const { flows, pool } = buildNetwork(m, opts(seed))
+        for (const f of flows) {
+          if (f.drain !== -1) continue
+          const e = (f.pts[f.pts.length - 1].x - pool.cx) / pool.rx
+          expect(Math.abs(e)).toBeLessThanOrEqual(1)
+          expect(f.drainAt).toBeCloseTo(e, 9)
+          if (f.role === 'trunk') expect(Math.abs(e)).toBeLessThan(0.05)
+          // the others (the lower fissure, and any tributary that drains alone) come in 0.4 to 0.9 out, never at the trunk's entry
+          else {
+            expect(Math.abs(e)).toBeGreaterThanOrEqual(0.4)
+            expect(Math.abs(e)).toBeLessThanOrEqual(0.9)
+          }
+        }
+      }
+    }
+  })
+
   test('a phone pool whose cone stops well short of the screen is lifted onto the cone', () => {
     // the foot is far above h: the pool top must still be reachable by the streams
     const m = cone({ w: 390, rows: 27, height: 300, peakY: 100, craterHalf: 18 })
     const { pool, flows } = buildNetwork(m, { w: 390, h: 844, phone: true, rng: mulberry32(3) })
     expect(pool.arcTop).toBeLessThan(400)
-    for (const f of flows) expect(Math.abs(f.pts[f.pts.length - 1].y - pool.arcY(f.pts[f.pts.length - 1].x))).toBeLessThan(1e-3)
+    for (const f of flows) expectEnd(f, flows, pool)
   })
 })
 
@@ -282,6 +348,7 @@ describe('buildNetwork streams', () => {
     expect(pa.flows.map((f) => f.pts)).toEqual(pb.flows.map((f) => f.pts))
     expect(pa.pool.cy).toBe(pb.pool.cy)
     expect(a.fissures).toEqual(b.fissures)
+    expect(a.joins).toEqual(b.joins)
     expect(a.pool.cx).toBe(b.pool.cx)
     expect(a.flows.map((f) => f.pts)).not.toEqual(c.flows.map((f) => f.pts))
   })
@@ -390,7 +457,7 @@ describe('buildNetwork streams', () => {
   })
 
   test('a cone with a one-row band keeps one fissure, not three stacked on a row', () => {
-    for (const [rows, height] of [[20, 276], [27, 200], [30, 200]]) {
+    for (const [rows, height] of [[16, 200], [20, 160], [27, 100], [30, 100]]) {
       const { fissures, flows } = buildNetwork(cone({ rows, height }), opts(7))
       expect(fissures).toHaveLength(1)
       expect(flows.map((f) => f.role)).toEqual(['trunk', 'rim', 'upper'])
@@ -425,7 +492,7 @@ describe('buildNetwork streams', () => {
 
 describe('roles and aims', () => {
   // the S5.3 windows: where along the trunk each tributary is to join
-  const windows = { rim: [0.2, 0.35], upper: [0.45, 0.6], mid: [0.65, 0.8], 'phone-fissure': [0.65, 0.8] }
+  const windows = { rim: [0.2, 0.35], upper: [0.45, 0.6], mid: [0.65, 0.8], 'phone-fissure': [0.66, 0.85] }
   const mountains = [cone(), cone({ jitter: 20 }), cone({ rows: 27, jitter: 20 }), cone({ rows: 27, terraces: true, jitter: 20 }), cone({ rows: 30 })]
 
   test('every flow names its role', () => {
@@ -469,7 +536,7 @@ describe('roles and aims', () => {
     }
   })
 
-  test('the feeder comes onto the trunk where it was aimed, at a shallow angle', () => {
+  test('the feeder comes onto the trunk where it was aimed, at under 30 degrees to it', () => {
     // distance from a point to a polyline, and the index of the nearest vertex
     const nearest = (pts, q) => {
       let best = Infinity
@@ -506,7 +573,7 @@ describe('roles and aims', () => {
     }
   })
 
-  test('on a real-height cone the tributaries join: the mid fissure on at least 90% of seeds, the rim on a low route too', () => {
+  test('on a real-height cone the tributaries join: the mid fissure on at least 90% of seeds, the upper fissure on a low route too', () => {
     const rate = (m, role) => {
       let joined = 0
       let n = 0
@@ -521,8 +588,10 @@ describe('roles and aims', () => {
     // 27 rows, as buildMountain makes them (flank y jittered), plain and terraced
     expect(rate(cone({ rows: 27, jitter: 20 }), 'mid')).toBeGreaterThanOrEqual(0.9)
     expect(rate(cone({ rows: 27, terraces: true, jitter: 20 }), 'mid')).toBeGreaterThanOrEqual(0.9)
-    // /planner stands the cone 276 px high
-    expect(rate(cone({ rows: 27, height: 276, jitter: 20 }), 'rim')).toBeGreaterThanOrEqual(0.9)
+    // /planner stands the cone 276 px high: the V's turn needs room the short trunk has less of; the upper fissure joins on
+    // nearly every seed, the rim and the mid fissure on about 4 in 10
+    expect(rate(cone({ rows: 27, height: 276, jitter: 20 }), 'upper')).toBeGreaterThanOrEqual(0.9)
+    expect(rate(cone({ rows: 27, height: 276, jitter: 20 }), 'rim')).toBeGreaterThanOrEqual(0.3)
     // the rim and the upper fissure join on the plain 27-row cone too
     expect(rate(cone({ rows: 27, jitter: 20 }), 'rim')).toBeGreaterThanOrEqual(0.9)
     expect(rate(cone({ rows: 27, jitter: 20 }), 'upper')).toBeGreaterThanOrEqual(0.9)
@@ -533,7 +602,604 @@ describe('roles and aims', () => {
     const m = cone({ rows: 14, height: 200 })
     const { flows, pool } = buildNetwork(m, opts(7))
     expect(flows.some((f) => f.role !== 'trunk' && f.aim === null)).toBe(true)
-    for (const f of flows) expect(Math.abs(f.pts[f.pts.length - 1].y - pool.arcY(f.pts[f.pts.length - 1].x))).toBeLessThan(1e-3)
+    for (const f of flows) expectEnd(f, flows, pool)
+  })
+})
+
+describe('confluences', () => {
+  const mountains = [
+    ['the 60-row cone', cone()],
+    ['27 rows, jittered', cone({ rows: 27, jitter: 20 })],
+    ['27 rows, terraced', cone({ rows: 27, terraces: true, jitter: 20 })],
+    ['276 px high', cone({ rows: 27, height: 276, jitter: 20 })],
+  ]
+  // desktop and phone, the full cone, the 27 rows buildMountain makes (plain and terraced) and the 276 px /planner route
+  const angleCases = [
+    ['desktop, 60 rows', cone(), false],
+    ['desktop, 27 rows jittered', cone({ rows: 27, jitter: 20 }), false],
+    ['desktop, 27 rows terraced', cone({ rows: 27, terraces: true, jitter: 20 }), false],
+    ['desktop, 276 px high', cone({ rows: 27, height: 276, jitter: 20 }), false],
+    ['phone, 60 rows', cone(), true],
+    ['phone, 27 rows jittered', cone({ rows: 27, jitter: 20 }), true],
+    ['phone, 27 rows terraced', cone({ rows: 27, terraces: true, jitter: 20 }), true],
+    ['phone, 276 px high', cone({ rows: 27, height: 276, jitter: 20 }), true],
+  ]
+  const joinOf = (net, role) => net.joins.find((j) => net.flows[j.feeder].role === role)
+  // where the trunk's pool flare begins, as a fraction of its length, and its growth at s: 15% by there
+  const sfOf = (m, flows) => 1 - (2 * rowHeight(m)) / length(flows[0].pts)
+  const growth = (s, sf) => 1 + 0.15 * Math.min(1, s / sf)
+
+  test('rim joins the trunk between 20% and 35%', () => {
+    for (const [name, m] of mountains) {
+      let joined = 0
+      for (const seed of seeds) {
+        const j = joinOf(buildNetwork(m, opts(seed)), 'rim')
+        if (!j) continue
+        joined++
+        expect(j.at, name).toBeGreaterThanOrEqual(0.2)
+        expect(j.at, name).toBeLessThanOrEqual(0.35)
+      }
+      expect(joined, name).toBeGreaterThan(0)
+    }
+  })
+
+  test('upper fissure joins mid, mid fissure joins low or drains to the pool', () => {
+    for (const [name, m] of mountains) {
+      for (const seed of seeds) {
+        const net = buildNetwork(m, opts(seed))
+        const up = joinOf(net, 'upper')
+        if (up) {
+          expect(up.at, name).toBeGreaterThanOrEqual(0.45)
+          expect(up.at, name).toBeLessThanOrEqual(0.6)
+        }
+        const mid = joinOf(net, 'mid')
+        const midFlow = net.flows.find((f) => f.role === 'mid')
+        if (mid) {
+          expect(mid.at, name).toBeGreaterThanOrEqual(0.65)
+          expect(mid.at, name).toBeLessThanOrEqual(0.8)
+        } else if (midFlow) {
+          expect(midFlow.drain, name).toBe(-1)
+        }
+      }
+    }
+    // on the full cone both of them get there
+    for (const seed of seeds) {
+      const net = buildNetwork(cone(), opts(seed))
+      expect(joinOf(net, 'upper')).toBeDefined()
+      expect(joinOf(net, 'mid')).toBeDefined()
+    }
+  })
+
+  test('lower fissure drains to the pool', () => {
+    for (const [name, m] of mountains) {
+      for (const seed of seeds) {
+        const net = buildNetwork(m, opts(seed))
+        const i = net.flows.findIndex((f) => f.role === 'lower')
+        if (i < 0) continue
+        expect(net.flows[i].drain, name).toBe(-1)
+        expect(net.flows[i].aim, name).toBeNull()
+        expect(
+          net.joins.some((j) => j.feeder === i),
+          name,
+        ).toBe(false)
+      }
+    }
+  })
+
+  test('every join approaches at 30 degrees or less', () => {
+    let n = 0
+    for (const [name, m] of mountains) {
+      for (const phone of [false, true]) {
+        for (const seed of seeds) {
+          const { flows, joins } = buildNetwork(m, opts(seed, { phone }))
+          for (const j of joins) {
+            n++
+            const f = flows[j.feeder]
+            // the angle it came in at, before the turn, and the angle it has at its end
+            expect(j.angle, name).toBeLessThanOrEqual(CONFLUENCE_MAX_DEG)
+            expect(approachAngleDeg(f.pts, flows[0].pts, j.at), name).toBeLessThanOrEqual(CONFLUENCE_MAX_DEG)
+          }
+        }
+      }
+    }
+    expect(n).toBeGreaterThan(100)
+  })
+
+  test('a feeder ends exactly on its trunk centreline, on a full cone, a phone and a low route', () => {
+    let n = 0
+    for (const [name, m] of mountains) {
+      for (const phone of [false, true]) {
+        for (const seed of seeds) {
+          const { flows, joins } = buildNetwork(m, opts(seed, { phone }))
+          const trunk = flows[0]
+          for (const j of joins) {
+            n++
+            const f = flows[j.feeder]
+            expect(f.drain, name).toBe(0)
+            expect(j.trunk, name).toBe(0)
+            expect(f.drainAt, name).toBe(j.at)
+            // the end is on the trunk's centreline, as a fraction of the trunk's width there
+            const end = f.pts[f.pts.length - 1]
+            const at = along(trunk.pts, j.at)
+            expect(Math.hypot(end.x - at.x, end.y - at.y), name).toBeLessThan(1e-6)
+            expect(distTo(trunk.pts, end), name).toBeLessThan(1e-6)
+            // and it is cut there: nothing of it runs on below the join
+            for (const p of f.pts) expect(p.y, name).toBeLessThanOrEqual(at.y + 1e-6)
+          }
+        }
+      }
+    }
+    expect(n).toBeGreaterThan(200)
+  })
+
+  test('the last three feeder widths turn it onto the trunk heading', () => {
+    let eased = 0
+    const deg = (a, b) => (Math.acos(Math.max(-1, Math.min(1, a.x * b.x + a.y * b.y))) * 180) / Math.PI
+    for (const [name, m] of mountains) {
+      for (const phone of [false, true]) {
+        for (const seed of seeds) {
+          const { flows, joins } = buildNetwork(m, opts(seed, { phone }))
+          for (const j of joins) {
+            const f = flows[j.feeder]
+            const tb = tangentAt(flows[0].pts, Math.round(j.at * (flows[0].pts.length - 1)))
+            // the heading at its end lies along the trunk's, inside the 12 degrees a chord may turn
+            const last = f.pts.length - 1
+            const end = { x: f.pts[last].x - f.pts[last - 1].x, y: f.pts[last].y - f.pts[last - 1].y }
+            const len = Math.hypot(end.x, end.y)
+            expect(deg({ x: end.x / len, y: end.y / len }, tb), name).toBeLessThanOrEqual(12)
+            // an approach that was well off the trunk's heading was turned toward it
+            if (j.angle > 12) {
+              eased++
+              expect(approachAngleDeg(f.pts, flows[0].pts, j.at), name).toBeLessThan(j.angle)
+            }
+          }
+        }
+      }
+    }
+    expect(eased).toBeGreaterThan(0)
+  })
+
+  test('the joins are recorded in order down the trunk, with the widths the rule gives', () => {
+    for (const [name, m] of mountains) {
+      for (const seed of seeds) {
+        const { flows, joins } = buildNetwork(m, opts(seed))
+        expect(joins.length, name).toBe(flows.filter((f) => f.drain === 0).length)
+        const sf = sfOf(m, flows)
+        const seen = new Set()
+        let settled = 1
+        let prev = 0
+        for (const j of joins) {
+          expect(j.at, name).toBeGreaterThan(prev)
+          prev = j.at
+          expect(seen.has(j.feeder), name).toBe(false)
+          seen.add(j.feeder)
+          expect(flows[j.feeder].drain, name).toBe(0)
+          expect(j.wf, name).toBeCloseTo(flows[j.feeder].widthAt(1), 9)
+          expect(j.wj, name).toBeCloseTo(joinedWidth(j.wt, j.wf), 9)
+          // the trunk above a join is what its own growth and the joins above it have made of it
+          expect(j.wt, name).toBeCloseTo(flows[0].widthAt(0) * growth(j.at, sf) * settled, 6)
+          settled *= j.wj / j.wt
+        }
+      }
+    }
+  })
+
+  test('trunk width after a join follows joinedWidth within 1%', () => {
+    // read once the bulge has settled (one width to its peak and three more to settle), where that comes before the next
+    // join's swell and before the pool flare begins: the joins above have settled by then, and the ones below have not begun
+    let checked = 0
+    for (const [name, m] of mountains) {
+      for (const phone of [false, true]) {
+        for (const seed of seeds) {
+          const net = buildNetwork(m, opts(seed, { phone }))
+          const trunk = net.flows[0]
+          const L = length(trunk.pts)
+          const sf = sfOf(m, net.flows)
+          net.joins.forEach((j, k) => {
+            const s = j.at + (4.25 * j.wj) / L
+            const next = net.joins[k + 1]
+            if (s >= sf || (next && s >= next.at - next.wj / L)) return
+            checked++
+            const want = joinedWidth(j.wt, j.wf) * (growth(s, sf) / growth(j.at, sf))
+            expect(Math.abs(trunk.widthAt(s) / want - 1), name).toBeLessThan(0.01)
+          })
+        }
+      }
+    }
+    expect(checked).toBeGreaterThan(30)
+  })
+
+  test('joinWidthProfile: wt above, 1.1 of the joined width one width below the join, settling to it over three more', () => {
+    const wt = 20
+    const wf = 8
+    const sj = 0.5
+    const wScale = 0.002 // a 500 px trunk
+    const f = joinWidthProfile(wt, wf, sj, wScale)
+    const wj = joinedWidth(wt, wf)
+    const one = wj * wScale
+    expect(f(0)).toBe(wt)
+    expect(f(sj - one - 1e-9)).toBe(wt)
+    expect(f(sj + one)).toBeCloseTo(1.1 * wj, 9)
+    expect(f(sj + 4 * one)).toBeCloseTo(wj, 9)
+    expect(f(1)).toBeCloseTo(wj, 9)
+    // it rises from one width above the join to the peak and settles from there, both without a step
+    let peakAt = 0
+    let peak = 0
+    let prev = wt
+    for (let k = 0; k <= 2000; k++) {
+      const s = k / 2000
+      const w = f(s)
+      if (s > sj - one && s <= sj + one) expect(w).toBeGreaterThanOrEqual(prev - 1e-9)
+      if (s > sj + one + 1 / 2000 && s <= sj + 4 * one) expect(w).toBeLessThanOrEqual(prev + 1e-9)
+      expect(Math.abs(w - prev)).toBeLessThan(0.5)
+      if (w > peak) [peak, peakAt] = [w, s]
+      prev = w
+    }
+    expect(peak).toBeCloseTo(1.1 * wj, 1)
+    expect(peakAt).toBeCloseTo(sj + one, 2)
+  })
+
+  test('the bulge peaks at 1.1 of the joined width one width below the join then settles', () => {
+    // a phone makes one join, so the trunk's width after it is that join's alone
+    let checked = 0
+    for (const m of [cone(), cone({ rows: 27, jitter: 20 })]) {
+      for (const seed of seeds) {
+        const net = buildNetwork(m, opts(seed, { phone: true }))
+        const j = net.joins[0]
+        if (!j) continue
+        const trunk = net.flows[0]
+        const L = length(trunk.pts)
+        const sf = sfOf(m, net.flows)
+        // the width with the trunk's own growth taken out, so the swell reads on its own
+        let peak = 0
+        let peakAt = 0
+        for (let k = 0; k <= 1000; k++) {
+          const s = j.at + (k / 1000) * (sf - j.at)
+          const w = trunk.widthAt(s) / (growth(s, sf) / growth(j.at, sf))
+          if (w > peak) [peak, peakAt] = [w, s]
+        }
+        checked++
+        expect(peak / (1.1 * j.wj)).toBeGreaterThan(0.98)
+        expect(peak / (1.1 * j.wj)).toBeLessThan(1.02)
+        expect(Math.abs(peakAt - (j.at + j.wj / L))).toBeLessThan(0.015)
+        // then it settles: four widths on it is back to the joined width, within 1%
+        const s4 = j.at + (4.25 * j.wj) / L
+        if (s4 < sf) expect(trunk.widthAt(s4) / (growth(s4, sf) / growth(j.at, sf)) / j.wj).toBeCloseTo(1, 2)
+      }
+    }
+    expect(checked).toBeGreaterThan(0)
+  })
+
+  test('after the last join the growth and the pool flare continue from the joined width', () => {
+    // widthAt(1) = the trunk's own growth and flare (1.15 and 1.2 of W0), each join's step taken as the product says; no
+    // case skipped, so a swell still settling at the pool is counted too
+    let checked = 0
+    for (const [name, m] of mountains) {
+      for (const phone of [false, true]) {
+        for (const seed of seeds) {
+          const net = buildNetwork(m, opts(seed, { phone }))
+          if (!net.joins.length) continue
+          const trunk = net.flows[0]
+          const L = length(trunk.pts)
+          let want = trunk.widthAt(0) * growth(1, sfOf(m, net.flows)) * 1.2
+          for (const j of net.joins) want *= joinWidthProfile(j.wt, j.wf, j.at, 1 / L)(1) / j.wt
+          checked++
+          expect(trunk.widthAt(1) / want, name).toBeCloseTo(1, 6)
+        }
+      }
+    }
+    expect(checked).toBeGreaterThan(100)
+  })
+
+  test('a narrow cone builds fast, never loops, and every stream ends on the pool or the trunk', () => {
+    // a 320 px viewport: 40 rows, the cone's base 320 px across (two thin ones and a short one besides)
+    const narrow = [
+      cone({ w: 320, rows: 40, height: 400, craterHalf: 14, halfBase: 160 }),
+      cone({ w: 320, rows: 40, height: 640, craterHalf: 14, halfBase: 160 }),
+      cone({ w: 320, rows: 40, height: 300, craterHalf: 10, halfBase: 100 }),
+      cone({ w: 320, rows: 40 }),
+    ]
+    for (const m of narrow) {
+      for (const phone of [false, true]) {
+        for (const seed of seeds) {
+          const t = performance.now()
+          const { flows, pool, joins } = buildNetwork(m, { w: 320, h: 640, phone, rng: mulberry32(seed) })
+          expect(performance.now() - t).toBeLessThan(50)
+          for (const f of flows) {
+            // (on a cone this thin a stream can come down past the pool's side: it still ends on the line, entering at the edge)
+            expectEnd(f, flows, pool, false)
+            // no loops: every stream keeps going down
+            for (let i = 1; i < f.pts.length; i++) expect(f.pts[i].y).toBeGreaterThan(f.pts[i - 1].y)
+          }
+          for (const j of joins) expect(j.angle).toBeLessThanOrEqual(CONFLUENCE_MAX_DEG)
+        }
+      }
+    }
+  })
+
+  test('a cone too short for any join sends every tributary to the pool and never loops', () => {
+    // no trunk row falls in a window with room to reach it
+    for (const m of [cone({ rows: 14, height: 200 }), cone({ rows: 10, height: 200 })]) {
+      for (const seed of seeds) {
+        const t = performance.now()
+        const { flows, pool, joins } = buildNetwork(m, opts(seed))
+        expect(performance.now() - t).toBeLessThan(50)
+        expect(joins).toEqual([])
+        for (const f of flows) {
+          expect(f.drain).toBe(-1)
+          expectEnd(f, flows, pool)
+          for (let i = 1; i < f.pts.length; i++) expect(f.pts[i].y).toBeGreaterThan(f.pts[i - 1].y)
+        }
+      }
+    }
+  })
+
+  test('a join that cannot be made drains to the pool, and says so in dev', () => {
+    // 276 px high: the upper fissure's turn does not fit in the room it has on about 2 seeds in 5
+    const m = cone({ rows: 27, height: 276, jitter: 20 })
+    const spy = vi.spyOn(console, 'debug').mockImplementation(() => {})
+    let fell = 0
+    for (let seed = 1; seed <= 100; seed++) {
+      spy.mockClear()
+      const net = buildNetwork(m, opts(seed))
+      const said = spy.mock.calls.filter((c) => c.join(' ').includes('drains to the pool'))
+      if (!said.length) continue
+      fell++
+      const fallen = net.flows.filter((f) => f.role !== 'trunk' && f.aim === null)
+      expect(fallen.length).toBeGreaterThanOrEqual(said.length)
+      for (const f of fallen) {
+        expect(f.drain).toBe(-1)
+        expectEnd(f, net.flows, net.pool)
+        for (let i = 1; i < f.pts.length; i++) expect(f.pts[i].y).toBeGreaterThan(f.pts[i - 1].y)
+      }
+      expect(net.joins.every((j) => net.flows[j.feeder].drain === 0)).toBe(true)
+    }
+    expect(fell).toBeGreaterThan(0)
+  })
+
+  test('a feeder arrives at its aim at 15 to 28 degrees to the trunk, about 20 at the median', () => {
+    // the angle before the turn (`joins[].angle`): the feeder's heading at the join against the trunk's tangent
+    for (const [name, m, phone] of angleCases) {
+      const angles = []
+      for (let seed = 1; seed <= 100; seed++) {
+        const { joins } = buildNetwork(m, opts(seed, { phone }))
+        for (const j of joins) angles.push(j.angle)
+      }
+      expect(angles.length, name).toBeGreaterThan(80)
+      const inBand = angles.filter((a) => a >= 15 && a <= 28).length / angles.length
+      expect(inBand, name).toBeGreaterThanOrEqual(0.95)
+      angles.sort((a, b) => a - b)
+      const median = angles[angles.length >> 1]
+      expect(median, name).toBeGreaterThanOrEqual(17)
+      expect(median, name).toBeLessThanOrEqual(25)
+      // and the rule's own ceiling
+      expect(angles[angles.length - 1], name).toBeLessThanOrEqual(CONFLUENCE_MAX_DEG)
+    }
+  })
+
+  test('the banks first touch a bounded way above the join: the V has a mouth', () => {
+    // The feeder's bank and the trunk's meet when their centrelines are (wt + wf) / 2 apart. The distance along the feeder
+    // from first contact to the join, in feeder widths. A straight approach at the 28 degree top of the band, a feeder
+    // 0.4 of the trunk's width and a turn that keeps to 12 degrees a chord put the floor at about 5 widths for the rim and
+    // the fissures (the 3 asked for needs 50 degrees); measured medians are 7 to 10.5. Pinned at 11 (p90 14) for the rim,
+    // the mid fissure and the phone fissure; the upper fissure's source stands on the trunk's bank on a 27-row cone, so it is
+    // left out of the pin. The join is where the turn lands, a little below the aim.
+    const widthsOf = (net) =>
+      net.joins.map((j) => {
+        const f = net.flows[j.feeder]
+        const T = net.flows[0].pts
+        let run = 0
+        for (let k = f.pts.length - 1; k > 0; k--) {
+          if (distTo(T, f.pts[k]) > (j.wt + j.wf) / 2) break
+          run += Math.hypot(f.pts[k].x - f.pts[k - 1].x, f.pts[k].y - f.pts[k - 1].y)
+        }
+        return { role: f.role, w: run / j.wf }
+      })
+    for (const [name, m, phone] of angleCases) {
+      const ws = []
+      for (let seed = 1; seed <= 100; seed++) for (const c of widthsOf(buildNetwork(m, opts(seed, { phone })))) if (c.role !== 'upper') ws.push(c.w)
+      ws.sort((a, b) => a - b)
+      expect(ws[ws.length >> 1], name).toBeLessThanOrEqual(11)
+      expect(ws[Math.floor(ws.length * 0.9)], name).toBeLessThanOrEqual(14)
+    }
+  })
+
+  test('the DRAWN feeder keeps to 30 degrees to the local trunk tangent over its last 8 feeder widths', () => {
+    // read on the finished feeder, chord by chord, against the direction of the trunk's nearest segment: not at the aim
+    // (where the scaffold ends), not at the very end (where the turn has made it 0), but the stretch above the turn
+    const unit = (a, b) => {
+      const l = Math.hypot(b.x - a.x, b.y - a.y) || 1
+      return { x: (b.x - a.x) / l, y: (b.y - a.y) / l }
+    }
+    const nearestSeg = (T, p) => {
+      let best = Infinity
+      let bi = 0
+      for (let i = 1; i < T.length; i++) {
+        const a = T[i - 1]
+        const b = T[i]
+        const l2 = (b.x - a.x) ** 2 + (b.y - a.y) ** 2
+        const r = l2 ? Math.max(0, Math.min(1, ((p.x - a.x) * (b.x - a.x) + (p.y - a.y) * (b.y - a.y)) / l2)) : 0
+        const d = Math.hypot(p.x - (a.x + (b.x - a.x) * r), p.y - (a.y + (b.y - a.y) * r))
+        if (d < best) [best, bi] = [d, i - 1]
+      }
+      return bi
+    }
+    for (const [name, m, phone] of angleCases) {
+      let n = 0
+      for (let seed = 1; seed <= 100; seed++) {
+        const { flows, joins } = buildNetwork(m, opts(seed, { phone }))
+        const T = flows[0].pts
+        for (const j of joins) {
+          const f = flows[j.feeder]
+          let arc = 0
+          let worst = 0
+          for (let k = f.pts.length - 1; k >= 1; k--) {
+            arc += Math.hypot(f.pts[k].x - f.pts[k - 1].x, f.pts[k].y - f.pts[k - 1].y)
+            if (arc > 8 * j.wf) break
+            const a = unit(f.pts[k - 1], f.pts[k])
+            const i = nearestSeg(T, f.pts[k])
+            const b = unit(T[i], T[i + 1])
+            worst = Math.max(worst, (Math.acos(Math.max(-1, Math.min(1, a.x * b.x + a.y * b.y))) * 180) / Math.PI)
+          }
+          n++
+          expect(worst, name + ' seed ' + seed).toBeLessThanOrEqual(30)
+        }
+      }
+      expect(n, name).toBeGreaterThan(50)
+    }
+  })
+
+  test('the join is where the turn meets the trunk: aim, drainAt and joins agree, inside the S5.3 window', () => {
+    const windows = { rim: [0.2, 0.35], upper: [0.45, 0.6], mid: [0.65, 0.8], 'phone-fissure': [0.66, 0.85] }
+    let n = 0
+    for (const [name, m, phone] of angleCases) {
+      for (const seed of seeds) {
+        const { flows, joins } = buildNetwork(m, opts(seed, { phone }))
+        for (const j of joins) {
+          const f = flows[j.feeder]
+          n++
+          expect(f.drainAt, name).toBe(j.at)
+          expect(f.aim.at, name).toBe(j.at)
+          expect(j.at, name).toBeGreaterThanOrEqual(windows[f.role][0])
+          expect(j.at, name).toBeLessThanOrEqual(windows[f.role][1])
+          // its row is the trunk row nearest the landing
+          const y = along(flows[0].pts, j.at).y
+          expect(Math.abs(f.aim.row - (y - (m.left[0].y + m.right[0].y) / 2) / rowHeight(m)), name).toBeLessThanOrEqual(0.5 + 1e-9)
+        }
+      }
+    }
+    expect(n).toBeGreaterThan(300)
+  })
+
+  test('a stream the trunk cannot be reached by (no row in its window fits) runs to the pool and says so in dev', () => {
+    // 10 rows, 200 px: no trunk row falls in the rim's window with room to reach it
+    const spy = vi.spyOn(console, 'debug').mockImplementation(() => {})
+    const net = buildNetwork(cone({ rows: 10, height: 200 }), opts(7))
+    const rim = net.flows.find((f) => f.role === 'rim')
+    expect(rim.drain).toBe(-1)
+    expect(rim.aim).toBeNull()
+    const said = spy.mock.calls.filter((c) => c.join(' ').includes('rim') && c.join(' ').includes('no trunk row in its window fits'))
+    expect(said).toHaveLength(1)
+    // the lower fissure was never to join: it does not say so
+    spy.mockClear()
+    buildNetwork(cone(), opts(7))
+    expect(spy.mock.calls.filter((c) => c.join(' ').includes('lower'))).toHaveLength(0)
+  })
+
+  test('approachAngleDeg reads the angle between the feeder and the trunk where they meet', () => {
+    const trunk = Array.from({ length: 101 }, (_, i) => ({ x: 0, y: i * 10 }))
+    const feeder = (deg) => {
+      const r = (deg * Math.PI) / 180
+      return Array.from({ length: 30 }, (_, i) => ({ x: -Math.sin(r) * (29 - i) * 5, y: 500 - Math.cos(r) * (29 - i) * 5 }))
+    }
+    expect(approachAngleDeg(feeder(0), trunk, 0.5)).toBeCloseTo(0, 6)
+    expect(approachAngleDeg(feeder(25), trunk, 0.5)).toBeCloseTo(25, 6)
+    expect(approachAngleDeg(feeder(40), trunk, 0.5)).toBeCloseTo(40, 6)
+    expect(approachAngleDeg(feeder(90), trunk, 0.5)).toBeCloseTo(90, 6)
+  })
+})
+
+describe('a phone on a mountain made the way buildMountain makes it', () => {
+  // MountDeathfire.vue buildMountain, as plain data: the cone's height from peakHeight (690 * scale * h / 1000, at most
+  // 0.7 h), the peak at w * face, a spread and a curve per flank, 27 rows with the y jitter tapering to 0 at the rim, three
+  // terraces a flank, and the vent at the valley floor's low point of the breach. The probe the Task 2 reviewer used, kept.
+  function like(seed, w, h, scale, face) {
+    const r = mulberry32(seed * 7919 + 13)
+    const grand = (a, b) => a + (b - a) * r()
+    const height = Math.max(40, Math.min(690 * scale * (h / 1000), h * 0.7))
+    const peakX = w * face
+    const peakY = h - height
+    const halfBase = Math.max((w * 0.6) / 2, height * 0.6)
+    const craterHalf = Math.max(18, height * 0.13)
+    const spread = [grand(0.78, 1.24), grand(0.78, 1.24)]
+    const curve = [grand(2.15, 2.65), grand(2.15, 2.65)]
+    const dip = grand(-1.5, 1.5)
+    const rimL = { x: peakX - craterHalf, y: peakY - dip }
+    const rimR = { x: peakX + craterHalf, y: peakY + dip }
+    const flank = (dir, k) => {
+      const pts = []
+      for (let i = 0; i <= 26; i++) {
+        const f = i / 26
+        pts.push({ x: peakX + dir * (craterHalf + Math.pow(f, curve[k]) * (halfBase * spread[k] - craterHalf)), y: peakY + f * height + grand(-1, 1) * height * 0.03 * f })
+      }
+      const lr = mulberry32((seed * 31 + (dir < 0 ? 0x1ed9e : 0x2fa7)) >>> 0)
+      for (let n = 0; n < 3; n++) {
+        const at = 4 + Math.floor(lr() * 17)
+        const out = (0.03 + lr() * 0.05) * halfBase * spread[k]
+        for (let i = at; i <= 26; i++) pts[i].x += dir * out
+      }
+      pts[0] = { ...(dir < 0 ? rimL : rimR) }
+      return pts
+    }
+    const left = flank(-1, 0)
+    const right = flank(1, 1)
+    const low = 0.42 + (r() * 2 - 1) * 0.08
+    const depth = (0.3 + 0.12 * r()) * craterHalf
+    const vent = { x: rimL.x + 0.55 * craterHalf + 2 * craterHalf * 0.45 * low, y: rimL.y + (rimR.y - rimL.y) * low + depth }
+    return { peakX, peakY, craterHalf, left, right, rimL, rimR, vent }
+  }
+  const W = 390
+  const H = 844
+  const trunkY = (net, at) => along(net.flows[0].pts, at).y
+
+  test('the phone fissure joins on at least 90% of seeds, and below the title box (the join stands at 0.79 to 0.90 of the height)', () => {
+    // the title box covers about 0.46 to 0.76 of the height; scale 1 is the hero, the others the smaller cones of the other pages
+    for (const scale of [1, 0.85, 0.7]) {
+      let n = 0
+      let joined = 0
+      for (const face of [0.1, 0.18, 0.28, 0.4, 0.5]) {
+        for (let seed = 1; seed <= 30; seed++) {
+          const m = like(seed, W, H, scale, face)
+          const net = buildNetwork(m, { w: W, h: H, phone: true, rng: mulberry32(seed) })
+          n++
+          const j = net.joins[0]
+          if (!j) continue
+          joined++
+          expect(net.flows[j.feeder].role).toBe('phone-fissure')
+          expect(trunkY(net, j.at) / H, 'scale ' + scale).toBeGreaterThanOrEqual(0.76)
+          expect(trunkY(net, j.at) / H, 'scale ' + scale).toBeLessThanOrEqual(0.95)
+          expect(j.angle).toBeLessThanOrEqual(CONFLUENCE_MAX_DEG)
+        }
+      }
+      expect(joined / n, 'scale ' + scale).toBeGreaterThanOrEqual(0.9)
+    }
+  })
+
+  test('every stream ends on the pool or the trunk, no chord turns over 12 degrees, the pool sits below the screen', () => {
+    for (const scale of [1, 0.7]) {
+      for (let seed = 1; seed <= 40; seed++) {
+        const m = like(seed, W, H, scale, 0.1 + 0.02 * (seed % 20))
+        const { flows, pool } = buildNetwork(m, { w: W, h: H, phone: true, rng: mulberry32(seed) })
+        for (const f of flows) {
+          expectEnd(f, flows, pool)
+          for (let i = 1; i < f.pts.length - 1; i++) {
+            const a = f.pts[i - 1]
+            const b = f.pts[i]
+            const c = f.pts[i + 1]
+            const cos = ((b.x - a.x) * (c.x - b.x) + (b.y - a.y) * (c.y - b.y)) / (Math.hypot(b.x - a.x, b.y - a.y) * Math.hypot(c.x - b.x, c.y - b.y))
+            expect((Math.acos(Math.max(-1, Math.min(1, cos))) * 180) / Math.PI).toBeLessThanOrEqual(12)
+          }
+        }
+        // the centre is under the screen's bottom edge and the arc's top a little above it (the glow shows)
+        expect(pool.cy).toBeGreaterThan(H)
+        expect(pool.arcTop).toBeLessThan(H)
+        expect(pool.arcTop).toBeGreaterThan(H - pool.ry)
+      }
+    }
+  })
+
+  test('a join above the title box (0.46 of the height) is out of reach: the stretch above it is shorter than a join needs', () => {
+    // the vent stands 96 px above the box top on the hero cone; the turn alone is 3 feeder widths (a phone fissure is 23 px
+    // wide), and a fissure's crack is 3 to 5 rows tall below the mouth, its run 3 rows, so no join lands up there
+    const m = like(1, W, H, 1, 0.18)
+    const net = buildNetwork(m, { w: W, h: H, phone: true, rng: mulberry32(1) })
+    const wf = net.flows[1].widthAt(1)
+    expect(0.46 * H - m.vent.y).toBeLessThan(3 * wf + 3 * ((m.left[26].y - m.left[0].y) / 26))
+    for (let seed = 1; seed <= 100; seed++) {
+      const mm = like(seed, W, H, 1, 0.1 + 0.4 * ((seed * 7) % 10) / 10)
+      const n = buildNetwork(mm, { w: W, h: H, phone: true, rng: mulberry32(seed) })
+      for (const j of n.joins) expect(trunkY(n, j.at)).toBeGreaterThan(0.46 * H)
+    }
   })
 })
 
@@ -570,11 +1236,23 @@ describe('widths', () => {
   test('widths grow 15% source to end before any join', () => {
     const m = cone()
     for (const seed of seeds) {
-      const { flows } = buildNetwork(m, opts(seed))
+      const { flows, joins } = buildNetwork(m, opts(seed))
       for (const f of flows) {
+        if (f.drain === 0) {
+          // a feeder ends at its join: 15% wider there than at its source, and no flare (it never reaches the pool)
+          expect(f.widthAt(1) / f.widthAt(0)).toBeCloseTo(1.15, 6)
+          expect(f.widthAt(0.5) / f.widthAt(0)).toBeCloseTo(1.075, 6)
+          for (let k = 1; k <= 20; k++) expect(f.widthAt(k / 20)).toBeGreaterThanOrEqual(f.widthAt((k - 1) / 20) - 1e-9)
+          continue
+        }
         // `widthAt(1)` is the flared end; the growth is read where the flare begins
         const s = sf(f, m)
         expect(s).toBeGreaterThan(0.5)
+        if (f.role === 'trunk' && joins.length) {
+          // the joins widen it below them: before the first one it grows as any stream does
+          for (const t of [0.04, 0.08]) expect(f.widthAt(t) / f.widthAt(0)).toBeCloseTo(1 + (0.15 * t) / s, 6)
+          continue
+        }
         expect(f.widthAt(s) / f.widthAt(0)).toBeCloseTo(1.15, 2)
         expect(f.widthAt(s / 2) / f.widthAt(0)).toBeCloseTo(1.075, 2)
         for (let k = 1; k <= 20; k++) expect(f.widthAt(k / 20)).toBeGreaterThanOrEqual(f.widthAt((k - 1) / 20) - 1e-9)
@@ -582,15 +1260,21 @@ describe('widths', () => {
     }
   })
 
-  test('the last two rows flare 20% as the stream enters the pool', () => {
-    const m = cone()
-    const { flows } = buildNetwork(m, opts(7))
-    for (const f of flows) {
-      const s = sf(f, m)
-      expect(f.widthAt(1) / f.widthAt(s)).toBeCloseTo(1.2, 2)
-      expect(f.widthAt(1) / f.widthAt(0)).toBeCloseTo(1.15 * 1.2, 2)
-      // no flare above the last two rows
-      expect(f.widthAt(s - 0.01) / f.widthAt(0)).toBeLessThan(1.151)
+  test('the last two rows flare 20% as a stream enters the pool', () => {
+    // the full cone (the trunk and the lower fissure reach the pool, the rest join) and a short one where nothing joins
+    for (const m of [cone(), cone({ rows: 14, height: 200 })]) {
+      const { flows, joins } = buildNetwork(m, opts(7))
+      let flared = 0
+      for (const f of flows) {
+        if (f.drain !== -1 || (f.role === 'trunk' && joins.length)) continue
+        flared++
+        const s = sf(f, m)
+        expect(f.widthAt(1) / f.widthAt(s)).toBeCloseTo(1.2, 2)
+        expect(f.widthAt(1) / f.widthAt(0)).toBeCloseTo(1.15 * 1.2, 2)
+        // no flare above the last two rows
+        expect(f.widthAt(s - 0.01) / f.widthAt(0)).toBeLessThan(1.151)
+      }
+      expect(flared).toBeGreaterThanOrEqual(1)
     }
   })
 
