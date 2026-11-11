@@ -1,5 +1,7 @@
 import { describe, test, expect, vi, beforeEach, afterEach } from 'vitest'
 import { buildNetwork, joinedWidth, joinWidthProfile, approachAngleDeg, resample, tangentAt, CONFLUENCE_MAX_DEG } from './lavaNetwork'
+import { buildMountain } from './mountain'
+import { DEFAULTS, RANDOMIZE_DEFAULTS } from './fireTuning'
 
 function mulberry32(seed) {
   let a = seed >>> 0
@@ -1404,44 +1406,21 @@ describe('the fork', () => {
 })
 
 describe('a phone on a mountain made the way buildMountain makes it', () => {
-  // MountDeathfire.vue buildMountain, as plain data: the cone's height from peakHeight (690 * scale * h / 1000, at most
-  // 0.7 h), the peak at w * face, a spread and a curve per flank, 27 rows with the y jitter tapering to 0 at the rim, three
-  // terraces a flank, and the vent at the valley floor's low point of the breach. The probe the Task 2 reviewer used, kept.
-  function like(seed, w, h, scale, face) {
-    const r = mulberry32(seed * 7919 + 13)
-    const grand = (a, b) => a + (b - a) * r()
-    const height = Math.max(40, Math.min(690 * scale * (h / 1000), h * 0.7))
-    const peakX = w * face
-    const peakY = h - height
-    const halfBase = Math.max((w * 0.6) / 2, height * 0.6)
-    const craterHalf = Math.max(18, height * 0.13)
-    const spread = [grand(0.78, 1.24), grand(0.78, 1.24)]
-    const curve = [grand(2.15, 2.65), grand(2.15, 2.65)]
-    const dip = grand(-1.5, 1.5)
-    const rimL = { x: peakX - craterHalf, y: peakY - dip }
-    const rimR = { x: peakX + craterHalf, y: peakY + dip }
-    const flank = (dir, k) => {
-      const pts = []
-      for (let i = 0; i <= 26; i++) {
-        const f = i / 26
-        pts.push({ x: peakX + dir * (craterHalf + Math.pow(f, curve[k]) * (halfBase * spread[k] - craterHalf)), y: peakY + f * height + grand(-1, 1) * height * 0.03 * f })
-      }
-      const lr = mulberry32((seed * 31 + (dir < 0 ? 0x1ed9e : 0x2fa7)) >>> 0)
-      for (let n = 0; n < 3; n++) {
-        const at = 4 + Math.floor(lr() * 17)
-        const out = (0.03 + lr() * 0.05) * halfBase * spread[k]
-        for (let i = at; i <= 26; i++) pts[i].x += dir * out
-      }
-      pts[0] = { ...(dir < 0 ? rimL : rimR) }
-      return pts
-    }
-    const left = flank(-1, 0)
-    const right = flank(1, 1)
-    const low = 0.42 + (r() * 2 - 1) * 0.08
-    const depth = (0.3 + 0.12 * r()) * craterHalf
-    const vent = { x: rimL.x + 0.55 * craterHalf + 2 * craterHalf * 0.45 * low, y: rimL.y + (rimR.y - rimL.y) * low + depth }
-    return { peakX, peakY, craterHalf, left, right, rimL, rimR, vent }
-  }
+  // The real buildMountain (lib/mountain, the one the page uses): the cone's height from peakHeight (690 * scale * h / 1000,
+  // at most 0.7 h), the peak at w * face, a spread and a curve per flank, 27 rows with the y jitter tapering to 0 at the rim,
+  // three terraces a flank, and the vent at the valley floor's low point of the breach. It stood here as a hand-kept replica,
+  // the probe the Task 2 reviewer used; the seed picks the stream and the route path (so the terraces and the crown).
+  const like = (seed, w, h, scale, face) =>
+    buildMountain({
+      w,
+      h,
+      face,
+      prof: { scale, variance: 1 },
+      tune: DEFAULTS.bed,
+      rng: mulberry32(seed * 7919 + 13),
+      path: `/like/${seed}`,
+      randomize: RANDOMIZE_DEFAULTS,
+    })
   const W = 390
   const H = 844
   const trunkY = (net, at) => along(net.flows[0].pts, at).y
