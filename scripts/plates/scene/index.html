@@ -1,0 +1,25 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>Plate scene</title>
+    <link rel="icon" href="data:," />
+    <!-- Offline plate renderer (scripts/plates). Served by the Vite dev server, which resolves the bare `three` import
+         from the devDependency: no CDN, no web fonts. See main.js for the URL contract. -->
+    <style>
+      html,
+      body {
+        margin: 0;
+        background: transparent;
+        overflow: hidden;
+      }
+      #scene {
+        display: block;
+      }
+    </style>
+  </head>
+  <body>
+    <canvas id="scene" aria-hidden="true"></canvas>
+    <script type="module" src="./main.js"></script>
+  </body>
+</html>

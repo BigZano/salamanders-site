@@ -80,6 +80,9 @@ roles_list.txt
 .forge/
 docs/design/refs/
 
+# The plate scene's rock textures (Poly Haven, CC0): fetched by scripts/plates/fetch-textures.mjs, never committed
+scripts/plates/scene/textures/
+
 # Local archive of vetoed and superseded work (Bret, 2026-11-11)
 zzArchive/
 dev-mock/
