@@ -5,8 +5,10 @@ import { useRoute } from 'vue-router'
 import { motionAllowed } from '../lib/doomfire'
 import { buildNetwork } from '../lib/lavaNetwork'
 import { mulberry32, hashString, peakHeight, buildMountain, faceFor, REF } from '../lib/mountain'
-import { fireTuning, randomize, profileFor, NEUTRAL_PROFILE, DEFAULTS } from '../lib/fireTuning'
+import { fireTuning, randomize, profileFor, profileKeyFor, NEUTRAL_PROFILE, DEFAULTS } from '../lib/fireTuning'
 import { deathfireHeat } from '../lib/deathfireHeat'
+import { bucketFor, plateSlug, fitPlate, mapMountain, anchorFor } from '../lib/plate'
+import { createPlateLoader, plateState } from '../lib/plateLoader'
 
 /**
  * Mount Deathfire — the great volcano of Nocturne, sitting behind every page.
@@ -26,6 +28,12 @@ import { deathfireHeat } from '../lib/deathfireHeat'
  * 0 / 1 / 1, which is neutral in every expression below — so `/` consumes the
  * identical sequence of seeded random numbers it did before profiles existed
  * and renders unchanged. Keep it that way when editing here.
+ *
+ * Where a 3D-rendered plate exists for the route and the window's shape (lib/plate, lib/plateLoader; made offline from this
+ * same mountain data), it is drawn over the painted sky and rock: the sky plate before the moon, the rock plate where the
+ * painted rock is, with the mountain taken from the plate's own sidecar so the lava, lip, plume and ash sit on the plate's
+ * rock. Everything else is as it was. Where there is none (nothing yet, a route with no plate of its own is given the default
+ * one, a plate that fails to load or to make sense), the painted rock is all there is, and nothing says otherwise.
  */
 
 const tune = fireTuning.bed
@@ -92,6 +100,15 @@ function trialLevel(sec, tier) {
 let spits = [] // lava spat up off the lip, and bubbles popping on it
 const SPIT_MAX = 18
 let silhouette = null // cached rock, redrawn only on resize
+// The 3D plate (lib/plate, lib/plateLoader), when there is one for this route and window shape. The loader is the page view's:
+// what it has failed to get it does not ask for again.
+const plateLoader = createPlateLoader({ base: `${import.meta.env.BASE_URL}plates/` })
+const plateFade = plateState()
+let plate = null // the plate in use: { id, sky, rock, sidecar, fit }. null is the painted rock alone
+let plateWanted = '' // `slug/bucket` of the plate last asked for, so a layout asks again only when the plate it wants has changed
+let plateToken = 0 // bumped for every ask: an answer that comes back under an older one belongs to a page or a window shape we have left
+let plateSnap = false // the plate arrived under reduced motion (or on a frozen playground): it is drawn whole, with no fade
+let cancelPrefetch = null // takes back the idle prefetch if the page goes first
 let drift = [] // continuous sparks/embers off the summit
 let burst = [] // sparks thrown by an eruption pulse
 let ashBack = [] // ash falling behind the rock
@@ -998,6 +1015,107 @@ function buildSilhouette(w, h) {
   return cv
 }
 
+/** A plate's picture, cover-fitted, over what is already drawn. */
+function drawPlate(ctx, img, alpha) {
+  const { scale, dx, dy } = plate.fit
+  ctx.globalCompositeOperation = 'source-over'
+  ctx.globalAlpha = alpha
+  ctx.drawImage(img, dx, dy, img.width * scale, img.height * scale)
+  ctx.globalAlpha = 1
+}
+
+/** Back to the painted rock alone. */
+function dropPlate() {
+  plate = null
+  plateFade.set(null, 0)
+}
+
+/** A plate that came but is no good (its numbers made nothing drawable): painted rock, and the loader will not hand it out again. */
+function badPlate(key, bucket) {
+  dropPlate()
+  plateLoader.fail(key, bucket)
+}
+
+/**
+ * The plate for this route and window shape, as a mountain: the sidecar's, mapped through the plate's cover-fit to the window
+ * (the fit is refreshed on every layout, so a resize that keeps the shape just moves it). `null` when the painted mountain is
+ * to be used: no plate is up. If the plate that is up is for another shape of window, or for a route with another plate, it is
+ * put down first (it would not fit this mountain), and the one wanted is asked for, once; the answer comes to takePlate.
+ *
+ * A plate whose numbers throw here is put down and marked bad: painted rock, no error, no more asking. The route's profile
+ * key is what the loader maps to the plate's folder (so `/planner` and `/roster` share the default one).
+ */
+function plateMountain(w, h) {
+  const key = profileKeyFor(route.path)
+  const bucket = bucketFor(w, h)
+  const id = `${plateSlug(key)}/${bucket}`
+  if (plate && plate.id !== id) dropPlate()
+  if (plate) {
+    try {
+      plate.fit = fitPlate({ imageW: plate.rock.width, imageH: plate.rock.height, w, h, anchor: anchorFor(plate.sidecar) })
+      return mapMountain(plate.sidecar, plate.fit)
+    } catch {
+      badPlate(key, bucket)
+      return null
+    }
+  }
+  if (plateWanted !== id) {
+    plateWanted = id
+    plateLoader.load(key, bucket, ++plateToken).then(takePlate)
+  }
+  return null
+}
+
+/**
+ * A plate has come in. Only a plate that is the latest asked for is taken up: `null` is a plate that cannot be had, and an
+ * older token is an answer for a route or a window shape the page has left (it must never be painted over the new one).
+ * The mountain, its channels, the lip and the painted rock are rebuilt on the plate's mountain; the particles, the moon and
+ * the heat sim carry on, so nothing that is burning stops. Under reduced motion it is shown whole, with no fade.
+ */
+function takePlate(result) {
+  if (stopped || !result || result.token !== plateToken || !mountain) return
+  plate = { id: plateWanted, sky: result.sky, rock: result.rock, sidecar: result.sidecar, fit: null }
+  plateSnap = !motionAllowed() || !!forge?.frozen
+  plateFade.set(plate, performance.now())
+  buildTerrain(lastW, lastH)
+  const cold = !!lava?.cold // before the draw, as in relayout
+  draw(1)
+  if (cold && mode.value === 'still' && !forge?.frozen) burnStill()
+}
+
+/**
+ * Everything that follows the mountain, for a viewport of w by h: the mountain (the plate's, if one is up for this route and
+ * window shape, else the painted builder's), the far ridges, the lava network, the shader's channels, the lip and the cached
+ * rock. The painted mountain and the ridges are built whether a plate is up or not, so the seeded stream is where it always
+ * was when the network draws from it. Under a plate the cone is the plate's (mapped from its sidecar), there are no painted
+ * ridges (the plate has its own), and the glow under the sky follows the plate's peak.
+ */
+function buildTerrain(w, h) {
+  seedForRoute()
+  mountain = buildMountain({ w, h, face: faceOffset, prof, tune, rng, path: route.path, randomize })
+  ridges = buildRidges(w, h)
+  const fromPlate = plateMountain(w, h)
+  if (fromPlate) {
+    mountain = fromPlate
+    ridges = []
+    face.value = mountain.peakX / w
+  }
+  flows = buildFlows(flows, w)
+  lavaResize(w, h) // the shader's channels follow the same centrelines
+  lip = buildLip(mountain)
+  silhouette = buildSilhouette(w, h)
+}
+
+/** Calls `fn` when the browser is idle; a timer where there is no requestIdleCallback. Returns what takes it back. */
+function whenIdle(fn) {
+  if (typeof window.requestIdleCallback === 'function') {
+    const id = window.requestIdleCallback(fn, { timeout: 4000 })
+    return () => window.cancelIdleCallback(id)
+  }
+  const id = window.setTimeout(fn, 2000)
+  return () => window.clearTimeout(id)
+}
+
 const isPhone = () => window.matchMedia?.('(max-width: 768px)').matches
 
 // The shader's per-frame arguments: two objects rewritten each frame, so handing it a frame allocates nothing.
@@ -1127,14 +1245,8 @@ function layout() {
   }
 
   if (!spriteGlow) spriteGlow = makeGlow()
-  seedForRoute()
-  mountain = buildMountain({ w, h, face: faceOffset, prof, tune, rng, path: route.path, randomize })
-  ridges = buildRidges(w, h)
-  flows = buildFlows(flows, w)
-  lavaResize(w, h) // the shader's channels follow the same centrelines
-  lip = buildLip(mountain)
+  buildTerrain(w, h)
   moon = buildMoon(w, h)
-  silhouette = buildSilhouette(w, h)
 
   const mobile = isPhone()
   burst = []
@@ -1280,6 +1392,10 @@ function draw(dt) {
       }
     }
   }
+  // The plate's sky, before the moon (the plate has none of its own): over the painted sky (the glow layer under the canvas,
+  // which shows through while it fades in). plateA is how much of the plate is drawn this frame, 0 to 1; 0 with no plate.
+  const plateA = plate ? plateFade.tick(performance.now(), plateSnap) : 0
+  if (plateA > 0) drawPlate(ctx, plate.sky, plateA)
   if (moon) {
     const near = Math.sin(Math.PI * phase) // 0 far, 1 closest, at mid-cycle
     const scale = 0.55 + 0.6 * near * near // swells as it nears; 1.15 at its closest
@@ -1327,10 +1443,16 @@ function draw(dt) {
   if (glowEl.value) glowEl.value.style.opacity = Math.min(1, 0.62 + 0.18 * ((breathe - 0.2) / 0.8) + 0.3 * flare).toFixed(3)
   if (m.flare) m.flare = Math.max(0, m.flare - secs * 1.8)
 
-  // 3. The rock.
+  // 3. The rock. The painted one, whole (alone, when there is no plate); while a plate fades in, the painted rock goes down at
+  // 1 - a and the plate's rock over it at a; once it is in, the plate's rock alone.
   ctx.globalCompositeOperation = 'source-over'
   ctx.globalAlpha = 1
-  ctx.drawImage(silhouette, 0, 0, w, h)
+  if (plateA < 1) {
+    ctx.globalAlpha = 1 - plateA
+    ctx.drawImage(silhouette, 0, 0, w, h)
+  }
+  if (plateA > 0) drawPlate(ctx, plate.rock, plateA)
+  ctx.globalAlpha = 1
 
   // The calm band: where reading text sits over the lava, the lava steps aside (see calmFactor). The text is measured a
   // few times a second, since pages scroll and re-flow; between measures the scroll is accounted for.
@@ -1774,6 +1896,15 @@ onMounted(() => {
     resizeObserver.observe(host.value)
   }
 
+  // The hero's other plate (this window's own was asked for by the layout above): fetched when the browser is idle, so a
+  // resize or a turn of the phone does not wait on it. Only the plates that exist, and only from the hero.
+  if (route.path === '/') {
+    cancelPrefetch = whenIdle(() => {
+      plateLoader.load('/', 'wide')
+      plateLoader.load('/', 'portrait')
+    })
+  }
+
   if (!motionAllowed()) {
     t = 2.5
     draw(1)
@@ -1843,6 +1974,10 @@ onBeforeUnmount(() => {
   resizeObserver?.disconnect()
   resizeObserver = null
   document.removeEventListener('visibilitychange', onVisibility)
+  cancelPrefetch?.()
+  cancelPrefetch = null
+  dropPlate()
+  plateWanted = ''
   lavaWanted = false
   lava?.dispose()
   lava = null
