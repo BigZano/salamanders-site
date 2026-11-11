@@ -79,3 +79,7 @@ roles_list.txt
 # The forge playground's snaps (/dev/forge) and its reference frames (public domain, but large: keep them local)
 .forge/
 docs/design/refs/
+
+# Local archive of vetoed and superseded work (Bret, 2026-11-11)
+zzArchive/
+dev-mock/
