@@ -16,6 +16,16 @@
       #scene {
         display: block;
       }
+      /* preview=1 (looking only): the whole plate, scaled down to fit the window */
+      body.preview {
+        background: #000;
+      }
+      body.preview #scene {
+        width: auto;
+        height: auto;
+        max-width: 100vw;
+        max-height: 100vh;
+      }
     </style>
   </head>
   <body>

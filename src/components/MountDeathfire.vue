@@ -99,7 +99,8 @@ function trialLevel(sec, tier) {
 }
 let spits = [] // lava spat up off the lip, and bubbles popping on it
 const SPIT_MAX = 18
-let silhouette = null // cached rock, redrawn only on resize
+let silhouette = null // cached painted cone, redrawn only on resize
+let farRidges = null // cached far ridges, their own layer so a plate's rock can go over them; redrawn only on resize
 // The 3D plate (lib/plate, lib/plateLoader), when there is one for this route and window shape. The loader is the page view's:
 // what it has failed to get it does not ask for again.
 const plateLoader = createPlateLoader({ base: `${import.meta.env.BASE_URL}plates/` })
@@ -975,16 +976,23 @@ function spawnAsh(w, h, atTop, front) {
   }
 }
 
-/** Cache the rock, which only changes on resize. */
-function buildSilhouette(w, h) {
+/** A window-sized canvas for a cached layer of the rock, drawn on in window pixels. */
+function layerCanvas(w, h) {
   const cv = document.createElement('canvas')
   const dpr = Math.min(window.devicePixelRatio || 1, 2)
   cv.width = Math.ceil(w * dpr)
   cv.height = Math.ceil(h * dpr)
   const g = cv.getContext('2d')
   g.setTransform(dpr, 0, 0, dpr, 0, 0)
+  return { cv, g }
+}
 
-  // Distant ridges first, dimmer the further back they sit.
+/**
+ * Cache the distant ridges, dimmer the further back they sit. They only change on resize, and they are a layer of their
+ * own: the painted cone goes over them, and so does a plate's rock, which has no far ridges of its own.
+ */
+function buildRidgeLayer(w, h) {
+  const { cv, g } = layerCanvas(w, h)
   for (const r of ridges) {
     g.beginPath()
     g.moveTo(r.pts[0].x, h + 20)
@@ -994,8 +1002,12 @@ function buildSilhouette(w, h) {
     g.fillStyle = `rgba(9, 18, 15, ${r.depth})`
     g.fill()
   }
+  return cv
+}
 
-  // The mountain itself.
+/** Cache the painted cone, which only changes on resize. */
+function buildSilhouette(w, h) {
+  const { cv, g } = layerCanvas(w, h)
   const m = mountain
   g.beginPath()
   g.moveTo(m.left[m.left.length - 1].x, h + 20)
@@ -1086,9 +1098,10 @@ function takePlate(result) {
 /**
  * Everything that follows the mountain, for a viewport of w by h: the mountain (the plate's, if one is up for this route and
  * window shape, else the painted builder's), the far ridges, the lava network, the shader's channels, the lip and the cached
- * rock. The painted mountain and the ridges are built whether a plate is up or not, so the seeded stream is where it always
- * was when the network draws from it. Under a plate the cone is the plate's (mapped from its sidecar), there are no painted
- * ridges (the plate has its own), and the glow under the sky follows the plate's peak.
+ * rock (the far ridges and the painted cone, a layer each). The painted mountain and the ridges are built whether a plate is
+ * up or not, so the seeded stream is where it always was when the network draws from it. Under a plate the cone is the
+ * plate's (mapped from its sidecar), the far ridges are the painted ones all the same (the plate has none: they are drawn
+ * under its rock), and the glow under the sky follows the plate's peak.
  */
 function buildTerrain(w, h) {
   seedForRoute()
@@ -1097,12 +1110,12 @@ function buildTerrain(w, h) {
   const fromPlate = plateMountain(w, h)
   if (fromPlate) {
     mountain = fromPlate
-    ridges = []
     face.value = mountain.peakX / w
   }
   flows = buildFlows(flows, w)
   lavaResize(w, h) // the shader's channels follow the same centrelines
   lip = buildLip(mountain)
+  farRidges = ridges.length ? buildRidgeLayer(w, h) : null
   silhouette = buildSilhouette(w, h)
 }
 
@@ -1443,10 +1456,12 @@ function draw(dt) {
   if (glowEl.value) glowEl.value.style.opacity = Math.min(1, 0.62 + 0.18 * ((breathe - 0.2) / 0.8) + 0.3 * flare).toFixed(3)
   if (m.flare) m.flare = Math.max(0, m.flare - secs * 1.8)
 
-  // 3. The rock. The painted one, whole (alone, when there is no plate); while a plate fades in, the painted rock goes down at
-  // 1 - a and the plate's rock over it at a; once it is in, the plate's rock alone.
+  // 3. The rock. First the far ridges, whole, plate or no plate (a plate has none of its own: they go under its rock). Then
+  // the painted cone, whole (alone, when there is no plate); while a plate fades in, the painted cone goes down at 1 - a
+  // and the plate's rock over it at a; once it is in, the plate's rock alone.
   ctx.globalCompositeOperation = 'source-over'
   ctx.globalAlpha = 1
+  if (farRidges) ctx.drawImage(farRidges, 0, 0, w, h)
   if (plateA < 1) {
     ctx.globalAlpha = 1 - plateA
     ctx.drawImage(silhouette, 0, 0, w, h)
@@ -1465,7 +1480,7 @@ function draw(dt) {
   // 4. Lava running down the flanks, drawn over the rock as channels cut through it: the cracks the flank streams start
   // from (under the channels), then for each channel the glow in three ribbons (bloom, body, core) and the crust skin
   // closing over the middle, so the margins stay brightest, which is where real channels shear and glow, and last the pool
-  // they end in. The rock (the cone and the far ridges, one cached canvas) is already down, and nothing is laid over the
+  // they end in. The rock (the far ridges and the cone, a cached layer each) is already down, and nothing is laid over the
   // lava after it but the lip and the particles, so no foreground hides the pool's far half: the bottom edge of the canvas
   // does (the pool's centre sits on the cone's lowest row, a phone's below the screen).
   // Once the WebGL layer has loaded it paints the channels instead (composited below, after the ribbons). The two
@@ -1998,6 +2013,7 @@ onBeforeUnmount(() => {
   ashBack = []
   ashFront = []
   silhouette = null
+  farRidges = null
 })
 </script>
 

@@ -29,6 +29,7 @@ function fakeContext(canvas) {
     globalAlpha: 1,
     globalCompositeOperation: 'source-over',
     drawImage: (...args) => calls.push({ fn: 'drawImage', args, alpha: own.globalAlpha }),
+    fill: () => calls.push({ fn: 'fill', style: own.fillStyle }),
     moveTo: (...args) => calls.push({ fn: 'moveTo', args }),
     lineTo: (...args) => calls.push({ fn: 'lineTo', args }),
     createLinearGradient: () => gradient,
@@ -132,12 +133,26 @@ function runFrame(ms = 40) {
   for (const cb of queued) cb(clock)
 }
 
+// the far ridges' fill (MountDeathfire.vue buildRidgeLayer), which nothing else on the page is filled with
+const RIDGE_FILL = 'rgba(9, 18, 15,'
+
 function kindOf(img) {
   if (img.url?.includes('.sky.')) return 'sky'
   if (img.url?.includes('.rock.')) return 'rock'
-  if (img.width === window.innerWidth && img.height === window.innerHeight) return 'painted' // the cached silhouette, one window big
+  if (img.width === window.innerWidth && img.height === window.innerHeight) {
+    // a cached layer of the rock, one window big: the far ridges (every fill in their colour) or the painted cone
+    const fills = contexts.get(img)?.calls.filter((c) => c.fn === 'fill') ?? []
+    return fills.length && fills.every((c) => String(c.style).startsWith(RIDGE_FILL)) ? 'ridges' : 'painted'
+  }
   return img.width === 64 ? 'glow' : 'moon'
 }
+
+/** The points a cached layer was painted through, as [x, y] pairs: every moveTo and lineTo, in order. */
+const pathOf = (image) =>
+  contexts
+    .get(image)
+    .calls.filter((c) => c.fn === 'moveTo' || c.fn === 'lineTo')
+    .map((c) => c.args)
 
 /** What the main canvas was handed to draw, in order, as { kind, alpha, args } (args after the image). */
 const drawn = () =>
@@ -188,7 +203,7 @@ describe('with no plate on the server', () => {
     expect(s.jsons()).toEqual(['/plates/default/wide.json', '/plates/default/portrait.json'])
   })
 
-  test('the painted rock draws whole, at full alpha, from the mountain the builder makes, and nothing else is drawn under it', async () => {
+  test('the painted rock draws whole, at full alpha, from the mountain the builder makes: its far ridges, then the cone', async () => {
     await openPage('/planner', { serve: () => 'missing' })
     await flushPromises()
     const draws = frameDraws()
@@ -198,14 +213,21 @@ describe('with no plate on the server', () => {
     expect(extra).toHaveLength(0)
     expect(painted.alpha).toBe(1)
     expect(painted.args).toEqual([0, 0, 1300, 773])
-    // what it painted: the mountain mountainForRoute makes at this size for this route, and its far ridges before it
+    // what it painted: the mountain mountainForRoute makes at this size for this route, alone on its layer
     const { mountain } = mountainForRoute({ path: '/planner', w: 1300, h: 773, tune: fireTuning.bed, randomize })
     const lines = contexts.get(painted.image).calls.filter((c) => c.fn === 'lineTo').map((c) => c.args)
     expect(lines).toContainEqual([mountain.rimL.x, mountain.rimL.y])
     expect(lines).toContainEqual([mountain.rimR.x, mountain.rimR.y])
     for (const p of mountain.crown) expect(lines).toContainEqual([p.x, p.y])
-    const moves = contexts.get(painted.image).calls.filter((c) => c.fn === 'moveTo').map((c) => c.args)
-    expect(moves.length).toBeGreaterThan(1) // ridges are painted: one moveTo each, and the cone's
+    expect(contexts.get(painted.image).calls.filter((c) => c.fn === 'moveTo')).toHaveLength(1)
+    // and the far ridges on a layer of their own, whole, just before it: one moveTo each, as many as the tuning asks for
+    const kinds = draws.map((d) => d.kind)
+    expect(only(draws, 'ridges')).toHaveLength(1)
+    const [ridges] = only(draws, 'ridges')
+    expect(ridges.alpha).toBe(1)
+    expect(ridges.args).toEqual([0, 0, 1300, 773])
+    expect(kinds.indexOf('ridges')).toBe(kinds.indexOf('painted') - 1)
+    expect(contexts.get(ridges.image).calls.filter((c) => c.fn === 'moveTo')).toHaveLength(Math.round(fireTuning.bed.ridges))
   })
 
   test('the same on the hero', async () => {
@@ -277,7 +299,7 @@ describe('with a plate', () => {
     const [painted] = only(draws, 'painted')
     const calls = contexts.get(painted.image).calls
     expect(calls.filter((c) => c.fn === 'lineTo').map((c) => c.args)).toContainEqual([mapped.rimL.x, mapped.rimL.y])
-    expect(calls.filter((c) => c.fn === 'moveTo')).toHaveLength(1) // no far ridges under a plate: the cone alone
+    expect(calls.filter((c) => c.fn === 'moveTo')).toHaveLength(1) // the painted cone's layer is the cone alone
     expect(calls.find((c) => c.fn === 'moveTo').args).toEqual([mapped.left[mapped.left.length - 1].x, 773 + 20])
     // and the vent the lava leaves from (live mode: the forge's hands are on the page in dev)
     expect(window.__forge.actions.geometry().vent).toEqual(mapped.vent)
@@ -289,22 +311,26 @@ describe('with a plate', () => {
     expect(s.jsons()).toContain('/plates/home/wide.json')
   })
 
-  test('it fades in over 400 ms: the painted rock goes down at 1 - a and the plate over it at a', async () => {
+  test('it fades in over 400 ms: the painted cone goes down at 1 - a and the plate over it at a, the far ridges whole under both', async () => {
     await openPage('/planner')
     await flushPromises() // arrived at clock 1000
     let draws = frameDraws(0)
     expect(only(draws, 'sky')).toHaveLength(0) // not yet: nothing of it is visible at a = 0
     expect(only(draws, 'painted')[0].alpha).toBe(1)
+    expect(only(draws, 'ridges')[0].alpha).toBe(1)
     draws = frameDraws(200)
     expect(only(draws, 'sky')[0].alpha).toBeCloseTo(0.5)
     expect(only(draws, 'rock')[0].alpha).toBeCloseTo(0.5)
     expect(only(draws, 'painted')[0].alpha).toBeCloseTo(0.5)
+    expect(only(draws, 'ridges')[0].alpha).toBe(1)
     const kinds = draws.map((d) => d.kind)
+    expect(kinds.indexOf('ridges')).toBeLessThan(kinds.indexOf('painted'))
     expect(kinds.indexOf('painted')).toBeLessThan(kinds.indexOf('rock')) // the plate goes over the painted rock
     draws = frameDraws(200)
     expect(only(draws, 'sky')[0].alpha).toBe(1)
     expect(only(draws, 'rock')[0].alpha).toBe(1)
     expect(only(draws, 'painted')).toHaveLength(0)
+    expect(only(draws, 'ridges')[0].alpha).toBe(1)
   })
 
   test('under reduced motion there is no crossfade: the plate is whole the moment it lands, and the painted rock is not drawn', async () => {
@@ -384,6 +410,62 @@ describe('with a plate', () => {
     expect(only(after, 'sky')[0].image.url).toBe('/plates/default/portrait.sky.avif')
     const fit = expectedFit(390, 844)
     expect(only(after, 'sky')[0].args).toEqual([fit.dx, fit.dy, IMAGE.width * fit.scale, IMAGE.height * fit.scale])
+  })
+})
+
+describe('the far ridges with a plate up', () => {
+  test('they are drawn under the plate\'s rock, whole, once a frame, after the moon: before it lands, while it fades in and after', async () => {
+    await openPage('/planner')
+    await flushPromises() // the plate landed at clock 1000
+    for (const ms of [0, 100, 200, 300, 100, 500]) {
+      const draws = frameDraws(ms)
+      const kinds = draws.map((d) => d.kind)
+      const ridges = only(draws, 'ridges')
+      expect(ridges).toHaveLength(1) // never twice: the painted cone's layer has none of them
+      expect(ridges[0].alpha).toBe(1)
+      expect(ridges[0].args).toEqual([0, 0, 1300, 773])
+      expect(kinds.indexOf('moon')).toBeLessThan(kinds.indexOf('ridges'))
+      if (kinds.includes('rock')) expect(kinds.indexOf('ridges')).toBeLessThan(kinds.indexOf('rock'))
+      if (kinds.includes('painted')) expect(kinds.indexOf('ridges')).toBeLessThan(kinds.indexOf('painted'))
+    }
+  })
+
+  test('they are the painted ones the page had before the plate came, point for point: nothing moves when it lands', async () => {
+    const held = gate()
+    await openPage('/planner', { serve: async () => (await held.wait, 'ok') })
+    await flushPromises()
+    const before = pathOf(only(frameDraws(), 'ridges')[0].image)
+    expect(only(frameDraws(), 'rock')).toHaveLength(0) // still on its way
+    held.open()
+    await flushPromises()
+    clock += 400
+    const draws = frameDraws(0)
+    expect(only(draws, 'rock')[0].alpha).toBe(1)
+    expect(pathOf(only(draws, 'ridges')[0].image)).toEqual(before)
+    expect(before.length).toBeGreaterThan(0)
+  })
+
+  test('under reduced motion they are under the plate the moment it lands', async () => {
+    reduced = true
+    await openPage('/planner')
+    mainContext().calls.length = 0
+    await flushPromises()
+    const draws = drawn()
+    const kinds = draws.map((d) => d.kind)
+    expect(only(draws, 'ridges')[0].alpha).toBe(1)
+    expect(kinds.indexOf('ridges')).toBeLessThan(kinds.indexOf('rock'))
+    expect(only(draws, 'painted')).toHaveLength(0)
+  })
+
+  test('a resize rebuilds them for the new window, still under the plate', async () => {
+    await openPage('/planner')
+    await flushPromises()
+    runFrame(500)
+    await resizeTo(1280, 720)
+    clock += 500
+    const draws = frameDraws(0)
+    expect(only(draws, 'ridges')[0].args).toEqual([0, 0, 1280, 720])
+    expect(only(draws, 'rock')[0].alpha).toBe(1)
   })
 })
 
