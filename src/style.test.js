@@ -264,7 +264,7 @@ describe('tap targets', () => {
   const read = (file) => readFileSync(join(dir, file), 'utf8')
   // `selector {` at the start of a line, indented or not (the shared rules in style.css sit inside a layer).
   const rule = (source, selector) =>
-    new RegExp(`\\n[ \\t]*${selector.replace(/[.[\]]/g, '\\$&')} \\{([^}]*)\\}`).exec(source)?.[1] ?? ''
+    new RegExp(`\\n[ \\t]*${selector.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')} \\{([^}]*)\\}`).exec(source)?.[1] ?? ''
 
   it('is auto on desktop and 44px on phones and touch screens', () => {
     expect(css).toMatch(/:root\s*\{\s*--tap:\s*auto;/)

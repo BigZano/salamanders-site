@@ -109,7 +109,7 @@ describe('ForgeMark', () => {
 
     it('has its hot zone (ember to the core to ember) in the middle 30% and the core at the centre', () => {
       const at = (name) =>
-        [...rule('.forge-mark').matchAll(new RegExp(`${name.replace(/[()]/g, '\\$&')}\\s+(\\d+)%`, 'g'))].map((m) => Number(m[1]))
+        [...rule('.forge-mark').matchAll(new RegExp(`${name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\s+(\\d+)%`, 'g'))].map((m) => Number(m[1]))
       expect(at('var(--color-ember)')).toEqual([35, 65])
       expect(at('var(--mark-core)')).toEqual([50])
       expect(at('var(--color-ash-2)')).toEqual([20, 80])

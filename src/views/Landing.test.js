@@ -148,7 +148,7 @@ describe('Landing muster style source', () => {
   const source = readFileSync(fileURLToPath(import.meta.url).replace(/\.test\.js$/, '.vue'), 'utf8')
   const style = source.slice(source.indexOf('<style'))
   const rule = (selector) => {
-    const escaped = selector.replace(/[.[\]]/g, '\\$&')
+    const escaped = selector.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
     return new RegExp(`(?:^|\\n)${escaped}\\s*\\{([^}]*)\\}`).exec(style)?.[1] ?? ''
   }
 
