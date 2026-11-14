@@ -73,6 +73,25 @@
       input[type='range'] {
         width: 100%;
       }
+      label.tune {
+        display: grid;
+        grid-template-columns: 1fr auto;
+        gap: 2px 6px;
+        margin: 4px 0;
+        cursor: default;
+      }
+      label.tune input {
+        grid-column: 1 / -1;
+      }
+      label.tune output {
+        color: #ffb066;
+      }
+      #tune-out {
+        color: #7a8a81;
+        font-size: 11px;
+        white-space: pre-wrap;
+        margin: 6px 0 0;
+      }
       #stage {
         position: relative;
         overflow: hidden;
@@ -104,6 +123,7 @@
       </div>
       <h2>Lava fire</h2>
       <div class="row" id="pals">
+        <button data-pal="forge">Forge blend</button>
         <button data-pal="molten">Molten</button>
         <button data-pal="doom">Doom raw</button>
       </div>
@@ -114,6 +134,22 @@
         <button data-size="768">768</button>
         <button data-size="390">390</button>
       </div>
+      <h2>Phone</h2>
+      <div class="row" id="phones">
+        <button data-phone="roof">Roof</button>
+        <button data-phone="stack">Stack</button>
+      </div>
+      <h2>Inner pages</h2>
+      <div class="row" id="inners">
+        <button data-inner="left">Left as home</button>
+        <button data-inner="right">Mirrored right</button>
+      </div>
+      <h2>Tuner</h2>
+      <div id="tuner"></div>
+      <div class="row">
+        <button id="tune-reset">Reset tuner</button>
+      </div>
+      <pre id="tune-out"></pre>
       <h2>Mock layers</h2>
       <div id="layers"></div>
       <h2>Moon across the sky</h2>
