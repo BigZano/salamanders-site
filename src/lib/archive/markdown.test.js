@@ -163,6 +163,32 @@ describe('inline', () => {
   it('an unpaired ** does not become empty emphasis', () => {
     expect(one('**a*')).toEqual([{ type: 'text', value: '*' }, { type: 'em', children: [{ type: 'text', value: 'a' }] }])
   })
+  describe('a doubled marker inside a single-marker span is a unit, as in Discord, not its closer', () => {
+    const t = (value) => ({ type: 'text', value })
+    it('an italic sentence holding a bold link stays one italic span, the link intact', () => {
+      expect(one('*see the [**Hall**](https://a.io) now*')).toEqual([{ type: 'em', children: [
+        t('see the '), { type: 'link', href: 'https://a.io', children: [{ type: 'strong', children: [t('Hall')] }] }, t(' now'),
+      ] }])
+    })
+    it.each([
+      ['*a **b** c*', 'em', [t('a '), { type: 'strong', children: [t('b')] }, t(' c')]],
+      ['_a __b__ c_', 'em', [t('a '), { type: 'underline', children: [t('b')] }, t(' c')]],
+    ])('%s', (s, type, children) => expect(one(s)).toEqual([{ type, children }]))
+    it.each([
+      // A run of markers pairs up from its start; an odd run's last marker is the closer.
+      ['*a***', [{ type: 'em', children: [t('a**')] }]],
+      ['*a ***', [{ type: 'em', children: [t('a **')] }]],
+      ['*a ****b*', [{ type: 'em', children: [t('a ****b')] }]],
+      ['*a**b*c', [{ type: 'em', children: [t('a**b')] }, t('c')]],
+      ['_a___', [{ type: 'em', children: [t('a__')] }]],
+      // An even run is all pairs, so with no lone marker after it the span never closes.
+      ['*a**', [t('*a**')]],
+      ['*a****', [t('*a****')]],
+      ['_a__', [t('_a__')]],
+      // A lone marker after a space still can't close.
+      ['*a ** *', [t('*a ** *')]],
+    ])('%s', (s, want) => expect(one(s)).toEqual(want))
+  })
   it('emphasis needs non-space just inside both markers', () => {
     expect(one('* a*')).toEqual([{ type: 'text', value: '* a*' }])
     expect(one('*a *')).toEqual([{ type: 'text', value: '*a *' }])
@@ -235,6 +261,11 @@ describe('hostile input', () => {
     ['deep nesting', '**__~~||'.repeat(5_000) + 'x' + '||~~__**'.repeat(5_000)],
     ['2k nested list levels', Array.from({ length: 2_000 }, (_, i) => ' '.repeat(i) + '- x').join('\n')],
     ['zero-width and RTL', '\u200b**\u202ex\u200d**'],
+    ['an italic opener before 1 MB of paired asterisks', '*a' + '**'.repeat(500_000)],
+    ['an italic opener before 1 MB of bold spans', '*a ' + '**b'.repeat(330_000)],
+    ['italic openers each before a pair', '*a**'.repeat(250_000)],
+    ['italic openers before runs of four', '*a ****'.repeat(140_000)],
+    ['an underscore opener before 1 MB of paired underscores', '_a' + '__'.repeat(500_000)],
   ])('%s parses in < 2s without throwing', (_, s) => {
     // Uninstrumented these take ~250ms max; Stryker's instrumentation is ~10x
     // slower, and its own per-mutant timeout catches runaway mutants anyway.

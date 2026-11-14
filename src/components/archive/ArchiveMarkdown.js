@@ -5,6 +5,7 @@
  */
 import { defineComponent, h, ref } from 'vue'
 import { RouterLink } from 'vue-router'
+import { parseDiscordRef } from '../../lib/archive/links'
 
 const Spoiler = defineComponent({
   name: 'ArchiveSpoiler',
@@ -56,7 +57,7 @@ export default defineComponent({
         case 'emoji': return ctx.emoji(n)
         case 'mention': return mention(n, ctx)
         case 'link': return anchor(ctx.link(n.href), inl(n.children))
-        case 'url': return anchor(ctx.link(n.href), [n.href])
+        case 'url': return bareUrl(n, ctx)
         default: return ''
       }
     }
@@ -64,6 +65,13 @@ export default defineComponent({
       if (r.kind === 'route') return h(RouterLink, { to: r.to, class: 'md-link' }, () => children)
       if (r.kind === 'external') return h('a', { href: r.href, class: 'md-link md-ext', target: '_blank', rel: 'noopener noreferrer' }, children)
       return h('span', { class: 'md-unlinked' }, children)
+    }
+    // Discord shows a bare channel or message URL as the channel's name, the same as <#id>, so the
+    // archive does too rather than printing the URL. Other URLs keep their own text.
+    function bareUrl(n, ctx) {
+      const ref = parseDiscordRef(n.href)
+      if (!ref) return anchor(ctx.link(n.href), [n.href])
+      return mention({ kind: 'channel', id: ref.channelId, raw: n.href }, ctx)
     }
     function mention(n, ctx) {
       const { label, color } = ctx.mention(n)

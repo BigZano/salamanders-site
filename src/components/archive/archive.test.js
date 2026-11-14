@@ -10,7 +10,7 @@ import ArchiveImage from './ArchiveImage.vue'
 import { parse } from '../../lib/archive/markdown'
 import { useArchive } from '../../stores/archive'
 import { useAuth } from '../../stores/auth'
-import { makeIndex, IDS } from '../../lib/archive/testIndex'
+import { makeIndex, IDS, LINKS } from '../../lib/archive/testIndex'
 import { stashAnchor, takeAnchor } from '../../lib/archive/anchor'
 
 // Only Discord's full-page redirect is stubbed; the real signIn runs.
@@ -117,6 +117,38 @@ describe('ArchiveView', () => {
     expect(msg.findAll('.md-mention-channel').map((m) => m.text())).toEqual(['#fixture-reports'])
     expect(msg.text()).toContain('Report in #fixture-reports please')
     expect(msg.find('a').exists()).toBe(false)
+  })
+  describe('a bare Discord URL reads as the channel it names, as Discord shows it, never as the URL', () => {
+    const G = IDS.GUILD
+    async function bare(content) {
+      const index = makeIndex()
+      const f = `threads/${IDS.A_T2}.json`
+      const t = JSON.parse(index.collections.accolades.files[f])
+      t.messages.push({ id: '100000000000000032', type: 0, position: 6, attachments: [], content })
+      index.collections.accolades.files[f] = JSON.stringify(t)
+      const { w } = await mountView(`/accolades/${IDS.A_T2}`, { index })
+      return w.find('#m-100000000000000032')
+    }
+    it.each([
+      ['a channel outside the archive', `https://discord.com/channels/${G}/${IDS.EXT_CHANNEL}`],
+      ['a message in it, in angle brackets', `<https://discordapp.com/channels/${G}/${IDS.EXT_CHANNEL}/${IDS.DEAD_MSG}>`],
+    ])('%s: its name, plain, in the sentence', async (_, url) => {
+      const msg = await bare(`Post in the ${url} channel, tagging Command.`)
+      expect(msg.text()).toBe('Post in the #fixture-reports channel, tagging Command.')
+      expect(msg.findAll('.md-mention-channel').map((m) => m.text())).toEqual(['#fixture-reports'])
+      expect(msg.find('a').exists()).toBe(false)
+    })
+    it('a thread in the archive: its name, linked to its page', async () => {
+      const msg = await bare(`See ${LINKS.toRanks} first.`)
+      expect(msg.text()).toBe('See #Fixture Ranks first.')
+      const a = msg.find('a.md-mention')
+      expect([a.text(), a.attributes('href')]).toEqual(['#Fixture Ranks', `/ranks/${IDS.R_TOC}#m-${IDS.R_TOC_M}`])
+    })
+    it('a link that is not Discord keeps its URL as its text', async () => {
+      const msg = await bare('See https://example.com/rules first.')
+      expect(msg.find('a.md-ext').text()).toBe('https://example.com/rules')
+      expect(msg.find('.md-mention').exists()).toBe(false)
+    })
   })
   it('dead link follows its fix to the replacement message', async () => {
     const { w } = await mountView(`/accolades/${IDS.A_T2}`)

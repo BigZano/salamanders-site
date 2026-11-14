@@ -69,6 +69,9 @@ describe.skipIf(!present)('real export renders (local only)', () => {
             if (hash) expect(targetCol.threads.get(target).messages.some((m) => `m-${m.id}` === hash), `thread ${threadId} → ${href}`).toBe(true)
           }
         }
+        // Nor does the page's text show a Discord URL: a bare one reads as the channel it names.
+        expect(/discord(app)?\.com\/channels|discord\.gg/i.test(w.text()), `thread ${threadId} shows a Discord URL`).toBe(false)
+        expect(w.text().includes('#unknown-channel'), `thread ${threadId} names an unknown channel`).toBe(false)
         // Pruning never drops a live link: every one in the source is rendered (plus the ToC overlay's entries).
         const kind = (h) => classifyHref(h, archive.archive).kind
         const isToc = threadId === col.tocThreadId

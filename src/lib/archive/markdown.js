@@ -133,6 +133,18 @@ export function parseInline(s) {
   // No memo needed: when a delimiter has no closer after i, no later opener
   // of it exists either, so each failed scan happens at most once per delimiter.
   const closing = (delim, from) => s.indexOf(delim, from)
+  // A single-marker span closes at the first lone marker. A doubled one inside it is a unit, as in
+  // Discord, so "*in the [**Hall**](…) now*" stays one span. A run of markers pairs up from its
+  // start, and an odd run ends in the closer. An opener is never followed by its own marker, so every
+  // scan starts outside a run and sees the same runs: the no-memo argument above still holds.
+  const closingLone = (c, from) => {
+    for (let at = s.indexOf(c, from); at !== -1; at = s.indexOf(c, at)) {
+      let lone = false
+      for (; s[at] === c; at++) lone = !lone
+      if (lone) return at - 1
+    }
+    return -1
+  }
 
   let i = 0
   while (i < s.length) {
@@ -188,7 +200,7 @@ export function parseInline(s) {
       }
     }
     if ((c === '*' || c === '_') && isEmOpen(s, i, c)) {
-      const at = closing(c, i + 1)
+      const at = closingLone(c, i + 1)
       if (at !== -1 && isEmClose(s, at, c)) {
         i = push({ type: 'em', children: parseInline(s.slice(i + 1, at)) }, at + 1)
         continue
