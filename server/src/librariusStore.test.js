@@ -513,6 +513,67 @@ describe('upsertMessages', () => {
     expect(release).not.toHaveBeenCalled()
   })
 
+  describe('with keepReactions', () => {
+    // The same statement with the reactions left out of what a conflict updates. The insert still carries them ($11), so a
+    // message that is new is stored with the reactions it came with.
+    const KEEPING = INSERT.replace('reactions = excluded.reactions, ', '')
+
+    it('leaves the stored reactions alone when the message exists, and still inserts them when it does not', async () => {
+      const { pool, log } = fakePool([['insert into librarius_messages', [{ id: MSG }]]])
+      const m = message()
+      expect(await store(pool).upsertMessages([m], { keepReactions: true })).toBeUndefined()
+      expect(KEEPING).not.toBe(INSERT)
+      expect(log.map((l) => l.sql)).toEqual(['begin', KEEPING, DELETE_ATTACHMENTS, INSERT_ATTACHMENT, 'commit'])
+      expect(log[1].sql.slice(log[1].sql.indexOf('do update set'))).not.toContain('reactions')
+      expect(log[1].sql.slice(0, log[1].sql.indexOf('do update set'))).toContain('$11::jsonb')
+      expect(log[1].params[10]).toBe(JSON.stringify(m.reactions))
+    })
+
+    it('changes nothing else about the write: the same parameters and the same stamp of a new number', async () => {
+      const keep = fakePool([['insert into librarius_messages', [{ id: MSG }]]])
+      const full = fakePool([['insert into librarius_messages', [{ id: MSG }]]])
+      await store(keep.pool).upsertMessages([message()], { keepReactions: true })
+      await store(full.pool).upsertMessages([message()])
+      expect(keep.log.map((l) => l.params)).toEqual(full.log.map((l) => l.params))
+      expect(keep.log[1].sql).toContain("rev = nextval('librarius_rev')")
+      expect(keep.log[1].sql).toContain('edited_at = excluded.edited_at')
+    })
+
+    it('applies to every message of a batch', async () => {
+      const { pool, log } = fakePool([['insert into librarius_messages', [{ id: MSG }]]])
+      await store(pool).upsertMessages([message({ id: MSG }), message({ id: MSG_2 })], { keepReactions: true })
+      expect(log.filter((l) => l.sql.startsWith('insert into librarius_messages')).map((l) => l.sql)).toEqual([KEEPING, KEEPING])
+    })
+
+    it.each([[undefined], [{}], [{ keepReactions: undefined }], [{ keepReactions: false }]])(
+      'writes the reactions as before when the options are %j',
+      async (options) => {
+        const { pool, log } = fakePool([['insert into librarius_messages', [{ id: MSG }]]])
+        await store(pool).upsertMessages([message()], options)
+        expect(log[1].sql).toBe(INSERT)
+      },
+    )
+
+    it.each([[1], [0], ['true'], [null], [{}], [[]]])('refuses %j, which is not true or false, before any query', async (bad) => {
+      const { pool, log } = fakePool([['insert into librarius_messages', [{ id: MSG }]]])
+      await expect(store(pool).upsertMessages([message()], { keepReactions: bad })).rejects.toThrow('keepReactions must be true or false')
+      expect(log).toEqual([])
+    })
+
+    it('refuses a bad option even when there is nothing to write', async () => {
+      const { pool, log } = fakePool()
+      await expect(store(pool).upsertMessages([], { keepReactions: 'yes' })).rejects.toThrow(TypeError)
+      expect(log).toEqual([])
+    })
+
+    it('rolls back and gives the error to the caller when the write fails', async () => {
+      const err = boom()
+      const { pool, sqls } = fakePool([['insert into librarius_messages', err]])
+      await expect(store(pool).upsertMessages([message()], { keepReactions: true })).rejects.toBe(err)
+      expect(sqls()).toEqual(['begin', KEEPING, 'rollback'])
+    })
+  })
+
   it.each([undefined, null, message(), 'x', new Set([message()])])('refuses %j, which is not a list', async (bad) => {
     const { pool, log } = fakePool()
     await expect(store(pool).upsertMessages(bad)).rejects.toThrow('rows must be a list')

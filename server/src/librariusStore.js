@@ -35,17 +35,27 @@ const POST_MESSAGES = `select ${MESSAGE_COLUMNS} from librarius_messages where p
 
 const REPLIES = '(select count(*)::int from librarius_messages m where m.post_id = p.id and m.id <> p.id)'
 
-/** Insert a message, or update what Discord can change on it, stamping a new rev either way. → { id } when written. */
-const UPSERT_MESSAGE = `insert into librarius_messages
+/**
+ * Insert a message, or update what Discord can change on it, stamping a new rev either way. → { id } when written.
+ * `reactions` is the one column a caller may ask to leave alone on an update: see UPSERT_KEEPING_REACTIONS.
+ */
+const upsertMessageSql = (updatesReactions) => `insert into librarius_messages
     (id, post_id, author_id, author_name, author_avatar, webhook_id, kind, content, embeds, stickers, reactions, reply_to, created_at, edited_at)
   select $1::bigint, $2::bigint, $3::bigint, $4::text, $5::text, $6::bigint, $7::smallint, $8::text, $9::jsonb, $10::jsonb, $11::jsonb, $12::bigint, $13::timestamptz, $14::timestamptz
   where exists (select 1 from librarius_posts where id = $2)
   on conflict (id) do update set
     author_id = excluded.author_id, author_name = excluded.author_name, author_avatar = excluded.author_avatar,
     webhook_id = excluded.webhook_id, kind = excluded.kind, content = excluded.content, embeds = excluded.embeds,
-    stickers = excluded.stickers, reactions = excluded.reactions, reply_to = excluded.reply_to,
+    stickers = excluded.stickers, ${updatesReactions ? 'reactions = excluded.reactions, ' : ''}reply_to = excluded.reply_to,
     edited_at = excluded.edited_at, rev = nextval('librarius_rev')
   returning id`
+
+const UPSERT_MESSAGE = upsertMessageSql(true)
+/**
+ * The same, without `reactions` among what a conflict updates: a message already stored keeps the counts it has, and
+ * a new one is still inserted with the reactions it came with.
+ */
+const UPSERT_KEEPING_REACTIONS = upsertMessageSql(false)
 
 /**
  * Every post, with what the topic list shows of it, in one statement: its latest message (the newest by id, the
@@ -242,14 +252,19 @@ export function createLibrariusStore(pool) {
     /**
      * Write parseMessage rows, each with a new rev, and replace each one's attachments, all in one transaction. A message
      * whose post is not stored is skipped. Every row is checked before the first is written.
+     *
+     * With `keepReactions: true` a message that is already stored keeps the reactions it has, whatever the row says,
+     * and a new one is stored with the row's: for a live update of a message, which can leave its reactions out. It is
+     * true or false, else a TypeError before any query.
      */
-    async upsertMessages(rows) {
+    async upsertMessages(rows, { keepReactions = false } = {}) {
       needList(rows, 'rows')
+      if (typeof keepReactions !== 'boolean') throw new TypeError('keepReactions must be true or false')
       for (const m of rows) checkMessage(m)
       if (rows.length === 0) return
       return inTx(async (q) => {
         for (const m of rows) {
-          const { rows: written } = await q.query(UPSERT_MESSAGE, [
+          const { rows: written } = await q.query(keepReactions ? UPSERT_KEEPING_REACTIONS : UPSERT_MESSAGE, [
             m.id,
             m.postId,
             m.authorId,
