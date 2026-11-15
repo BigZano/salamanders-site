@@ -58,6 +58,7 @@ export default {
     'server/src/librariusPerms.js',
     'server/src/librariusParse.js',
     'server/src/librariusStore.js',
+    'server/src/librariusDiscord.js',
   ],
   coverageAnalysis: 'perTest',
   thresholds: { high: 100, low: 100, break: 100 },

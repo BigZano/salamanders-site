@@ -57,6 +57,7 @@ const GATED = [
   'server/src/librariusPerms.js',
   'server/src/librariusParse.js',
   'server/src/librariusStore.js',
+  'server/src/librariusDiscord.js',
 ]
 
 export default defineConfig({
