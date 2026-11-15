@@ -18,7 +18,8 @@
  *
  * Attachment links expire, and the link refresh (librariusLinks.js) keeps them ahead of that for posts that are read.
  * Any that lapse within five minutes of a read are renewed there and then (the first 50 shown), stored, and answered
- * renewed. One that cannot be renewed keeps the link the store has.
+ * renewed: those of a page's messages, and the thumbnails of the topic list, which no one need have opened. One that
+ * cannot be renewed keeps the link the store has.
  *
  * Names and avatars: the roster's now, else the ones stored with the message. `people` answers them by member id for
  * everyone a page names: its authors, those a message mentions, and the authors of the messages it replies to.
@@ -94,26 +95,23 @@ export function createLibrariusHandler({ access, store, guild, links, importer, 
   }
 
   /**
-   * → Map of attachment id → the link to show, for the attachments of `rows` whose link lapses within five minutes (the
-   * first 50) and that Discord renewed. The new links are stored too.
+   * → Map of attachment id → { url, expiresAt }, the new link of each of `candidates` ([{ id, url, expiresAt }]) whose link
+   * lapses within five minutes (the first 50 of those) and that Discord renewed. The new links are stored too.
    */
-  async function renewedLinks(rows) {
-    const due = []
-    for (const message of rows) {
-      // A link with no expiry reads as NaN, which is never due.
-      for (const a of message.attachments) if (Date.parse(a.expiresAt) <= now() + REFRESH_WITHIN_MS) due.push({ id: a.id, url: a.url })
-    }
+  async function renewedLinks(candidates) {
+    // A link with no expiry reads as NaN, which is never due.
+    const due = candidates.filter((a) => Date.parse(a.expiresAt) <= now() + REFRESH_WITHIN_MS)
     if (due.length === 0) return new Map()
-    const renewed = await links.refresh(due.slice(0, REFRESH_MAX))
+    const renewed = await links.refresh(due.slice(0, REFRESH_MAX).map(({ id, url }) => ({ id, url })))
     if (renewed.size > 0) {
       await store.updateAttachmentUrls([...renewed].map(([id, { url, expiresAt }]) => ({ id, url, expiresAt })))
     }
-    return new Map([...renewed].map(([id, { url }]) => [id, url]))
+    return renewed
   }
 
   /** → { messages, people } for message rows of a post: each as the site shows it, and everyone they name. */
   async function present(postId, rows) {
-    const urls = await renewedLinks(rows)
+    const renewed = await renewedLinks(rows.flatMap((m) => m.attachments))
     const directory = createDirectory(await members())
     // What each reply quotes: a message of the page, else one the store has. A message that is not stored is not quoted.
     const quoted = new Map(rows.map((r) => [r.id, r]))
@@ -154,7 +152,7 @@ export function createLibrariusHandler({ access, store, guild, links, importer, 
           size: a.size,
           width: a.width,
           height: a.height,
-          url: urls.get(a.id) ?? a.url,
+          url: renewed.get(a.id)?.url ?? a.url,
         })),
         embeds: m.embeds,
         stickers: m.stickers,
@@ -184,12 +182,19 @@ export function createLibrariusHandler({ access, store, guild, links, importer, 
 
   async function posts(_request, verdict) {
     const list = await store.listPosts(verdict.user.id)
+    // A post with no messages has no latest, and a latest without an image has none to renew.
+    const renewed = await renewedLinks(list.map((post) => post.latest?.image).filter(Boolean))
     const directory = createDirectory(await members())
     for (const post of list) {
       if (post.latest !== null) directory.note(post.latest.authorId, post.latest.authorName, post.latest.authorAvatar, post.latest.id)
       for (const id of post.posterIds) directory.want(id)
     }
-    return reply(200, { posts: list, people: directory.people() })
+    const shown = list.map((post) => {
+      const fresh = renewed.get(post.latest?.image?.id)
+      if (fresh === undefined) return post
+      return { ...post, latest: { ...post.latest, image: { ...post.latest.image, url: fresh.url, expiresAt: fresh.expiresAt } } }
+    })
+    return reply(200, { posts: shown, people: directory.people() })
   }
 
   async function openPost(id, verdict) {

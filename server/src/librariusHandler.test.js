@@ -478,6 +478,167 @@ describe('GET /librarius/posts', () => {
       expect(out.people[ALICE].name).toBe('Alice Later')
     }
   })
+
+  describe('the thumbnails', () => {
+    const oldUrl = (id) => `https://cdn.example.test/attachments/${id}/thumb.png?ex=old`
+    const newUrl = (id) => `https://cdn.example.test/attachments/${id}/thumb.png?ex=fresh`
+    const nextExpiry = () => at(24 * 60 * MINUTE)
+    const refreshAll = (list) => new Map(list.map(({ id }) => [id, { url: newUrl(id), expiresAt: nextExpiry() }]))
+    // A post whose newest message carries an image with this id and expiry: its own post id and message id come from `n`.
+    const withImage = (n, expiresAt, over = {}) => {
+      const id = String(BigInt('200000000000002000') + BigInt(n))
+      return post(String(BigInt('200000000000005000') + BigInt(n)), {
+        latest: {
+          id: String(BigInt('200000000000003000') + BigInt(n)),
+          authorId: ALICE,
+          authorName: 'Test Alice',
+          authorAvatar: avatar(ALICE),
+          content: 'a line',
+          image: { id, url: oldUrl(id), expiresAt },
+        },
+        ...over,
+      })
+    }
+    const imageOf = (out, n) => out.posts[n].latest.image
+    const idOf = (n) => String(BigInt('200000000000002000') + BigInt(n))
+    // Deep-frozen, so a handler that changed what the store gave it would throw.
+    const frozen = (list) => structuredClone(list).map((p) => Object.freeze({ ...p, latest: p.latest && Object.freeze({ ...p.latest, image: p.latest.image && Object.freeze({ ...p.latest.image }) }) }))
+
+    it.each([
+      ['one that lapsed an hour ago', -60 * MINUTE, true],
+      ['one that lapsed a millisecond ago', -1, true],
+      ['one that lapses now', 0, true],
+      ['one that lapses in 5 minutes less a millisecond', 5 * MINUTE - 1, true],
+      ['one that lapses in exactly 5 minutes', 5 * MINUTE, true],
+      ['one that lapses in 5 minutes and a millisecond', 5 * MINUTE + 1, false],
+      ['one that lapses in an hour', 60 * MINUTE, false],
+    ])('asks for a new link for %s: %s', async (_, offset, due) => {
+      const list = [withImage(0, at(offset))]
+      const { get, refreshed, calls } = setup({ store: { listPosts: () => list }, refresh: refreshAll })
+      const out = await body(await get('/librarius/posts'))
+      if (due) {
+        expect(refreshed).toEqual([[{ id: idOf(0), url: oldUrl(idOf(0)) }]])
+        expect(imageOf(out, 0)).toEqual({ id: idOf(0), url: newUrl(idOf(0)), expiresAt: nextExpiry() })
+        expect(calls('updateAttachmentUrls')).toEqual([[[{ id: idOf(0), url: newUrl(idOf(0)), expiresAt: nextExpiry() }]]])
+      } else {
+        expect(refreshed).toEqual([])
+        expect(imageOf(out, 0)).toEqual(list[0].latest.image)
+        expect(calls('updateAttachmentUrls')).toEqual([])
+      }
+    })
+
+    it('leaves an image with no expiry, and one whose expiry cannot be read, alone', async () => {
+      const list = [withImage(0, null), withImage(1, 'not a time')]
+      const { get, refreshed, calls } = setup({ store: { listPosts: () => list }, refresh: refreshAll })
+      const out = await body(await get('/librarius/posts'))
+      expect(refreshed).toEqual([])
+      expect(calls('updateAttachmentUrls')).toEqual([])
+      expect(out.posts).toEqual(list)
+    })
+
+    it('asks for no new link when no post has an image: none, a post with no messages, a latest with no image', async () => {
+      const list = [post(POST), post(POST_2, { latest: null, posterIds: [] })]
+      const { get, refreshed, calls } = setup({ store: { listPosts: () => list }, refresh: refreshAll })
+      const out = await body(await get('/librarius/posts'))
+      expect(refreshed).toEqual([])
+      expect(calls('updateAttachmentUrls')).toEqual([])
+      expect(out.posts).toEqual(list)
+    })
+
+    it('asks for all the due links in one call, in the order of the list, and renews only those that are due', async () => {
+      const list = [withImage(0, at(0)), post(POST_2, { latest: null, posterIds: [] }), withImage(1, at(60 * MINUTE)), withImage(2, at(-MINUTE))]
+      const { get, refreshed } = setup({ store: { listPosts: () => list }, refresh: refreshAll })
+      const out = await body(await get('/librarius/posts'))
+      expect(refreshed).toEqual([
+        [
+          { id: idOf(0), url: oldUrl(idOf(0)) },
+          { id: idOf(2), url: oldUrl(idOf(2)) },
+        ],
+      ])
+      expect(imageOf(out, 0).url).toBe(newUrl(idOf(0)))
+      expect(out.posts[1].latest).toBeNull()
+      expect(imageOf(out, 2)).toEqual(list[2].latest.image)
+      expect(imageOf(out, 3).url).toBe(newUrl(idOf(2)))
+    })
+
+    it('asks for no more than the first 50, and shows the rest as they are stored', async () => {
+      const list = Array.from({ length: 60 }, (_, n) => withImage(n, at(-MINUTE)))
+      const { get, refreshed, calls } = setup({ store: { listPosts: () => list }, refresh: refreshAll })
+      const out = await body(await get('/librarius/posts'))
+      expect(refreshed).toHaveLength(1)
+      expect(refreshed[0].map((a) => a.id)).toEqual(Array.from({ length: 50 }, (_, n) => idOf(n)))
+      expect(calls('updateAttachmentUrls')[0][0]).toHaveLength(50)
+      expect(out.posts.slice(0, 50).every((p) => p.latest.image.url.endsWith('?ex=fresh'))).toBe(true)
+      expect(out.posts.slice(50).map((p) => p.latest.image)).toEqual(list.slice(50).map((p) => p.latest.image))
+    })
+
+    it('asks for exactly 50 when 50 are due', async () => {
+      const list = Array.from({ length: 50 }, (_, n) => withImage(n, at(0)))
+      const { get, refreshed } = setup({ store: { listPosts: () => list }, refresh: refreshAll })
+      await get('/librarius/posts')
+      expect(refreshed[0]).toHaveLength(50)
+    })
+
+    it('keeps the stored link when no new one comes, and stores nothing', async () => {
+      const list = [withImage(0, at(0))]
+      const { get, refreshed, calls } = setup({ store: { listPosts: () => list }, refresh: () => new Map() })
+      const res = await get('/librarius/posts')
+      expect(res.status).toBe(200)
+      expect(refreshed).toHaveLength(1)
+      expect((await body(res)).posts).toEqual(list)
+      expect(calls('updateAttachmentUrls')).toEqual([])
+    })
+
+    it('uses the links that came, keeps the others, and stores only those that came', async () => {
+      const list = [withImage(0, at(0)), withImage(1, at(0))]
+      const only = (given) => new Map(given.filter(({ id }) => id === idOf(1)).map(({ id }) => [id, { url: 'https://cdn.example.test/new', expiresAt: null }]))
+      const { get, calls } = setup({ store: { listPosts: () => list }, refresh: only })
+      const out = await body(await get('/librarius/posts'))
+      expect(imageOf(out, 0)).toEqual(list[0].latest.image)
+      expect(imageOf(out, 1)).toEqual({ id: idOf(1), url: 'https://cdn.example.test/new', expiresAt: null })
+      expect(calls('updateAttachmentUrls')).toEqual([[[{ id: idOf(1), url: 'https://cdn.example.test/new', expiresAt: null }]]])
+    })
+
+    it('changes nothing else of the post, and nothing in what the store gave it', async () => {
+      const list = frozen([withImage(0, at(0), { pinned: true, unread: 4, tagIds: [] }), withImage(1, at(MINUTE * 60))])
+      const { get } = setup({ store: { listPosts: () => list }, refresh: refreshAll })
+      const out = await body(await get('/librarius/posts'))
+      const expected = structuredClone(list)
+      expected[0].latest.image = { id: idOf(0), url: newUrl(idOf(0)), expiresAt: nextExpiry() }
+      expect(out.posts).toEqual(expected)
+    })
+
+    it('still names the people of the list', async () => {
+      const list = [withImage(0, at(0))]
+      const out = await body(await setup({ store: { listPosts: () => list }, refresh: refreshAll }).get('/librarius/posts'))
+      expect(out.people).toEqual({ [ALICE]: { name: 'Test Alice', avatar: avatar(ALICE) } })
+    })
+
+    it('does not hide a failure to store the new links', async () => {
+      const list = [withImage(0, at(0))]
+      const { get } = setup({
+        store: {
+          listPosts: () => list,
+          updateAttachmentUrls: () => {
+            throw new Error('write failed')
+          },
+        },
+        refresh: refreshAll,
+      })
+      await expect(get('/librarius/posts')).rejects.toThrow('write failed')
+    })
+
+    it('does not hide a failure of the refresh that is not Discord being unreachable', async () => {
+      const list = [withImage(0, at(0))]
+      const { get } = setup({
+        store: { listPosts: () => list },
+        refresh: () => {
+          throw new TypeError('each attachment must have an id and a url, as text.')
+        },
+      })
+      await expect(get('/librarius/posts')).rejects.toThrow('each attachment must have an id')
+    })
+  })
 })
 
 describe('GET /librarius/posts/:id', () => {
