@@ -241,3 +241,61 @@ Rollout:
    `backup/README.md`). It copies, never syncs: the backup keeps the files the purge takes out.
 
 The one-time import of the channel's back catalogue is a separate job.
+
+## Librarius (`/librarius/*`)
+
+The guild's Discord forum, read on the site: the posts and their messages are copied into Postgres (the import,
+then the gateway's live events), and the site reads that copy. Nothing here writes to Discord. Design:
+`docs/superpowers/specs/2026-11-15-librarius-design.md`. Access follows the forum in Discord: a member may read it
+here exactly when Discord would let them open it, worked out from the guild's roles and the forum's permission
+overwrites (View Channel and Read Message History, `librariusPerms.js`). The guild owner and Administrators read it
+too, as in Discord, and a role the forum shuts out does not. Reads reuse a verdict for 30 seconds; marking a post read
+asks Discord afresh. Any Discord failure answers 503, and responses are never cached.
+
+| Endpoint | Who | Notes |
+|---|---|---|
+| `GET /librarius/me` | any signed-in user | `{ access }` for someone who may not read the forum; for a reader also `ready` (the import has finished), `tags`, `roles`, `guildId`, `forumId`; never 403 |
+| `GET /librarius/emoji` | reader | `{ emoji }`: the guild's custom emoji |
+| `GET /librarius/posts` | reader | `{ posts, people }`: every post with its tag ids, its latest message, its posters and the caller's unread count |
+| `GET /librarius/posts/:id` | reader | `{ post, lastRead, rev }`; opening a post marks it viewed, which keeps its attachment links fresh |
+| `GET /librarius/posts/:id/messages` | reader | one page: `?limit=` (1 to 100, default 50) and at most one of `before`, `after` or `around` (a message id); `{ messages, hasOlder, hasNewer, people, rev }` |
+| `GET /librarius/posts/:id/changes?since=<rev>` | reader | what changed after `rev`: `{ messages, deleted, rev, people }`, or `{ reset: true }` when too much did and the page must be read again |
+| `PUT /librarius/posts/:id/read` | reader | JSON `{ messageId }` (at most 1 KB): how far the caller has read; 204 |
+
+A route that is not listed answers 404, an unconfigured Librarius 503, no identity 401 and no read permission 403
+(except `/librarius/me`). A post or message id that is not a snowflake never reaches the database: a post is 404, a
+cursor 400. Attachment links are signed by Discord and lapse; the link refresh (every 10 minutes) renews those of posts
+that were viewed in the last day, and a read renews any that lapse within five minutes, so a reader is never handed a
+dead link when Discord can be reached.
+
+| Variable | Value |
+|---|---|
+| `LIBRARIUS_CHANNEL_ID` | the forum channel's id (17 to 20 digits) — no default, required. Not a secret, but live data: `server/.env` only |
+| `DISCORD_GUILD_ID`, `DISCORD_BOT_TOKEN` | shared with the rest of the API — required |
+
+The Librarius is on only when all three are set (and the forum id is a channel id). Otherwise every `/librarius`
+route answers 503 "not configured" and nothing starts (no gateway connection, no timer, no import), so the image may
+ship first. The API logs one warning at startup saying which, never a value. When it is on, the API starts, after it is
+listening: the roster warm-up, the posts load, the import (in the background, and again after every gateway READY as a
+catch-up), the link refresh timer and the gateway connection. A step that fails is logged as `Librarius: ...` (never the
+token or a link) and the rest go on; none of it can keep the API from listening.
+
+**Bot permissions:** View Channel and Read Message History on the forum (granted 2026-11-15), and the Message Content
+intent toggle on the bot's page in the Discord Developer Portal, already on for the Reliquarium (without it the gateway
+is refused).
+
+**The port.** `docker-compose.yml` publishes the API as `127.0.0.1:8787:8787`: on the host's loopback only. The Cloudflare
+tunnel runs on the host and reaches it there; nothing else on the LAN can. `src/composePorts.test.js` pins this.
+
+Rollout:
+
+1. Apply `schema.sql` (idempotent, command in the reports section above) **before** starting the new image: the tables
+   are `librarius_*`.
+2. Set `LIBRARIUS_CHANNEL_ID` in `server/.env`.
+3. Rebuild the API, keeping the rollback tag: `docker tag server-api:latest server-api:pre-librarius` first, then
+   `docker compose up -d --build api`. To go back, point the `api` service at `server-api:pre-librarius`.
+4. Check:
+   - `curl -s -o /dev/null -w '%{http_code}' localhost:8787/librarius/me` answers 401;
+   - `docker compose logs api` shows no "Librarius is not configured";
+   - the import finishes (`/librarius/me` says `ready: true` for a reader);
+   - port 8787 is no longer reachable from another machine on the LAN.

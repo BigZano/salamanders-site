@@ -73,8 +73,14 @@ services:
       R2_SECRET_ACCESS_KEY: ${R2_SECRET_ACCESS_KEY:-}
       # For the e2e stack's mock R2 only. Leave unset in production: empty means Cloudflare's endpoint.
       R2_ENDPOINT: ${R2_ENDPOINT:-}
+      # The Librarius (the guild's forum, read on the site): the forum channel's id. No default anywhere: unset, every
+      # /librarius route answers 503 and the gateway connection, the import and the link refresh do not start. The id is
+      # not a secret, but it is live data, so it lives in server/.env and never in git.
+      LIBRARIUS_CHANNEL_ID: ${LIBRARIUS_CHANNEL_ID:-}
     ports:
-      - '8787:8787'
+      # The host's loopback only: the Cloudflare tunnel and the owner's curl both run on the host, so nothing on the
+      # LAN can reach the API directly.
+      - '127.0.0.1:8787:8787'
 
 volumes:
   db-data:
