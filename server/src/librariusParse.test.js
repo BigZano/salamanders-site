@@ -544,6 +544,15 @@ describe('parseMessage', () => {
       expect(parseMessage(raw)).toBeNull()
     })
 
+    it('stores kind 0 as a plain zero, even when Discord sends minus zero', () => {
+      // MESSAGE_KINDS.has(-0) is true, since a Set compares like Object.is except for zero.
+      const kind = parseMessage(message({ type: -0 })).kind
+      expect(Object.is(kind, 0)).toBe(true)
+      expect(Object.is(parseMessage(message({ type: 0 })).kind, 0)).toBe(true)
+      expect(JSON.parse(JSON.stringify(parseMessage(message({ type: -0 }))))).toStrictEqual(parseMessage(message({ type: -0 })))
+      for (const type of [19, 20, 23]) expect(Object.is(parseMessage(message({ type })).kind, type)).toBe(true)
+    })
+
     it('is null for every message type outside the four kept', () => {
       for (let type = -1; type <= 60; type++) {
         if (MESSAGE_KINDS.has(type)) continue
@@ -925,6 +934,12 @@ describe('parseMessage', () => {
       }
     })
 
+    it('stores a size of minus zero as a plain zero', () => {
+      expect(Object.is(row({ size: -0 })[0].size, 0)).toBe(true)
+      expect(Object.is(row({ size: 0 })[0].size, 0)).toBe(true)
+      expect(Object.is(row({ size: 5 })[0].size, 5)).toBe(true)
+    })
+
     it('reads width and height when they are whole positive numbers, else null', () => {
       expect(row({ width: 1, height: 1 })[0]).toMatchObject({ width: 1, height: 1 })
       expect(row({ width: 2147483647, height: 2147483647 })[0]).toMatchObject({ width: 2147483647, height: 2147483647 })
@@ -1279,7 +1294,7 @@ describe('parseMessage', () => {
       junk,
     )
     const stamp = fc.oneof(fc.constant(CREATED), fc.date({ min: new Date('2015-01-01'), max: new Date('2100-01-01'), noInvalidDate: true }).map((d) => d.toISOString()), textish)
-    const natural = fc.oneof(fc.integer({ min: -3, max: 3000 }), junk)
+    const natural = fc.oneof(fc.integer({ min: -3, max: 3000 }), fc.constant(-0), junk)
     const image = fc.oneof(fc.record({ url: urlish, proxy_url: urlish, width: natural, height: natural }, { requiredKeys: [] }), junk)
     const raw = fc.oneof(
       { weight: 1, arbitrary: junk },
@@ -1289,7 +1304,7 @@ describe('parseMessage', () => {
           {
             id: idish,
             channel_id: idish,
-            type: fc.oneof({ weight: 8, arbitrary: fc.constantFrom(0, 19, 20, 23) }, { weight: 1, arbitrary: junk }),
+            type: fc.oneof({ weight: 8, arbitrary: fc.constantFrom(0, -0, 19, 20, 23) }, { weight: 1, arbitrary: junk }),
             webhook_id: idish,
             author: fc.oneof(
               { weight: 9, arbitrary: fc.record({ id: idish, username: textish, global_name: textish, avatar: hash }, { requiredKeys: ['id'] }) },
@@ -1332,6 +1347,7 @@ describe('parseMessage', () => {
         if (row === null) return
         answered++
         expect(MESSAGE_KINDS.has(row.kind)).toBe(true)
+        expect(Object.is(row.kind, -0)).toBe(false)
         for (const id of [row.id, row.postId, row.authorId]) expect(id).toMatch(SNOW)
         expect(row.webhookId === null || SNOW.test(row.webhookId)).toBe(true)
         expect(row.replyTo === null || (row.kind === 19 && SNOW.test(row.replyTo))).toBe(true)
@@ -1348,7 +1364,7 @@ describe('parseMessage', () => {
           expect(a.filename.length).toBeLessThanOrEqual(200)
           expect(a.url.startsWith('https://cdn.discordapp.com/attachments/')).toBe(true)
           expect(a.proxyUrl === null || a.proxyUrl.startsWith('https://media.discordapp.net/attachments/')).toBe(true)
-          expect(Number.isInteger(a.size) && a.size >= 0 && a.size <= 2147483647).toBe(true)
+          expect(Number.isInteger(a.size) && a.size >= 0 && a.size <= 2147483647 && !Object.is(a.size, -0)).toBe(true)
           for (const d of [a.width, a.height]) expect(d === null || (Number.isInteger(d) && d > 0)).toBe(true)
         })
         expect(row.embeds.length).toBeLessThanOrEqual(10)

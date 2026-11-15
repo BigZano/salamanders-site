@@ -203,7 +203,8 @@ function attachmentRow(a) {
     id: a.id,
     filename: clean(a.filename, 200),
     contentType: clean(a.content_type, 100) || null,
-    size: a.size,
+    // `|| 0`: a size of minus zero is a size of zero, and is stored as one.
+    size: a.size || 0,
     width: dimension(a.width),
     height: dimension(a.height),
     url,
@@ -267,7 +268,8 @@ export function parseMessage(raw) {
     authorName: clean(author.global_name, 80) || clean(author.username, 80) || author.id,
     authorAvatar: avatar === null ? null : `https://cdn.discordapp.com/avatars/${author.id}/${avatar}.png?size=64`,
     webhookId: isId(raw.webhook_id) ? raw.webhook_id : null,
-    kind: raw.type,
+    // `|| 0`: MESSAGE_KINDS.has(-0) is true, and minus zero must not reach the row as the kind.
+    kind: raw.type || 0,
     content: clean(raw.content, 4000),
     embeds: list(raw.embeds).map(embedRow).filter((e) => e !== null).slice(0, 10),
     stickers: list(raw.sticker_items)
