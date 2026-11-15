@@ -56,6 +56,7 @@ export default {
     'server/src/galleryErase.js',
     'src/lib/gallery/embed.js',
     'server/src/librariusPerms.js',
+    'server/src/librariusParse.js',
   ],
   coverageAnalysis: 'perTest',
   thresholds: { high: 100, low: 100, break: 100 },
