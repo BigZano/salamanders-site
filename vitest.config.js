@@ -60,6 +60,7 @@ const GATED = [
   'server/src/librariusDiscord.js',
   'server/src/librariusGuild.js',
   'server/src/librariusAccess.js',
+  'server/src/librariusGateway.js',
 ]
 
 export default defineConfig({
