@@ -23,19 +23,25 @@
  * The same goes for setEmoji, which answers the emoji read in flight with something newer.
  *
  * A guild with no list of roles and a forum with no list of overwrites are Upstream rather than empty, because a forum
- * read as having no overwrites would be read as one nobody is shut out of. Within the lists, whatever is not the shape
- * Discord documents is left out, and a permission that is not digits counts as none.
+ * read as having no overwrites would be read as one nobody is shut out of. For the same reason one overwrite that is not
+ * the shape Discord documents (an id, a type of 0 or 1, an allow and a deny of digits) makes the whole forum Upstream,
+ * not just that overwrite left out: it could be the deny that shuts @everyone out. A role or a tag that is not the shape
+ * is left out, since a role lost can only take permissions away, and a role's permission that is not digits counts as
+ * none.
  */
 import { Upstream } from './discordRoles.js'
 import { parseEmoji } from './librariusParse.js'
 import { toBits } from './librariusPerms.js'
 
 const SNOWFLAKE = /^\d{17,20}$/
+// A permission value as Discord sends it, and as librariusPerms.js toBits reads it.
+const PERMISSION = /^\d{1,40}$/
 const MAX_COLOR = 0xffffff
 // Overwrite types, as Discord numbers them: a role's or a member's.
 const KINDS = [0, 1]
 
 const isId = (v) => typeof v === 'string' && SNOWFLAKE.test(v)
+const isPermission = (v) => typeof v === 'string' && PERMISSION.test(v)
 const isObject = (v) => typeof v === 'object' && v !== null && !Array.isArray(v)
 const unusable = (what) => new Upstream(`Discord answered 200 for ${what}, but not with what the Librarius expected.`)
 
@@ -51,8 +57,9 @@ function roleOf(r) {
   return { id: r.id, permissions: digits(r.permissions), name: typeof r.name === 'string' ? r.name : '', color: colorOf(r.color) }
 }
 
+// An overwrite is never skipped, since the one left out could be a deny: a forum read without it could be open to all.
 function overwriteOf(o) {
-  if (!isObject(o) || !isId(o.id) || !KINDS.includes(o.type)) return null
+  if (!isObject(o) || !isId(o.id) || !KINDS.includes(o.type) || !isPermission(o.allow) || !isPermission(o.deny)) throw unusable('the forum')
   return { id: o.id, type: o.type, allow: digits(o.allow), deny: digits(o.deny) }
 }
 
@@ -70,7 +77,7 @@ function parseGuild(raw) {
 
 function parseForum(raw) {
   if (!Array.isArray(raw.permission_overwrites)) throw unusable('the forum')
-  return { overwrites: parsed(raw.permission_overwrites, overwriteOf), tags: parsed(raw.available_tags, tagOf) }
+  return { overwrites: raw.permission_overwrites.map(overwriteOf), tags: parsed(raw.available_tags, tagOf) }
 }
 
 /**

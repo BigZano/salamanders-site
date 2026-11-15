@@ -187,13 +187,19 @@ describe('facts', () => {
     const { guild, world } = setup()
     const lengths = [15, 16, 17, 18, 19, 20, 21]
     world.guild.roles = lengths.map((n) => ({ id: '3'.repeat(n), name: 'r', color: 0, permissions: '0' }))
-    world.forum.permission_overwrites = lengths.map((n) => ({ id: '3'.repeat(n), type: 0, allow: '0', deny: '0' }))
     world.forum.available_tags = lengths.map((n) => ({ id: '3'.repeat(n), name: 't' }))
-    const facts = await guild.facts()
     const kept = [17, 18, 19, 20].map((n) => '3'.repeat(n))
+    // A role or a tag with another length is left out; an overwrite with one is Upstream, as the next describe shows.
+    world.forum.permission_overwrites = kept.map((id) => ({ id, type: 0, allow: '0', deny: '0' }))
+    const facts = await guild.facts()
     expect(facts.roles.map((r) => r.id)).toStrictEqual(kept)
     expect(facts.overwrites.map((o) => o.id)).toStrictEqual(kept)
     expect(facts.tags.map((t) => t.id)).toStrictEqual(kept)
+    for (const n of [15, 16, 21]) {
+      world.forum.permission_overwrites = [{ id: '3'.repeat(n), type: 0, allow: '0', deny: '0' }]
+      guild.invalidate('forum')
+      expect(await failure(guild.facts()), String(n)).toBeInstanceOf(Upstream)
+    }
   })
 
   it('gives a role with no name an empty one, and does not take a name that is no text', async () => {
@@ -274,29 +280,6 @@ describe('facts', () => {
     ])
   })
 
-  it('counts an allow or a deny that is not digits as none, and leaves out an overwrite of no kind or no id', async () => {
-    const { guild, world } = setup()
-    const ok = { id: READER, type: 0, allow: '1024', deny: '0' }
-    world.forum.permission_overwrites = [
-      null, undefined, 'overwrite', 8, true, [], [ok],
-      ...BAD_IDS.map((id) => ({ ...ok, id })),
-      { ...ok, type: 2 },
-      { ...ok, type: -1 },
-      { ...ok, type: '0' },
-      { ...ok, type: 0.5 },
-      { ...ok, type: null },
-      { ...ok, type: undefined },
-      { ...ok, allow: 1024, deny: -5 },
-      { ...ok, allow: undefined, deny: 'deny' },
-      { ...ok, allow: '1'.repeat(41), deny: '' },
-    ]
-    expect((await guild.facts()).overwrites).toStrictEqual([
-      { id: READER, type: 0, allow: '0', deny: '0' },
-      { id: READER, type: 0, allow: '0', deny: '0' },
-      { id: READER, type: 0, allow: '0', deny: '0' },
-    ])
-  })
-
   it('hands back copies: what a caller changes in them is not what the next caller gets', async () => {
     const { guild } = setup()
     const first = await guild.facts()
@@ -320,11 +303,17 @@ describe('facts: what is well-formed whatever Discord sends', () => {
     { id: maybe(snowflake), type: maybe(fc.constantFrom(0, 1)), allow: maybe(fc.stringMatching(/^\d{1,45}$/)), deny: maybe(fc.stringMatching(/^\d{1,45}$/)) },
     { requiredKeys: [] },
   )
+  const goodOverwrite = fc.record({ id: snowflake, type: fc.constantFrom(0, 1), allow: fc.stringMatching(/^\d{1,40}$/), deny: fc.stringMatching(/^\d{1,40}$/) })
   const tag = fc.record({ id: maybe(snowflake), name: maybe(fc.string()) }, { requiredKeys: [] })
   const world = fc.record({
     ownerId: maybe(snowflake),
     roles: fc.oneof({ weight: 8, arbitrary: fc.array(maybe(role)) }, { weight: 1, arbitrary: fc.jsonValue() }),
-    overwrites: fc.oneof({ weight: 8, arbitrary: fc.array(maybe(overwrite)) }, { weight: 1, arbitrary: fc.jsonValue() }),
+    // A malformed overwrite is Upstream, so most runs must hold only good ones for the roles and tags to be read at all.
+    overwrites: fc.oneof(
+      { weight: 8, arbitrary: fc.array(goodOverwrite) },
+      { weight: 2, arbitrary: fc.array(maybe(overwrite)) },
+      { weight: 1, arbitrary: fc.jsonValue() },
+    ),
     tags: fc.oneof({ weight: 8, arbitrary: fc.array(maybe(tag)) }, { weight: 1, arbitrary: fc.jsonValue() }),
   })
 
@@ -386,6 +375,96 @@ describe('facts: what is well-formed whatever Discord sends', () => {
         expect(gotTags).toStrictEqual(tags.map((t) => ({ id: t.id, name: t.name })))
       }),
     )
+  })
+})
+
+describe('a malformed forum overwrite', () => {
+  const good = () => ({ id: READER, type: 0, allow: '1024', deny: '0' })
+
+  // Every way one overwrite can be wrong, each with the rest of it as it should be.
+  const malformed = () => [
+    null, undefined, 'overwrite', 8, true, [], [good()],
+    ...BAD_IDS.map((id) => ({ ...good(), id })),
+    { id: undefined },
+    ...[2, -1, '0', '1', 0.5, null, undefined, NaN, true, [0], {}].map((type) => ({ ...good(), type })),
+    { id: READER, allow: '1024', deny: '0' }, // no type
+    ...[1024, -5, 8.5, '', 'deny', '-1', '1.5', '1e3', ' 8', '8 ', '8\n', '0x8', '1'.repeat(41), '\u0661', null, undefined, true, [], ['8'], {}].flatMap((value) => [
+      { ...good(), allow: value },
+      { ...good(), deny: value },
+    ]),
+    { id: READER, type: 0, deny: '0' }, // no allow
+    { id: READER, type: 0, allow: '0' }, // no deny
+  ]
+
+  it('is Upstream, wherever it stands among good ones', async () => {
+    for (const bad of malformed()) {
+      for (const list of [[bad], [bad, good()], [good(), bad], [good(), bad, good()]]) {
+        const { guild, world } = setup()
+        world.forum.permission_overwrites = list
+        const error = await failure(guild.facts())
+        expect(error, JSON.stringify(bad)).toBeInstanceOf(Upstream)
+        expect(error.message).toBe(NO_FORUM)
+      }
+    }
+  })
+
+  it('is Upstream when it is the deny of View Channel to @everyone, which skipped would open the forum to all', async () => {
+    const { guild, world } = setup()
+    world.forum.permission_overwrites = [
+      { id: GUILD, type: 0, allow: '0', deny: 1024 },
+      { id: READER, type: 0, allow: '1024', deny: '0' },
+    ]
+    expect(await failure(guild.facts())).toBeInstanceOf(Upstream)
+    world.forum.permission_overwrites = [
+      { id: 'everyone', type: 0, allow: '0', deny: '1024' },
+      { id: READER, type: 0, allow: '1024', deny: '0' },
+    ]
+    expect(await failure(guild.facts())).toBeInstanceOf(Upstream)
+  })
+
+  it('caches nothing: the next call reads the forum again, and not the guild, which was read fine', async () => {
+    const { guild, discord, world } = setup()
+    world.forum.permission_overwrites = [good(), { ...good(), type: 2 }]
+    expect(await failure(guild.facts())).toBeInstanceOf(Upstream)
+    expect(await failure(guild.facts())).toBeInstanceOf(Upstream)
+    expect(discord.channel).toHaveBeenCalledTimes(2)
+    world.forum.permission_overwrites = [good()]
+    expect((await guild.facts()).overwrites).toStrictEqual([{ id: READER, type: 0, allow: '1024', deny: '0' }])
+    expect(discord.channel).toHaveBeenCalledTimes(3)
+    expect(discord.guild).toHaveBeenCalledTimes(1)
+  })
+
+  it('is not served from an older good read once that has expired', async () => {
+    const { guild, clock, world } = setup()
+    await guild.facts()
+    clock.t = 1_000 + 300_000
+    world.forum.permission_overwrites = [{ ...good(), allow: 'x' }]
+    expect(await failure(guild.facts())).toBeInstanceOf(Upstream)
+  })
+
+  it('fails every caller waiting on the read', async () => {
+    const { guild, world } = setup()
+    world.forum.permission_overwrites = [{ ...good(), id: 'x' }]
+    const results = await Promise.all([failure(guild.facts()), failure(guild.facts())])
+    for (const error of results) expect(error).toBeInstanceOf(Upstream)
+  })
+
+  it('does not fail a forum with no overwrites at all, only one whose list is missing or bad', async () => {
+    const { guild, world } = setup()
+    world.forum.permission_overwrites = []
+    expect((await guild.facts()).overwrites).toStrictEqual([])
+  })
+
+  it('takes an allow and a deny of 1 and of 40 digits, and a type of 0 and of 1', async () => {
+    const { guild, world } = setup()
+    world.forum.permission_overwrites = [
+      { id: READER, type: 0, allow: '7', deny: '9'.repeat(40) },
+      { id: OWNER, type: 1, allow: '1'.repeat(40), deny: '0' },
+    ]
+    expect((await guild.facts()).overwrites).toStrictEqual([
+      { id: READER, type: 0, allow: '7', deny: '9'.repeat(40) },
+      { id: OWNER, type: 1, allow: '1'.repeat(40), deny: '0' },
+    ])
   })
 })
 
