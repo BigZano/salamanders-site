@@ -54,6 +54,7 @@ const GATED = [
   'server/src/galleryPurge.js',
   'server/src/galleryErase.js',
   'src/lib/gallery/embed.js',
+  'server/src/librariusPerms.js',
 ]
 
 export default defineConfig({
