@@ -485,7 +485,7 @@ second threat is the bot being made to misbehave in Discord. The layers:
 6. **Bot safety:** explicit `allowed_mentions` on every send; embeds suppressed; the author shown by real
    mention in the footer; per-member rate limits and a ceiling on all bot writes (below).
 
-**Rate limits (starting values, my call; the builder tunes them):** per member, 10 replies a minute, 20 edits a minute, 30 reactions a minute, 30 uploads an hour. Over the limit → 429 with a
+**Rate limits (starting values, my call; the builder tunes them):** per member, 3 replies a minute (see "No member is ever struck"), 20 edits a minute, 30 reactions a minute, 30 uploads an hour. Over the limit → 429 with a
 plain message. All Librarius writes to Discord share one ceiling (about one a second, with a small burst). The
 Librarius's Discord calls go through a client that obeys Discord's rate-limit headers and backs off inside its
 own share, so it can never spend the allowance the roster, membership checks, the Reliquarium and Deathwatch
@@ -506,6 +506,22 @@ site must never earn a member a timeout, an AutoMod alert, a strike or a record 
 - **If Discord blocks a send anyway** (AutoMod's "message blocked" error), the outbox does **not** retry it,
   because repeats would flood the moderators' alert channel and add to the refused-call count. The reply is
   marked "blocked by the server's rules" on the site, for its author to edit or delete.
+- **Long and multi-message replies never look like spam** (the owner's chief concern, 2026-11-15):
+  - **Fewest messages:** the primary form keeps most long replies to one message.
+  - **Spacing:** the parts of one reply go out at least 1.5 seconds apart, never as a burst.
+  - **Per-member cap:** at most 3 replies a minute per member, so one member can send at most 9 messages a
+    minute.
+  - **Webhook ceiling:** at most 20 Librarius messages a minute through the webhook, whoever sends them;
+    sends queue past it rather than burst.
+  - **No double sends:** a send that times out is never sent again blindly. The outbox first looks in the
+    thread's recent messages for one from our webhook with the same text, and only resends if none landed.
+    Repeated identical messages are what spam filters key on.
+  - **Circuit breaker:** two sends blocked by Discord within an hour pause all Librarius sending for an hour.
+    The Librarians see why on the site, so nothing compounds while someone looks.
+  - **Proven first:** batch 2's guild check runs in a private test forum channel the owner creates, not in the
+    Librarius. It sends a full-length 3-message reply and a burst at the per-member cap. Pass means no AutoMod
+    block or alert, no timeout or flag on any account, and nothing in the moderators' alert channel. If
+    anything flags, batch 2 stops and the limits are revisited before anything reaches the Librarius.
 - **Bot reactions and the "Delete on site" command** act as the app only and can't cause a strike.
 - **The other direction is unchanged:** a member already timed out in Discord can read but not post on the
   site (Access, above). That respects a strike; it never creates one.
