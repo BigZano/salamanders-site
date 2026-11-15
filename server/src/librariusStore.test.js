@@ -210,7 +210,9 @@ describe('createLibrariusStore: ids', () => {
     ['listMessages before', (s, bad) => s.listMessages(POST, { before: bad, limit: 5 }), 'before', true],
     ['listMessages after', (s, bad) => s.listMessages(POST, { after: bad, limit: 5 }), 'after', true],
     ['listMessages around', (s, bad) => s.listMessages(POST, { around: bad, limit: 5 }), 'around', true],
-    ['changes', (s, bad) => s.changes(bad, '0'), 'postId'],
+    ['changes', (s, bad) => s.changes(bad, '0', 200), 'postId'],
+    ['quotedMessages postId', (s, bad) => s.quotedMessages(bad, [MSG]), 'postId'],
+    ['quotedMessages messageId', (s, bad) => s.quotedMessages(POST, [MSG, bad]), 'messageId'],
     ['setRead memberId', (s, bad) => s.setRead(bad, POST, MSG), 'memberId'],
     ['setRead postId', (s, bad) => s.setRead(MEMBER, bad, MSG), 'postId'],
     ['setRead messageId', (s, bad) => s.setRead(MEMBER, POST, bad), 'messageId'],
@@ -1326,23 +1328,46 @@ describe('listMessages', () => {
 })
 
 describe('changes', () => {
-  const MESSAGES = `select ${COLUMNS} from librarius_messages where post_id = $1 and rev > $2 order by rev`
-  const TOMBSTONES = 'select message_id, rev from librarius_tombstones where post_id = $1 and rev > $2 order by rev'
+  const MESSAGES = `select ${COLUMNS} from librarius_messages where post_id = $1 and rev > $2 order by rev limit $3`
+  const TOMBSTONES = 'select message_id, rev from librarius_tombstones where post_id = $1 and rev > $2 order by rev limit $3'
+  const LIMIT = 200
 
   it.each(labelled(['', '-1', '1.5', ' 1', '1 ', '1\n', 'x', '\uFF11', 12, 12n, null, undefined, {}, '9223372036854775808', '99999999999999999999']))(
     'refuses a since of %s with a TypeError before any query',
     async (_, since) => {
       const { pool, log } = fakePool()
-      await expect(store(pool).changes(POST, since)).rejects.toThrow('sinceRev must be the digits of a rev')
+      await expect(store(pool).changes(POST, since, LIMIT)).rejects.toThrow('sinceRev must be the digits of a rev')
       expect(log).toEqual([])
     },
   )
 
+  it.each(labelled([0, -1, 1.5, '5', NaN, null, undefined, Infinity, 2 ** 53, true, 10n]))('refuses a limit of %s with a RangeError before any query', async (_, limit) => {
+    const { pool, log } = fakePool()
+    const failed = store(pool).changes(POST, '5', limit)
+    await expect(failed).rejects.toThrow(RangeError)
+    await expect(failed).rejects.toThrow('limit must be a whole number from 1 to')
+    expect(log).toEqual([])
+  })
+
+  it('checks the post, then the since, then the limit', async () => {
+    const { pool } = fakePool()
+    await expect(store(pool).changes('nope', 'x', 0)).rejects.toThrow('postId must be a snowflake')
+    await expect(store(pool).changes(POST, 'x', 0)).rejects.toThrow('sinceRev must be the digits')
+  })
+
   it('takes a since of 0, and the largest bigint', async () => {
     for (const since of ['0', '9223372036854775807']) {
       const { pool, log } = fakePool()
-      await store(pool).changes(POST, since)
-      expect(log[0].params).toEqual([POST, since])
+      await store(pool).changes(POST, since, LIMIT)
+      expect(log[0].params).toEqual([POST, since, LIMIT])
+    }
+  })
+
+  it('takes a limit of 1 and of the largest safe integer', async () => {
+    for (const limit of [1, Number.MAX_SAFE_INTEGER]) {
+      const { pool, log } = fakePool()
+      await store(pool).changes(POST, '5', limit)
+      expect(log.map((l) => l.params)).toEqual([[POST, '5', limit], [POST, '5', limit]])
     }
   })
 
@@ -1351,9 +1376,9 @@ describe('changes', () => {
       [MESSAGES, [dbMessage(MSG, { rev: '9' })]],
       ['from librarius_attachments', [dbAttachment(ATT, MSG)]],
     ])
-    await store(pool).changes(POST, '5')
+    await store(pool).changes(POST, '5', LIMIT)
     expect(log.map((l) => l.sql)).toEqual([MESSAGES, has('from librarius_attachments where message_id = any($1::bigint[])'), TOMBSTONES])
-    expect(log.map((l) => l.params)).toEqual([[POST, '5'], [[MSG]], [POST, '5']])
+    expect(log.map((l) => l.params)).toEqual([[POST, '5', LIMIT], [[MSG]], [POST, '5', LIMIT]])
     expect(release).not.toHaveBeenCalled()
   })
 
@@ -1363,7 +1388,7 @@ describe('changes', () => {
       ['from librarius_attachments', [dbAttachment(ATT, MSG_2, { filename: 'late.png' })]],
       [TOMBSTONES, [{ message_id: MSG_3, rev: '8' }, { message_id: '200000000000000433', rev: '8' }]],
     ])
-    const out = await store(pool).changes(POST, '5')
+    const out = await store(pool).changes(POST, '5', LIMIT)
     expect(out.rows.map((r) => [r.id, r.rev, r.attachments.length])).toEqual([[MSG, '7', 0], [MSG_2, '9', 1]])
     expect(out.rows[1].attachments[0].filename).toBe('late.png')
     expect(out.deleted).toEqual([MSG_3, '200000000000000433'])
@@ -1375,7 +1400,7 @@ describe('changes', () => {
       [MESSAGES, [dbMessage(MSG, { rev: '7' })]],
       [TOMBSTONES, [{ message_id: MSG_3, rev: '12' }]],
     ])
-    expect((await store(pool).changes(POST, '5')).rev).toBe('12')
+    expect((await store(pool).changes(POST, '5', LIMIT)).rev).toBe('12')
   })
 
   it('compares the numbers as numbers: 100 is above 99', async () => {
@@ -1383,23 +1408,23 @@ describe('changes', () => {
       [MESSAGES, [dbMessage(MSG, { rev: '99' })]],
       [TOMBSTONES, [{ message_id: MSG_3, rev: '100' }]],
     ])
-    expect((await store(pool).changes(POST, '5')).rev).toBe('100')
+    expect((await store(pool).changes(POST, '5', LIMIT)).rev).toBe('100')
     const flipped = fakePool([
       [MESSAGES, [dbMessage(MSG, { rev: '100' })]],
       [TOMBSTONES, [{ message_id: MSG_3, rev: '99' }]],
     ])
-    expect((await store(flipped.pool).changes(POST, '5')).rev).toBe('100')
+    expect((await store(flipped.pool).changes(POST, '5', LIMIT)).rev).toBe('100')
   })
 
   it('stays where it was asked from when nothing changed, and asks for no attachments', async () => {
     const { pool, log } = fakePool()
-    expect(await store(pool).changes(POST, '41')).toEqual({ rows: [], deleted: [], rev: '41' })
+    expect(await store(pool).changes(POST, '41', LIMIT)).toEqual({ rows: [], deleted: [], rev: '41' })
     expect(log.map((l) => l.sql)).toEqual([MESSAGES, TOMBSTONES])
   })
 
   it('writes the number it stays at without leading zeros', async () => {
     const { pool } = fakePool()
-    expect((await store(pool).changes(POST, '007')).rev).toBe('7')
+    expect((await store(pool).changes(POST, '007', LIMIT)).rev).toBe('7')
   })
 
   it('never answers a number below the one asked from, whatever the rows say (property)', async () => {
@@ -1413,12 +1438,59 @@ describe('changes', () => {
             [MESSAGES, rowRevs.map((r, i) => dbMessage(ids(FIRST, 4)[i], { rev: String(r) }))],
             [TOMBSTONES, deleteRevs.map((r) => ({ message_id: MSG_3, rev: String(r) }))],
           ])
-          const out = await store(pool).changes(POST, String(since))
+          const out = await store(pool).changes(POST, String(since), LIMIT)
           const max = [since, ...rowRevs, ...deleteRevs].reduce((a, b) => (a > b ? a : b))
           expect(out.rev).toBe(String(max))
         },
       ),
     )
+  })
+})
+
+describe('quotedMessages', () => {
+  const SQL =
+    'select id, author_id, author_name, author_avatar, left(content, 200) as content from librarius_messages where post_id = $1 and id = any($2::bigint[])'
+
+  it('asks for the named messages of the post in one plain statement, with the first 200 characters of each', async () => {
+    const { pool, log, release } = fakePool([[SQL, []]])
+    await store(pool).quotedMessages(POST, [MSG, MSG_2])
+    expect(log).toEqual([{ sql: SQL, params: [POST, [MSG, MSG_2]] }])
+    expect(release).not.toHaveBeenCalled()
+  })
+
+  it('answers each stored one as its id, author, name, avatar and start, and leaves out any that is not stored', async () => {
+    const { pool } = fakePool([
+      [
+        SQL,
+        [
+          { id: MSG_2, author_id: AUTHOR, author_name: 'Test Author', author_avatar: 'https://cdn.discordapp.com/avatars/x.png', content: 'the start' },
+          { id: MSG, author_id: OWNER, author_name: 'Other', author_avatar: null, content: '' },
+        ],
+      ],
+    ])
+    expect(await store(pool).quotedMessages(POST, [MSG, MSG_2, MSG_3])).toEqual([
+      { id: MSG_2, authorId: AUTHOR, authorName: 'Test Author', authorAvatar: 'https://cdn.discordapp.com/avatars/x.png', content: 'the start' },
+      { id: MSG, authorId: OWNER, authorName: 'Other', authorAvatar: null, content: '' },
+    ])
+  })
+
+  it('sends nothing for an empty list', async () => {
+    const { pool, log } = fakePool()
+    expect(await store(pool).quotedMessages(POST, [])).toEqual([])
+    expect(log).toEqual([])
+  })
+
+  it.each(labelled([undefined, null, MSG, 'abc', {}, 5, new Set([MSG])]))('refuses ids of %s, which is no list, with a TypeError before any query', async (_, list) => {
+    const { pool, log } = fakePool()
+    const failed = store(pool).quotedMessages(POST, list)
+    await expect(failed).rejects.toThrow(TypeError)
+    await expect(failed).rejects.toThrow('ids must be a list')
+    expect(log).toEqual([])
+  })
+
+  it('fails with the pool, so a caller sees it', async () => {
+    const { pool } = fakePool([[SQL, boom()]])
+    await expect(store(pool).quotedMessages(POST, [MSG])).rejects.toThrow('connection lost')
   })
 })
 

@@ -65,6 +65,7 @@ const GATED = [
   'server/src/librariusIngest.js',
   'server/src/librariusConfig.js',
   'server/src/librariusLinks.js',
+  'server/src/librariusHandler.js',
 ]
 
 export default defineConfig({

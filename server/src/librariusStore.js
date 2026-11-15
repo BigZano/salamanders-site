@@ -440,21 +440,41 @@ export function createLibrariusStore(pool) {
 
     /**
      * What changed in a post after `sinceRev` (the digits of a rev): the messages written since, with their attachments, and
-     * the ids of those deleted. → { rows, deleted, rev }, where rev is the highest number among what is answered, or
-     * `sinceRev` when nothing changed: the number to ask from next.
+     * the ids of those deleted, oldest change first. At most `limit` of each (a whole number from 1), so a reader that asks
+     * from a long way back is not sent the whole post: a list that has `limit` entries may have been cut short, and the
+     * caller who sees one should start the reader afresh. → { rows, deleted, rev }, where rev is the highest number among
+     * what is answered, or `sinceRev` when nothing changed: the number to ask from next.
      */
-    async changes(postId, sinceRev) {
+    async changes(postId, sinceRev, limit) {
       needId(postId, 'postId')
       needRev(sinceRev)
-      const { rows } = await pool.query(`${POST_MESSAGES} and rev > $2 order by rev`, [postId, sinceRev])
+      needCount(limit, 'limit')
+      const { rows } = await pool.query(`${POST_MESSAGES} and rev > $2 order by rev limit $3`, [postId, sinceRev, limit])
       const shown = await withAttachments(rows)
       const { rows: gone } = await pool.query(
-        'select message_id, rev from librarius_tombstones where post_id = $1 and rev > $2 order by rev',
-        [postId, sinceRev],
+        'select message_id, rev from librarius_tombstones where post_id = $1 and rev > $2 order by rev limit $3',
+        [postId, sinceRev, limit],
       )
       // Stryker disable next-line EqualityOperator: when two revs are equal, taking either gives the same number
       const rev = [...rows, ...gone].reduce((top, r) => (BigInt(r.rev) > top ? BigInt(r.rev) : top), BigInt(sinceRev))
       return { rows: shown, deleted: gone.map((g) => g.message_id), rev: String(rev) }
+    },
+
+    /**
+     * The messages of a post that a reply can quote: those of `ids` that are stored in the post, each as { id, authorId,
+     * authorName, authorAvatar, content (the first 200 characters) }, in no order. An id that is not stored is left out.
+     * An empty list sends nothing.
+     */
+    async quotedMessages(postId, ids) {
+      needId(postId, 'postId')
+      needList(ids, 'ids')
+      for (const id of ids) needId(id, 'messageId')
+      if (ids.length === 0) return []
+      const { rows } = await pool.query(
+        'select id, author_id, author_name, author_avatar, left(content, 200) as content from librarius_messages where post_id = $1 and id = any($2::bigint[])',
+        [postId, ids],
+      )
+      return rows.map((r) => ({ id: r.id, authorId: r.author_id, authorName: r.author_name, authorAvatar: r.author_avatar, content: r.content }))
     },
 
     /**
