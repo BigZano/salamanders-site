@@ -60,6 +60,7 @@ export default {
     'server/src/librariusStore.js',
     'server/src/librariusDiscord.js',
     'server/src/librariusGuild.js',
+    'server/src/librariusAccess.js',
   ],
   coverageAnalysis: 'perTest',
   thresholds: { high: 100, low: 100, break: 100 },
