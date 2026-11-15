@@ -56,6 +56,7 @@ const GATED = [
   'src/lib/gallery/embed.js',
   'server/src/librariusPerms.js',
   'server/src/librariusParse.js',
+  'server/src/librariusStore.js',
 ]
 
 export default defineConfig({
