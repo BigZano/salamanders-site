@@ -64,6 +64,8 @@ export default {
     'server/src/librariusGateway.js',
     'server/src/librariusImport.js',
     'server/src/librariusIngest.js',
+    'server/src/librariusConfig.js',
+    'server/src/librariusLinks.js',
   ],
   coverageAnalysis: 'perTest',
   thresholds: { high: 100, low: 100, break: 100 },
