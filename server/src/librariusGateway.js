@@ -10,6 +10,11 @@
  * onDispatch that throws or rejects is recorded and never stops the connection. A missing or wrong option is a
  * TypeError or RangeError here, since a client that cannot connect would only retry forever.
  *
+ * A socket that has not said HELLO within helloTimeoutMs (30 seconds) of being made is taken to be dead, and is dropped
+ * like any other. A handler that has not settled within dispatchTimeoutMs (15 seconds) is given up on: lastError says
+ * so, the next event goes ahead, and whatever the handler does after that is ignored. Both are whole milliseconds from
+ * 1 to the longest a timer can hold.
+ *
  * start() connects, and resolves once the first try has opened a socket or has had to wait to try again; it never
  * rejects. A client that is already started, stopped or failed is left alone. stop() closes the socket for good.
  *
@@ -74,6 +79,15 @@ const REIDENTIFY_SPREAD_MS = 4000
 const MAX_TIMER_MS = 2 ** 31 - 1 // a longer delay makes a timer fire at once
 const MAX_ERROR = 200
 
+// What a handler that ran out of time is recorded as; nothing else makes one of these.
+class DispatchTimeout extends Error {}
+
+const needDelay = (value, name) => {
+  if (!Number.isSafeInteger(value) || value < 1 || value > MAX_TIMER_MS) {
+    throw new RangeError(`${name} must be a whole number of milliseconds from 1 to ${MAX_TIMER_MS}.`)
+  }
+}
+
 // Stryker disable next-line BlockStatement: a message that is not JSON reads as null, or as undefined; the reader takes both for a message with no op
 const parse = (data) => { try { return JSON.parse(data) } catch { return null } }
 
@@ -86,12 +100,16 @@ export function createGateway({
   timers = { setTimeout, clearTimeout },
   random = Math.random,
   log = console.error,
+  helloTimeoutMs = 30_000,
+  dispatchTimeoutMs = 15_000,
 }) {
   if (typeof discord?.gatewayBot !== 'function') throw new TypeError('discord must have a gatewayBot function.')
   if (typeof botToken !== 'string' || botToken === '') throw new TypeError('botToken must be a non-empty string.')
   if (typeof onDispatch !== 'function') throw new TypeError('onDispatch must be a function.')
   if (typeof WebSocketImpl !== 'function') throw new TypeError('WebSocketImpl must be a WebSocket constructor.')
   if (!Number.isSafeInteger(intents) || intents < 0) throw new RangeError('intents must be a whole number of 0 or more.')
+  needDelay(helloTimeoutMs, 'helloTimeoutMs')
+  needDelay(dispatchTimeoutMs, 'dispatchTimeoutMs')
 
   let state = 'idle'
   let lastReadyAt = null
@@ -105,6 +123,7 @@ export function createGateway({
   let greeted // this socket has had its HELLO
   let acked // the last heartbeat of this socket was acknowledged
   let attempts = 0 // drops since the last READY or RESUMED, which sets the backoff
+  let helloTimer
   let heartbeatTimer
   let identifyTimer
   let waitTimer
@@ -136,6 +155,7 @@ export function createGateway({
   // Lets go of the live socket without closing it: its close has come, or the caller closes it.
   function letGo() {
     socket = null
+    timers.clearTimeout(helloTimer)
     timers.clearTimeout(heartbeatTimer)
     timers.clearTimeout(identifyTimer)
   }
@@ -187,6 +207,10 @@ export function createGateway({
     socket = ws
     greeted = false
     acked = true
+    helloTimer = timers.setTimeout(() => {
+      fault('The Librarius gateway got no HELLO.')
+      abandon()
+    }, helloTimeoutMs)
     ws.onmessage = (event) => {
       if (ws === socket) receive(event.data)
     }
@@ -259,6 +283,7 @@ export function createGateway({
       return
     }
     greeted = true
+    timers.clearTimeout(helloTimer)
     heartbeatTimer = timers.setTimeout(() => beat(interval), interval * random())
     authenticate()
   }
@@ -305,13 +330,27 @@ export function createGateway({
       becameReady()
     }
     // One at a time, in order: a later event can depend on an earlier one, and the sequence number has moved on already.
-    handling = handling.then(async () => {
-      try {
-        await onDispatch(t, d)
-      } catch (err) {
-        fault(`The Librarius gateway could not handle ${t}: ${describe(err)}`)
-      }
+    handling = handling.then(() => handle(t, d))
+  }
+
+  // Waits for onDispatch, for as long as dispatchTimeoutMs allows. It never throws. Once the race is lost, the handler's
+  // promise is still being watched by it, so a late failure is not left unhandled, and is ignored.
+  async function handle(t, d) {
+    let timer
+    const tooLong = new Promise((_, reject) => {
+      timer = timers.setTimeout(() => reject(new DispatchTimeout()), dispatchTimeoutMs)
     })
+    try {
+      await Promise.race([new Promise((resolve) => resolve(onDispatch(t, d))), tooLong])
+    } catch (err) {
+      fault(
+        err instanceof DispatchTimeout
+          ? `A Librarius gateway handler took too long on ${t}.`
+          : `The Librarius gateway could not handle ${t}: ${describe(err)}`,
+      )
+    } finally {
+      timers.clearTimeout(timer)
+    }
   }
 
   return {

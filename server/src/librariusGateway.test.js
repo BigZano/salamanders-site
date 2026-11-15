@@ -17,6 +17,8 @@ const FIRST_BEAT = INTERVAL / 2
 const FATAL = [4004, 4010, 4011, 4012, 4013, 4014]
 const NOON = '2026-11-15T12:00:00.000Z'
 const MAX_TIMER_MS = 2 ** 31 - 1
+const HELLO_TIMEOUT = 30_000
+const DISPATCH_TIMEOUT = 15_000
 
 /** A WebSocket that records what it was given and lets the test play the server. close() does not close by itself. */
 class FakeSocket {
@@ -162,13 +164,32 @@ describe('createGateway: the boundary', () => {
     ['NaN intents', { intents: Number.NaN }, RangeError, 'intents must be a whole number of 0 or more.'],
     ['infinite intents', { intents: Infinity }, RangeError, 'intents must be a whole number of 0 or more.'],
     ['intents past the safe integers', { intents: 2 ** 53 }, RangeError, 'intents must be a whole number of 0 or more.'],
+    ...['helloTimeoutMs', 'dispatchTimeoutMs'].flatMap((name) =>
+      [
+        ['0', 0],
+        ['a negative number', -1],
+        ['a fraction', 1.5],
+        ['a string', '30000'],
+        ['null', null],
+        ['NaN', Number.NaN],
+        ['Infinity', Infinity],
+        ['one more than the longest timer', 2 ** 31],
+      ].map(([what, value]) => [
+        `${name} of ${what}`,
+        { [name]: value },
+        RangeError,
+        `${name} must be a whole number of milliseconds from 1 to 2147483647.`,
+      ]),
+    ),
   ])('refuses %s', (_name, over, error, message) => {
     expect(() => createGateway({ ...good(), ...over })).toThrow(error)
     expect(() => createGateway({ ...good(), ...over })).toThrow(message)
   })
 
-  it('takes zero intents, and a client with only the required options', () => {
+  it('takes zero intents, the shortest and longest timeouts a timer can hold, and a client with only the required options', () => {
     expect(() => createGateway({ ...good(), intents: 0 })).not.toThrow()
+    expect(() => createGateway({ ...good(), helloTimeoutMs: 1, dispatchTimeoutMs: 1 })).not.toThrow()
+    expect(() => createGateway({ ...good(), helloTimeoutMs: MAX_TIMER_MS, dispatchTimeoutMs: MAX_TIMER_MS })).not.toThrow()
     expect(() => createGateway(good())).not.toThrow()
   })
 
@@ -1190,7 +1211,8 @@ describe('closes and the backoff', () => {
     sock.drop(1006)
     await tick(1000)
     expect(r.sockets).toHaveLength(2)
-    await tick(600_000)
+    // The new socket's own silence is 30 seconds away; nothing else would make another.
+    await tick(HELLO_TIMEOUT - 2000)
     expect(r.sockets).toHaveLength(2)
   })
 })
@@ -1348,8 +1370,246 @@ describe('a socket that has been replaced', () => {
     await tick(1000)
     old.drop(1006)
     old.drop(4004)
-    await tick(600_000)
+    await tick(HELLO_TIMEOUT - 2000)
     expect(r.sockets).toHaveLength(2)
+  })
+})
+
+describe('a socket that never says HELLO', () => {
+  it('is closed with 4000 after 30 seconds, counted from when the socket was made, and tried again', async () => {
+    const r = rig()
+    await r.gateway.start()
+    const sock = r.sockets[0]
+    await tick(10_000)
+    sock.open()
+    await tick(HELLO_TIMEOUT - 10_000 - 1)
+    expect(sock.closed).toEqual([])
+    expect(r.gateway.status().state).toBe('connecting')
+    await tick(1)
+    expect(sock.closed).toEqual([4000])
+    expect(r.gateway.status().state).toBe('waiting')
+    expect(r.gateway.status().lastError).toMatch(/HELLO/)
+    await tick(999)
+    expect(r.sockets).toHaveLength(1)
+    await tick(1)
+    expect(r.sockets).toHaveLength(2)
+  })
+
+  it('is closed even when the socket never opens', async () => {
+    const r = rig()
+    await r.gateway.start()
+    await tick(HELLO_TIMEOUT)
+    expect(r.sockets[0].closed).toEqual([4000])
+  })
+
+  it('backs off like any other drop while the silence goes on', async () => {
+    const r = rig()
+    await r.gateway.start()
+    for (const wait of [1000, 2000, 4000, 8000]) {
+      const count = r.sockets.length
+      await tick(HELLO_TIMEOUT)
+      expect(r.sockets.at(-1).closed).toEqual([4000])
+      await tick(wait - 1)
+      expect(r.sockets).toHaveLength(count)
+      await tick(1)
+      expect(r.sockets).toHaveLength(count + 1)
+    }
+  })
+
+  it('waits as long as helloTimeoutMs says, no more and no less', async () => {
+    await fc.assert(
+      fc.asyncProperty(fc.integer({ min: 1, max: 200_000 }), async (wait) => {
+        const r = rig({ helloTimeoutMs: wait })
+        await r.gateway.start()
+        await tick(wait - 1)
+        expect(r.sockets[0].closed).toEqual([])
+        await tick(1)
+        expect(r.sockets[0].closed).toEqual([4000])
+        r.gateway.stop()
+      }),
+      { numRuns: 25 },
+    )
+  })
+
+  it('is not closed once HELLO has come', async () => {
+    const r = rig()
+    const sock = await opened(r)
+    hello(sock, 1_000_000)
+    await tick(2 * HELLO_TIMEOUT)
+    expect(sock.closed).toEqual([])
+    expect(r.sockets).toHaveLength(1)
+  })
+
+  it('closes once, not twice, a socket whose HELLO was no use', async () => {
+    const r = rig()
+    const sock = await opened(r)
+    sock.receive({ op: 10, d: {} })
+    await tick(2 * HELLO_TIMEOUT)
+    expect(sock.closed).toEqual([4000])
+  })
+
+  it('does not hold a socket that dropped before HELLO to account for the one that replaced it', async () => {
+    const r = rig()
+    const first = await opened(r)
+    first.drop(1006)
+    await tick(1000)
+    const second = r.sockets[1]
+    await tick(HELLO_TIMEOUT - 1000)
+    expect(second.closed).toEqual([])
+    expect(r.gateway.status().state).toBe('connecting')
+    await tick(1000)
+    expect(second.closed).toEqual([4000])
+  })
+
+  it('does not touch a socket that failed for good before HELLO', async () => {
+    const r = rig()
+    const sock = await opened(r)
+    sock.drop(4004)
+    await tick(2 * HELLO_TIMEOUT)
+    expect(sock.closed).toEqual([])
+    expect(r.sockets).toHaveLength(1)
+    expect(r.gateway.status().state).toBe('failed')
+  })
+
+  it('does not reconnect after a stop', async () => {
+    const r = rig()
+    const sock = await opened(r)
+    r.gateway.stop()
+    await tick(2 * HELLO_TIMEOUT)
+    expect(sock.closed).toEqual([1000])
+    expect(r.sockets).toHaveLength(1)
+    expect(r.gateway.status().state).toBe('stopped')
+  })
+})
+
+describe('a handler that takes too long', () => {
+  /** A client whose onDispatch holds HANG_THING until the test settles it, and answers everything else at once. */
+  function hung(over = {}) {
+    const seen = []
+    const calls = []
+    const r = rig({
+      onDispatch: (t) => {
+        seen.push(t)
+        if (t === 'HANG_THING') return new Promise((resolve, reject) => calls.push({ resolve, reject }))
+      },
+      ...over,
+    })
+    return { r, seen, calls }
+  }
+  const event = (sock, t, s) => sock.receive({ op: 0, t, s, d: {} })
+
+  it('is given up on after 15 seconds: recorded, and the next event goes ahead', async () => {
+    const { r, seen } = hung()
+    const sock = await ready(r)
+    event(sock, 'HANG_THING', 2)
+    event(sock, 'NEXT_THING', 3)
+    await tick(DISPATCH_TIMEOUT - 1)
+    expect(seen).toEqual(['READY', 'HANG_THING'])
+    expect(r.gateway.status().lastError).toBeNull()
+    await tick(1)
+    expect(seen).toEqual(['READY', 'HANG_THING', 'NEXT_THING'])
+    expect(r.gateway.status().lastError).toMatch(/took too long/)
+    expect(r.gateway.status().lastError).toMatch(/HANG_THING/)
+    expect(r.gateway.status().state).toBe('ready')
+    expect(sock.closed).toEqual([])
+  })
+
+  it('counts the 15 seconds from when the handler starts, not from when the event came', async () => {
+    const r = rig({
+      onDispatch: (t) => {
+        if (t === 'SLOW_THING') return new Promise((resolve) => setTimeout(resolve, 10_000))
+        if (t === 'HANG_THING') return new Promise(() => {})
+      },
+    })
+    const sock = await ready(r)
+    event(sock, 'SLOW_THING', 2)
+    event(sock, 'HANG_THING', 3)
+    await tick(10_000 + DISPATCH_TIMEOUT - 1)
+    expect(r.gateway.status().lastError).toBeNull()
+    await tick(1)
+    expect(r.gateway.status().lastError).toMatch(/HANG_THING/)
+  })
+
+  it('waits as long as dispatchTimeoutMs says, no more and no less', async () => {
+    await fc.assert(
+      fc.asyncProperty(fc.integer({ min: 1, max: 15_000 }), async (wait) => {
+        const { r, seen } = hung({ dispatchTimeoutMs: wait })
+        const sock = await ready(r)
+        event(sock, 'HANG_THING', 2)
+        event(sock, 'NEXT_THING', 3)
+        await tick(wait - 1)
+        expect(seen).toEqual(['READY', 'HANG_THING'])
+        await tick(1)
+        expect(seen).toEqual(['READY', 'HANG_THING', 'NEXT_THING'])
+        r.gateway.stop()
+      }),
+      { numRuns: 25 },
+    )
+  })
+
+  it.each([
+    ['settles', (call) => call.resolve()],
+    ['fails', (call) => call.reject(new Error('too late to matter'))],
+  ])('does not mind a handler that %s after it was given up on', async (_name, settle) => {
+    const { r, seen, calls } = hung()
+    const sock = await ready(r)
+    event(sock, 'HANG_THING', 2)
+    event(sock, 'NEXT_THING', 3)
+    await tick(DISPATCH_TIMEOUT)
+    const timedOut = r.gateway.status().lastError
+    expect(timedOut).toMatch(/took too long/)
+    settle(calls[0])
+    await tick(0)
+    event(sock, 'LAST_THING', 4)
+    await tick(0)
+    expect(seen).toEqual(['READY', 'HANG_THING', 'NEXT_THING', 'LAST_THING'])
+    expect(r.gateway.status().lastError).toBe(timedOut)
+    expect(r.gateway.status().state).toBe('ready')
+  })
+
+  it('goes on to the next event at once when a handler settles before its time is up', async () => {
+    const { r, seen, calls } = hung()
+    const sock = await ready(r)
+    event(sock, 'HANG_THING', 2)
+    event(sock, 'NEXT_THING', 3)
+    await tick(DISPATCH_TIMEOUT - 1)
+    calls[0].resolve()
+    await tick(0)
+    expect(seen).toEqual(['READY', 'HANG_THING', 'NEXT_THING'])
+    await tick(DISPATCH_TIMEOUT)
+    expect(r.gateway.status().lastError).toBeNull()
+  })
+
+  it('stops its timer when a handler is done', async () => {
+    const jobs = []
+    const timers = {
+      setTimeout: (fn, ms) => jobs.push({ fn, ms, cleared: false }) - 1,
+      clearTimeout: (id) => {
+        if (jobs[id]) jobs[id].cleared = true
+      },
+    }
+    const r = rig({ timers })
+    const sock = await opened(r)
+    hello(sock)
+    event(sock, 'A_THING', 1)
+    await tick(0)
+    const timeouts = jobs.filter((j) => j.ms === DISPATCH_TIMEOUT)
+    expect(timeouts).toHaveLength(1)
+    expect(timeouts[0].cleared).toBe(true)
+  })
+
+  it('records it without the token or a link, whatever the event is called', async () => {
+    const r = rig({ onDispatch: () => new Promise(() => {}) })
+    const sock = await ready(r)
+    await tick(DISPATCH_TIMEOUT)
+    sock.receive({ op: 0, t: `${'A'.repeat(150)} ${TOKEN} https://cdn.test/x?sig=${TOKEN}`, s: 2, d: {} })
+    await tick(DISPATCH_TIMEOUT)
+    const { lastError } = r.gateway.status()
+    expect(lastError).toMatch(/took too long/)
+    expect(lastError).not.toContain(TOKEN)
+    expect(lastError).not.toContain('://')
+    expect(lastError.length).toBeLessThanOrEqual(200)
+    expect(r.logged.join('\n')).not.toContain(TOKEN)
   })
 })
 
@@ -1376,7 +1636,7 @@ describe('hostile messages', () => {
     expect(sock.sent).toEqual([])
     expect(sock.closed).toEqual([])
     expect(r.gateway.status()).toEqual({ state: 'connecting', lastReadyAt: null, lastError: null })
-    await tick(10 * INTERVAL)
+    await tick(HELLO_TIMEOUT - 1)
     expect(r.sockets).toHaveLength(1)
     expect(r.dispatched).toEqual([])
   })
@@ -1503,11 +1763,12 @@ describe('the options it is given, and the ones it defaults', () => {
     const r = rig({ timers })
     const sock = await opened(r)
     hello(sock)
-    expect(jobs.map((j) => j.ms)).toEqual([FIRST_BEAT])
-    jobs[0].over = true
-    jobs[0].fn()
+    expect(jobs.map((j) => j.ms)).toEqual([HELLO_TIMEOUT, FIRST_BEAT])
+    expect(jobs[0].over).toBe(true)
+    jobs[1].over = true
+    jobs[1].fn()
     expect(heartbeats(sock)).toHaveLength(1)
-    expect(jobs.map((j) => j.ms)).toEqual([FIRST_BEAT, INTERVAL])
+    expect(jobs.map((j) => j.ms)).toEqual([HELLO_TIMEOUT, FIRST_BEAT, INTERVAL])
     r.gateway.stop()
     for (const job of jobs.filter((j) => !j.over)) job.fn()
     expect(heartbeats(sock)).toHaveLength(1)
