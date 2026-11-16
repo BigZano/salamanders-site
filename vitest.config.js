@@ -71,6 +71,7 @@ const GATED = [
   'src/lib/librarius/snowflake.js',
   'src/lib/librarius/layout.js',
   'src/lib/librarius/render.js',
+  'src/stores/asking.js',
   'src/stores/librarius.js',
 ]
 

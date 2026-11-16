@@ -121,8 +121,9 @@ const Host = {
   },
 }
 
-// The page asks for a post's messages twice: for a page of them, and for the post's opening message (one message, `limit: 1`).
-const asksForOpening = (opts) => opts?.limit === 1
+// The page asks for a post's messages twice: for a page of them, and for the start of the post (the opening message and the one
+// after it, `limit: 2`).
+const asksForOpening = (opts) => opts?.limit === 2
 /**
  * The server as it answers: `page` (a { messages, hasOlder, ... } answer) for a page of messages, and for the question about the
  * opening message the one message `first`, or none.

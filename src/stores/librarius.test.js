@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import fc from 'fast-check'
 import { setActivePinia, createPinia } from 'pinia'
 
@@ -34,6 +34,10 @@ const found = (extra = {}) => ({ post: info(), lastRead: null, rev: '40', ...ext
 const pageOf = (ns, extra = {}) => ({ messages: ns.map((n) => msg(n)), hasOlder: false, hasNewer: false, people: {}, rev: '40', ...extra })
 const changesOf = (extra = {}) => ({ messages: [], deleted: [], rev: '60', people: {}, ...extra })
 
+/** Serves `page` for a page of messages, and no message at all for the question about the start of the post (two messages). */
+const servePage = (page) =>
+  listMessages.mockImplementation(async (_token, _id, opts) => (opts?.limit === 2 ? { messages: [], hasOlder: false, hasNewer: false, people: {}, rev: page.rev } : page))
+
 let s
 beforeEach(() => {
   setActivePinia(createPinia())
@@ -42,10 +46,10 @@ beforeEach(() => {
 })
 
 /** An open post, set straight into the store: messages given as numbers (ids), and what lies beyond them. */
-const seed = (ns, { hasOlder = false, hasNewer = false, lastRead = null, rev = '40' } = {}) => {
+const seed = (ns, { hasOlder = false, hasNewer = false, lastRead = null, rev = '40', earliest = null } = {}) => {
   s.$patch((state) => {
     state.status = 'allowed'
-    state.post = { id: POST, info: info(), opening: null, messages: ns.map((n) => msg(n)), hasOlder, hasNewer, rev, lastRead }
+    state.post = { id: POST, info: info(), opening: null, earliest, messages: ns.map((n) => msg(n)), hasOlder, hasNewer, rev, lastRead }
   })
 }
 /** Everything the store can hold for a reader, so that a refusal has something to empty. */
@@ -55,7 +59,7 @@ const fill = () => {
     state.me = ME
     state.posts = [{ id: POST, title: 'Invented post' }]
     state.people = { [SELF]: person('Invented Author') }
-    state.post = { id: POST, info: info(), opening: null, messages: [msg(401)], hasOlder: true, hasNewer: true, rev: '40', lastRead: mid(401) }
+    state.post = { id: POST, info: info(), opening: null, earliest: null, messages: [msg(401)], hasOlder: true, hasNewer: true, rev: '40', lastRead: mid(401) }
   })
 }
 const snapshot = () => JSON.parse(JSON.stringify(s.$state))
@@ -268,43 +272,41 @@ describe('librarius store: the topic list', () => {
       expect(s.error, String(err)).toBe('Something went wrong.')
     }
   })
-
-  it('a 401 is the caller\'s to handle: it is reported and rethrown, and the store does not pretend to know why', async () => {
-    s.status = 'allowed'
-    listPosts.mockRejectedValue(apiError(401, 'Sign in with Discord.'))
-    await expect(s.loadPosts('tok')).rejects.toMatchObject({ status: 401 })
-    expect(s.status).toBe('allowed')
-    expect(s.error).toBe('Sign in with Discord.')
-  })
 })
 
-describe('librarius store: a 403 on any read takes the page away', () => {
-  const REFUSED = apiError(403, 'Restricted to those who can read the Librarius in Discord.')
-  const calls = {
-    loadPosts: { run: () => s.loadPosts('tok'), setup: () => listPosts.mockRejectedValue(REFUSED) },
-    'openPost (the post)': { run: () => s.openPost('tok', POST), setup: () => getPost.mockRejectedValue(REFUSED) },
+describe.each([
+  [403, 'denied', 'Restricted to those who can read the Librarius in Discord.'],
+  [401, 'signin', 'Sign in with Discord.'],
+])('librarius store: a %i on any read takes the page away (%s)', (code, status, message) => {
+  const refusal = () => apiError(code, message)
+  const calls = () => ({
+    loadPosts: { run: () => s.loadPosts('tok'), setup: () => listPosts.mockRejectedValue(refusal()) },
+    'openPost (the post)': { run: () => s.openPost('tok', POST), setup: () => getPost.mockRejectedValue(refusal()) },
     'openPost (the messages)': {
       run: () => s.openPost('tok', POST),
       setup: () => {
         getPost.mockResolvedValue(found())
-        listMessages.mockRejectedValue(REFUSED)
+        listMessages.mockRejectedValue(refusal())
       },
     },
-    loadOlder: { run: () => s.loadOlder('tok'), setup: () => listMessages.mockRejectedValue(REFUSED), after: () => seed([401, 402], { hasOlder: true }) },
-    loadNewer: { run: () => s.loadNewer('tok'), setup: () => listMessages.mockRejectedValue(REFUSED), after: () => seed([401, 402], { hasNewer: true }) },
-    poll: { run: () => s.poll('tok'), setup: () => getChanges.mockRejectedValue(REFUSED), after: () => seed([401, 402]) },
-    markRead: { run: () => s.markRead('tok', mid(450)), setup: () => markRead.mockRejectedValue(REFUSED), after: () => seed([401, 402], { lastRead: mid(401) }) },
-  }
-
-  it.each(Object.keys(calls))('%s: denied, everything emptied, nothing thrown and no error text', async (name) => {
-    const { run, setup, after } = calls[name]
-    setup()
-    fill()
-    after?.()
-    s.error = 'earlier'
-    await expect(run()).resolves.toBeUndefined()
-    expect(s.$state).toEqual(refused('denied'))
+    loadOlder: { run: () => s.loadOlder('tok'), setup: () => listMessages.mockRejectedValue(refusal()), after: () => seed([401, 402], { hasOlder: true }) },
+    loadNewer: { run: () => s.loadNewer('tok'), setup: () => listMessages.mockRejectedValue(refusal()), after: () => seed([401, 402], { hasNewer: true }) },
+    poll: { run: () => s.poll('tok'), setup: () => getChanges.mockRejectedValue(refusal()), after: () => seed([401, 402]) },
+    markRead: { run: () => s.markRead('tok', mid(450)), setup: () => markRead.mockRejectedValue(refusal()), after: () => seed([401, 402], { lastRead: mid(401) }) },
   })
+
+  it.each(['loadPosts', 'openPost (the post)', 'openPost (the messages)', 'loadOlder', 'loadNewer', 'poll', 'markRead'])(
+    '%s: the status is the refusal, everything emptied, nothing thrown and no error text',
+    async (name) => {
+      const { run, setup, after } = calls()[name]
+      setup()
+      fill()
+      after?.()
+      s.error = 'earlier'
+      await expect(run()).resolves.toBeUndefined()
+      expect(s.$state).toEqual(refused(status))
+    },
+  )
 
   it('drops every other answer that is still on its way', async () => {
     seed([401, 402], { hasOlder: true })
@@ -312,12 +314,12 @@ describe('librarius store: a 403 on any read takes the page away', () => {
     listMessages.mockReturnValue(older.promise)
     const loading = s.loadOlder('tok')
     await tick()
-    getChanges.mockRejectedValue(REFUSED)
+    getChanges.mockRejectedValue(refusal())
     await s.poll('tok')
-    expect(s.$state).toEqual(refused('denied'))
+    expect(s.$state).toEqual(refused(status))
     older.resolve(pageOf([399, 400], { hasOlder: false }))
     await loading
-    expect(s.$state).toEqual(refused('denied'))
+    expect(s.$state).toEqual(refused(status))
   })
 
   it('is no refusal when it is a stale call that got it: the newer call has its own answer', async () => {
@@ -327,17 +329,35 @@ describe('librarius store: a 403 on any read takes the page away', () => {
     const a = s.poll('tok')
     await tick()
     await s.poll('tok')
-    first.reject(REFUSED)
+    first.reject(refusal())
     await a
     expect(s.status).toBe('allowed')
     expect(ids(s.post.messages)).toEqual([mid(401), mid(402), mid(403)])
   })
 })
 
+describe('librarius store: any other failure of a read is the caller\'s to handle', () => {
+  it.each([[400], [404], [429], [500], [502], [503]])('a %i is reported and rethrown, and the store does not pretend to know why', async (code) => {
+    fill()
+    const held = snapshot()
+    listPosts.mockRejectedValue(apiError(code, 'Discord could not be reached. Try again.'))
+    await expect(s.loadPosts('tok')).rejects.toMatchObject({ status: code })
+    expect({ ...snapshot(), error: '' }).toEqual(held)
+    expect(s.error).toBe('Discord could not be reached. Try again.')
+  })
+
+  it('a failure with no status is the same', async () => {
+    fill()
+    listPosts.mockRejectedValue(new TypeError('Failed to fetch'))
+    await expect(s.loadPosts('tok')).rejects.toBeInstanceOf(TypeError)
+    expect(s.status).toBe('allowed')
+  })
+})
+
 describe('librarius store: opening a post', () => {
   it('asks for the post, then the newest page when no message was read, and keeps both', async () => {
     getPost.mockResolvedValue(found())
-    listMessages.mockResolvedValue(pageOf([401, 402], { hasOlder: true }))
+    servePage(pageOf([401, 402], { hasOlder: true }))
     await s.openPost('tok', POST)
     expect(getPost).toHaveBeenCalledWith('tok', POST)
     // The page, and the question about the opening message.
@@ -345,12 +365,12 @@ describe('librarius store: opening a post', () => {
     const args = listMessages.mock.calls[0]
     expect(args.slice(0, 2)).toEqual(['tok', POST])
     expect(args[2]).toStrictEqual({})
-    expect(s.post).toEqual({ id: POST, info: info(), opening: null, messages: [msg(401), msg(402)], hasOlder: true, hasNewer: false, rev: '40', lastRead: null })
+    expect(s.post).toEqual({ id: POST, info: info(), opening: null, earliest: null, messages: [msg(401), msg(402)], hasOlder: true, hasNewer: false, rev: '40', lastRead: null })
   })
 
   it('asks for the page around the last message read when there is one', async () => {
     getPost.mockResolvedValue(found({ lastRead: mid(450) }))
-    listMessages.mockResolvedValue(pageOf([449, 450, 451], { hasOlder: true, hasNewer: true }))
+    servePage(pageOf([449, 450, 451], { hasOlder: true, hasNewer: true }))
     await s.openPost('tok', POST)
     expect(listMessages.mock.calls[0].slice(0, 2)).toEqual(['tok', POST])
     expect(listMessages.mock.calls[0][2]).toStrictEqual({ around: mid(450) })
@@ -360,7 +380,7 @@ describe('librarius store: opening a post', () => {
   describe('opening around a message the caller names', () => {
     it('asks for the page around that message, not the last read, and still puts the reader\'s mark in the post', async () => {
       getPost.mockResolvedValue(found({ lastRead: mid(450) }))
-      listMessages.mockResolvedValue(pageOf([409, 410, 411], { hasOlder: true, hasNewer: true }))
+      servePage(pageOf([409, 410, 411], { hasOlder: true, hasNewer: true }))
       await s.openPost('tok', POST, { around: mid(410) })
       expect(listMessages).toHaveBeenCalledTimes(2)
       expect(listMessages.mock.calls[0].slice(0, 2)).toEqual(['tok', POST])
@@ -599,9 +619,10 @@ describe('librarius store: opening a post', () => {
 })
 
 describe('librarius store: the opening message', () => {
-  // The messages of a post are asked for twice: its page, and the first message after the one before the post's own id.
-  const BEFORE_POST = String(BigInt(POST) - 1n)
-  const isOpeningAsk = (opts) => opts?.limit === 1
+  // The messages of a post are asked for twice: its page, and the first two messages after the one before the post's own id
+  // (the opening message, and the one after it).
+  const beforePost = () => String(BigInt(POST) - 1n)
+  const isOpeningAsk = (opts) => opts?.limit === 2
   const opener = (extra = {}) => msg(500, { content: 'The opening words', ...extra })
   const opening = (rows, extra = {}) => ({ messages: rows, hasOlder: false, hasNewer: true, people: {}, rev: '40', ...extra })
   /** The server as it answers: `page` for a page, `answer` for the question about the opening message. */
@@ -610,13 +631,13 @@ describe('librarius store: the opening message', () => {
     listMessages.mockImplementation(async (_token, _id, opts) => (isOpeningAsk(opts) ? answer : page))
   }
 
-  it('asks for the first message after the one before the post\'s id, one only, along with the page', async () => {
+  it('asks for the first two messages after the one before the post\'s id, along with the page', async () => {
     serve(pageOf([401, 402]), opening([opener()]))
     await s.openPost('tok', POST)
     expect(listMessages).toHaveBeenCalledTimes(2)
     expect(listMessages.mock.calls[0][2]).toStrictEqual({})
     expect(listMessages.mock.calls[1].slice(0, 2)).toEqual(['tok', POST])
-    expect(listMessages.mock.calls[1][2]).toStrictEqual({ after: BEFORE_POST, limit: 1 })
+    expect(listMessages.mock.calls[1][2]).toStrictEqual({ after: beforePost(), limit: 2 })
   })
 
   it('keeps it apart from the run: the post holds it as `opening`, and the run is only what the page brought', async () => {
@@ -666,6 +687,136 @@ describe('librarius store: the opening message', () => {
     serve(pageOf([401]), opening([opener(), msg(501)]))
     await s.openPost('tok', POST)
     expect(s.post.opening).toEqual(opener())
+  })
+
+  describe('what lies before the run: the opening message is pinned apart, so it is no reason to offer older ones', () => {
+    // The post's opening message is mid(500). Its replies are 501, 502, ... and the second message of the post is 501.
+    const second = () => msg(501)
+
+    it('holds the id of the oldest message after the opening one, which is what the answer about the start of the post names second', async () => {
+      serve(pageOf([503, 504], { hasOlder: true }), opening([opener(), second()]))
+      await s.openPost('tok', POST)
+      expect(s.post.earliest).toBe(mid(501))
+    })
+
+    it('has no older message when the run starts at that one: only the opening message is older, and it is pinned', async () => {
+      serve(pageOf([501, 502], { hasOlder: true }), opening([opener(), second()]))
+      await s.openPost('tok', POST)
+      expect(ids(s.post.messages)).toEqual([mid(501), mid(502)])
+      expect(s.post.hasOlder).toBe(false)
+    })
+
+    it('has older messages when the run starts after that one', async () => {
+      serve(pageOf([502, 503], { hasOlder: true }), opening([opener(), second()]))
+      await s.openPost('tok', POST)
+      expect(s.post.hasOlder).toBe(true)
+    })
+
+    it('has no older message either when the run starts before that one (one stored late)', async () => {
+      serve(pageOf([499, 501], { hasOlder: true }), opening([opener(), second()]))
+      await s.openPost('tok', POST)
+      expect(s.post.hasOlder).toBe(false)
+    })
+
+    it('has none when the page held the opening message and the server says nothing is older', async () => {
+      serve(pageOf([500, 501, 502], { hasOlder: false }), opening([opener(), second()]))
+      await s.openPost('tok', POST)
+      expect(s.post.hasOlder).toBe(false)
+    })
+
+    it('counts the first message of the post when the opening message was deleted: nothing older than it', async () => {
+      serve(pageOf([501, 502], { hasOlder: true }), opening([msg(501), msg(502)]))
+      await s.openPost('tok', POST)
+      expect(s.post.opening).toBeNull()
+      expect(s.post.earliest).toBe(mid(501))
+      expect(s.post.hasOlder).toBe(false)
+    })
+
+    it('takes what the server says when the answer names no message after the opening one', async () => {
+      serve(pageOf([502], { hasOlder: true }), opening([opener()]))
+      await s.openPost('tok', POST)
+      expect(s.post.earliest).toBeNull()
+      expect(s.post.hasOlder).toBe(true)
+    })
+
+    it('takes what the server says for an answer that is not what the routes send', async () => {
+      for (const answer of [undefined, null, {}, { messages: null }, { messages: [] }, { messages: [null, null] }, { messages: [opener(), {}] }, { messages: [opener(), { id: 'abc' }] }, { messages: [opener(), { id: 501 }] }, { messages: [opener(), { id: mid(501) + 'x' }] }, { messages: 'x' }, 7]) {
+        serve(pageOf([501, 502], { hasOlder: true }), answer)
+        await s.openPost('tok', POST)
+        expect(s.post.earliest, JSON.stringify(answer)).toBeNull()
+        expect(s.post.hasOlder, JSON.stringify(answer)).toBe(true)
+      }
+    })
+
+    it('takes the first usable id after the opening message when the answer holds odd rows before it', async () => {
+      serve(pageOf([501, 502], { hasOlder: true }), { ...opening([]), messages: [null, {}, { id: 7 }, opener(), second()] })
+      await s.openPost('tok', POST)
+      expect(s.post.earliest).toBe(mid(501))
+    })
+
+    it('leaves hasOlder as the server says when the run is empty (the page held only the opening message)', async () => {
+      serve(pageOf([500], { hasOlder: true }), opening([opener(), second()]))
+      await s.openPost('tok', POST)
+      expect(s.post.messages).toEqual([])
+      expect(s.post.hasOlder).toBe(true)
+    })
+
+    it('counts a boundary that is as wide as an id gets: 20 digits against 17', async () => {
+      serve({ ...pageOf([]), messages: [{ id: '18446744073709551615' }], hasOlder: true }, opening([opener(), { id: '99999999999999999' }]))
+      await s.openPost('tok', POST)
+      expect(s.post.hasOlder).toBe(true)
+      serve({ ...pageOf([]), messages: [{ id: '99999999999999990' }], hasOlder: true }, opening([opener(), { id: '99999999999999999' }]))
+      await s.openPost('tok', POST)
+      expect(s.post.hasOlder).toBe(false)
+    })
+
+    describe('and as older messages are loaded', () => {
+      it('has none left when the page reaches the second message of the post, though the server says the opening one is older', async () => {
+        seed([503, 504], { hasOlder: true, earliest: mid(501) })
+        listMessages.mockResolvedValue(pageOf([501, 502], { hasOlder: true }))
+        await s.loadOlder('tok')
+        expect(ids(s.post.messages)).toEqual([mid(501), mid(502), mid(503), mid(504)])
+        expect(s.post.hasOlder).toBe(false)
+      })
+
+      it('has some left while the page stops after the second message', async () => {
+        seed([504, 505], { hasOlder: true, earliest: mid(501) })
+        listMessages.mockResolvedValue(pageOf([502, 503], { hasOlder: true }))
+        await s.loadOlder('tok')
+        expect(s.post.hasOlder).toBe(true)
+      })
+
+      it('has none when the server says there are none', async () => {
+        seed([503, 504], { hasOlder: true, earliest: mid(501) })
+        listMessages.mockResolvedValue(pageOf([500, 501, 502], { hasOlder: false }))
+        await s.loadOlder('tok')
+        expect(s.post.hasOlder).toBe(false)
+      })
+
+      it('goes by the server alone for a post that holds no earliest message', async () => {
+        for (const earliest of [null, undefined]) {
+          seed([503, 504], { hasOlder: true })
+          s.post.earliest = earliest
+          listMessages.mockResolvedValue(pageOf([501, 502], { hasOlder: true }))
+          await s.loadOlder('tok')
+          expect(s.post.hasOlder, String(earliest)).toBe(true)
+        }
+      })
+
+      it('leaves the earliest message as it was, and loads newer ones as before', async () => {
+        seed([503, 504], { hasOlder: true, hasNewer: true, earliest: mid(501) })
+        listMessages.mockResolvedValue(pageOf([505, 506], { hasNewer: true, hasOlder: false }))
+        await s.loadNewer('tok')
+        expect(s.post).toMatchObject({ earliest: mid(501), hasOlder: true, hasNewer: true })
+      })
+
+      it('keeps the older flag the newer page leaves alone, even for a run that already holds the earliest message', async () => {
+        seed([501, 502], { hasOlder: false, hasNewer: true, earliest: mid(501) })
+        listMessages.mockResolvedValue(pageOf([503], { hasNewer: false }))
+        await s.loadNewer('tok')
+        expect(s.post.hasOlder).toBe(false)
+      })
+    })
   })
 
   it('merges the people the answer names, and none from an answer that has no people', async () => {
@@ -1228,26 +1379,77 @@ describe('librarius store: polling for changes', () => {
   })
 
   describe('when the server says to start over', () => {
-    it('opens the same post again: its mark as it stands, else the newest page, and rev afresh', async () => {
-      seed([401, 402], { rev: '40', lastRead: mid(402) })
+    it('opens the same post again around the middle of the run held: the post, then the page, and rev afresh', async () => {
+      seed([401, 402, 403, 404], { rev: '40', lastRead: mid(402) })
       getChanges.mockResolvedValue({ reset: true })
       getPost.mockResolvedValue(found({ lastRead: mid(402), rev: '900' }))
-      listMessages.mockResolvedValue(pageOf([401, 402, 403, 404], { hasOlder: true, hasNewer: true, rev: '905' }))
+      servePage(pageOf([401, 402, 403, 404], { hasOlder: true, hasNewer: true, rev: '905' }))
       await s.poll('tok')
       expect(getPost).toHaveBeenCalledWith('tok', POST)
-      expect(listMessages.mock.calls[0][2]).toStrictEqual({ around: mid(402) })
-      expect(s.post).toEqual({ id: POST, info: info(), opening: null, messages: [msg(401), msg(402), msg(403), msg(404)], hasOlder: true, hasNewer: true, rev: '900', lastRead: mid(402) })
+      expect(listMessages.mock.calls[0][2]).toStrictEqual({ around: mid(403) })
+      expect(s.post).toEqual({
+        id: POST,
+        info: info(),
+        opening: null,
+        earliest: null,
+        messages: [msg(401), msg(402), msg(403), msg(404)],
+        hasOlder: true,
+        hasNewer: true,
+        rev: '900',
+        lastRead: mid(402),
+      })
     })
 
-    it('keeps the reader\'s place when the report of it has not landed, and the newest page when there is none', async () => {
-      seed([401], { lastRead: mid(450) })
+    it.each([
+      [1, 401],
+      [2, 402],
+      [3, 402],
+      [4, 403],
+      [5, 403],
+      [6, 404],
+      [7, 404],
+      [8, 405],
+    ])('with %i messages held, goes around message %i: the one at the middle, the upper one of two', async (count, middle) => {
+      seed(Array.from({ length: count }, (_, i) => 401 + i), { lastRead: mid(401) })
+      getChanges.mockResolvedValue({ reset: true })
+      getPost.mockResolvedValue(found({ lastRead: null }))
+      listMessages.mockResolvedValue(pageOf([middle]))
+      await s.poll('tok')
+      expect(listMessages.mock.calls[0][2]).toStrictEqual({ around: mid(middle) })
+    })
+
+    it('goes around the middle, not the reader\'s mark, wherever the mark is', async () => {
+      for (const lastRead of [mid(401), mid(406), mid(450), mid(399), null]) {
+        seed([401, 402, 403, 404, 405, 406], { lastRead })
+        getChanges.mockResolvedValue({ reset: true })
+        getPost.mockResolvedValue(found({ lastRead: null }))
+        listMessages.mockClear()
+        listMessages.mockResolvedValue(pageOf([404]))
+        await s.poll('tok')
+        expect(listMessages.mock.calls[0][2], String(lastRead)).toStrictEqual({ around: mid(404) })
+        s.reset()
+      }
+    })
+
+    it('keeps the reader\'s mark, the further on of the server\'s and the one held, though it goes around the middle', async () => {
+      seed([401, 402, 403], { lastRead: mid(450) })
+      getChanges.mockResolvedValue({ reset: true })
+      getPost.mockResolvedValue(found({ lastRead: mid(420) }))
+      listMessages.mockResolvedValue(pageOf([402]))
+      await s.poll('tok')
+      expect(s.post.lastRead).toBe(mid(450))
+    })
+
+    it('goes around the reader\'s mark when no message is held, else the newest page', async () => {
+      seed([], { lastRead: mid(450) })
       getChanges.mockResolvedValue({ reset: true })
       getPost.mockResolvedValue(found({ lastRead: null }))
       listMessages.mockResolvedValue(pageOf([450]))
       await s.poll('tok')
       expect(listMessages.mock.calls[0][2]).toStrictEqual({ around: mid(450) })
 
-      seed([401], { lastRead: null })
+      s.reset()
+      seed([], { lastRead: null })
       listMessages.mockClear()
       await s.poll('tok')
       expect(listMessages.mock.calls[0][2]).toStrictEqual({})
@@ -1289,6 +1491,240 @@ describe('librarius store: polling for changes', () => {
       getPost.mockRejectedValue(apiError(403))
       await s.poll('tok')
       expect(s.$state).toEqual(refused('denied'))
+    })
+  })
+
+  // Defence in depth: the server should answer a start-over only when more than 200 changes are waiting. If it keeps on
+  // answering one with the rev the post was just opened at, the store opens nothing more and asks less and less often.
+  describe('when the server keeps saying to start over', () => {
+    const T0 = Date.UTC(2026, 10, 15, 12, 0, 0)
+    const WAITS = [20_000, 40_000, 80_000, 160_000, 300_000, 300_000, 300_000]
+
+    beforeEach(() => {
+      vi.useFakeTimers({ toFake: ['Date'] })
+      vi.setSystemTime(T0)
+    })
+    afterEach(() => {
+      vi.useRealTimers()
+    })
+
+    /** The server's answers while it keeps saying to start over: opening the post gives rev `rev`. */
+    const startOver = (rev = '900') => {
+      getChanges.mockResolvedValue({ reset: true })
+      getPost.mockResolvedValue(found({ rev }))
+      listMessages.mockResolvedValue(pageOf([401, 402], { rev }))
+    }
+    /** Sets the clock `ms` after T0. */
+    const at = (ms) => vi.setSystemTime(T0 + ms)
+    /** The store after the first start-over: the post opened again at rev 900, and the next poll asks from there. */
+    const afterFirst = async () => {
+      seed([401, 402], { rev: '40' })
+      startOver()
+      await s.poll('tok')
+      getPost.mockClear()
+      listMessages.mockClear()
+      getChanges.mockClear()
+    }
+
+    it('opens the post again for the first start-over, and records the rev that gave', async () => {
+      seed([401, 402], { rev: '40' })
+      startOver('900')
+      await s.poll('tok')
+      expect(getPost).toHaveBeenCalledTimes(1)
+      expect(s.post.rev).toBe('900')
+    })
+
+    it('ignores a start-over that comes with the rev the last one opened the post at: nothing is opened, nothing changes', async () => {
+      await afterFirst()
+      const held = snapshot()
+      await s.poll('tok')
+      expect(getChanges).toHaveBeenCalledWith('tok', POST, '900')
+      expect(getPost).not.toHaveBeenCalled()
+      expect(listMessages).not.toHaveBeenCalled()
+      expect(snapshot()).toEqual(held)
+    })
+
+    it('then waits twice as long, then four times, and so on up to five minutes, asking nothing in between', async () => {
+      await afterFirst()
+      let now = 0
+      for (const wait of WAITS) {
+        getChanges.mockClear()
+        at(now)
+        await s.poll('tok') // asks, and the start-over comes again: ignored
+        expect(getChanges, `at ${now}`).toHaveBeenCalledTimes(1)
+        at(now + wait - 1)
+        await s.poll('tok')
+        expect(getChanges, `at ${now} + ${wait} - 1`).toHaveBeenCalledTimes(1)
+        now += wait
+      }
+      expect(getPost).not.toHaveBeenCalled()
+    })
+
+    it('asks again the very moment the wait is over', async () => {
+      await afterFirst()
+      await s.poll('tok')
+      at(20_000)
+      getChanges.mockClear()
+      await s.poll('tok')
+      expect(getChanges).toHaveBeenCalledTimes(1)
+    })
+
+    it('does nothing in the wait: no request, no error, the post as it is', async () => {
+      await afterFirst()
+      await s.poll('tok')
+      s.error = 'an earlier trouble'
+      const held = snapshot()
+      at(5_000)
+      getChanges.mockClear()
+      await s.poll('tok')
+      expect(getChanges).not.toHaveBeenCalled()
+      expect({ ...snapshot(), error: held.error }).toEqual(held)
+      expect(s.error).toBe('')
+    })
+
+    it('treats a start-over that comes with another rev as a new one: it opens the post again, and the wait begins again', async () => {
+      await afterFirst()
+      await s.poll('tok') // ignored: the next ask is 20 s on
+      at(20_000)
+      await s.poll('tok') // ignored: the next ask is 40 s on
+      at(60_000)
+      // the server answers normally, and the rev moves on
+      getChanges.mockResolvedValue(changesOf({ rev: '950' }))
+      await s.poll('tok')
+      expect(s.post.rev).toBe('950')
+      // a start-over comes with a rev that is not the one the last opening gave: opened again, around the middle
+      startOver('1000')
+      getPost.mockClear()
+      await s.poll('tok')
+      expect(getPost).toHaveBeenCalledTimes(1)
+      expect(s.post.rev).toBe('1000')
+      // and the wait is 20 s again, not 80
+      getChanges.mockClear()
+      await s.poll('tok')
+      expect(getChanges).toHaveBeenCalledTimes(1)
+      at(60_000 + 19_999)
+      await s.poll('tok')
+      expect(getChanges).toHaveBeenCalledTimes(1)
+      at(60_000 + 20_000)
+      await s.poll('tok')
+      expect(getChanges).toHaveBeenCalledTimes(2)
+    })
+
+    it('stops waiting when the rev has changed in the wait (the reader opened the post afresh), and a start-over then opens it again', async () => {
+      await afterFirst()
+      await s.poll('tok') // ignored: quiet for 20 s
+      getPost.mockResolvedValue(found({ rev: '1100' }))
+      listMessages.mockResolvedValue(pageOf([401, 402], { rev: '1100' }))
+      await s.openPost('tok', POST)
+      expect(s.post.rev).toBe('1100')
+      at(5_000)
+      getChanges.mockClear()
+      getPost.mockClear()
+      await s.poll('tok') // asks from 1100 at once, and the start-over comes: not the rev the last start-over gave
+      expect(getChanges).toHaveBeenCalledWith('tok', POST, '1100')
+      expect(getPost).toHaveBeenCalledTimes(1)
+    })
+
+    it('waits for the post it ignored a start-over of, and for no other', async () => {
+      await afterFirst()
+      await s.poll('tok') // ignored: quiet for 20 s
+      const OTHER = mid(501)
+      getPost.mockResolvedValue({ ...found({ rev: '5' }), post: { ...info(), id: OTHER } })
+      listMessages.mockResolvedValue(pageOf([601], { rev: '5' }))
+      await s.openPost('tok', OTHER)
+      getChanges.mockClear()
+      getChanges.mockResolvedValue(changesOf({ rev: '6' }))
+      await s.poll('tok')
+      expect(getChanges).toHaveBeenCalledWith('tok', OTHER, '5')
+    })
+
+    it('does not ignore the start-over of another post that has the same rev', async () => {
+      await afterFirst()
+      const OTHER = mid(501)
+      getPost.mockResolvedValue({ ...found({ rev: '900' }), post: { ...info(), id: OTHER } })
+      listMessages.mockResolvedValue(pageOf([601], { rev: '900' }))
+      await s.openPost('tok', OTHER)
+      getPost.mockClear()
+      getChanges.mockResolvedValue({ reset: true })
+      await s.poll('tok')
+      expect(getPost).toHaveBeenCalledWith('tok', OTHER)
+    })
+
+    it('forgets all of it on reset(), and on a new load()', async () => {
+      for (const forget of [() => s.reset(), () => s.load('tok')]) {
+        getMe.mockReturnValue(new Promise(() => {})) // a load stays pending
+        await afterFirst()
+        await s.poll('tok') // ignored: quiet for 20 s
+        forget()
+        seed([401, 402], { rev: '900' })
+        getChanges.mockClear()
+        getPost.mockClear()
+        await s.poll('tok')
+        expect(getChanges).toHaveBeenCalledTimes(1)
+        expect(getPost).toHaveBeenCalledTimes(1) // the first start-over of a new session: opened
+        s.reset()
+      }
+    })
+
+    it('records nothing when opening it again fails, so the next start-over opens it again', async () => {
+      seed([401, 402], { rev: '40' })
+      getChanges.mockResolvedValue({ reset: true })
+      getPost.mockRejectedValue(apiError(503, 'down'))
+      await expect(s.poll('tok')).rejects.toMatchObject({ status: 503 })
+      getPost.mockResolvedValue(found({ rev: '900' }))
+      listMessages.mockResolvedValue(pageOf([401, 402], { rev: '900' }))
+      getPost.mockClear()
+      await s.poll('tok')
+      expect(getPost).toHaveBeenCalledTimes(1)
+    })
+
+    it('records nothing when the post is opened again after the store has moved on', async () => {
+      seed([401, 402], { rev: '40' })
+      const slow = deferred()
+      getChanges.mockResolvedValue({ reset: true })
+      getPost.mockResolvedValue(found({ rev: '900' }))
+      listMessages.mockReturnValue(slow.promise)
+      const p = s.poll('tok')
+      await tick()
+      s.reset()
+      slow.resolve(pageOf([401], { rev: '900' }))
+      await p
+      seed([401, 402], { rev: '900' })
+      getPost.mockClear()
+      listMessages.mockResolvedValue(pageOf([401, 402], { rev: '900' }))
+      await s.poll('tok')
+      expect(getPost).toHaveBeenCalledTimes(1)
+    })
+
+    it('never waits longer than five minutes, however many start-overs it ignores (property)', async () => {
+      await fc.assert(
+        fc.asyncProperty(fc.integer({ min: 1, max: 12 }), async (times) => {
+          setActivePinia(createPinia())
+          const store = useLibrarius()
+          vi.setSystemTime(T0)
+          store.$patch((state) => {
+            state.status = 'allowed'
+            state.post = { id: POST, info: info(), opening: null, earliest: null, messages: [msg(401)], hasOlder: false, hasNewer: false, rev: '40', lastRead: null }
+          })
+          startOver('900')
+          await store.poll('tok') // opens it again
+          let now = 0
+          for (let i = 0; i < times; i++) {
+            await store.poll('tok') // ignored
+            const wait = Math.min(20_000 * 2 ** i, 300_000)
+            getChanges.mockClear()
+            vi.setSystemTime(T0 + now + wait - 1)
+            await store.poll('tok')
+            expect(getChanges).not.toHaveBeenCalled()
+            now += wait
+            vi.setSystemTime(T0 + now)
+          }
+          getChanges.mockClear()
+          await store.poll('tok')
+          expect(getChanges).toHaveBeenCalledTimes(1)
+        }),
+        { numRuns: 20 },
+      )
     })
   })
 })
@@ -1452,6 +1888,99 @@ describe('librarius store: marking messages read', () => {
     expect(s.post.lastRead).toBe(mid(470))
   })
 
+  describe('when the report fails after the post was opened again', () => {
+    /** A report of mark 460 that is on its way while the same post is opened again, the server holding `server` for it. */
+    const reopenedWhileSending = async (server) => {
+      seed([401], { lastRead: mid(450) })
+      const d = deferred()
+      markRead.mockReturnValueOnce(d.promise)
+      const p = s.markRead('tok', mid(460))
+      await tick()
+      getPost.mockResolvedValue(found({ lastRead: server }))
+      listMessages.mockResolvedValue(pageOf([401]))
+      await s.openPost('tok', POST)
+      return { d, p }
+    }
+
+    it('puts the mark held before it back, the new post having kept the mark of a report that had not landed', async () => {
+      const { d, p } = await reopenedWhileSending(null)
+      expect(s.post.lastRead).toBe(mid(460))
+      d.reject(apiError(503, 'late failure'))
+      await expect(p).resolves.toBeUndefined()
+      expect(s.post.lastRead).toBe(mid(450))
+      expect(s.error).toBe('')
+    })
+
+    it('puts back no mark when there was none before it', async () => {
+      seed([401], { lastRead: null })
+      const d = deferred()
+      markRead.mockReturnValueOnce(d.promise)
+      const p = s.markRead('tok', mid(460))
+      await tick()
+      getPost.mockResolvedValue(found({ lastRead: null }))
+      listMessages.mockResolvedValue(pageOf([401]))
+      await s.openPost('tok', POST)
+      d.reject(apiError(503, 'late failure'))
+      await p
+      expect(s.post.lastRead).toBeNull()
+    })
+
+    it('leaves a higher mark that the opening found at the server', async () => {
+      const { d, p } = await reopenedWhileSending(mid(470))
+      expect(s.post.lastRead).toBe(mid(470))
+      d.reject(apiError(503, 'late failure'))
+      await p
+      expect(s.post.lastRead).toBe(mid(470))
+    })
+
+    it('leaves a higher mark that was reported since', async () => {
+      const { d, p } = await reopenedWhileSending(null)
+      markRead.mockResolvedValueOnce(null)
+      await s.markRead('tok', mid(470))
+      expect(s.post.lastRead).toBe(mid(470))
+      d.reject(apiError(503, 'late failure'))
+      await p
+      expect(s.post.lastRead).toBe(mid(470))
+    })
+
+    it('puts the mark back whatever the failure, a refusal apart', async () => {
+      for (const err of [apiError(500, 'Boom.'), apiError(404, 'No such post.'), new TypeError('Failed to fetch'), undefined]) {
+        const { d, p } = await reopenedWhileSending(null)
+        d.reject(err)
+        await p
+        expect(s.post.lastRead, String(err)).toBe(mid(450))
+      }
+    })
+
+    it('touches no post of another session: after reset() the new post\'s mark is its own', async () => {
+      seed([401], { lastRead: mid(450) })
+      const d = deferred()
+      markRead.mockReturnValueOnce(d.promise)
+      const p = s.markRead('tok', mid(460))
+      await tick()
+      s.reset()
+      seed([401], { lastRead: mid(460) }) // the mark of the new session happens to be the same
+      d.reject(apiError(503, 'late failure'))
+      await expect(p).resolves.toBeUndefined()
+      expect(s.post.lastRead).toBe(mid(460))
+    })
+
+    it('touches no other post', async () => {
+      seed([401], { lastRead: mid(450) })
+      const d = deferred()
+      markRead.mockReturnValueOnce(d.promise)
+      const p = s.markRead('tok', mid(460))
+      await tick()
+      const OTHER = mid(501)
+      getPost.mockResolvedValue({ ...found({ lastRead: mid(460) }), post: { ...info(), id: OTHER } })
+      listMessages.mockResolvedValue(pageOf([601]))
+      await s.openPost('tok', OTHER)
+      d.reject(apiError(503, 'late failure'))
+      await p
+      expect(s.post).toMatchObject({ id: OTHER, lastRead: mid(460) })
+    })
+  })
+
   it('forgets an earlier error when it sends', async () => {
     seed([401])
     s.error = 'old trouble'
@@ -1511,7 +2040,7 @@ describe('librarius store: marking messages read', () => {
 
 // An answer that arrives after the store has moved on must change nothing: not after reset(), not after a newer load().
 describe('librarius store: late answers', () => {
-  const answer = {
+  const answerTo = () => ({
     load: ME,
     loadPosts: { posts: [{ id: mid(1), title: 'Late' }], people: { [mid(9)]: person('Late') } },
     getPost: found({ lastRead: null, rev: '41' }),
@@ -1519,48 +2048,48 @@ describe('librarius store: late answers', () => {
     older: pageOf([399, 400], { hasOlder: false, people: { [mid(9)]: person('Late') } }),
     newer: pageOf([403, 404], { hasNewer: false, people: { [mid(9)]: person('Late') } }),
     changes: changesOf({ messages: [msg(401, { content: 'late edit' }), msg(403)], deleted: [mid(402)], rev: '999', people: { [mid(9)]: person('Late') } }),
-  }
+  })
 
   // Each case starts one action with its API call pending, and says how to settle it.
   const cases = {
     load: (d) => {
       getMe.mockReturnValue(d.promise)
-      return { run: () => s.load('tok'), ok: answer.load }
+      return { run: () => s.load('tok'), ok: answerTo().load }
     },
     loadPosts: (d) => {
       listPosts.mockReturnValue(d.promise)
-      return { run: () => s.loadPosts('tok'), ok: answer.loadPosts }
+      return { run: () => s.loadPosts('tok'), ok: answerTo().loadPosts }
     },
     'openPost (waiting for the post)': (d) => {
       getPost.mockReturnValue(d.promise)
-      return { run: () => s.openPost('tok', POST), ok: answer.getPost }
+      return { run: () => s.openPost('tok', POST), ok: answerTo().getPost }
     },
     'openPost (waiting for the messages)': (d) => {
-      getPost.mockResolvedValue(answer.getPost)
+      getPost.mockResolvedValue(answerTo().getPost)
       listMessages.mockReturnValue(d.promise)
-      return { run: () => s.openPost('tok', POST), ok: answer.openPage }
+      return { run: () => s.openPost('tok', POST), ok: answerTo().openPage }
     },
     loadOlder: (d) => {
       seed([401, 402], { hasOlder: true })
       listMessages.mockReturnValue(d.promise)
-      return { run: () => s.loadOlder('tok'), ok: answer.older }
+      return { run: () => s.loadOlder('tok'), ok: answerTo().older }
     },
     loadNewer: (d) => {
       seed([401, 402], { hasNewer: true })
       listMessages.mockReturnValue(d.promise)
-      return { run: () => s.loadNewer('tok'), ok: answer.newer }
+      return { run: () => s.loadNewer('tok'), ok: answerTo().newer }
     },
     poll: (d) => {
       seed([401, 402])
       getChanges.mockReturnValue(d.promise)
-      return { run: () => s.poll('tok'), ok: answer.changes }
+      return { run: () => s.poll('tok'), ok: answerTo().changes }
     },
     'poll (waiting for the post to open again)': (d) => {
       seed([401, 402])
       getChanges.mockResolvedValue({ reset: true })
-      getPost.mockResolvedValue(answer.getPost)
+      getPost.mockResolvedValue(answerTo().getPost)
       listMessages.mockReturnValue(d.promise)
-      return { run: () => s.poll('tok'), ok: answer.openPage }
+      return { run: () => s.poll('tok'), ok: answerTo().openPage }
     },
     markRead: (d) => {
       seed([401, 402], { lastRead: mid(401) })

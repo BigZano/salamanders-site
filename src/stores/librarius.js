@@ -1,5 +1,6 @@
 import { defineStore } from 'pinia'
 import * as api from '../lib/librarius/api'
+import { STALE, attempt, statusOf, unlessStale } from './asking'
 
 // What the Librarius pages show: whether the signed-in user may read it (the answer to GET /librarius/me), the topic
 // list, the people it names, and the one post that is open with the messages loaded so far. It only decides what to
@@ -22,15 +23,24 @@ import * as api from '../lib/librarius/api'
 // A poll, older messages, newer messages and a read mark do not replace each other, and all four may be on their way at once.
 const gen = { session: 0, posts: 0, post: 0, poll: 0 }
 
-const restart = () => {
+// How often the post page polls, in milliseconds, and so the wait that a start-over the server keeps repeating is doubled from.
+export const POLL_MS = 10_000
+// The longest the store waits to poll again once the server keeps answering a start-over for the same rev.
+const BACKOFF_MAX_MS = 300_000
+
+// By store: the post a start-over was last answered for, the rev it was opened again at, how long the next poll waits if the
+// server answers a start-over for that rev again, and until when polls are let go by. Only a start-over that comes with the
+// rev the last one opened the post at is ignored: a rev that has changed is news, and begins afresh.
+const quiet = new WeakMap()
+
+const restart = (store) => {
   // Stryker disable next-line UpdateOperator: only restart() moves the session counter, so counting down tells an older answer from a current one as well as counting up
   gen.session++
   gen.posts++
   gen.post++
   gen.poll++
+  quiet.delete(store)
 }
-
-const statusOf = (err) => (err?.status === 401 ? 'signin' : err?.status === 403 ? 'denied' : 'unavailable')
 
 const initial = () => ({
   status: 'idle',
@@ -39,9 +49,11 @@ const initial = () => ({
   posts: [],
   // Everyone the answers have named, { id: { name, avatar } }, the newest answer winning.
   people: {},
-  // { id, info, opening, messages, hasOlder, hasNewer, rev, lastRead } once a post is open, else null. `opening` is the post's
-  // own first message (its id is the post's), or null when there is none: it is kept apart from `messages`, so that the page
-  // can pin it on top, and it is never in `messages` too. `lastRead` is the newest message the reader has read, and it is
+  // { id, info, opening, earliest, messages, hasOlder, hasNewer, rev, lastRead } once a post is open, else null. `opening` is
+  // the post's own first message (its id is the post's), or null when there is none: it is kept apart from `messages`, so
+  // that the page can pin it on top, and it is never in `messages` too. `earliest` is the id of the oldest message after it,
+  // as it was when the post was opened, or null when that is not known: a run that holds it has nothing older to load, though
+  // the server counts the pinned opening message as older. `lastRead` is the newest message the reader has read, and it is
   // where an opened post is put.
   post: null,
   error: '',
@@ -49,49 +61,25 @@ const initial = () => ({
 
 // A message id as the routes take it: a snowflake, 17 to 20 digits, kept as a string.
 const MESSAGE_ID = /^\d{17,20}$/
-
-const STALE = Symbol('stale')
-
-// → what `ask` answers, or STALE if `now()` (a generation counter) moved while it was asked for. A failure that arrives
-// then is dropped too, not thrown.
-async function unlessStale(now, ask) {
-  const then = now()
-  try {
-    const got = await ask()
-    return then === now() ? got : STALE
-  } catch (err) {
-    if (then === now()) throw err
-    return STALE
-  }
-}
+const isMessageId = (value) => typeof value === 'string' && MESSAGE_ID.test(value)
 
 // Whoever may not read leaves nothing of the forum behind, and nothing still on its way may land: the status is the only
 // thing kept.
 function refuse(store, status) {
-  restart()
+  restart(store)
   store.$patch((state) => Object.assign(state, initial(), { status }))
 }
 
-// Asks, as unlessStale does, and a 403 (the reader's role is gone: the server re-checks it on every read) takes the page away
-// and counts as stale, so that nothing is left to land.
+// Asks, as unlessStale does, and a refusal takes the page away and counts as stale, so that nothing is left to land: a 403
+// (the reader's role is gone: the server re-checks it on every read) is denied, and a 401 (the sign-in has expired) is signin.
 async function readOrRefuse(store, now, ask) {
   try {
     return await unlessStale(now, ask)
   } catch (err) {
-    if (err?.status !== 403) throw err
-    refuse(store, 'denied')
+    const status = statusOf(err)
+    if (status === 'unavailable') throw err
+    refuse(store, status)
     return STALE
-  }
-}
-
-// Runs one action: the message of a failure is kept in `error` for the page to show, and the failure goes on to the caller.
-async function attempt(store, run) {
-  store.error = ''
-  try {
-    return await run()
-  } catch (err) {
-    store.error = err?.message || 'Something went wrong.'
-    throw err
   }
 }
 
@@ -159,19 +147,24 @@ const later = (a, b) => (a === null ? b : b === null ? a : BigInt(b) > BigInt(a)
 // Stryker disable next-line EqualityOperator: equal revs are the same text, so `<` and `<=` answer alike
 const earlier = (a, b) => (BigInt(b) < BigInt(a) ? b : a)
 
+// → whether the run reaches back to `earliest`, the oldest message after the opening one (null when it is not known): only the
+// opening message is older then, and it is pinned apart, so there is nothing older to load.
+const holdsEarliest = (messages, earliest) => typeof earliest === 'string' && messages.length > 0 && idOf(messages[0]) <= BigInt(earliest)
+
 // Opens a post: the post itself, then a page of its messages around `around` (a message id the caller names, to jump to a
 // date), else around the reader's place, else the newest page, and, asked for with the page, the post's opening message
 // (the first message after the one before the post's own id). The opening message is kept as `opening`, and is not in the
 // run: an answer that is not what the routes send, or whose first message is not the post's own, leaves it null.
 // Asked for the post that is open (a poll was told to start over, or the reader jumped), it keeps showing it until the new
 // one lands, and it keeps the reader's place if that is further on than the server knows (its report may not have landed):
-// a jump moves the page, never the mark.
+// a jump moves the page, never the mark. The question about the opening message asks for the first two messages: the opening
+// one, and the one after it, which is what `earliest` is. → whether the post landed.
 async function open(store, token, id, around) {
   gen.post++
   gen.poll++
   if (store.post?.id !== id) store.post = null
   const found = await readOrRefuse(store, () => gen.post, () => api.getPost(token, id))
-  if (found === STALE) return
+  if (found === STALE) return false
   const lastRead = later(found.lastRead, store.post?.id === id ? store.post.lastRead : null)
   const anchor = around ?? lastRead
   const [page, first] = await Promise.all([
@@ -183,37 +176,53 @@ async function open(store, token, id, around) {
     readOrRefuse(
       store,
       () => gen.post,
-      () => api.listMessages(token, id, { after: String(BigInt(id) - 1n), limit: 1 }),
+      () => api.listMessages(token, id, { after: String(BigInt(id) - 1n), limit: 2 }),
     ),
   ])
-  if (page === STALE || first === STALE) return
+  if (page === STALE || first === STALE) return false
   // The rev is the earliest of the answers, so that whatever changed between the reads is sent again by the next poll. The
   // answer about the opening message may have none.
   const rev = [page.rev, first?.rev].filter((r) => r !== undefined).reduce(earlier, found.rev)
-  const row = first?.messages?.[0]
+  // Stryker disable next-line ArrayDeclaration: a row that is no message has no id, so none and a row of nonsense name nothing alike
+  const rows = Array.isArray(first?.messages) ? first.messages : []
+  const earliest = rows.map((row) => row?.id).find((rowId) => isMessageId(rowId) && rowId !== id) ?? null
+  const messages = withoutOpening(page.messages, id)
   store.post = {
     id,
     info: found.post,
-    opening: row?.id === id ? row : null,
-    messages: withoutOpening(page.messages, id),
-    hasOlder: page.hasOlder === true,
+    opening: rows[0]?.id === id ? rows[0] : null,
+    earliest,
+    messages,
+    hasOlder: page.hasOlder === true && !holdsEarliest(messages, earliest),
     hasNewer: page.hasNewer === true,
     rev,
     lastRead,
   }
   takePeople(store, page)
   takePeople(store, first ?? {})
+  return true
 }
 
-// One side of the held run: the cursor the server takes, the flag it answers, and which held message the page starts from.
+// One side of the held run: the cursor the server takes, the flag it answers, which held message the page starts from, and
+// whether more lies that way once the page is merged in (`answered` is what the server said).
 const SIDES = {
-  older: { cursor: 'before', flag: 'hasOlder', edge: (messages) => messages[0] },
-  newer: { cursor: 'after', flag: 'hasNewer', edge: (messages) => messages[messages.length - 1] },
+  older: {
+    cursor: 'before',
+    flag: 'hasOlder',
+    edge: (messages) => messages[0],
+    more: (post, messages, answered) => answered === true && !holdsEarliest(messages, post.earliest),
+  },
+  newer: {
+    cursor: 'after',
+    flag: 'hasNewer',
+    edge: (messages) => messages[messages.length - 1],
+    more: (_post, _messages, answered) => answered === true,
+  },
 }
 
 // Loads the page beyond one end of the run and merges it in. It does nothing when nothing lies that way.
 async function loadBeyond(store, token, side) {
-  const { cursor, flag, edge } = SIDES[side]
+  const { cursor, flag, edge, more } = SIDES[side]
   const held = store.post
   if (held === null || !held[flag] || held.messages.length === 0) return
   const page = await readOrRefuse(
@@ -225,7 +234,7 @@ async function loadBeyond(store, token, side) {
   const post = store.post
   const messages = mergePage(post.messages, withoutOpening(page.messages, post.id))
   post.messages = messages
-  post[flag] = page[flag] === true
+  post[flag] = more(post, messages, page[flag])
   takePeople(store, page)
 }
 
@@ -233,7 +242,7 @@ export const useLibrarius = defineStore('librarius', {
   state: initial,
   actions: {
     async load(token) {
-      restart()
+      restart(this)
       const mine = gen.session
       if (!token) return refuse(this, 'signin')
       this.status = 'checking'
@@ -255,7 +264,7 @@ export const useLibrarius = defineStore('librarius', {
     },
 
     reset() {
-      restart()
+      restart(this)
       this.$patch((state) => Object.assign(state, initial()))
     },
 
@@ -272,10 +281,10 @@ export const useLibrarius = defineStore('librarius', {
     // `around`, a message id, opens the post on the page about that message instead of about the reader's place.
     openPost(token, id, { around } = {}) {
       return attempt(this, async () => {
-        if (around !== undefined && around !== null && (typeof around !== 'string' || !MESSAGE_ID.test(around))) {
+        if (around !== undefined && around !== null && !isMessageId(around)) {
           throw new TypeError('openPost takes the id of a message to open around.')
         }
-        return open(this, token, id, around)
+        await open(this, token, id, around)
       })
     },
 
@@ -291,11 +300,28 @@ export const useLibrarius = defineStore('librarius', {
       return attempt(this, async () => {
         const held = this.post
         if (held === null) return
+        // A start-over that came again for the rev the post was opened at is being waited out.
+        const kept = quiet.get(this)
+        const waiting = kept?.id === held.id && kept.rev === held.rev ? kept : undefined
+        if (waiting !== undefined && Date.now() < waiting.until) return
         gen.poll++
         const got = await readOrRefuse(this, () => gen.poll, () => api.getChanges(token, held.id, held.rev))
         if (got === STALE) return
-        // Too much changed to be sent: the run is no use, so the post is opened again, at the reader's place.
-        if (got.reset === true) return open(this, token, held.id)
+        if (got.reset === true) {
+          // The server was asked from the rev the last start-over opened the post at, and says to start over again: opening it
+          // again would only come to the same, so the store asks less and less often, up to five minutes apart.
+          if (waiting !== undefined) {
+            waiting.wait = Math.min(waiting.wait * 2, BACKOFF_MAX_MS)
+            waiting.until = Date.now() + waiting.wait
+            return
+          }
+          // Too much changed to be sent: the run is no use, so the post is opened again around the middle of the run held,
+          // so that the reader's window survives, and the rev it was opened at is kept.
+          const middle = held.messages[Math.floor(held.messages.length / 2)]
+          const landed = await open(this, token, held.id, middle?.id)
+          if (landed) quiet.set(this, { id: held.id, rev: this.post.rev, wait: POLL_MS, until: 0 })
+          return
+        }
         const post = this.post
         const messages = applyChanges(post.messages, post, withoutOpening(got.messages, post.id), got.deleted)
         post.messages = messages
@@ -312,18 +338,32 @@ export const useLibrarius = defineStore('librarius', {
     // lower id is never sent after a higher one while that one is on its way, and is put back if the report fails.
     markRead(token, messageId) {
       return attempt(this, async () => {
-        if (typeof messageId !== 'string' || !MESSAGE_ID.test(messageId)) throw new TypeError('markRead takes the id of a message.')
+        if (!isMessageId(messageId)) throw new TypeError('markRead takes the id of a message.')
         const post = this.post
         if (post === null) return
         if (post.lastRead !== null && BigInt(messageId) <= BigInt(post.lastRead)) return
         const before = post.lastRead
+        const session = gen.session
         post.lastRead = messageId
-        try {
-          await readOrRefuse(this, () => gen.post, () => api.markRead(token, post.id, messageId))
-        } catch (err) {
-          if (post.lastRead === messageId) post.lastRead = before
-          throw err
+        // A report that fails puts the mark held before it back, on the post open now if it is this one (it may have been opened
+        // again meanwhile, keeping the mark) and unless a higher mark has replaced it since. Another session's post is its own.
+        const putBack = () => {
+          const current = this.post
+          // Stryker disable next-line OptionalChaining: with no post open the answer is stale (the post was left), and a failure thrown here is dropped as stale
+          if (session === gen.session && current?.id === post.id && current.lastRead === messageId) current.lastRead = before
         }
+        await readOrRefuse(
+          this,
+          () => gen.post,
+          async () => {
+            try {
+              return await api.markRead(token, post.id, messageId)
+            } catch (err) {
+              putBack()
+              throw err
+            }
+          },
+        )
       })
     },
   },

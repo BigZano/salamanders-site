@@ -22,6 +22,36 @@ const sent = () => {
   return fetchMock.mock.calls[0]
 }
 const headersOf = (init) => init.headers ?? {}
+/** What is no id, built afresh by each test that wants it. */
+const NOT_IDS = () => [
+  '',
+  ' ',
+  'abc',
+  '12345',
+  '1234567890123456',
+  '123456789012345678901',
+  '-200000000000000402',
+  '+200000000000000402',
+  '200000000000000402.5',
+  '2e17',
+  '0x2c68af0bb140402',
+  ' 200000000000000402',
+  '200000000000000402 ',
+  '200000000000000402\n',
+  '2000000000000004\n02',
+  '２０００００００００００００４０２',
+  '٢٠٠٠٠٠٠٠٠٠٠٠٠٠٤٠٢',
+  200000000000000402,
+  200000000000000402n,
+  true,
+  null,
+  undefined,
+  {},
+  { toString: () => '200000000000000402' },
+  ['200000000000000402'],
+  new String('200000000000000402'),
+  Symbol('id'),
+]
 
 describe('the reads', () => {
   it.each([
@@ -57,7 +87,7 @@ describe('listMessages: the page asked for', () => {
     await listMessages(TOKEN, POST, options)
     return fetchMock.mock.calls[0][0]
   }
-  const base = `${API_BASE}/librarius/posts/${POST}/messages`
+  const base = () => `${API_BASE}/librarius/posts/${POST}/messages`
 
   it.each([
     ['before', { before: MSG }, `?before=${MSG}`],
@@ -68,29 +98,49 @@ describe('listMessages: the page asked for', () => {
     ['after and a limit', { after: MSG, limit: 1 }, `?after=${MSG}&limit=1`],
     ['around and a limit', { around: MSG, limit: 10 }, `?around=${MSG}&limit=10`],
   ])('asks only for %s', async (_name, options, query) => {
-    expect(await urlOf(options)).toBe(`${base}${query}`)
+    expect(await urlOf(options)).toBe(`${base()}${query}`)
   })
 
   it('leaves out every option that is undefined or null, so the newest page is the plain route', async () => {
-    expect(await urlOf({ before: undefined, after: undefined, around: undefined, limit: undefined })).toBe(base)
-    expect(await urlOf({ before: null, after: null, around: null, limit: null })).toBe(base)
-    expect(await urlOf({ around: null, limit: 20 })).toBe(`${base}?limit=20`)
+    expect(await urlOf({ before: undefined, after: undefined, around: undefined, limit: undefined })).toBe(base())
+    expect(await urlOf({ before: null, after: null, around: null, limit: null })).toBe(base())
+    expect(await urlOf({ around: null, limit: 20 })).toBe(`${base()}?limit=20`)
   })
 
-  it('sends a value that is falsy but given, such as 0 or an empty string, for the server to judge', async () => {
-    expect(await urlOf({ limit: 0 })).toBe(`${base}?limit=0`)
-    expect(await urlOf({ before: '' })).toBe(`${base}?before=`)
-    expect(await urlOf({ before: 0 })).toBe(`${base}?before=0`)
+  it('sends a limit that is falsy but given, such as 0, for the server to judge', async () => {
+    expect(await urlOf({ limit: 0 })).toBe(`${base()}?limit=0`)
   })
 
-  it('URL-encodes each value, so a hostile one cannot add a parameter or end the query', async () => {
-    expect(await urlOf({ before: 'a b&c=d/e#f?g' })).toBe(`${base}?before=a%20b%26c%3Dd%2Fe%23f%3Fg`)
-    expect(await urlOf({ limit: '5&around=1' })).toBe(`${base}?limit=5%26around%3D1`)
+  it('URL-encodes the limit, so a hostile one cannot add a parameter or end the query', async () => {
+    expect(await urlOf({ limit: '5&around=1' })).toBe(`${base()}?limit=5%26around%3D1`)
+    expect(await urlOf({ limit: 'a b#c?d/e' })).toBe(`${base()}?limit=a%20b%23c%3Fd%2Fe`)
   })
 
   it('ignores an option it does not know', async () => {
-    expect(await urlOf({ unknown: 'x', before: MSG })).toBe(`${base}?before=${MSG}`)
-    expect(await urlOf({ unknown: 'x' })).toBe(base)
+    expect(await urlOf({ unknown: 'x', before: MSG })).toBe(`${base()}?before=${MSG}`)
+    expect(await urlOf({ unknown: 'x' })).toBe(base())
+  })
+
+  it.each(['before', 'after', 'around'])('refuses a %s that is no id, and sends nothing', async (name) => {
+    // Undefined and null are no cursor at all: they are left out, not refused.
+    for (const value of NOT_IDS().filter((v) => v !== undefined && v !== null)) {
+      fetchMock.mockClear()
+      await expect(listMessages(TOKEN, POST, { [name]: value }), `${name}: ${String(value)}`).rejects.toThrow(
+        new TypeError(`${name} must be an id: a string of 17 to 20 digits.`),
+      )
+      expect(fetchMock).not.toHaveBeenCalled()
+    }
+  })
+
+  it('refuses a falsy cursor that is given, such as an empty string or 0, which the server would have judged before', async () => {
+    await expect(listMessages(TOKEN, POST, { before: '' })).rejects.toBeInstanceOf(TypeError)
+    await expect(listMessages(TOKEN, POST, { after: 0 })).rejects.toBeInstanceOf(TypeError)
+    expect(fetchMock).not.toHaveBeenCalled()
+  })
+
+  it('refuses a bad cursor even next to a good one, rather than send the good one alone', async () => {
+    await expect(listMessages(TOKEN, POST, { before: MSG, around: 'x' })).rejects.toThrow(new TypeError('around must be an id: a string of 17 to 20 digits.'))
+    expect(fetchMock).not.toHaveBeenCalled()
   })
 })
 
@@ -111,6 +161,14 @@ describe('getChanges: the number it asks from', () => {
 })
 
 describe('markRead', () => {
+  it('refuses a message id that is no id, and sends nothing', async () => {
+    for (const value of NOT_IDS()) {
+      fetchMock.mockClear()
+      await expect(markRead(TOKEN, POST, value), String(value)).rejects.toThrow(new TypeError('messageId must be an id: a string of 17 to 20 digits.'))
+      expect(fetchMock).not.toHaveBeenCalled()
+    }
+  })
+
   it('PUTs the message id as JSON, with the token in a header, and answers null for the empty reply', async () => {
     fetchMock.mockResolvedValue(new Response(null, { status: 204 }))
     expect(await markRead(TOKEN, POST, MSG)).toBeNull()
@@ -125,56 +183,90 @@ describe('markRead', () => {
 })
 
 describe('the post id', () => {
-  const HOSTILE = ['a/b?c', '../posts', '..%2f', '1/2', 'a b', 'a#b', '%', '%2e%2e', 'x?since=1', '\n', 'é', '']
+  // The routes it makes, for one post id.
+  const routes = (id) => [
+    () => getPost(TOKEN, id),
+    () => listMessages(TOKEN, id),
+    () => getChanges(TOKEN, id, '1'),
+    () => markRead(TOKEN, id, MSG),
+  ]
 
-  it('is URL-encoded on every route that has one, so it cannot leave its path segment', async () => {
+  it('is on the path of every route that has one, as it is', async () => {
     fetchMock.mockImplementation(async () => json({}))
-    for (const id of HOSTILE) {
-      fetchMock.mockClear()
-      const enc = encodeURIComponent(id)
-      await getPost(TOKEN, id)
-      await listMessages(TOKEN, id)
-      await getChanges(TOKEN, id, '1')
-      await markRead(TOKEN, id, MSG)
-      expect(
-        fetchMock.mock.calls.map(([url]) => url),
-        JSON.stringify(id),
-      ).toEqual([
-        `${API_BASE}/librarius/posts/${enc}`,
-        `${API_BASE}/librarius/posts/${enc}/messages`,
-        `${API_BASE}/librarius/posts/${enc}/changes?since=1`,
-        `${API_BASE}/librarius/posts/${enc}/read`,
-      ])
-    }
+    for (const call of routes(POST)) await call()
+    expect(fetchMock.mock.calls.map(([url]) => url)).toEqual([
+      `${API_BASE}/librarius/posts/${POST}`,
+      `${API_BASE}/librarius/posts/${POST}/messages`,
+      `${API_BASE}/librarius/posts/${POST}/changes?since=1`,
+      `${API_BASE}/librarius/posts/${POST}/read`,
+    ])
   })
 
-  it('stays one path segment for any text (property)', async () => {
+  it('is refused when it is no id, on every route, and nothing is sent: a dot or two cannot climb out of the path', async () => {
+    const hostile = [...NOT_IDS(), '.', '..', '../posts', '..%2f', '%2e%2e', 'a/b?c', '1/2', 'x?since=1', '200000000000000401/read', '200000000000000401/../me']
+    for (const id of hostile) {
+      for (const call of routes(id)) {
+        await expect(call(), String(id)).rejects.toThrow(new TypeError('The post id must be an id: a string of 17 to 20 digits.'))
+      }
+    }
+    expect(fetchMock).not.toHaveBeenCalled()
+  })
+
+  it('is accepted at 17 and at 20 digits, and refused at 16 and at 21', async () => {
+    fetchMock.mockImplementation(async () => json({}))
+    for (const id of ['10000000000000000', '18446744073709551615']) {
+      for (const call of routes(id)) await call()
+    }
+    expect(fetchMock).toHaveBeenCalledTimes(8)
+    fetchMock.mockClear()
+    for (const id of ['1000000000000000', '184467440737095516150']) {
+      for (const call of routes(id)) await expect(call()).rejects.toBeInstanceOf(TypeError)
+    }
+    expect(fetchMock).not.toHaveBeenCalled()
+  })
+
+  it('stays one path segment of digits, and anything else is refused (property)', async () => {
     fetchMock.mockImplementation(async () => json({}))
     await fc.assert(
       fc.asyncProperty(fc.string({ unit: 'binary' }), async (id) => {
         fetchMock.mockClear()
-        await getPost(TOKEN, id)
-        const url = fetchMock.mock.calls[0][0]
-        expect(url.startsWith(`${API_BASE}/librarius/posts/`)).toBe(true)
-        const rest = url.slice(`${API_BASE}/librarius/posts/`.length)
-        expect(rest).not.toMatch(/[/?#\s]/)
-        expect(decodeURIComponent(rest)).toBe(id)
+        const isId = /^\d{17,20}$/.test(id)
+        if (isId) {
+          await getPost(TOKEN, id)
+          expect(fetchMock.mock.calls[0][0]).toBe(`${API_BASE}/librarius/posts/${id}`)
+        } else {
+          await expect(getPost(TOKEN, id)).rejects.toBeInstanceOf(TypeError)
+          expect(fetchMock).not.toHaveBeenCalled()
+        }
+      }),
+    )
+  })
+
+  it('takes any string of 17 to 20 digits (property)', async () => {
+    fetchMock.mockImplementation(async () => json({}))
+    await fc.assert(
+      fc.asyncProperty(fc.stringMatching(/^\d{17,20}$/), async (id) => {
+        fetchMock.mockClear()
+        await markRead(TOKEN, id, id)
+        expect(fetchMock.mock.calls[0][0]).toBe(`${API_BASE}/librarius/posts/${id}/read`)
+        expect(JSON.parse(fetchMock.mock.calls[0][1].body)).toEqual({ messageId: id })
       }),
     )
   })
 })
 
-describe('an id that cannot be URL-encoded', () => {
+describe('what cannot be URL-encoded', () => {
   // A lone surrogate is no text a URL can carry: encodeURIComponent throws, and nothing malformed goes on the wire.
   it.each([
-    ['getPost', () => getPost(TOKEN, '\ud800')],
-    ['listMessages id', () => listMessages(TOKEN, '\ud800')],
-    ['listMessages cursor', () => listMessages(TOKEN, POST, { around: '\udc00' })],
-    ['getChanges id', () => getChanges(TOKEN, '\ud800', '1')],
     ['getChanges since', () => getChanges(TOKEN, POST, '\ud800')],
-    ['markRead', () => markRead(TOKEN, '\ud800', MSG)],
+    ['listMessages limit', () => listMessages(TOKEN, POST, { limit: '\udc00' })],
   ])('%s: fails with a URIError and sends nothing', async (_name, call) => {
     await expect((async () => call())()).rejects.toBeInstanceOf(URIError)
+    expect(fetchMock).not.toHaveBeenCalled()
+  })
+
+  it('is no id either: a lone surrogate in an id is refused as one', async () => {
+    await expect(getPost(TOKEN, '\ud800')).rejects.toBeInstanceOf(TypeError)
     expect(fetchMock).not.toHaveBeenCalled()
   })
 })
