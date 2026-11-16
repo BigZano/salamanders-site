@@ -1,6 +1,7 @@
 import { describe, it, expect, afterEach } from 'vitest'
 import fc from 'fast-check'
-import { webcrypto } from 'node:crypto'
+import { createHash, webcrypto } from 'node:crypto'
+import { readFileSync } from 'node:fs'
 import { parse } from 'node-html-parser'
 import { inlineScriptHashes, buildCsp, injectCsp, apiOriginOf, cspMetaPlugin } from './csp.mjs'
 
@@ -10,10 +11,22 @@ const EMPTY = "'sha256-47DEQpj8HBSa+/TImW+5JCeuQeRkm5NMpJWZG3hSuFU='"
 const ALERT = "'sha256-bhHHL3z2vDgxUt0W3dWQOrprscmda2Y5pLsLg4GF+pI='"
 
 const sha256 = async (text) => `'sha256-${Buffer.from(await webcrypto.subtle.digest('SHA-256', new TextEncoder().encode(text))).toString('base64')}'`
+const sha256Sync = (text) => `'sha256-${createHash('sha256').update(text).digest('base64')}'`
 const asHash = (bytes) => `'sha256-${Buffer.from(bytes).toString('base64')}'`
 const anyHash = fc.uint8Array({ minLength: 32, maxLength: 32 }).map(asHash)
 // Any text a script could hold, except where the page would read it as ending the script or opening a comment.
 const plainText = fc.string({ unit: 'binary' }).filter((t) => !/<\/script|<!--/i.test(t))
+// Text that may hold what the scanner is most likely to trip on: the start of a comment, its end, and end tags of a script
+// (some that end it, some that only look as if they do). No "<script" and no NUL: those are the browser-parting cases, tested by name.
+const trickyText = fc
+  .array(fc.oneof(fc.string({ unit: 'binary', maxLength: 6 }), fc.constantFrom('<!--', '-->', '--!>', '<!-->', '</script>', '</SCRIPT >', '</script/', '</script\n', '</scripts>', '</scrip', '<', '/', '>', '\r\n', '&amp;', 'é')), { maxLength: 8 })
+  .map((parts) => parts.join(''))
+  .filter((t) => !/<script/i.test(t) && !t.includes('\u0000'))
+// Where a script of this text ends: at the first "</script" followed by white space, "/" or ">".
+const endOf = (text) => {
+  const at = text.search(/<\/script(?=[\s/>])/i)
+  return at === -1 ? text : text.slice(0, at)
+}
 
 /** A policy cut into its directives: [[name, [source, …]], …], in order. */
 const directives = (policy) =>
@@ -165,11 +178,69 @@ describe('inlineScriptHashes', () => {
     )
   })
 
+  it('hashes the text up to the first end tag, whatever comment starts and ends or lookalike end tags it holds', async () => {
+    await fc.assert(
+      fc.asyncProperty(trickyText, async (body) => {
+        const expected = await sha256(endOf(body).replace(/\r\n?/g, '\n'))
+        expect(inlineScriptHashes(`<head><script>${body}</script></head>`)).toEqual([expected])
+      }),
+    )
+  })
+
   it('agrees with an independent sha256 of the text, line breaks read as a browser reads them, for any text', async () => {
     await fc.assert(
       fc.asyncProperty(fc.array(plainText, { minLength: 1, maxLength: 3 }), async (bodies) => {
         const page = `<head>${bodies.map((b) => `<script>${b}</script>`).join('<p>x</p>')}</head>`
         expect(inlineScriptHashes(page)).toEqual(await Promise.all(bodies.map((b) => sha256(b.replace(/\r\n?/g, '\n')))))
+      }),
+    )
+  })
+})
+
+// What the scanner does not model of the HTML parsing rules. In every case it reads fewer scripts than a browser runs, or
+// hashes a different text for one, so the script is blocked (the page loses a script, never gains one); and it never hashes
+// text that is not between a tag and an end tag of the page, so nothing is allowed that the page's author did not write.
+describe('inlineScriptHashes, where the scanner and a browser part', () => {
+  const RAN = 'window.__ran = true'
+
+  it.each([
+    ['an abrupt <!-->', `<!--><script>${RAN}</script>`],
+    ['an abrupt <!--->', `<!---><script>${RAN}</script>`],
+    ['a comment closed by --!>', `<!-- note --!><script>${RAN}</script>`],
+    ['a <!-- that is only text in a <title>', `<title><!--</title><script>${RAN}</script>`],
+    ['a <!-- that is only text in a <textarea>', `<textarea><!--</textarea><script>${RAN}</script>`],
+    ['a <!-- that is only text in a <style>', `<style><!--</style><script>${RAN}</script>`],
+  ])('leaves out a script after %s, which a browser runs: the script is blocked', (_, page) => {
+    expect(inlineScriptHashes(page)).toEqual([])
+    expect(inlineScriptHashes(`${page}<script>other()</script>`)).toEqual([])
+  })
+
+  it('takes the text of a script in double-escaped script data only up to the first end tag, so the browser hashes more and blocks it', async () => {
+    const page = '<script><!-- <script>a</script> b</script> -->c</script>'
+    const browserText = '<!-- <script>a</script> b'
+    expect(inlineScriptHashes(page)).toEqual([await sha256('<!-- <script>a')])
+    expect(inlineScriptHashes(page)).not.toContain(await sha256(browserText))
+  })
+
+  it('hashes a NUL as it is, where a browser reads U+FFFD, so the browser hashes another text and blocks it', async () => {
+    expect(inlineScriptHashes('<script>a\u0000b</script>')).toEqual([await sha256('a\u0000b')])
+    expect(inlineScriptHashes('<script>a\u0000b</script>')).not.toContain(await sha256('a�b'))
+  })
+
+  it('hashes a script inside a <title>, which a browser does not run: the text is the author’s and allows nothing else', async () => {
+    expect(inlineScriptHashes('<title><script>x</script></title>')).toEqual([await sha256('x')])
+  })
+
+  it('never hashes text that is not between a tag and an end tag of the page, whatever it is made of', () => {
+    const piece = fc.constantFrom('<script>', '<script src=x>', '</script>', '</SCRIPT >', '<!--', '-->', '<!-->', '--!>', '<title>', '</title>', '<style>', '</style>', '<head>', '</head>', 'a', ' ', '\n', '\r\n', '\u0000', '<', '>', '"', "'", '=')
+    fc.assert(
+      fc.property(fc.array(piece, { maxLength: 14 }), (pieces) => {
+        const page = pieces.join('')
+        const starts = [...page.matchAll(/>/g)].map((m) => m.index + 1)
+        const ends = [...page.matchAll(/<\/script/gi)].map((m) => m.index).concat(page.length)
+        const hashes = new Set()
+        for (const from of starts) for (const to of ends) if (to >= from) hashes.add(sha256Sync(page.slice(from, to).replace(/\r\n?/g, '\n')))
+        for (const hash of inlineScriptHashes(page)) expect(hashes.has(hash)).toBe(true)
       }),
     )
   })
@@ -181,7 +252,7 @@ describe('buildCsp', () => {
       "default-src 'self'",
       `script-src 'self'${hashes.map((h) => ` ${h}`).join('')}`,
       "style-src 'self' 'unsafe-inline'",
-      "img-src 'self' data: blob: https://cdn.discordapp.com https://media.discordapp.net https://*.discordapp.net https://*.r2.cloudflarestorage.com https://i.ytimg.com",
+      "img-src 'self' data: blob: https://cdn.discordapp.com https://media.discordapp.net https://*.discordapp.net https://*.r2.cloudflarestorage.com",
       "media-src 'self' blob: https://cdn.discordapp.com https://media.discordapp.net https://*.r2.cloudflarestorage.com",
       "font-src 'self' data:",
       `connect-src 'self' ${API} https://discord.com https://spacemarine2.fandom.com`,
@@ -208,6 +279,13 @@ describe('buildCsp', () => {
     expect(buildCsp({ apiOrigin: undefined })).toBe(buildCsp({}))
   })
 
+  it('names no host that nothing loads from: YouTube thumbnails are not asked for, and the bucket is any account host', () => {
+    const csp = buildCsp({ apiOrigin: API })
+    expect(csp).not.toContain('ytimg')
+    expect(sourcesOf(csp, 'img-src')).toContain('https://*.r2.cloudflarestorage.com')
+    expect(sourcesOf(csp, 'media-src')).toContain('https://*.r2.cloudflarestorage.com')
+  })
+
   it('lets the wiki the Armoury reads live weapon trees from through connect-src, and nowhere else', () => {
     const csp = buildCsp({ apiOrigin: API })
     expect(sourcesOf(csp, 'connect-src')).toContain('https://spacemarine2.fandom.com')
@@ -220,12 +298,34 @@ describe('buildCsp', () => {
     }
   })
 
+  it('takes http for this machine only, so a build made from a dev .env (VITE_BUILDS_API_URL=http://localhost:8787) works', () => {
+    for (const origin of ['http://localhost', 'http://localhost:8787', 'http://127.0.0.1', 'http://127.0.0.1:8787', 'http://localhost:1', 'http://127.0.0.1:65535']) {
+      expect(sourcesOf(buildCsp({ apiOrigin: origin }), 'connect-src')[1]).toBe(origin)
+    }
+  })
+
   it.each([
     ['a path', `${API}/v1`],
     ['a trailing slash', `${API}/`],
     ['a query', `${API}?x=1`],
     ['a fragment', `${API}#x`],
     ['http', 'http://builds-api.example.test'],
+    ['http on a host that only starts with localhost', 'http://localhost.example.test'],
+    ['http on a host that only ends with localhost', 'http://notlocalhost'],
+    ['http on a host that only starts with 127.0.0.1', 'http://127.0.0.1.example.test'],
+    ['http on another loopback address', 'http://127.0.0.2:8787'],
+    ['http on 0.0.0.0', 'http://0.0.0.0:8787'],
+    ['http on an IPv6 loopback', 'http://[::1]:8787'],
+    ['http on localhost with a path', 'http://localhost:8787/v1'],
+    ['http on localhost with a trailing slash', 'http://localhost:8787/'],
+    ['http on localhost with an empty port', 'http://localhost:'],
+    ['http on localhost with a port of six digits', 'http://localhost:123456'],
+    ['http on localhost with a user', 'http://user@localhost'],
+    ['http on localhost with capitals', 'http://LOCALHOST:8787'],
+    ['HTTP in capitals on localhost', 'HTTP://localhost:8787'],
+    ['http on localhost, then another host', 'http://localhost:8787 https://evil.test'],
+    ['http on localhost, then a directive', 'http://localhost:8787; script-src *'],
+    ['ws on localhost', 'ws://localhost:8787'],
     ['javascript:', 'javascript:alert(1)'],
     ['data:', 'data:text/html,x'],
     ['no scheme', '//builds-api.example.test'],
@@ -259,12 +359,18 @@ describe('buildCsp', () => {
     ['non-ASCII text in the host', 'https://exämple.test'],
     ['an IPv6 host', 'https://[::1]'],
     ['a backslash', 'https://a.test\\x'],
-  ])('refuses an apiOrigin with %s', (_, apiOrigin) => {
-    expect(() => buildCsp({ apiOrigin, scriptHashes: [] })).toThrow(/apiOrigin/)
+  ])('refuses an apiOrigin with %s, in words that name VITE_BUILDS_API_URL', (_, apiOrigin) => {
+    expect(() => buildCsp({ apiOrigin, scriptHashes: [] })).toThrow(/VITE_BUILDS_API_URL/)
   })
 
-  it.each([null, 5, true, {}, [], [API]])('refuses an apiOrigin of %j, which is no string', (apiOrigin) => {
+  it.each([null, 5, true, {}, [], [API]])('refuses an apiOrigin of %j, which is no string, in words that name VITE_BUILDS_API_URL', (apiOrigin) => {
     expect(() => buildCsp({ apiOrigin })).toThrow(TypeError)
+    expect(() => buildCsp({ apiOrigin })).toThrow(/VITE_BUILDS_API_URL/)
+  })
+
+  it('says what is wanted when it refuses an origin: https, or http on this machine, and no path', () => {
+    expect(() => buildCsp({ apiOrigin: 'http://builds-api.example.test' })).toThrow(/https.*localhost.*127\.0\.0\.1/s)
+    expect(() => buildCsp({ apiOrigin: `${API}/v1` })).toThrow(/path/)
   })
 
   it.each([
@@ -342,7 +448,7 @@ describe('buildCsp', () => {
 
   it('refuses a valid origin with anything stuck on either end', () => {
     fc.assert(
-      fc.property(fc.constantFrom(API, `${API}:8443`), fc.constantFrom(' ', ';', '/', '?', '#', '\n', "'", '*', ',', '@'), fc.boolean(), (origin, extra, atFront) => {
+      fc.property(fc.constantFrom(API, `${API}:8443`, 'http://localhost:8787', 'http://127.0.0.1'), fc.constantFrom(' ', ';', '/', '?', '#', '\n', "'", '*', ',', '@'), fc.boolean(), (origin, extra, atFront) => {
         expect(() => buildCsp({ apiOrigin: atFront ? extra + origin : origin + extra })).toThrow()
       }),
     )
@@ -373,14 +479,67 @@ describe('injectCsp', () => {
   ].join('\n')
   const META = /<meta http-equiv="Content-Security-Policy" content="[^"]*" ?\/>/
 
-  const metaOf = (html) => parse(html).querySelector('head').firstElementChild
+  const metaOf = (html) => parse(html).querySelector('meta[http-equiv]')
+  const CHARSET = '<meta charset="UTF-8" />'
 
-  it('puts the policy in a meta tag that is the first element in the head', () => {
+  it('puts the policy in a meta tag in the head, right after the charset declaration', () => {
     const out = injectCsp(PAGE, { apiOrigin: API })
     const meta = metaOf(out)
     expect(meta.tagName).toBe('META')
+    expect(meta.parentNode.tagName).toBe('HEAD')
     expect(meta.getAttribute('http-equiv')).toBe('Content-Security-Policy')
     expect(meta.getAttribute('content')).toBe(buildCsp({ apiOrigin: API, scriptHashes: [ALERT] }))
+    expect(out.indexOf('<meta http-equiv=')).toBe(PAGE.indexOf(CHARSET) + CHARSET.length)
+  })
+
+  it('keeps the charset declaration in the first 1024 bytes a browser reads for it, however long the policy is', () => {
+    const scripts = Array.from({ length: 14 }, (_, i) => `<script>f${i}()</script>`).join('')
+    const page = PAGE.replace('<script>alert(1)</script>', scripts)
+    const out = injectCsp(page, { apiOrigin: API })
+    const policyMeta = out.match(META)[0]
+    expect(Buffer.byteLength(policyMeta)).toBeGreaterThan(1024)
+    expect(Buffer.byteLength(out.slice(0, out.indexOf(CHARSET) + CHARSET.length))).toBeLessThanOrEqual(1024)
+    expect(out.indexOf('charset')).toBeLessThan(out.indexOf('Content-Security-Policy'))
+  })
+
+  it('puts the policy first in the head when the page has no charset declaration', () => {
+    const page = PAGE.replace(`    ${CHARSET}\n`, '')
+    const out = injectCsp(page, { apiOrigin: API })
+    expect(out.indexOf('<meta http-equiv=')).toBe(page.indexOf('<head>') + '<head>'.length)
+    expect(out.replace(META, '')).toBe(page)
+  })
+
+  it('goes after the first charset declaration, however it is written, and after what comes before it', () => {
+    const declarations = ['<meta charset="UTF-8">', '<meta charset=utf-8>', "<META CHARSET='utf-8' />", '<meta data-x="a>b" charset="utf-8">', '<meta\n  charset="utf-8"\n/>', '<meta name="x" content="y" charset>']
+    for (const declaration of declarations) {
+      for (const before of ['', '<title>t</title>', '<meta name="viewport" content="width=device-width">', '<!-- <meta charset="x"> -->']) {
+        const page = `<html><head>${before}${declaration}<meta charset="latin1"><script>alert(1)</script></head><body></body></html>`
+        const at = page.indexOf(declaration) + declaration.length
+        const policy = buildCsp({ apiOrigin: API, scriptHashes: [ALERT] })
+        expect(injectCsp(page, { apiOrigin: API })).toBe(`${page.slice(0, at)}<meta http-equiv="Content-Security-Policy" content="${policy}" />${page.slice(at)}`)
+      }
+    }
+  })
+
+  it('does not take for a charset declaration a meta that has no charset, or one outside the head', () => {
+    for (const page of [
+      '<html><head><meta name="charset" content="x"><meta data-charset="x"><meta http-equiv="Content-Type" content="text/html"></head><body></body></html>',
+      '<html><head></head><body><meta charset="UTF-8"></body></html>',
+      '<html><head></head><meta charset="UTF-8"><body></body></html>',
+      '<html><head><title>t</title><BODY class="x"><meta charset="UTF-8"></BODY></html>',
+      '<html><meta charset="UTF-8"><head></head><body></body></html>',
+    ]) {
+      const out = injectCsp(page, { apiOrigin: API })
+      expect(out.indexOf('<meta http-equiv=')).toBe(page.indexOf('<head>') + '<head>'.length)
+      expect(out.replace(META, '')).toBe(page)
+    }
+  })
+
+  it('takes a charset declaration that comes before the end of the head, though a meta of one comes after', () => {
+    const page = '<html><head><title>t</title><meta charset="UTF-8"></head><body><meta charset="x"></body></html>'
+    const at = page.indexOf('<meta charset="UTF-8">') + '<meta charset="UTF-8">'.length
+    expect(injectCsp(page, { apiOrigin: API }).indexOf('<meta http-equiv=')).toBe(at)
+    expect(injectCsp('<html><head><meta charset="UTF-8"></HEAD ><body></body></html>', { apiOrigin: API }).indexOf('<meta http-equiv=')).toBe('<html><head><meta charset="UTF-8">'.length)
   })
 
   it('changes nothing else in the page, so no script it hashed is altered', () => {
@@ -411,7 +570,7 @@ describe('injectCsp', () => {
       for (const lead of ['', '<!-- <head> -->', '<!--\n<head lang="x">\n-->', '<script>"<head>"</script>']) {
         const page = `${lead}<html>${open}<meta charset="UTF-8"><script>alert(1)</script></${name}><body></body></html>`
         const policy = buildCsp({ apiOrigin: API, scriptHashes: inlineScriptHashes(page) })
-        const at = page.indexOf(open, lead.length) + open.length
+        const at = page.indexOf(open, lead.length) + open.length + '<meta charset="UTF-8">'.length
         expect(injectCsp(page, { apiOrigin: API })).toBe(`${page.slice(0, at)}<meta http-equiv="Content-Security-Policy" content="${policy}" />${page.slice(at)}`)
       }
     }
@@ -424,6 +583,12 @@ describe('injectCsp', () => {
     expect(out.match(/Content-Security-Policy/g)).toHaveLength(1)
   })
 
+  it('is not led astray by a head tag, a body tag or a charset declaration that is only text in a script or a comment', () => {
+    const page = '<html><head><script>"<meta charset=x></head><body>"</script><!-- <body> --><meta charset="UTF-8"></head><body></body></html>'
+    const at = page.indexOf('<meta charset="UTF-8">') + '<meta charset="UTF-8">'.length
+    expect(injectCsp(page, { apiOrigin: API }).indexOf('<meta http-equiv=')).toBe(at)
+  })
+
   it('does not take a header element for the head', () => {
     expect(() => injectCsp('<header><script>alert(1)</script></header>', { apiOrigin: API })).toThrow(/head/)
   })
@@ -434,16 +599,17 @@ describe('injectCsp', () => {
     expect(() => injectCsp('', { apiOrigin: API })).toThrow(/head/)
   })
 
-  it('refuses an apiOrigin that is not a bare https origin, and so ships no page', () => {
-    expect(() => injectCsp(PAGE, { apiOrigin: 'http://localhost:8787' })).toThrow(/apiOrigin/)
-    expect(() => injectCsp(PAGE, { apiOrigin: `${API}/v1` })).toThrow(/apiOrigin/)
+  it('refuses an apiOrigin that is not a bare https origin or this machine over http, and so ships no page', () => {
+    expect(() => injectCsp(PAGE, { apiOrigin: 'http://builds-api.example.test' })).toThrow(/VITE_BUILDS_API_URL/)
+    expect(() => injectCsp(PAGE, { apiOrigin: `${API}/v1` })).toThrow(/VITE_BUILDS_API_URL/)
+    expect(metaOf(injectCsp(PAGE, { apiOrigin: 'http://localhost:8787' })).getAttribute('content')).toContain('connect-src \'self\' http://localhost:8787 ')
   })
 
   it.each([undefined, null, 5, {}])('refuses %j, which is not a page', (html) => {
     expect(() => injectCsp(html, { apiOrigin: API })).toThrow(TypeError)
   })
 
-  it('always leaves the first element of the head as the policy and the rest of the page as it was', () => {
+  it('always puts the policy right after the first charset declaration (or first in the head) and leaves the rest of the page as it was', () => {
     fc.assert(
       fc.property(
         fc.constantFrom('head', 'HEAD', 'Head'),
@@ -454,9 +620,11 @@ describe('injectCsp', () => {
           const page = `${lead}<html><${tag}${attrs}>${inner.join('\n')}</${tag}><body></body></html>`
           const out = injectCsp(page, { apiOrigin: API })
           expect(out.replace(META, '')).toBe(page)
-          const meta = metaOf(out)
-          expect(meta.getAttribute('http-equiv')).toBe('Content-Security-Policy')
-          expect(meta.getAttribute('content')).toBe(buildCsp({ apiOrigin: API, scriptHashes: inlineScriptHashes(page) }))
+          const policy = buildCsp({ apiOrigin: API, scriptHashes: inlineScriptHashes(page) })
+          const charset = page.indexOf('<meta charset="UTF-8">')
+          const open = `<${tag}${attrs}>`
+          const at = charset === -1 ? page.indexOf(open, lead.length) + open.length : charset + '<meta charset="UTF-8">'.length
+          expect(out).toBe(`${page.slice(0, at)}<meta http-equiv="Content-Security-Policy" content="${policy}" />${page.slice(at)}`)
         },
       ),
     )
@@ -478,10 +646,16 @@ describe('apiOriginOf', () => {
     expect(apiOriginOf('HTTPS://Builds-API.Example.test/x')).toBe(API)
   })
 
-  it('leaves a scheme that is not https for buildCsp to refuse, so the build fails and says why', () => {
+  it('gives http for this machine as it is, which buildCsp takes for a build from a dev .env', () => {
     expect(apiOriginOf('http://localhost:8787')).toBe('http://localhost:8787')
-    expect(() => buildCsp({ apiOrigin: apiOriginOf('http://localhost:8787') })).toThrow(/https/)
-    expect(() => buildCsp({ apiOrigin: apiOriginOf('javascript:alert(1)') })).toThrow(/https/)
+    expect(apiOriginOf('http://127.0.0.1:8787/v1')).toBe('http://127.0.0.1:8787')
+    expect(buildCsp({ apiOrigin: apiOriginOf('http://localhost:8787') })).toContain("connect-src 'self' http://localhost:8787 ")
+  })
+
+  it('leaves any other scheme or host for buildCsp to refuse, so the build fails and names the variable', () => {
+    expect(() => buildCsp({ apiOrigin: apiOriginOf('http://builds-api.example.test') })).toThrow(/VITE_BUILDS_API_URL/)
+    expect(() => buildCsp({ apiOrigin: apiOriginOf('javascript:alert(1)') })).toThrow(/VITE_BUILDS_API_URL/)
+    expect(() => buildCsp({ apiOrigin: apiOriginOf('ftp://localhost') })).toThrow(/VITE_BUILDS_API_URL/)
   })
 
   it.each(['nonsense', ' ', '/just/a/path', 'https://', 'https://a b.test'])('names the setting when %j is no address', (url) => {
@@ -522,9 +696,16 @@ describe('cspMetaPlugin', () => {
     expect(handler(PAGE, { path: '/index.html', filename: '/x/index.html' })).toBe(injectCsp(PAGE, { apiOrigin: API }))
   })
 
-  it('fails the build, rather than ship a page, for an address that is not https or not an address', () => {
-    expect(() => cspMetaPlugin({ apiUrl: 'http://localhost:8787' }).transformIndexHtml.handler(PAGE)).toThrow(/https/)
-    expect(() => cspMetaPlugin({ apiUrl: 'nonsense' }).transformIndexHtml.handler(PAGE)).toThrow(/VITE_BUILDS_API_URL/)
+  it('gives a build from a dev .env (http://localhost:8787) a policy for it', () => {
+    const page = cspMetaPlugin({ apiUrl: 'http://localhost:8787' }).transformIndexHtml.handler(PAGE)
+    expect(page).toBe(injectCsp(PAGE, { apiOrigin: 'http://localhost:8787' }))
+    expect(page).toContain("connect-src 'self' http://localhost:8787 ")
+  })
+
+  it('fails the build, rather than ship a page, for an address that is not https, not this machine, or not an address, and names the variable', () => {
+    for (const apiUrl of ['http://builds-api.example.test', 'ftp://localhost:8787', 'javascript:alert(1)', 'nonsense']) {
+      expect(() => cspMetaPlugin({ apiUrl }).transformIndexHtml.handler(PAGE)).toThrow(/VITE_BUILDS_API_URL/)
+    }
   })
 
   it('is made without looking at the address, so that dev (which needs no policy, and may use http://localhost) is never stopped', () => {
@@ -562,5 +743,46 @@ describe('vite.config.js', () => {
   it('is applied to the build and not the dev server, whatever the dev server is pointed at', async () => {
     const plugin = await pluginFor('http://localhost:8787', { command: 'serve', mode: 'development' })
     expect(plugin.apply).toBe('build')
+  })
+})
+
+describe('public/404.html', () => {
+  const html = readFileSync(new URL('../public/404.html', import.meta.url), 'utf8')
+  const META_TAG = /<meta http-equiv="Content-Security-Policy" content="[^"]*" ?\/>/
+
+  it('carries the policy for its own inline script, without the API, right after its charset declaration: just what the build would write', () => {
+    expect(html).toMatch(META_TAG)
+    expect(inlineScriptHashes(html)).toHaveLength(1)
+    expect(injectCsp(html.replace(META_TAG, ''), {})).toBe(html)
+  })
+
+  it('has the policy as a meta in its head, after the charset, that allows its one script by hash', () => {
+    const head = parse(html).querySelector('head')
+    const [charset, policyMeta] = head.children
+    expect(charset.getAttribute('charset')).toBe('UTF-8')
+    expect(policyMeta.getAttribute('http-equiv')).toBe('Content-Security-Policy')
+    expect(sourcesOf(policyMeta.getAttribute('content'), 'script-src')).toEqual(["'self'", ...inlineScriptHashes(html)])
+    expect(policyMeta.getAttribute('content')).toBe(buildCsp({ scriptHashes: inlineScriptHashes(html) }))
+  })
+
+  it('keeps the charset declaration in the first 1024 bytes', () => {
+    expect(Buffer.byteLength(html.slice(0, html.indexOf('<meta charset="UTF-8" />') + '<meta charset="UTF-8" />'.length))).toBeLessThanOrEqual(1024)
+  })
+})
+
+describe('.env.example', () => {
+  const example = readFileSync(new URL('../.env.example', import.meta.url), 'utf8')
+
+  it('sets a VITE_BUILDS_API_URL that a build takes, so copying it to .env does not break the build', () => {
+    const value = /^VITE_BUILDS_API_URL=(.*)$/m.exec(example)?.[1]
+    expect(value).toBeTruthy()
+    expect(() => buildCsp({ apiOrigin: apiOriginOf(value) })).not.toThrow()
+  })
+
+  it('says what a production build needs: a bare https origin, with no path', () => {
+    expect(example).toMatch(/https/i)
+    expect(example).toMatch(/origin/i)
+    expect(example).toMatch(/path/i)
+    expect(example).toMatch(/Content-Security-Policy/i)
   })
 })

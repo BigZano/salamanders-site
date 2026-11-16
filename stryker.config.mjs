@@ -76,8 +76,12 @@ export default {
     'src/lib/librarius/places.js',
     'src/stores/librarius.js',
     'scripts/csp.mjs',
+    'scripts/check-csp.mjs',
   ],
   coverageAnalysis: 'perTest',
+  // Stryker's default is to put "// @ts-nocheck" at the top of the scripts in .html files too, which changes the one inline script
+  // of public/404.html and so its Content-Security-Policy hash (scripts/csp.test.mjs reads that file). Nothing here is type-checked.
+  disableTypeChecks: false,
   thresholds: { high: 100, low: 100, break: 100 },
   reporters: ['clear-text', 'progress'],
   ignoreStatic: true,

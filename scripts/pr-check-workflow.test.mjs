@@ -7,6 +7,18 @@ import { existsSync, readFileSync } from 'node:fs'
 const path = new URL('../.github/workflows/pr-check.yml', import.meta.url)
 const workflow = existsSync(path) ? readFileSync(path, 'utf8') : ''
 
+const deployPath = new URL('../.github/workflows/deploy.yml', import.meta.url)
+const deploy = existsSync(deployPath) ? readFileSync(deployPath, 'utf8') : ''
+const CHECK = 'node scripts/check-csp.mjs dist'
+
+// The number of the step (counting the lines that start one, "- ...") that holds the first line with `text`, or -1.
+function stepOf(text, workflowText) {
+  const lines = workflowText.split('\n')
+  const line = lines.findIndex((l) => l.includes(text))
+  if (line === -1) return -1
+  return lines.slice(0, line + 1).filter((l) => /^\s+- /.test(l)).length - 1
+}
+
 describe('pr-check workflow', () => {
   it('runs on pull_request, never pull_request_target', () => {
     // pull_request_target runs with the base repo's secrets against a fork's code.
@@ -29,5 +41,26 @@ describe('pr-check workflow', () => {
   it('runs the suite and the build', () => {
     expect(workflow).toContain('bun run test')
     expect(workflow).toContain('bun run build')
+  })
+
+  it('checks the Content-Security-Policy of the build it just made, in the very next step', () => {
+    const build = stepOf('bun run build', workflow)
+    expect(build).toBeGreaterThan(-1)
+    expect(stepOf(CHECK, workflow)).toBe(build + 1)
+  })
+})
+
+describe('deploy workflow', () => {
+  it('checks the Content-Security-Policy of the build it ships, in the very next step after the build', () => {
+    expect(deploy).not.toBe('')
+    const build = stepOf('bun run build', deploy)
+    expect(build).toBeGreaterThan(-1)
+    expect(stepOf(CHECK, deploy)).toBe(build + 1)
+  })
+
+  it('checks it before the build is scanned or uploaded, and builds only the once', () => {
+    expect(stepOf(CHECK, deploy)).toBeLessThan(stepOf('scripts/scan-dist.mjs', deploy))
+    expect(stepOf(CHECK, deploy)).toBeLessThan(stepOf('upload-pages-artifact', deploy))
+    expect(deploy.match(/bun run build/g)).toHaveLength(1)
   })
 })

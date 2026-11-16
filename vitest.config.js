@@ -75,6 +75,7 @@ const GATED = [
   'src/lib/librarius/places.js',
   'src/stores/librarius.js',
   'scripts/csp.mjs',
+  'scripts/check-csp.mjs',
 ]
 
 export default defineConfig({

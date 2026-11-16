@@ -45,6 +45,8 @@ jobs:
           # once the server/ stack has a real public address and re-run this
           # workflow (workflow_dispatch or a push) to pick it up.
           VITE_BUILDS_API_URL: ${{ vars.VITE_BUILDS_API_URL }}
+      - name: Check the Content-Security-Policy of the build
+        run: node scripts/check-csp.mjs dist
       - name: Scan build output for plaintext
         run: node scripts/scan-dist.mjs dist
       - uses: actions/upload-pages-artifact@v5

@@ -1,12 +1,11 @@
-# Legion Archive merge gate: whole suite, then 100% coverage + mutation on
-# the gated units, then (locally, where the plaintext exists) a build scan
-# against real-content sentinels.
+# Legion Archive merge gate: the build and its Content-Security-Policy first (they are quick, and the one dist they make is
+# what the archive scan reads below), then the whole suite, then 100% coverage + mutation on the gated units, then (locally,
+# where the plaintext exists) a build scan against real-content sentinels.
 export PATH="$PWD/node_modules/.bin:$PATH"
+bun run build >/dev/null && node scripts/check-csp.mjs dist || exit 1
 bun run test || exit 1
 bun run test:coverage || exit 1
 bun run test:mutation || exit 1
-# The Content-Security-Policy the build puts in index.html: present, listing every inline script, no unsafe-eval or wildcard host.
-bun run build >/dev/null && node scripts/check-csp.mjs dist || exit 1
 if [ -d archive-export ]; then
-  bun run build >/dev/null && node scripts/scan-dist.mjs dist --sentinels-from archive-export || exit 1
+  node scripts/scan-dist.mjs dist --sentinels-from archive-export || exit 1
 fi

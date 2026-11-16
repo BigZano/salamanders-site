@@ -1,7 +1,13 @@
 <!doctype html>
 <html lang="en">
   <head>
-    <meta charset="UTF-8" />
+    <meta charset="UTF-8" /><meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'sha256-3jytkmnjNDohQmifYq7edVfN6sa8a7/DQNBv5uO7+bs='; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: https://cdn.discordapp.com https://media.discordapp.net https://*.discordapp.net https://*.r2.cloudflarestorage.com; media-src 'self' blob: https://cdn.discordapp.com https://media.discordapp.net https://*.r2.cloudflarestorage.com; font-src 'self' data:; connect-src 'self' https://discord.com https://spacemarine2.fandom.com; frame-src https://www.youtube.com https://clips.twitch.tv https://medal.tv; object-src 'none'; base-uri 'none'; form-action 'self'; manifest-src 'self'" />
+    <!--
+      The policy above is what scripts/csp.mjs writes into index.html at build time, less the API origin, and it holds the hash
+      of the one script below: a change to that script needs a new hash, or a browser will not run it. scripts/csp.test.mjs
+      fails when the policy or the hash goes stale (it re-writes this tag with injectCsp and compares), and
+      scripts/check-csp.mjs checks the built copy.
+    -->
     <title>Salamanders — SM2 Clan · Operations</title>
     <script>
       // GitHub Pages is pure static hosting — no server-side rewrite for a
