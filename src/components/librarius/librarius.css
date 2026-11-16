@@ -560,3 +560,165 @@ a.lb-file {
     border-color: var(--color-ash-2);
   }
 }
+
+/* One post: a breadcrumb, the title with a line of facts under it, then the thread beside a rail of months. On a phone the rail
+ * is a row of chips above the thread that scrolls sideways within itself; from 900px it is a column at the side that stays
+ * in view while the thread scrolls. Nothing here moves, fades or slides. */
+.lb-post {
+  min-width: 0;
+}
+.lb-crumbs {
+  margin-bottom: 0.4rem;
+  font-size: var(--text-sm);
+  color: var(--color-faint);
+}
+.lb-crumbs a {
+  display: inline-flex;
+  align-items: center;
+  min-height: var(--tap);
+  color: var(--color-pewter);
+  text-decoration: none;
+}
+.lb-crumb-here {
+  color: var(--color-smoke);
+  overflow-wrap: anywhere;
+  unicode-bidi: isolate;
+}
+.lb-post-top {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 0.6rem 1rem;
+}
+.lb-post-title {
+  flex: 1 1 16rem;
+  min-width: 0;
+  margin: 0;
+  font-family: var(--font-display);
+  font-size: var(--text-xl);
+  font-weight: 700;
+  line-height: 1.15;
+  color: var(--color-whitehot);
+  overflow-wrap: anywhere;
+  unicode-bidi: isolate;
+}
+.lb-discord {
+  flex: none;
+}
+.lb-post-meta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.3rem 0.5rem;
+  margin: 0.6rem 0 0;
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  color: var(--color-faint);
+}
+
+.lb-post-body {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 0.8rem 1.5rem;
+  margin-top: 1rem;
+}
+.lb-thread {
+  min-width: 0;
+}
+/* "Load older" and "Load newer": one button, the width of a finger or more, in the middle of the column. */
+.lb-more {
+  display: flex;
+  min-height: var(--tap);
+  margin: 0.8rem auto;
+}
+.lb-notice {
+  margin: 0.8rem 0;
+  font-size: var(--text-md);
+  color: var(--color-ember);
+}
+
+/* "Since your last visit": a rule across the column with its words in the middle. The page scrolls here when it opens. */
+.lb-divider {
+  display: flex;
+  align-items: center;
+  gap: 0.8rem;
+  margin: 1rem 0 0.4rem;
+  scroll-margin-top: 5rem;
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  letter-spacing: 0.08em;
+  color: var(--color-ember);
+}
+.lb-divider::before,
+.lb-divider::after {
+  content: '';
+  flex: 1 1 auto;
+  height: 1px;
+  background: var(--color-ember);
+  opacity: 0.5;
+}
+.lb-divider-text {
+  flex: none;
+  max-width: 100%;
+}
+
+/* The date rail: a button for each month. */
+.lb-rail {
+  display: flex;
+  gap: 0.4rem;
+  order: -1;
+  padding-bottom: 0.2rem;
+  overflow-x: auto;
+}
+.lb-month {
+  flex: none;
+  min-height: var(--tap);
+  padding: 0.3rem 0.85rem;
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  color: var(--color-smoke);
+  background: rgba(5, 10, 8, 0.6);
+  border: 1px solid var(--color-ash);
+  border-radius: var(--radius-pill);
+  cursor: pointer;
+}
+.lb-month:disabled,
+.lb-more:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+@media (min-width: 900px) {
+  .lb-post-body {
+    grid-template-columns: minmax(0, 1fr) 7.5rem;
+  }
+  .lb-rail {
+    flex-direction: column;
+    gap: 0.2rem;
+    order: 0;
+    align-self: start;
+    position: sticky;
+    top: 5rem;
+    max-height: calc(100vh - 6rem);
+    padding: 0 0 0 0.6rem;
+    overflow-x: visible;
+    overflow-y: auto;
+    border-left: 1px solid var(--color-ash);
+  }
+  .lb-month {
+    text-align: left;
+    background: transparent;
+    border: 0;
+    border-radius: var(--radius-sm);
+  }
+}
+
+@media (hover: hover) and (pointer: fine) {
+  .lb-crumbs a:hover {
+    color: var(--color-bone);
+  }
+  .lb-month:hover:not(:disabled) {
+    color: var(--color-bone);
+    border-color: var(--color-ash-2);
+  }
+}

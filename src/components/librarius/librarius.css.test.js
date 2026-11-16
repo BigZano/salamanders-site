@@ -24,7 +24,7 @@ describe('librarius.css', () => {
   })
 
   it('sets no type size in pixels, rems or ems of its own on the text it shows: the ramp\'s tokens', () => {
-    for (const selector of ['.lb-time', '.lb-reply', '.lb-file', '.lb-missing', '.lb-sticker', '.lb-reaction', '.lb-count', '.lb-topic-title', '.lb-topic-latest', '.lb-topic-meta', '.lb-chip', '.lb-sort', '.lb-tag', '.lb-new', '.lb-pin']) {
+    for (const selector of ['.lb-time', '.lb-reply', '.lb-file', '.lb-missing', '.lb-sticker', '.lb-reaction', '.lb-count', '.lb-topic-title', '.lb-topic-latest', '.lb-topic-meta', '.lb-chip', '.lb-sort', '.lb-tag', '.lb-new', '.lb-pin', '.lb-crumbs', '.lb-post-meta', '.lb-notice', '.lb-divider', '.lb-month']) {
       expect(rule(selector), selector).toMatch(/font-size:\s*var\(--text-(?:xs|sm|md|base)\)/)
     }
   })
@@ -42,16 +42,16 @@ describe('librarius.css', () => {
     expect(rule('.lb-msg')).toMatch(/grid-template-columns:\s*2\.5rem minmax\(0,\s*1fr\)/)
   })
 
-  it.each(['.lb-file', '.lb-reply', '.lb-topic', '.lb-chip', '.lb-sort'])('%s is a full-size tap target', (selector) => {
+  it.each(['.lb-file', '.lb-reply', '.lb-topic', '.lb-chip', '.lb-sort', '.lb-crumbs a', '.lb-more', '.lb-month'])('%s is a full-size tap target', (selector) => {
     expect(rule(selector), selector).toMatch(/min-height:\s*var\(--tap\)/)
   })
 
-  it.each(['.lb-name', '.lb-body', '.lb-reply-text', '.lb-embed', '.lb-topic-title', '.lb-topic-latest', '.lb-tag'])('%s keeps a right-to-left override in its own block', (selector) => {
+  it.each(['.lb-name', '.lb-body', '.lb-reply-text', '.lb-embed', '.lb-topic-title', '.lb-topic-latest', '.lb-tag', '.lb-post-title', '.lb-crumb-here'])('%s keeps a right-to-left override in its own block', (selector) => {
     expect(rule(selector), selector).toMatch(/unicode-bidi:\s*isolate/)
   })
 
   it('wraps long words and addresses rather than stretching the page', () => {
-    for (const selector of ['.lb-name', '.lb-body', '.lb-file', '.lb-embed', '.lb-topic-title', '.lb-topic-latest', '.lb-tag']) expect(rule(selector), selector).toMatch(/overflow-wrap:\s*anywhere/)
+    for (const selector of ['.lb-name', '.lb-body', '.lb-file', '.lb-embed', '.lb-topic-title', '.lb-topic-latest', '.lb-tag', '.lb-post-title', '.lb-crumb-here']) expect(rule(selector), selector).toMatch(/overflow-wrap:\s*anywhere/)
   })
 
   it('hides a spoiler from the eye until it is shown', () => {
@@ -70,6 +70,12 @@ describe('librarius.css', () => {
     expect(rule('.lb-avatar')).toMatch(/border-radius:\s*var\(--radius-pill\)/)
     expect(rule('.lb-article')).toMatch(/border-radius:\s*var\(--radius-md\)/)
     expect(rule('.lb-reaction')).toMatch(/border-radius:\s*var\(--radius-pill\)/)
+  })
+
+  it('keeps the date rail inside its own box on a phone, scrolling sideways, and sticks it at the side from 900px', () => {
+    expect(rule('.lb-rail')).toMatch(/overflow-x:\s*auto/)
+    expect(rule('.lb-rail')).toMatch(/order:\s*-1/)
+    expect(css).toMatch(/@media \(min-width: 900px\) \{[^@]*\.lb-rail \{[^}]*position:\s*sticky/)
   })
 
   it('has no hover rule outside the real-pointer media query: nothing depends on hover', () => {
