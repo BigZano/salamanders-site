@@ -116,11 +116,13 @@ describe('the verdict', () => {
     expect(await access.resolve(req('stranger'))).toStrictEqual({ user: asked('stranger'), read: false, perms: 0n })
   })
 
-  it('is null for a request with no identity, and does not look the member up', async () => {
-    const { access, roles } = setup()
+  it('is null for a request with no identity, even when the member lookup and the guild facts are down', async () => {
+    const { access, fail } = setup()
+    // Were either asked for, the answer would be Upstream (a rejection), not null.
+    fail.memberOf = true
+    fail.facts = true
     expect(await access.resolve(req(null))).toBeNull()
     expect(await access.resolve(req('nobody'))).toBeNull()
-    expect(roles.memberOf).not.toHaveBeenCalled()
   })
 
   it("lets one role's allow beat another role's deny, as Discord does", async () => {

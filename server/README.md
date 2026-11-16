@@ -265,9 +265,11 @@ cached.
 
 A route that is not listed answers 404, an unconfigured Librarius 503, no identity 401 and no read permission 403
 (except `/librarius/me`). A post or message id that is not a snowflake never reaches the database: a post is 404, a
-cursor 400. Attachment links are signed by Discord and lapse; the link refresh (every 10 minutes) renews those of posts
-that were viewed in the last day, and a read renews any that lapse within five minutes, so a reader is never handed a
-dead link when Discord can be reached.
+cursor 400. Attachment links are signed by Discord and lapse. The link refresh (every 10 minutes) renews, up to 200 a
+pass, those that lapse within two hours of posts viewed in the last day. A read renews the first 50 links on its page that
+lapse within five minutes; any beyond those wait for the next pass, which is at most 10 minutes away. A link Discord
+cannot be reached to renew stays as it is until it can, so a reader may be shown one that has lapsed for as long as
+Discord is down.
 
 | Variable | Value |
 |---|---|
@@ -277,9 +279,12 @@ dead link when Discord can be reached.
 The Librarius is on only when all three are set (and the forum id is a channel id). Otherwise every `/librarius`
 route answers 503 "not configured" and nothing starts (no gateway connection, no timer, no import), so the image may
 ship first. The API logs one warning at startup saying which, never a value. When it is on, the API starts, after it is
-listening: the roster warm-up, the posts load, the import (in the background, and again after every gateway READY as a
-catch-up), the link refresh timer and the gateway connection. A step that fails is logged as `Librarius: ...` (never the
-token or a link) and the rest go on; none of it can keep the API from listening.
+listening: the roster warm-up, the posts load, the import (in the background), the import's timer, the link refresh
+timer and the gateway connection. The import comes round on its own: once after start, again after every gateway READY,
+and 6 hours after the last run ended whoever started it. A run that fails is tried again after 5, 10 and 20 minutes, then
+every 30 minutes, and a run that finishes starts the steps over. A step that fails to start is logged as `Librarius: ...`
+(never the token or a link) and the rest go on; none of it can keep the API from listening. A rejection or exception that
+nothing handles anywhere in the API is logged the same way and no longer ends the process.
 
 **Bot permissions:** View Channel and Read Message History on the forum (granted 2026-11-15), and the Message Content
 intent toggle on the bot's page in the Discord Developer Portal, already on for the Reliquarium (without it the gateway
@@ -294,9 +299,26 @@ Rollout:
    are `librarius_*`.
 2. Set `LIBRARIUS_CHANNEL_ID` in `server/.env`.
 3. Rebuild the API, keeping the rollback tag: `docker tag server-api:latest server-api:pre-librarius` first, then
-   `docker compose up -d --build api`. To go back, point the `api` service at `server-api:pre-librarius`.
+   `docker compose up -d --build api`. To go back: `docker tag server-api:pre-librarius server-api:latest && docker
+   compose up -d --no-build --force-recreate api`.
 4. Check:
    - `curl -s -o /dev/null -w '%{http_code}' localhost:8787/librarius/me` answers 401;
+   - `curl -s <the API's public address>/health` (the address `VITE_BUILDS_API_URL` names) answers `{"ok":true}`: the tunnel
+     still reaches the API now that the port is bound to the loopback;
    - `docker compose logs api` shows no "Librarius is not configured";
-   - the import finishes (`/librarius/me` says `ready: true` for a reader);
-   - port 8787 is no longer reachable from another machine on the LAN.
+   - the import finishes: `docker compose exec -T db psql -U salamanders salamanders_builds -c 'select import_done,
+     last_error from librarius_sync;'` shows `import_done` true and an empty `last_error` (and `/librarius/me` says
+     `ready: true` for a reader);
+   - port 8787 is no longer reachable from another machine on the LAN;
+   - a link refresh moved a link forward: open a post with files, then, 10 minutes or more later, run the query below
+     for the soonest-expiring attachments of posts viewed in the last day. None should have an `expires_at` in the past or
+     within the next two hours; Discord signs its links for about a day, so a day after the import the soonest `expires_at`
+     should still be hours ahead rather than having come round to the past.
+
+     ```sh
+     docker compose exec -T db psql -U salamanders salamanders_builds -c "select a.id, a.expires_at from librarius_attachments a join librarius_messages m on m.id = a.message_id join librarius_posts p on p.id = m.post_id where p.viewed_at > now() - interval '1 day' order by a.expires_at limit 5;"
+     ```
+
+If the import never finishes (`import_done` stays false), read `last_error` in the same table: the import retries by itself
+(after 5, 10 and 20 minutes, then every 30), and `docker compose restart api` forces a run at once. A run that stopped
+resumes from the cursor each post kept, so a long import is not started over.

@@ -66,6 +66,22 @@ const BOT_TOKEN = process.env.DISCORD_BOT_TOKEN
 // instead of the real Discord API — see e2e/discord-mock.
 const DISCORD_API_BASE = process.env.DISCORD_API_BASE || 'https://discord.com/api'
 
+/** What a log may say of a failure: its name and message, with the bot token and every link cut out, in 200 characters. */
+const describeForLog = (err) => describeFailure(err, { secret: BOT_TOKEN })
+
+// A rejection nobody waited for, or an exception nobody caught, must not take the whole API down: Bun exits on either
+// unless something is listening. Both are logged the way every other failure is (no token, no link) and never thrown
+// again, and the log line itself is guarded, since a handler that throws ends the process all the same.
+function logUnhandled(kind, err) {
+  try {
+    console.error(`${kind}: ${describeForLog(err)}`)
+  } catch {
+    // The log is gone (a closed stderr, say): there is nowhere left to say it.
+  }
+}
+process.on('unhandledRejection', (reason) => logUnhandled('Unhandled rejection', reason))
+process.on('uncaughtException', (err) => logUnhandled('Uncaught exception', err))
+
 const pool = new Pool({ connectionString: process.env.DATABASE_URL })
 
 const roles = createDiscordRoles({ apiBase: DISCORD_API_BASE, guildId: GUILD_ID, botToken: BOT_TOKEN })
@@ -205,15 +221,12 @@ else if (librarius.configured && !librariusConfigured) {
   )
 }
 
-/** What the log may say of a failure: its name and message, with the bot token and every link cut out, in 200 characters. */
-const librariusDescribe = (err) => describeFailure(err, { secret: BOT_TOKEN })
-
 /** Do one startup step, and log it when it fails: nothing a step throws may reach the server. */
 async function librariusStep(what, run) {
   try {
     await run()
   } catch (err) {
-    console.error(`Librarius: ${what}: ${librariusDescribe(err)}`)
+    console.error(`Librarius: ${what}: ${describeForLog(err)}`)
   }
 }
 
@@ -226,7 +239,16 @@ if (librariusConfigured) {
     const guild = createLibrariusGuild({ discord, forumId: librarius.forumId })
     const access = createLibrariusAccess({ roles, guild, guildId: GUILD_ID })
     const store = createLibrariusStore(pool)
-    const importer = createImport({ discord, store, forumId: librarius.forumId })
+    // The import may queue for Discord longer than a reader's request may: it is given a view of the REST client that
+    // waits up to a minute for its turn. Everything else keeps the five seconds.
+    const importer = createImport({
+      discord: discord.withMaxWait(60_000),
+      store,
+      forumId: librarius.forumId,
+      // Once the posts are listed, before the long read of their messages: the live feed takes in the posts it has just
+      // been told of. `ingest` is made below, and is only called once the import runs.
+      onPostsListed: () => ingest.load(),
+    })
     const links = createLinkRefresh({ discord, store })
     const ingest = createIngest({
       store,
@@ -250,19 +272,21 @@ if (librariusConfigured) {
       configured: true,
     })
     // Run once the server is listening, and in this order: the posts it listens to, the import (not waited for: it can
-    // take minutes), the link timer, the gateway. A step that fails is logged and the rest go on: the catch-up that
-    // follows READY loads the posts again, so a failed load only delays the live feed.
+    // take minutes), the import's timer (its first run is the one just started), the link timer, the gateway. A step
+    // that fails is logged and the rest go on: the catch-up that follows READY loads the posts again, so a failed load
+    // only delays the live feed, and the import's timer tries a failed import again.
     startLibrarius = async () => {
       // The roster supplies the names and avatars on a page: warm it now (not waited for), so that a reader's first
       // request does not wait on it.
       librariusStep('the roster could not be warmed', () => roster.current())
       await librariusStep('the posts could not be loaded', () => ingest.load())
       librariusStep('the import could not start', () => importer.run())
+      await librariusStep('the import timer could not start', () => importer.start())
       await librariusStep('the link refresh could not start', () => links.start())
       await librariusStep('the gateway could not start', () => gateway.start())
     }
   } catch (err) {
-    console.error(`Librarius: could not be set up, so every /librarius route answers 503: ${librariusDescribe(err)}`)
+    console.error(`Librarius: could not be set up, so every /librarius route answers 503: ${describeForLog(err)}`)
   }
 }
 
@@ -405,4 +429,4 @@ Bun.serve({
 console.log(`Builds API listening on :${PORT}`)
 
 // Not waited for, and after Bun.serve: a slow database or a failing step must never keep the server from listening.
-startLibrarius().catch((err) => console.error(`Librarius: startup failed: ${librariusDescribe(err)}`))
+startLibrarius().catch((err) => console.error(`Librarius: startup failed: ${describeForLog(err)}`))
