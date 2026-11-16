@@ -8,8 +8,12 @@
 // Where the reader is:
 //   - The store keeps the reader's mark (`lastRead`) moving as messages are read, so the page takes a copy of it when the post
 //     opens and puts the "since your last visit" divider by that copy: the divider stays where it was while the reader reads on.
-//   - The page opens at that divider, else at the message the address names (#m-<id>), else at the newest message. It scrolls
-//     once for each opening, never for what a poll or an older page brings. Loading older messages keeps the reader's place.
+//   - The post's opening message is pinned on top, above "Load older", whichever run of messages is held.
+//   - The page opens at the message the address names (#m-<id>: a link to a message is where the reader means to be, and the
+//     post is opened around it when it is not among the messages held), else at the divider, else at the newest message. Coming
+//     Back to a post it opens around the message that was topmost when the reader left (kept in sessionStorage), and scrolls
+//     to that, in place of the rest. It scrolls once for each opening, never for what a poll or an older page brings. Loading
+//     older messages keeps the reader's place.
 //   - A message is reported read (the newest in view, two seconds after what is in view last changed) through the store, which
 //     never lowers the mark. A failed report, poll or page is dropped quietly or noted: none of them takes the page away.
 import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
@@ -28,6 +32,7 @@ const READ_AFTER_MS = 2_000
 const SNOWFLAKE = /^\d{17,20}$/
 const MESSAGE_ELEMENT = /^m-(\d{17,20})$/
 const MESSAGE_ANCHOR = /^#m-(\d{17,20})$/
+const placeKey = (postId) => `lb-anchor:${postId}`
 // The guild of a reader whose answer from /me names none the page can use: no address names this one, so no link is ours.
 const NO_GUILD = '0'.repeat(17)
 const COULD_NOT_REACH = 'The Librarius couldn\'t be reached.'
@@ -55,14 +60,14 @@ const busy = reactive({ older: false, newer: false, jump: false })
 const post = computed(() => (store.post?.id === props.postId ? store.post : null))
 const info = computed(() => post.value?.info ?? null)
 const messages = computed(() => post.value?.messages ?? [])
+// The post's own first message, pinned on top as an article whatever its length. The store keeps it out of the run.
+const opening = computed(() => post.value?.opening ?? null)
 
-// The opening message first, as an article whatever its length; the replies after it, grouped, each with its own layout.
-const entries = computed(() => {
-  const opening = messages.value.find((message) => message.id === props.postId)
-  const replies = messages.value.filter((message) => message.id !== props.postId)
-  const rows = groupMessages(replies).map(({ message, grouped }) => ({ message, grouped, article: isArticle(message, parse(message.content)) }))
-  return opening === undefined ? rows : [{ message: opening, grouped: false, article: true }, ...rows]
-})
+// The replies, grouped, each with its own layout.
+const entries = computed(() =>
+  groupMessages(messages.value).map(({ message, grouped }) => ({ message, grouped, article: isArticle(message, parse(message.content)) })),
+)
+const isHeld = (id) => opening.value?.id === id || messages.value.some((message) => message.id === id)
 
 // The divider: before the first message newer than the reader's mark. A run that begins after the mark and has older messages
 // beyond it does not say where the unread ones begin, so it gets none. The count is a lower bound when newer messages lie beyond.
@@ -123,30 +128,56 @@ const months = computed(() => {
 })
 
 const messageElement = (id) => root.value.querySelector(`#m-${id}`)
+// The first message of the run on the page: the opening message is above it, and does not move when older ones are added.
+const firstOfRun = () => [...root.value.querySelectorAll('.lb-msg')].find((node) => node.id !== `m-${props.postId}`)
 const scrollTo = (target, options) => {
   if (target) target.scrollIntoView(options)
 }
 const anchorId = () => MESSAGE_ANCHOR.exec(route.hash)?.[1] ?? null
 
-// The reader's place on opening: the divider, else the message the address names, else the newest message.
-function scrollToStart() {
+// The reader's place on opening: the message they mean to be at (where they were, coming Back, or the one the address names),
+// else the divider, else the newest message. A message that is gone leaves the rest of the order to decide.
+function scrollToStart(wanted) {
+  const named = wanted === null ? null : messageElement(wanted)
+  if (named) return scrollTo(named, TO_TOP)
   const unread = root.value.querySelector('.lb-divider')
   if (unread) return scrollTo(unread, TO_TOP)
-  const id = anchorId()
-  const named = id === null ? null : messageElement(id)
-  if (named) return scrollTo(named, TO_TOP)
   const all = root.value.querySelectorAll('.lb-msg')
   scrollTo(all[all.length - 1], TO_END)
 }
 
-// A link in this post to one of its messages changes the address while the page is open.
-watch(
-  () => route.hash,
-  () => {
-    const id = anchorId()
-    if (id !== null) scrollTo(messageElement(id), TO_TOP)
-  },
-)
+// Opens the post again around a message the messages held do not reach. A failure is not the reader's trouble: the page goes
+// on with what it has, and the message is simply not there.
+async function reach(id) {
+  try {
+    await store.openPost(auth.token, props.postId, { around: id })
+  } catch {
+    // The run held stays.
+  }
+}
+
+// Back keeps the reader's place: where they were is the topmost message in view when they leave, kept for this tab only.
+const returning = () => Boolean(window.history.state?.forward)
+function savedPlace(postId) {
+  try {
+    const id = sessionStorage.getItem(placeKey(postId))
+    return id !== null && SNOWFLAKE.test(id) ? id : null
+  } catch {
+    return null
+  }
+}
+function rememberPlace(postId) {
+  try {
+    let top = null
+    for (const id of inView) {
+      if (top === null || BigInt(id) < BigInt(top)) top = id
+    }
+    if (top === null) sessionStorage.removeItem(placeKey(postId))
+    else sessionStorage.setItem(placeKey(postId), top)
+  } catch {
+    // A browser that keeps nothing keeps nothing: the reader is put at the usual place.
+  }
+}
 
 // Marking read. The messages in view are what the browser last said was in view; two seconds after that last changed, the
 // newest of them is reported. One observer for each opening of a post.
@@ -196,7 +227,7 @@ function stopReading() {
 }
 
 // Messages that arrive (from a poll, an older or newer page, or a jump) are watched once they are on the page.
-watch(() => post.value?.messages, watchMessages, { flush: 'post' })
+watch(() => [post.value?.messages, post.value?.opening], watchMessages, { flush: 'post' })
 
 // Polling: one chain of timeouts, not an interval, so that a slow answer is never asked again on top of itself. `session`
 // counts the openings of a post; a chain that belongs to an earlier one ends.
@@ -210,8 +241,20 @@ function poll(mine) {
   }, POLL_MS)
 }
 
-// Opens the post: asks the store, takes the reader's mark for the divider, then puts the reader at their place and starts
-// watching and polling. Whatever an earlier opening was doing is let go.
+// → whether the opening that is `mine` is still the current one and has put the post in the store. A post the store has let go
+// (the reader may no longer read it) is a failure.
+function landed(mine) {
+  if (mine !== session) return false
+  if (store.post?.id !== props.postId) {
+    phase.value = 'failed'
+    return false
+  }
+  return true
+}
+
+// Opens the post: asks the store (around the place the reader left, coming Back), takes the reader's mark for the divider, and
+// reaches a message the address names when the run does not; then puts the reader at their place and starts watching and polling.
+// Whatever an earlier opening was doing is let go.
 async function enter() {
   const mine = ++session
   clearTimeout(pollTimer)
@@ -220,40 +263,66 @@ async function enter() {
   notice.value = ''
   // So that a channel mention or a link names a post: a deep link arrives with no topic list. The page does not wait for it.
   if (store.posts.length === 0) store.loadPosts(auth.token).catch(() => {})
+  const back = returning() ? savedPlace(props.postId) : null
   try {
-    await store.openPost(auth.token, props.postId)
+    await store.openPost(auth.token, props.postId, { around: back })
   } catch (err) {
     phase.value = err?.status === 404 ? 'missing' : 'failed'
     return
   }
-  if (mine !== session) return
-  if (store.post?.id !== props.postId) {
-    phase.value = 'failed'
-    return
-  }
+  if (!landed(mine)) return
   snapshot.value = store.post.lastRead
+  const named = back === null ? anchorId() : null
+  if (named !== null && !isHeld(named)) {
+    await reach(named)
+    if (!landed(mine)) return
+  }
   phase.value = 'ready'
   await nextTick()
   if (mine !== session) return
   watchMessages()
-  scrollToStart()
+  scrollToStart(back ?? named)
   poll(mine)
 }
 
 onMounted(enter)
-watch(() => props.postId, enter)
+watch(
+  () => props.postId,
+  (_now, before) => {
+    if (phase.value === 'ready') rememberPlace(before)
+    enter()
+  },
+)
 onBeforeUnmount(() => {
+  if (phase.value === 'ready') rememberPlace(props.postId)
   session++
   clearTimeout(pollTimer)
   stopReading()
 })
 
+// A link in this post to one of its messages changes the address while the page is open. A change of post comes with its own
+// opening (which sets the phase), so it is left to that.
+watch(
+  () => route.hash,
+  async () => {
+    const id = anchorId()
+    if (id === null) return
+    await nextTick()
+    if (phase.value !== 'ready') return
+    if (!isHeld(id)) {
+      await reach(id)
+      await nextTick()
+    }
+    scrollTo(messageElement(id), TO_TOP)
+  },
+)
+
 // Loads the page beyond one end of what is held. Older messages go above what the reader is looking at, so the first message
-// held is kept where it is on the screen (a browser may have done so already, and then there is nothing to move).
+// of the run is kept where it is on the screen (a browser may have done so already, and then there is nothing to move).
 async function more(side) {
   busy[side] = true
   notice.value = ''
-  const anchor = root.value.querySelector('.lb-msg')
+  const anchor = firstOfRun()
   const from = anchor?.getBoundingClientRect().top
   try {
     await (side === 'older' ? store.loadOlder(auth.token) : store.loadNewer(auth.token))
@@ -327,6 +396,7 @@ async function jump(month) {
 
       <div class="lb-post-body">
         <div class="lb-thread">
+          <LibMessage v-if="opening" :message="opening" :grouped="false" article :people="store.people" :ctx="ctx" />
           <button v-if="post.hasOlder" type="button" class="btn-ghost btn-sm lb-more" :disabled="busy.older" @click="more('older')">Load older</button>
 
           <template v-for="e in entries" :key="e.message.id">

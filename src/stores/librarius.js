@@ -6,7 +6,8 @@ import * as api from '../lib/librarius/api'
 // show; the server enforces every read and write again. Statuses: idle, checking, allowed, importing, denied, signin,
 // unavailable.
 //
-// The open post holds a run of its messages, oldest first, with no gap and no id twice. `hasOlder` and `hasNewer` say
+// The open post holds a run of its messages, oldest first, with no gap and no id twice, and the post's opening message
+// apart from it. `hasOlder` and `hasNewer` say
 // whether more lie beyond the run; loadOlder() and loadNewer() grow it; poll() keeps it up to date from `rev`, the number
 // the server's changes are asked from. Only opening a post and polling move `rev`: a page carries the rev it was read at,
 // but it holds no word of what changed in the messages already held, so taking it would skip those changes.
@@ -38,8 +39,10 @@ const initial = () => ({
   posts: [],
   // Everyone the answers have named, { id: { name, avatar } }, the newest answer winning.
   people: {},
-  // { id, info, messages, hasOlder, hasNewer, rev, lastRead } once a post is open, else null. `lastRead` is the newest
-  // message the reader has read, and it is where an opened post is put.
+  // { id, info, opening, messages, hasOlder, hasNewer, rev, lastRead } once a post is open, else null. `opening` is the post's
+  // own first message (its id is the post's), or null when there is none: it is kept apart from `messages`, so that the page
+  // can pin it on top, and it is never in `messages` too. `lastRead` is the newest message the reader has read, and it is
+  // where an opened post is put.
   post: null,
   error: '',
 })
@@ -123,6 +126,9 @@ function mergePage(held, page) {
   return ordered([...byId.values()])
 }
 
+// → the messages without the one that has the post's own id: that is the post's opening message, which is held apart.
+const withoutOpening = (messages, postId) => messages.filter((message) => message.id !== postId)
+
 // → the messages held with what a poll answered: a message that is held is replaced by its new version, and one that is
 // deleted goes. A message that is not held is added when it falls where the run has no gap: among the held, after the
 // newest when nothing newer lies unloaded, or before the oldest when nothing older does. Otherwise it is the edit of a
@@ -154,9 +160,12 @@ const later = (a, b) => (a === null ? b : b === null ? a : BigInt(b) > BigInt(a)
 const earlier = (a, b) => (BigInt(b) < BigInt(a) ? b : a)
 
 // Opens a post: the post itself, then a page of its messages around `around` (a message id the caller names, to jump to a
-// date), else around the reader's place, else the newest page. Asked for the post that is open (a poll was told to start
-// over, or the reader jumped), it keeps showing it until the new one lands, and it keeps the reader's place if that is
-// further on than the server knows (its report may not have landed): a jump moves the page, never the mark.
+// date), else around the reader's place, else the newest page, and, asked for with the page, the post's opening message
+// (the first message after the one before the post's own id). The opening message is kept as `opening`, and is not in the
+// run: an answer that is not what the routes send, or whose first message is not the post's own, leaves it null.
+// Asked for the post that is open (a poll was told to start over, or the reader jumped), it keeps showing it until the new
+// one lands, and it keeps the reader's place if that is further on than the server knows (its report may not have landed):
+// a jump moves the page, never the mark.
 async function open(store, token, id, around) {
   gen.post++
   gen.poll++
@@ -165,24 +174,35 @@ async function open(store, token, id, around) {
   if (found === STALE) return
   const lastRead = later(found.lastRead, store.post?.id === id ? store.post.lastRead : null)
   const anchor = around ?? lastRead
-  const page = await readOrRefuse(
-    store,
-    () => gen.post,
-    () => api.listMessages(token, id, anchor === null ? {} : { around: anchor }),
-  )
-  if (page === STALE) return
-  // The rev is the earlier of the two, so that whatever changed between the two reads is sent again by the next poll.
-  const rev = earlier(found.rev, page.rev)
+  const [page, first] = await Promise.all([
+    readOrRefuse(
+      store,
+      () => gen.post,
+      () => api.listMessages(token, id, anchor === null ? {} : { around: anchor }),
+    ),
+    readOrRefuse(
+      store,
+      () => gen.post,
+      () => api.listMessages(token, id, { after: String(BigInt(id) - 1n), limit: 1 }),
+    ),
+  ])
+  if (page === STALE || first === STALE) return
+  // The rev is the earliest of the answers, so that whatever changed between the reads is sent again by the next poll. The
+  // answer about the opening message may have none.
+  const rev = [page.rev, first?.rev].filter((r) => r !== undefined).reduce(earlier, found.rev)
+  const row = first?.messages?.[0]
   store.post = {
     id,
     info: found.post,
-    messages: page.messages,
+    opening: row?.id === id ? row : null,
+    messages: withoutOpening(page.messages, id),
     hasOlder: page.hasOlder === true,
     hasNewer: page.hasNewer === true,
     rev,
     lastRead,
   }
   takePeople(store, page)
+  takePeople(store, first ?? {})
 }
 
 // One side of the held run: the cursor the server takes, the flag it answers, and which held message the page starts from.
@@ -203,7 +223,7 @@ async function loadBeyond(store, token, side) {
   )
   if (page === STALE) return
   const post = store.post
-  const messages = mergePage(post.messages, page.messages)
+  const messages = mergePage(post.messages, withoutOpening(page.messages, post.id))
   post.messages = messages
   post[flag] = page[flag] === true
   takePeople(store, page)
@@ -277,8 +297,12 @@ export const useLibrarius = defineStore('librarius', {
         // Too much changed to be sent: the run is no use, so the post is opened again, at the reader's place.
         if (got.reset === true) return open(this, token, held.id)
         const post = this.post
-        const messages = applyChanges(post.messages, post, got.messages, got.deleted)
+        const messages = applyChanges(post.messages, post, withoutOpening(got.messages, post.id), got.deleted)
         post.messages = messages
+        // The opening message is updated or removed as any other is, the deletion winning.
+        const changed = got.messages.find((message) => message.id === post.id)
+        if (changed !== undefined) post.opening = changed
+        if (got.deleted.includes(post.id)) post.opening = null
         post.rev = got.rev
         takePeople(this, got)
       })

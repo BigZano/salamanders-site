@@ -45,7 +45,7 @@ beforeEach(() => {
 const seed = (ns, { hasOlder = false, hasNewer = false, lastRead = null, rev = '40' } = {}) => {
   s.$patch((state) => {
     state.status = 'allowed'
-    state.post = { id: POST, info: info(), messages: ns.map((n) => msg(n)), hasOlder, hasNewer, rev, lastRead }
+    state.post = { id: POST, info: info(), opening: null, messages: ns.map((n) => msg(n)), hasOlder, hasNewer, rev, lastRead }
   })
 }
 /** Everything the store can hold for a reader, so that a refusal has something to empty. */
@@ -55,7 +55,7 @@ const fill = () => {
     state.me = ME
     state.posts = [{ id: POST, title: 'Invented post' }]
     state.people = { [SELF]: person('Invented Author') }
-    state.post = { id: POST, info: info(), messages: [msg(401)], hasOlder: true, hasNewer: true, rev: '40', lastRead: mid(401) }
+    state.post = { id: POST, info: info(), opening: null, messages: [msg(401)], hasOlder: true, hasNewer: true, rev: '40', lastRead: mid(401) }
   })
 }
 const snapshot = () => JSON.parse(JSON.stringify(s.$state))
@@ -340,11 +340,12 @@ describe('librarius store: opening a post', () => {
     listMessages.mockResolvedValue(pageOf([401, 402], { hasOlder: true }))
     await s.openPost('tok', POST)
     expect(getPost).toHaveBeenCalledWith('tok', POST)
-    expect(listMessages).toHaveBeenCalledTimes(1)
+    // The page, and the question about the opening message.
+    expect(listMessages).toHaveBeenCalledTimes(2)
     const args = listMessages.mock.calls[0]
     expect(args.slice(0, 2)).toEqual(['tok', POST])
     expect(args[2]).toStrictEqual({})
-    expect(s.post).toEqual({ id: POST, info: info(), messages: [msg(401), msg(402)], hasOlder: true, hasNewer: false, rev: '40', lastRead: null })
+    expect(s.post).toEqual({ id: POST, info: info(), opening: null, messages: [msg(401), msg(402)], hasOlder: true, hasNewer: false, rev: '40', lastRead: null })
   })
 
   it('asks for the page around the last message read when there is one', async () => {
@@ -361,7 +362,7 @@ describe('librarius store: opening a post', () => {
       getPost.mockResolvedValue(found({ lastRead: mid(450) }))
       listMessages.mockResolvedValue(pageOf([409, 410, 411], { hasOlder: true, hasNewer: true }))
       await s.openPost('tok', POST, { around: mid(410) })
-      expect(listMessages).toHaveBeenCalledTimes(1)
+      expect(listMessages).toHaveBeenCalledTimes(2)
       expect(listMessages.mock.calls[0].slice(0, 2)).toEqual(['tok', POST])
       expect(listMessages.mock.calls[0][2]).toStrictEqual({ around: mid(410) })
       expect(s.post).toMatchObject({ lastRead: mid(450), hasOlder: true, hasNewer: true })
@@ -413,7 +414,10 @@ describe('librarius store: opening a post', () => {
     it('a late answer for an older opening around a date does not replace a newer one', async () => {
       const slow = deferred()
       getPost.mockResolvedValue(found())
-      listMessages.mockReturnValueOnce(slow.promise).mockResolvedValueOnce(pageOf([490, 491]))
+      listMessages.mockImplementation(async (_t, _i, opts) => {
+        if (opts.limit === 1) return pageOf([])
+        return opts.around === mid(410) ? slow.promise : pageOf([490, 491])
+      })
       const a = s.openPost('tok', POST, { around: mid(410) })
       await tick()
       await s.openPost('tok', POST, { around: mid(490) })
@@ -432,7 +436,7 @@ describe('librarius store: opening a post', () => {
     expect(listMessages).not.toHaveBeenCalled()
     d.resolve(found())
     await p
-    expect(listMessages).toHaveBeenCalledTimes(1)
+    expect(listMessages).toHaveBeenCalledTimes(2)
   })
 
   it('shows no post until both answers are in', async () => {
@@ -591,6 +595,228 @@ describe('librarius store: opening a post', () => {
     await expect(s.openPost('tok', POST)).rejects.toBeInstanceOf(SyntaxError)
     expect(s.post).toBeNull()
     expect(s.people).toEqual({})
+  })
+})
+
+describe('librarius store: the opening message', () => {
+  // The messages of a post are asked for twice: its page, and the first message after the one before the post's own id.
+  const BEFORE_POST = String(BigInt(POST) - 1n)
+  const isOpeningAsk = (opts) => opts?.limit === 1
+  const opener = (extra = {}) => msg(500, { content: 'The opening words', ...extra })
+  const opening = (rows, extra = {}) => ({ messages: rows, hasOlder: false, hasNewer: true, people: {}, rev: '40', ...extra })
+  /** The server as it answers: `page` for a page, `answer` for the question about the opening message. */
+  const serve = (page, answer) => {
+    getPost.mockResolvedValue(found())
+    listMessages.mockImplementation(async (_token, _id, opts) => (isOpeningAsk(opts) ? answer : page))
+  }
+
+  it('asks for the first message after the one before the post\'s id, one only, along with the page', async () => {
+    serve(pageOf([401, 402]), opening([opener()]))
+    await s.openPost('tok', POST)
+    expect(listMessages).toHaveBeenCalledTimes(2)
+    expect(listMessages.mock.calls[0][2]).toStrictEqual({})
+    expect(listMessages.mock.calls[1].slice(0, 2)).toEqual(['tok', POST])
+    expect(listMessages.mock.calls[1][2]).toStrictEqual({ after: BEFORE_POST, limit: 1 })
+  })
+
+  it('keeps it apart from the run: the post holds it as `opening`, and the run is only what the page brought', async () => {
+    serve(pageOf([401, 402], { hasOlder: true }), opening([opener()]))
+    await s.openPost('tok', POST)
+    expect(s.post.opening).toEqual(opener())
+    expect(ids(s.post.messages)).toEqual([mid(401), mid(402)])
+    expect(s.post.hasOlder).toBe(true)
+  })
+
+  it('shows it once when the page holds it too: it is in `opening`, and dropped from the run', async () => {
+    serve(pageOf([500, 501, 502]), opening([opener()]))
+    await s.openPost('tok', POST)
+    expect(s.post.opening).toEqual(opener())
+    expect(ids(s.post.messages)).toEqual([mid(501), mid(502)])
+  })
+
+  it('drops it from the run even when the question about it brought nothing', async () => {
+    serve(pageOf([500, 501]), opening([]))
+    await s.openPost('tok', POST)
+    expect(s.post.opening).toBeNull()
+    expect(ids(s.post.messages)).toEqual([mid(501)])
+  })
+
+  it('holds none when the first message after it is some other message (the post\'s own was deleted)', async () => {
+    serve(pageOf([401]), opening([msg(501)]))
+    await s.openPost('tok', POST)
+    expect(s.post.opening).toBeNull()
+  })
+
+  it('holds none, and still opens the post, for an answer that is not what the routes send', async () => {
+    for (const answer of [undefined, null, {}, { messages: null }, { messages: [] }, { messages: [null] }, { messages: [{}] }, { messages: 'x' }, 7]) {
+      serve(pageOf([401, 402]), answer)
+      await s.openPost('tok', POST)
+      expect(s.post.opening, JSON.stringify(answer)).toBeNull()
+      expect(ids(s.post.messages), JSON.stringify(answer)).toEqual([mid(401), mid(402)])
+    }
+  })
+
+  it('takes only the first row of the answer, and only for the post\'s own id', async () => {
+    serve(pageOf([401]), opening([msg(501), opener()]))
+    await s.openPost('tok', POST)
+    expect(s.post.opening).toBeNull()
+  })
+
+  it('takes the first row whatever else the answer holds', async () => {
+    serve(pageOf([401]), opening([opener(), msg(501)]))
+    await s.openPost('tok', POST)
+    expect(s.post.opening).toEqual(opener())
+  })
+
+  it('merges the people the answer names, and none from an answer that has no people', async () => {
+    serve(pageOf([401], { people: { [mid(10)]: person('From the page') } }), opening([opener()], { people: { [mid(11)]: person('From the opening') } }))
+    await s.openPost('tok', POST)
+    expect(s.people).toEqual({ [mid(10)]: person('From the page'), [mid(11)]: person('From the opening') })
+    serve(pageOf([401]), undefined)
+    await s.openPost('tok', POST)
+    expect(s.people).toEqual({ [mid(10)]: person('From the page'), [mid(11)]: person('From the opening') })
+  })
+
+  it('keeps the earliest rev of the three answers, since a poll asks from there', async () => {
+    for (const [post, page, first, expected] of [
+      ['40', '45', '38', '38'],
+      ['40', '45', '47', '40'],
+      ['50', '45', '47', '45'],
+      ['9', '10', '10', '9'],
+      ['10', '10', '9', '9'],
+    ]) {
+      getPost.mockResolvedValue(found({ rev: post }))
+      listMessages.mockImplementation(async (_t, _i, opts) => (isOpeningAsk(opts) ? opening([opener()], { rev: first }) : pageOf([401], { rev: page })))
+      await s.openPost('tok', POST)
+      expect(s.post.rev, `${post} ${page} ${first}`).toBe(expected)
+    }
+  })
+
+  it('keeps the earlier rev of the other two when the answer about it has none', async () => {
+    getPost.mockResolvedValue(found({ rev: '40' }))
+    listMessages.mockImplementation(async (_t, _i, opts) => (isOpeningAsk(opts) ? { messages: [opener()] } : pageOf([401], { rev: '45' })))
+    await s.openPost('tok', POST)
+    expect(s.post.rev).toBe('40')
+  })
+
+  it('asks again each time the post is opened, a jump included, and holds what that answer says', async () => {
+    serve(pageOf([401]), opening([opener()]))
+    await s.openPost('tok', POST)
+    serve(pageOf([450]), opening([opener({ content: 'Edited meanwhile' })]))
+    await s.openPost('tok', POST, { around: mid(450) })
+    expect(s.post.opening.content).toBe('Edited meanwhile')
+    expect(ids(s.post.messages)).toEqual([mid(450)])
+  })
+
+  it('shows nothing of the post, and rethrows, when the question about the opening message fails', async () => {
+    getPost.mockResolvedValue(found())
+    listMessages.mockImplementation(async (_t, _i, opts) => {
+      if (isOpeningAsk(opts)) throw apiError(503, 'Discord could not be reached. Try again.')
+      return pageOf([401])
+    })
+    await expect(s.openPost('tok', POST)).rejects.toMatchObject({ status: 503 })
+    expect(s.post).toBeNull()
+    expect(s.error).toBe('Discord could not be reached. Try again.')
+  })
+
+  it('takes the page away from a reader the server refuses on the question about the opening message', async () => {
+    fill()
+    getPost.mockResolvedValue(found())
+    listMessages.mockImplementation(async (_t, _i, opts) => {
+      if (isOpeningAsk(opts)) throw apiError(403)
+      return pageOf([401])
+    })
+    await s.openPost('tok', POST)
+    expect(s.$state).toEqual(refused('denied'))
+  })
+
+  it('lands nothing of an older opening when a newer one has been asked for since', async () => {
+    const slow = deferred()
+    getPost.mockResolvedValue(found())
+    listMessages.mockImplementation(async (_t, _i, opts) => (isOpeningAsk(opts) ? slow.promise : pageOf([401])))
+    const a = s.openPost('tok', POST)
+    await tick()
+    getPost.mockResolvedValue({ ...found(), post: { ...info(), id: mid(501) } })
+    listMessages.mockImplementation(async (_t, _i, opts) => (isOpeningAsk(opts) ? opening([]) : pageOf([601])))
+    await s.openPost('tok', mid(501))
+    slow.resolve(opening([opener()]))
+    await a
+    expect(s.post).toMatchObject({ id: mid(501), opening: null })
+    expect(ids(s.post.messages)).toEqual([mid(601)])
+  })
+
+  describe('older messages', () => {
+    it('never put it back in the run: it is the oldest, and it is pinned on its own', async () => {
+      seed([401, 402], { hasOlder: true })
+      s.post.opening = opener()
+      listMessages.mockResolvedValue(pageOf([500, 400], { hasOlder: false }))
+      await s.loadOlder('tok')
+      expect(ids(s.post.messages)).toEqual([mid(400), mid(401), mid(402)])
+      expect(s.post.opening).toEqual(opener())
+      expect(s.post.hasOlder).toBe(false)
+    })
+
+    it('drops it from a page that holds nothing else, and the run is as it was', async () => {
+      seed([401], { hasOlder: true })
+      listMessages.mockResolvedValue(pageOf([500]))
+      await s.loadOlder('tok')
+      expect(ids(s.post.messages)).toEqual([mid(401)])
+      expect(s.post.hasOlder).toBe(false)
+    })
+
+    it('drops only the post\'s own message from a page of newer ones too', async () => {
+      seed([401], { hasNewer: true })
+      listMessages.mockResolvedValue(pageOf([500, 402]))
+      await s.loadNewer('tok')
+      expect(ids(s.post.messages)).toEqual([mid(401), mid(402)])
+    })
+  })
+
+  describe('a poll', () => {
+    const seeded = () => {
+      seed([401, 402])
+      s.post.opening = opener()
+    }
+
+    it('updates it when it has changed, and does not add it to the run', async () => {
+      seeded()
+      getChanges.mockResolvedValue(changesOf({ messages: [opener({ content: 'Edited words' }), msg(403)] }))
+      await s.poll('tok')
+      expect(s.post.opening.content).toBe('Edited words')
+      expect(ids(s.post.messages)).toEqual([mid(401), mid(402), mid(403)])
+    })
+
+    it('removes it when it is deleted', async () => {
+      seeded()
+      getChanges.mockResolvedValue(changesOf({ deleted: [POST] }))
+      await s.poll('tok')
+      expect(s.post.opening).toBeNull()
+      expect(ids(s.post.messages)).toEqual([mid(401), mid(402)])
+    })
+
+    it('lets the deletion win over a change to it in the same answer', async () => {
+      seeded()
+      getChanges.mockResolvedValue(changesOf({ messages: [opener({ content: 'Edited words' })], deleted: [POST] }))
+      await s.poll('tok')
+      expect(s.post.opening).toBeNull()
+    })
+
+    it('keeps it when the answer says nothing of it, and when what is deleted is some other message', async () => {
+      seeded()
+      getChanges.mockResolvedValue(changesOf({ messages: [msg(402, { content: 'Edited' })], deleted: [mid(401)] }))
+      await s.poll('tok')
+      expect(s.post.opening).toEqual(opener())
+      expect(ids(s.post.messages)).toEqual([mid(402)])
+    })
+
+    it('asks again for it when it is told to start over', async () => {
+      seeded()
+      getPost.mockResolvedValue(found())
+      getChanges.mockResolvedValue({ reset: true })
+      listMessages.mockImplementation(async (_t, _i, opts) => (isOpeningAsk(opts) ? opening([opener({ content: 'After the reset' })]) : pageOf([401, 402])))
+      await s.poll('tok')
+      expect(s.post.opening.content).toBe('After the reset')
+    })
   })
 })
 
@@ -1010,7 +1236,7 @@ describe('librarius store: polling for changes', () => {
       await s.poll('tok')
       expect(getPost).toHaveBeenCalledWith('tok', POST)
       expect(listMessages.mock.calls[0][2]).toStrictEqual({ around: mid(402) })
-      expect(s.post).toEqual({ id: POST, info: info(), messages: [msg(401), msg(402), msg(403), msg(404)], hasOlder: true, hasNewer: true, rev: '900', lastRead: mid(402) })
+      expect(s.post).toEqual({ id: POST, info: info(), opening: null, messages: [msg(401), msg(402), msg(403), msg(404)], hasOlder: true, hasNewer: true, rev: '900', lastRead: mid(402) })
     })
 
     it('keeps the reader\'s place when the report of it has not landed, and the newest page when there is none', async () => {
@@ -1480,13 +1706,15 @@ describe('librarius store: late answers', () => {
     it('openPost: the older call\'s post, answering after the newer call has finished, asks for no messages and lands nothing', async () => {
       const firstPost = deferred()
       getPost.mockReturnValueOnce(firstPost.promise).mockResolvedValueOnce({ ...found(), post: { ...info(), id: mid(501) } })
-      listMessages.mockResolvedValueOnce(pageOf([601]))
+      listMessages.mockResolvedValue(pageOf([601]))
       const a = s.openPost('tok', POST)
       await tick()
       await s.openPost('tok', mid(501))
       firstPost.resolve(found())
       await a
-      expect(listMessages).toHaveBeenCalledTimes(1)
+      // Only the newer call asked: for its page, and for its opening message.
+      expect(listMessages).toHaveBeenCalledTimes(2)
+      expect(listMessages.mock.calls.map((c) => c[1])).toEqual([mid(501), mid(501)])
       expect(s.post.id).toBe(mid(501))
       expect(ids(s.post.messages)).toEqual([mid(601)])
     })
@@ -1494,7 +1722,7 @@ describe('librarius store: late answers', () => {
     it('openPost: the older call\'s messages, answering late, do not replace the newer post', async () => {
       const firstMessages = deferred()
       getPost.mockResolvedValueOnce(found()).mockResolvedValueOnce({ ...found(), post: { ...info(), id: mid(501) } })
-      listMessages.mockReturnValueOnce(firstMessages.promise).mockResolvedValueOnce(pageOf([601]))
+      listMessages.mockImplementation(async (_t, id, opts) => (id === POST && opts.limit !== 1 ? firstMessages.promise : pageOf([601])))
       const a = s.openPost('tok', POST)
       await tick()
       await s.openPost('tok', mid(501))
