@@ -59,6 +59,9 @@ const USERS = {
   // reader role and no Legion role; the shut-out one holds it too, but a member overwrite on the forum denies them View.
   'test-librarian-token': { id: '200000000000000402', username: 'librarian-tester' },
   'test-shut-out-token': { id: '200000000000000403', username: 'shut-out-tester' },
+  // The site bar (e2e/tests/layout.spec.js): a Techmarine nothing revokes, here and in LAYOUT_MEMBERS. perks.spec.js ends by
+  // revoking test-techmarine-token, and a spec that signed in as him would pass or fail by when the two happen to run.
+  'test-layout-token': { id: '200000000000000510', username: 'layout-tester' },
 }
 const LEGION_ROLE = '1377787723976409211'
 const RECLUSIARCH_ROLE = '1323334632904855592'
@@ -96,6 +99,11 @@ const DEATHWATCH_MEMBERS = {
 const CURATOR_ROLE = '200000000000000301'
 const GALLERY_MEMBERS = {
   '200000000000000302': { roles: [LEGION_ROLE, CURATOR_ROLE] },
+}
+// The layout spec's Techmarine: the Legion role and the Techmarine's, so the bar shows every member link and Version History. Like
+// the Deathwatch testers, kept out of MEMBERS (the roster specs count that list) and answering the single-member lookup only.
+const LAYOUT_MEMBERS = {
+  '200000000000000510': { roles: [LEGION_ROLE, TECHMARINE_ROLE] },
 }
 // The Librarius reader role (the forum's overwrites let it in) and its two holders, neither a Legion member. Kept out of
 // MEMBERS for the same reason as the Deathwatch testers. A Legion member such as test-member-token holds no reader role,
@@ -680,7 +688,8 @@ Bun.serve({
       const member = MEMBERS[memberMatch[1]] ??
         DEATHWATCH_MEMBERS[memberMatch[1]] ??
         GALLERY_MEMBERS[memberMatch[1]] ??
-        LIBRARIUS_MEMBERS[memberMatch[1]]
+        LIBRARIUS_MEMBERS[memberMatch[1]] ??
+        LAYOUT_MEMBERS[memberMatch[1]]
       return withCors(member ? Response.json({ joined_at: JOINED, ...member }) : Response.json({ message: 'Unknown Member' }, { status: 404 }))
     }
 

@@ -13,9 +13,11 @@ const sideways = async (page) => {
 }
 
 // The fullest bar there is: Version History as well as the member links, and a name at the most the bar shows of one
-// (it cuts a name at 8rem, and the mock's are shorter than that). The stored name is what the bar reads.
+// (it cuts a name at 8rem, and the mock's are shorter than that). The stored name is what the bar reads. Version History is a
+// Techmarine's, and perks.spec.js revokes test-techmarine-token (in another worker, at a time nothing here controls), so this signs
+// in as test-layout-token: a Techmarine of its own, whom nothing revokes.
 async function signInWithFullestBar(page) {
-  await signIn(page, 'test-techmarine-token')
+  await signIn(page, 'test-layout-token')
   await expect(page.locator('.nav-links').getByRole('link', { name: 'Version History' })).toBeVisible()
   await page.evaluate(() => {
     const key = 'salamanders-discord-member'
