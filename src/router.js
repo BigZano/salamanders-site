@@ -116,10 +116,10 @@ const routes = [
   },
 ]
 
-// The Librarius's two addresses, as they scroll: a post, and the topic list (which is also what /reliquarium opens on, for
-// someone who may read the Librarius). A trailing slash is the same address.
+// The Librarius's two addresses, as they scroll: a post, and the topic list. A trailing slash is the same address. (/reliquarium
+// with no tab is not the list: for someone who may read the galleries only it is the Clips, and that goes to the top as ever.)
 const LIBRARIUS_POST = /^\/reliquarium\/librarius\/\d{17,20}\/?$/
-const LIBRARIUS_LIST = /^\/reliquarium(?:\/librarius)?\/?$/
+const LIBRARIUS_LIST = /^\/reliquarium\/librarius\/?$/
 
 export const router = createRouter({
   // Clean URLs now that we're on a real domain. GitHub Pages still has no

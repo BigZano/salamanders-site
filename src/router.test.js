@@ -79,8 +79,17 @@ describe('scroll behaviour: the Librarius', () => {
   })
 
   it('takes the topic list back to where it was left, on Back', () => {
-    for (const path of ['/reliquarium/librarius', '/reliquarium/librarius/', '/reliquarium', '/reliquarium/']) {
+    for (const path of ['/reliquarium/librarius', '/reliquarium/librarius/']) {
       expect(scroll({ path, hash: '' }, { path: `/reliquarium/librarius/${POST}`, hash: '' }, SAVED), path).toBe(SAVED)
+    }
+  })
+
+  // /reliquarium with no tab is the Clips for someone who may not read the Librarius, and what it was before for them.
+  it('leaves /reliquarium with no tab as it was, saved position or not, so a reader of the galleries only is unchanged', () => {
+    for (const path of ['/reliquarium', '/reliquarium/']) {
+      expect(scroll({ path, hash: '' }, { path: '/reliquarium/clips', hash: '' }, SAVED), path).toEqual({ top: 0 })
+      expect(scroll({ path, hash: '' }, { path: `/reliquarium/librarius/${POST}`, hash: '' }, SAVED), path).toEqual({ top: 0 })
+      expect(scroll({ path, hash: '' }, { path: '/', hash: '' }), path).toEqual({ top: 0 })
     }
   })
 

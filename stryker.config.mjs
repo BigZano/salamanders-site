@@ -73,6 +73,7 @@ export default {
     'src/lib/librarius/layout.js',
     'src/lib/librarius/render.js',
     'src/stores/asking.js',
+    'src/lib/librarius/places.js',
     'src/stores/librarius.js',
   ],
   coverageAnalysis: 'perTest',

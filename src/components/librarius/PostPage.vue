@@ -27,6 +27,7 @@ import { useAuth } from '../../stores/auth'
 import { POLL_MS, useLibrarius } from '../../stores/librarius'
 import { articleMemo, firstUnread, groupMessages, isRead, railMonths, samePeople } from '../../lib/librarius/layout'
 import { createRenderCtx } from '../../lib/librarius/render'
+import { placeKey } from '../../lib/librarius/places'
 import { snowflakeAt } from '../../lib/librarius/snowflake'
 import LibMessage from './LibMessage.vue'
 import './librarius.css'
@@ -39,7 +40,6 @@ const SITE_HEADER = 'header.nav'
 const SNOWFLAKE = /^\d{17,20}$/
 const MESSAGE_ELEMENT = /^m-(\d{17,20})$/
 const MESSAGE_ANCHOR = /^#m-(\d{17,20})$/
-const placeKey = (postId) => `lb-anchor:${postId}`
 // The guild of a reader whose answer from /me names none the page can use: no address names this one, so no link is ours.
 const NO_GUILD = '0'.repeat(17)
 const COULD_NOT_REACH = 'The Librarius couldn\'t be reached.'
@@ -185,6 +185,9 @@ function savedPlace(postId) {
   }
 }
 function rememberPlace(postId) {
+  // A page that is left because the reader signed out keeps nothing: signing out has forgotten every place, and this one is the
+  // last reader's too.
+  if (!auth.signedIn) return
   try {
     let top = null
     for (const id of inView) {

@@ -1620,6 +1620,26 @@ describe('PostPage: Back', () => {
       expect(sessionStorage.getItem(key)).toBe(m(2))
     })
 
+    it('keeps no place for a reader who has signed out: the page is left because they signed out, and the place goes with them', async () => {
+      const w = await show({ messages: six() })
+      report([m(3), m(4)])
+      state.auth.signedIn = false
+      leave(w)
+      expect(sessionStorage.getItem(key)).toBeNull()
+      expect(sessionStorage).toHaveLength(0)
+    })
+
+    it('keeps none either when the reader signs out and the post is changed in the same breath', async () => {
+      const w = await show({ messages: six(), host: true })
+      report([m(3)])
+      state.auth.signedIn = false
+      getPost.mockResolvedValue({ post: info({ id: OTHER }), lastRead: null, rev: '40' })
+      await router.push(`/reliquarium/librarius/${OTHER}`)
+      await settle()
+      expect(sessionStorage.getItem(key)).toBeNull()
+      leave(w)
+    })
+
     it('takes the topmost by its number, not its text', async () => {
       const w = await show({ messages: [msg(1, { id: '99999999999999999' }), msg(2, { id: '100000000000000000' })] })
       report(['100000000000000000', '99999999999999999'])

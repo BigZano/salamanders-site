@@ -1,6 +1,6 @@
 /**
- * AST → VNodes. Text goes through Vue's escaping; there is no v-html
- * anywhere in the archive. Links come only from classifyHref: route,
+ * AST → VNodes. Text goes through Vue's escaping; no raw markup is
+ * written anywhere in the archive. Links come only from classifyHref: route,
  * external https, or plain text.
  */
 import { defineComponent, h, ref } from 'vue'

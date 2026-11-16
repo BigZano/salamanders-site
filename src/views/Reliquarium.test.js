@@ -8,20 +8,30 @@ import { galleryItem, artItem } from '../test-utils/galleryItem'
 import { forgetReloads } from '../lib/gallery/reloadOnce'
 
 const state = vi.hoisted(() => ({ auth: null }))
-vi.mock('../stores/auth', () => ({ useAuth: () => state.auth }))
+// A test that sets `state.auth` to null gets the real auth store (and so the real sign-in record in localStorage).
+vi.mock('../stores/auth', async (importOriginal) => {
+  const actual = await importOriginal()
+  return { ...actual, useAuth: (...args) => state.auth ?? actual.useAuth(...args) }
+})
 vi.mock('../lib/gallery/api')
 vi.mock('../lib/librarius/api')
 import { getMe, listClips, listArt, listMine, listReview, listEvents } from '../lib/gallery/api'
 import { getMe as getLibrariusMe, listPosts, getPost, listMessages, getChanges, markRead } from '../lib/librarius/api'
 import { useGallery } from '../stores/gallery'
 import { useLibrarius } from '../stores/librarius'
+import { useAuth } from '../stores/auth'
+import { useNavLinks } from '../lib/useNavLinks'
 import Reliquarium from './Reliquarium.vue'
 
 const apiError = (status, message = 'nope') => Object.assign(new Error(message), { status })
 const deferred = () => {
   let resolve
-  const promise = new Promise((res) => (resolve = res))
-  return { promise, resolve }
+  let reject
+  const promise = new Promise((res, rej) => {
+    resolve = res
+    reject = rej
+  })
+  return { promise, resolve, reject }
 }
 const member = () =>
   reactive({
@@ -55,9 +65,24 @@ async function visit(path = '/reliquarium') {
 const tabs = (w) => w.findAll('.rq-tab')
 const tabNames = (w) => tabs(w).map((t) => t.text())
 
+const RECORD = 'salamanders-discord-member'
+// Signs a person in for real: the sign-in record in storage, and the real auth store reading it when the page mounts.
+function signedInForReal({ isMember = false, librarius = false } = {}) {
+  localStorage.setItem(
+    RECORD,
+    JSON.stringify({ id: '100000000000000001', username: 'tester', isMember, librarius, checkedAt: 1, accessToken: 'tok', expiresAt: Date.now() + 3_600_000 }),
+  )
+  state.auth = null
+}
+const storedRecord = () => JSON.parse(localStorage.getItem(RECORD))
+// What the nav shows this person, from the real store.
+const navLabels = () => useNavLinks().value.map((l) => l.label)
+
 beforeEach(() => {
   vi.resetAllMocks()
   forgetReloads()
+  localStorage.clear()
+  sessionStorage.clear()
   state.auth = member()
   getMe.mockResolvedValue({ access: true, approver: false })
   // Unless a test says otherwise the reader may not read the Librarius, so that the gallery tests below are of someone who
@@ -506,6 +531,131 @@ describe('Reliquarium: a reader of the galleries who is not let into the Librari
   })
 })
 
+describe('Reliquarium: the galleries answer, and the Librarius cannot be reached', () => {
+  const NOTE = "The Librarius couldn't be reached."
+  const noteOf = (w) => w.findAll('p').find((p) => p.text() === NOTE)
+  const retryOf = (w) => w.findAll('button').find((b) => b.text() === 'Retry')
+
+  it('shows the galleries as ever, with a small note and Retry above the tabs', async () => {
+    getLibrariusMe.mockRejectedValue(apiError(503))
+    const { w } = await visit('/reliquarium')
+    expect(tabNames(w)).toEqual(['Clips', 'Artwork', 'Submit', 'Mine'])
+    expect(currentTabs(w)).toEqual(['Clips'])
+    expect(w.text()).toContain('A clip')
+    expect(noteOf(w)).toBeDefined()
+    expect(retryOf(w)).toBeDefined()
+    const html = w.html()
+    expect(html.indexOf(NOTE)).toBeGreaterThan(-1)
+    expect(html.indexOf(NOTE)).toBeLessThan(html.indexOf('aria-label="Reliquarium sections"'))
+    expect(w.text()).not.toContain('Restricted')
+    expect(w.text()).not.toContain('Checking…')
+    expect(w.text()).not.toContain("The Reliquarium couldn't be reached.")
+  })
+
+  it('says so on an address that names a post, in place of a silent jump to the Clips', async () => {
+    getLibrariusMe.mockRejectedValue(apiError(500))
+    const { w, router } = await visit(`/reliquarium/librarius/${POST}`)
+    expect(noteOf(w)).toBeDefined()
+    expect(currentTabs(w)).toEqual(['Clips'])
+    expect(router.currentRoute.value.fullPath).toBe(`/reliquarium/librarius/${POST}`)
+    expect(getPost).not.toHaveBeenCalled()
+  })
+
+  it('says so on the list address, and on a gallery tab', async () => {
+    getLibrariusMe.mockRejectedValue(new Error('offline'))
+    for (const path of ['/reliquarium/librarius', '/reliquarium/art', '/reliquarium/mine']) {
+      const { w } = await visit(path)
+      expect(noteOf(w), path).toBeDefined()
+    }
+  })
+
+  it('shows an approver the same note, and keeps the Review tab and its number', async () => {
+    getMe.mockResolvedValue({ access: true, approver: true })
+    listReview.mockResolvedValue({ items: [artItem('3', { status: 'pending' })], sync: { lastRunAt: null, lastOkAt: null, lastError: null } })
+    getLibrariusMe.mockRejectedValue(apiError(503))
+    const { w } = await visit('/reliquarium')
+    expect(tabNames(w)).toEqual(['Clips', 'Artwork', 'Submit', 'Mine', 'Review 1'])
+    expect(noteOf(w)).toBeDefined()
+  })
+
+  it('says nothing when the reader is simply not let into the Librarius, or the token is refused there', async () => {
+    for (const answer of [{ access: false }, apiError(403), apiError(401)]) {
+      const failing = answer instanceof Error
+      if (failing) getLibrariusMe.mockRejectedValue(answer)
+      else getLibrariusMe.mockResolvedValue(answer)
+      const { w } = await visit('/reliquarium')
+      expect(noteOf(w), JSON.stringify(failing ? answer.status : answer)).toBeUndefined()
+    }
+  })
+
+  it('says nothing when the Librarius lets the reader in, or the galleries cannot be reached and it does', async () => {
+    librariusAllows()
+    const first = await visit('/reliquarium')
+    expect(noteOf(first.w)).toBeUndefined()
+    getMe.mockRejectedValue(apiError(503))
+    const second = await visit('/reliquarium')
+    expect(noteOf(second.w)).toBeUndefined()
+    expect(tabNames(second.w)).toEqual(['Librarius'])
+  })
+
+  it('asks the Librarius again, and not the galleries, when Retry is pressed, and the Librarius tab comes first when it answers', async () => {
+    getLibrariusMe.mockRejectedValueOnce(apiError(503))
+    const { w } = await visit('/reliquarium/art')
+    expect(getMe).toHaveBeenCalledTimes(1)
+    librariusAllows()
+    await retryOf(w).trigger('click')
+    await flushPromises()
+    expect(getLibrariusMe).toHaveBeenCalledTimes(2)
+    expect(getLibrariusMe).toHaveBeenLastCalledWith('tok')
+    expect(getMe).toHaveBeenCalledTimes(1)
+    expect(noteOf(w)).toBeUndefined()
+    expect(tabNames(w)).toEqual(['Librarius', 'Clips', 'Artwork', 'Submit', 'Mine'])
+    expect(currentTabs(w)).toEqual(['Artwork'])
+  })
+
+  it('keeps the note, and the galleries, when the second try fails too', async () => {
+    getLibrariusMe.mockRejectedValue(apiError(503))
+    const { w } = await visit('/reliquarium')
+    await retryOf(w).trigger('click')
+    await flushPromises()
+    expect(getLibrariusMe).toHaveBeenCalledTimes(2)
+    expect(noteOf(w)).toBeDefined()
+    expect(tabNames(w)).toEqual(['Clips', 'Artwork', 'Submit', 'Mine'])
+  })
+
+  it('keeps the page where it is while the second try is on its way, so that nothing typed is lost', async () => {
+    getLibrariusMe.mockRejectedValueOnce(apiError(503))
+    const { w } = await visit('/reliquarium/submit')
+    const form = w.find('input[type="file"]').element
+    const slow = deferred()
+    getLibrariusMe.mockReturnValue(slow.promise)
+    await retryOf(w).trigger('click')
+    await flushPromises()
+    expect(w.text()).not.toContain('Checking…')
+    expect(w.find('input[type="file"]').element).toBe(form)
+    expect(retryOf(w).attributes('disabled')).toBeDefined()
+    // one try at a time
+    await retryOf(w).trigger('click')
+    expect(getLibrariusMe).toHaveBeenCalledTimes(2)
+    slow.reject(apiError(503))
+    await flushPromises()
+    expect(w.find('input[type="file"]').element).toBe(form)
+    expect(retryOf(w).attributes('disabled')).toBeUndefined()
+    expect(noteOf(w)).toBeDefined()
+  })
+
+  it('goes with the page when the person signs out', async () => {
+    getLibrariusMe.mockRejectedValue(apiError(503))
+    const { w } = await visit('/reliquarium')
+    expect(noteOf(w)).toBeDefined()
+    state.auth.member = null
+    state.auth.token = null
+    await flushPromises()
+    expect(noteOf(w)).toBeUndefined()
+    expect(w.text()).toContain('Sign in with Discord')
+  })
+})
+
 describe('Reliquarium: who is kept out, or asked to sign in', () => {
   it('says "Restricted to the XVIIIth Legion." only when both refuse, and shows nothing of either', async () => {
     galleryRefuses()
@@ -576,7 +726,6 @@ describe('Reliquarium: who is kept out, or asked to sign in', () => {
     expect(w.text()).toContain('Sign in with Discord to see the Reliquarium.')
     expect(w.findAll('button').filter((b) => b.text() === 'Sign in with Discord')).toHaveLength(1)
     expect(tabs(w)).toHaveLength(0)
-    expect(state.auth.noteLibrarius).not.toHaveBeenCalled()
   })
 
   it('does not ask for sign-in while only one server refuses the token', async () => {
@@ -608,13 +757,66 @@ describe('Reliquarium: who is kept out, or asked to sign in', () => {
     expect(state.auth.signIn).toHaveBeenCalledWith({ returnTo: `/reliquarium/librarius/${POST}` })
   })
 
-  it('says the Reliquarium could not be reached when the Librarius cannot be, and the galleries refuse', async () => {
-    galleryRefuses()
+  // An outage of the Librarius is no answer about the reader, so it never hides the galleries': whatever they said still picks the page.
+  it('says "Restricted to the XVIIIth Legion." when the galleries refuse the reader and the Librarius cannot be reached', async () => {
+    for (const failure of [apiError(503), apiError(500), new Error('offline')]) {
+      galleryRefuses()
+      getLibrariusMe.mockRejectedValue(failure)
+      for (const path of ['/reliquarium', '/reliquarium/librarius', `/reliquarium/librarius/${POST}`]) {
+        const { w } = await visit(path)
+        expect(w.text(), path).toContain('Restricted to the XVIIIth Legion.')
+        expect(w.text(), path).not.toContain("couldn't be reached")
+        expect(w.find('[role="alert"]').exists(), path).toBe(false)
+        expect(tabs(w), path).toHaveLength(0)
+        expect(w.findAll('button'), path).toHaveLength(0)
+      }
+    }
+    for (const call of [listClips, listArt, listMine, listReview, listPosts, getPost]) expect(call).not.toHaveBeenCalled()
+  })
+
+  it('asks for sign-in when the galleries refuse the token and the Librarius cannot be reached, and brings the reader back', async () => {
+    for (const failure of [apiError(503), new Error('offline')]) {
+      getMe.mockRejectedValue(apiError(401))
+      getLibrariusMe.mockRejectedValue(failure)
+      state.auth = member()
+      const { w } = await visit(`/reliquarium/librarius/${POST}`)
+      expect(w.text()).toContain('Sign in with Discord to see the Reliquarium.')
+      expect(w.text()).not.toContain("couldn't be reached")
+      expect(tabs(w)).toHaveLength(0)
+      const signIns = w.findAll('button').filter((b) => b.text() === 'Sign in with Discord')
+      expect(signIns).toHaveLength(1)
+      await signIns[0].trigger('click')
+      expect(state.auth.signIn).toHaveBeenCalledWith({ returnTo: `/reliquarium/librarius/${POST}` })
+    }
+  })
+
+  it('says it could not be reached, with Retry, when neither server can be', async () => {
+    getMe.mockRejectedValue(apiError(503))
     getLibrariusMe.mockRejectedValue(apiError(503))
     const { w } = await visit()
     expect(w.find('[role="alert"]').text()).toBe("The Reliquarium couldn't be reached.")
-    expect(w.text()).not.toContain('Restricted')
+    expect(w.findAll('button').map((b) => b.text())).toEqual(['Retry'])
     expect(tabs(w)).toHaveLength(0)
+  })
+
+  it('says it could not be reached when the galleries cannot be and the Librarius refuses the reader', async () => {
+    getMe.mockRejectedValue(apiError(503))
+    getLibrariusMe.mockResolvedValue({ access: false })
+    const { w } = await visit()
+    expect(w.find('[role="alert"]').text()).toBe("The Reliquarium couldn't be reached.")
+    expect(w.text()).not.toContain('Restricted')
+  })
+
+  it('does not call the Librarius\'s outage the galleries\' refusal while the galleries have not answered', async () => {
+    const slow = deferred()
+    getMe.mockReturnValue(slow.promise)
+    getLibrariusMe.mockRejectedValue(apiError(503))
+    const { w } = await visit()
+    expect(w.text()).toContain('Checking…')
+    expect(w.text()).not.toContain('Restricted')
+    slow.resolve({ access: false, approver: false })
+    await flushPromises()
+    expect(w.text()).toContain('Restricted to the XVIIIth Legion.')
   })
 
   it('says it too when the galleries cannot be reached and the Librarius refuses, and Retry asks both again', async () => {
@@ -631,15 +833,15 @@ describe('Reliquarium: who is kept out, or asked to sign in', () => {
     expect(tabNames(w)).toEqual(['Librarius', 'Clips', 'Artwork', 'Submit', 'Mine'])
   })
 
-  it('lets a reader whose Librarius answer was an outage try again from Retry when the galleries refuse', async () => {
+  it('shows a reader of the Librarius alone the same "Restricted" while it is down, and the Librarius at their next visit', async () => {
     galleryRefuses()
     getLibrariusMe.mockRejectedValueOnce(apiError(503))
-    const { w } = await visit('/reliquarium/librarius')
+    const first = await visit('/reliquarium/librarius')
+    expect(first.w.text()).toContain('Restricted to the XVIIIth Legion.')
     librariusAllows()
-    await w.findAll('button').find((b) => b.text() === 'Retry').trigger('click')
-    await flushPromises()
-    expect(tabNames(w)).toEqual(['Librarius'])
-    expect(topics(w)).toEqual(['The Long Road', 'Another Road'])
+    const second = await visit('/reliquarium/librarius')
+    expect(tabNames(second.w)).toEqual(['Librarius'])
+    expect(topics(second.w)).toEqual(['The Long Road', 'Another Road'])
   })
 
   it('goes back to asking for sign-in, with the Librarius gone, when the person signs out', async () => {
@@ -777,65 +979,145 @@ describe('Reliquarium: a post', () => {
   })
 })
 
+// The real auth store, with the sign-in record in storage: what the page learns of the Librarius is what the nav shows, and
+// what is kept for the next visit.
 describe('Reliquarium: it tells the nav what it learned of the Librarius', () => {
-  it('says yes when the reader may read it, ready or still being imported', async () => {
+  it('shows a reader who may read the Librarius, and is no member, the Reliquarium link, and keeps it', async () => {
+    signedInForReal({ librarius: false })
     librariusAllows()
+    galleryRefuses()
     await visit()
-    expect(state.auth.noteLibrarius).toHaveBeenCalledTimes(1)
-    expect(state.auth.noteLibrarius).toHaveBeenCalledWith(true)
-
-    state.auth = member()
-    librariusAllows({ ...LIBRARIUS_ME, ready: false })
-    await visit()
-    expect(state.auth.noteLibrarius).toHaveBeenCalledTimes(1)
-    expect(state.auth.noteLibrarius).toHaveBeenCalledWith(true)
+    expect(storedRecord()).toMatchObject({ isMember: false, librarius: true, accessToken: 'tok' })
+    expect(navLabels()).toContain('Reliquarium')
+    expect(navLabels()).not.toContain('Accolades')
   })
 
-  it('says no when the server refuses the reader, whether or not the galleries let them in', async () => {
+  it('does the same while the Librarius is still being imported', async () => {
+    signedInForReal({ librarius: false })
+    librariusAllows({ ...LIBRARIUS_ME, ready: false })
+    galleryRefuses()
+    await visit()
+    expect(storedRecord().librarius).toBe(true)
+    expect(navLabels()).toContain('Reliquarium')
+  })
+
+  it('takes the Reliquarium link from someone the server no longer lets read it', async () => {
+    for (const answer of [{ access: false }, apiError(403)]) {
+      signedInForReal({ librarius: true })
+      if (answer instanceof Error) getLibrariusMe.mockRejectedValue(answer)
+      else getLibrariusMe.mockResolvedValue(answer)
+      galleryRefuses()
+      await visit()
+      expect(storedRecord().librarius).toBe(false)
+      expect(navLabels()).not.toContain('Reliquarium')
+    }
+  })
+
+  it('leaves a member their link, and the record\'s other fields, whatever the Librarius says', async () => {
+    signedInForReal({ isMember: true, librarius: true })
     getLibrariusMe.mockResolvedValue({ access: false })
     await visit()
-    expect(state.auth.noteLibrarius).toHaveBeenCalledTimes(1)
-    expect(state.auth.noteLibrarius).toHaveBeenCalledWith(false)
-
-    state.auth = member()
-    getLibrariusMe.mockRejectedValue(apiError(403))
-    await visit()
-    expect(state.auth.noteLibrarius).toHaveBeenCalledTimes(1)
-    expect(state.auth.noteLibrarius).toHaveBeenCalledWith(false)
+    expect(storedRecord()).toMatchObject({ id: '100000000000000001', username: 'tester', isMember: true, librarius: false, accessToken: 'tok', checkedAt: 1 })
+    expect(navLabels()).toContain('Reliquarium')
   })
 
-  it('says nothing when it learned nothing: an outage, a refused token, or no one signed in', async () => {
+  it('learns nothing from an outage, a refused token or a slow answer, and keeps what it knew', async () => {
     for (const failure of [apiError(503), apiError(401), new Error('offline')]) {
-      state.auth = member()
+      signedInForReal({ librarius: true })
       getLibrariusMe.mockRejectedValue(failure)
       await visit()
-      expect(state.auth.noteLibrarius, String(failure.status)).not.toHaveBeenCalled()
+      expect(storedRecord().librarius, String(failure.status)).toBe(true)
+      expect(navLabels(), String(failure.status)).toContain('Reliquarium')
     }
-    state.auth = signedOut()
+    signedInForReal({ librarius: false })
+    getLibrariusMe.mockRejectedValue(apiError(503))
     await visit()
-    expect(state.auth.noteLibrarius).not.toHaveBeenCalled()
+    expect(storedRecord().librarius).toBe(false)
   })
 
-  it('says it after the answer, not before', async () => {
+  it('writes no record for nobody signed in', async () => {
+    state.auth = null
+    await visit()
+    expect(localStorage.getItem(RECORD)).toBeNull()
+    expect(getLibrariusMe).not.toHaveBeenCalled()
+  })
+
+  it('learns it after the answer, not before', async () => {
+    signedInForReal({ librarius: false })
     const slow = deferred()
     getLibrariusMe.mockReturnValue(slow.promise)
+    galleryRefuses()
     await visit()
-    expect(state.auth.noteLibrarius).not.toHaveBeenCalled()
+    expect(storedRecord().librarius).toBe(false)
     slow.resolve(LIBRARIUS_ME)
     await flushPromises()
-    expect(state.auth.noteLibrarius).toHaveBeenCalledWith(true)
+    expect(storedRecord().librarius).toBe(true)
+    expect(navLabels()).toContain('Reliquarium')
   })
 
-  it('does not ask again when the nav is told something new and the member is replaced, which would flicker the page', async () => {
+  it('does not ask again, or flicker, when what it learned changes the member the store holds', async () => {
+    signedInForReal({ librarius: false })
     librariusAllows()
-    state.auth.noteLibrarius = vi.fn((access) => {
-      state.auth.member = { ...state.auth.member, librarius: access }
-    })
     const { w } = await visit('/reliquarium/librarius')
-    expect(state.auth.noteLibrarius).toHaveBeenCalledTimes(1)
+    expect(useAuth().member.librarius).toBe(true)
     expect(getLibrariusMe).toHaveBeenCalledTimes(1)
     expect(getMe).toHaveBeenCalledTimes(1)
     expect(w.text()).not.toContain('Checking…')
     expect(topics(w)).toHaveLength(2)
+  })
+})
+
+// Signing out forgets the places the reader kept in the posts, and a post that is on the page when they sign out does not
+// write one as it goes (it is the real sign-out, from the real store, that runs here).
+describe('Reliquarium: signing out', () => {
+  // A browser that reports every message in view as soon as it is watched.
+  class Eager {
+    constructor(callback) {
+      this.callback = callback
+    }
+    observe(target) {
+      this.callback([{ target, isIntersecting: true }])
+    }
+    unobserve() {}
+    disconnect() {}
+  }
+
+  it('leaves no place kept for any post, though a post was open and its messages in view', async () => {
+    vi.stubGlobal('IntersectionObserver', Eager)
+    try {
+      signedInForReal({ librarius: true })
+      librariusAllows()
+      galleryRefuses()
+      sessionStorage.setItem(`lb-anchor:${OTHER_POST}`, mid(461))
+      sessionStorage.setItem('salamanders-discord-return-path', '/planner')
+      const { w } = await visit(`/reliquarium/librarius/${POST}`)
+      expect(w.find('.lb-post-title').text()).toBe('The Long Road')
+      useAuth().signOut()
+      await flushPromises()
+      expect(w.find('.lb-post').exists()).toBe(false)
+      expect(w.text()).toContain('Sign in with Discord')
+      const places = Object.keys(sessionStorage).filter((k) => k.startsWith('lb-anchor:'))
+      expect(places).toEqual([])
+      expect(sessionStorage.getItem('salamanders-discord-return-path')).toBe('/planner')
+      expect(localStorage.getItem(RECORD)).toBeNull()
+    } finally {
+      vi.unstubAllGlobals()
+    }
+  })
+
+  it('keeps a place for a post the reader leaves while still signed in', async () => {
+    vi.stubGlobal('IntersectionObserver', Eager)
+    try {
+      signedInForReal({ librarius: true })
+      librariusAllows()
+      galleryRefuses()
+      const { w, router } = await visit(`/reliquarium/librarius/${POST}`)
+      expect(w.find('.lb-post-title').text()).toBe('The Long Road')
+      await router.push('/reliquarium/librarius')
+      await flushPromises()
+      expect(sessionStorage.getItem(`lb-anchor:${POST}`)).toBe(POST)
+    } finally {
+      vi.unstubAllGlobals()
+    }
   })
 })

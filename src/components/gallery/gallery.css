@@ -45,6 +45,24 @@
   cursor: pointer;
 }
 
+/* The galleries have answered and the Librarius could not be reached: a small word above the tabs, with its own Retry. */
+.rq-outage {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem 1rem;
+  margin: 0 0 1rem;
+}
+.rq-outage p {
+  margin: 0;
+  color: var(--color-smoke);
+  line-height: 1.5;
+}
+.rq-outage .btn-ghost {
+  min-height: var(--tap);
+  cursor: pointer;
+}
+
 /* The tab bar wraps onto a second line on a narrow phone rather than scrolling sideways. */
 .rq-tabs {
   display: flex;

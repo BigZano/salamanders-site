@@ -204,3 +204,40 @@ describe('auth.noteLibrarius', () => {
     expect(auth.member).toBe(held)
   })
 })
+
+// The reader's place in each Librarius post is kept for the tab (see lib/librarius/places.js). It is the last person's reading,
+// so it goes with them.
+describe('auth.signOut forgets the places kept in the Librarius posts', () => {
+  const POST = '200000000000000402'
+  const OTHER = '200000000000000403'
+  beforeEach(() => sessionStorage.clear())
+
+  it('removes the place kept for every post, and nothing else', () => {
+    sessionStorage.setItem(`lb-anchor:${POST}`, '200000000000000450')
+    sessionStorage.setItem(`lb-anchor:${OTHER}`, '200000000000000451')
+    sessionStorage.setItem('salamanders-discord-return-path', '/planner')
+    sessionStorage.setItem('lb-anchor', 'not a place')
+    useAuth().signOut()
+    expect(sessionStorage.getItem(`lb-anchor:${POST}`)).toBeNull()
+    expect(sessionStorage.getItem(`lb-anchor:${OTHER}`)).toBeNull()
+    expect(sessionStorage.getItem('salamanders-discord-return-path')).toBe('/planner')
+    expect(sessionStorage.getItem('lb-anchor')).toBe('not a place')
+  })
+
+  it('still signs out, and still clears the rest, when the browser will not let it look', async () => {
+    const { useLibrarius } = await import('./librarius')
+    const lib = useLibrarius()
+    lib.$patch({ status: 'allowed', posts: [{ id: POST, title: 'Invented post' }] })
+    localStorage.setItem('salamanders-discord-member', JSON.stringify({ id: '200000000000000001', accessToken: 'tok' }))
+    vi.spyOn(Storage.prototype, 'key').mockImplementation(() => {
+      throw new DOMException('denied', 'SecurityError')
+    })
+    try {
+      expect(() => useAuth().signOut()).not.toThrow()
+    } finally {
+      vi.restoreAllMocks()
+    }
+    expect(localStorage.getItem('salamanders-discord-member')).toBeNull()
+    expect(lib).toMatchObject({ status: 'idle', posts: [] })
+  })
+})

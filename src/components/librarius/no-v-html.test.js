@@ -9,7 +9,8 @@ import { fileURLToPath } from 'node:url'
 // area's source (not tests) and also checks that it can actually find a violation, so it cannot pass by looking nowhere.
 // Same guard as the Reliquarium gallery's.
 const SRC = fileURLToPath(new URL('../../', import.meta.url))
-const SCANNED = ['components/librarius', 'lib/librarius', 'stores/librarius.js']
+// The Librarius draws what Discord sends with the archive's markdown renderer, so that is part of its area.
+const SCANNED = ['components/librarius', 'lib/librarius', 'stores/librarius.js', 'components/archive/ArchiveMarkdown.js']
 const SINKS = ['v-html', 'innerHTML', 'outerHTML', 'insertAdjacentHTML']
 
 const sourceFilesUnder = (path) => {
@@ -29,12 +30,13 @@ afterEach(() => scratch && rmSync(scratch, { recursive: true, force: true }))
 describe('no raw markup in the Librarius', () => {
   it('finds nothing in the area', () => {
     const files = SCANNED.flatMap((p) => sourceFilesUnder(join(SRC, p)))
-    expect(files.length).toBeGreaterThanOrEqual(8) // it is looking at real files: the components, the lib and the store
+    expect(files.length).toBeGreaterThanOrEqual(9) // it is looking at real files: the components, the lib and the store
     expect(files.some((f) => f.endsWith('PostPage.vue'))).toBe(true)
     expect(files.some((f) => f.endsWith('TopicList.vue'))).toBe(true)
     expect(files.some((f) => f.endsWith('LibMessage.vue'))).toBe(true)
     expect(files.some((f) => f.endsWith('render.js'))).toBe(true)
     expect(files.some((f) => f.endsWith('stores/librarius.js'))).toBe(true)
+    expect(files.some((f) => f.endsWith('components/archive/ArchiveMarkdown.js'))).toBe(true)
     expect(violations(files)).toEqual([])
   })
 

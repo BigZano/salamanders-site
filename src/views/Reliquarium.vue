@@ -8,7 +8,7 @@
 // (Discord's own permissions on its forum, which a person may hold without the role). The page is open to someone either
 // lets in, and each adds its own tabs: the Librarius first, then the galleries'. It waits for both answers before it
 // chooses a tab, so that the first tab is never the galleries' for a reader who is a moment from being shown the Librarius.
-import { computed, watch } from 'vue'
+import { computed, ref, watch } from 'vue'
 import { useRoute } from 'vue-router'
 import { useAuth } from '../stores/auth'
 import { useGallery } from '../stores/gallery'
@@ -57,12 +57,42 @@ const pending = (status) => status === 'idle' || status === 'checking'
 const galleryOpen = computed(() => gallery.status === 'allowed')
 // A Librarius still being brought over from Discord is the reader's to see, with a word about the wait.
 const librariusOpen = computed(() => librarius.status === 'allowed' || librarius.status === 'importing')
-const busy = computed(() => pending(gallery.status) || pending(librarius.status))
+// The Librarius could not be reached: that is no answer about the reader (a rollout, an outage), so it never hides what the
+// galleries said. See `gate`, and the note above the tabs.
+const librariusDown = computed(() => librarius.status === 'unavailable')
+
+// A second try at the Librarius, from the note above the tabs, is made with the page where it is: the galleries have answered,
+// and a Retry that took the page away and put it back would lose whatever was typed into it.
+const retrying = ref(false)
+const busy = computed(
+  () => pending(gallery.status) || (pending(librarius.status) && !(retrying.value && galleryOpen.value)),
+)
 const open = computed(() => !busy.value && (galleryOpen.value || librariusOpen.value))
+
+// What the gate says while the page is shut, from the two answers. Both settled: both asking to sign in, or both refusing, say
+// so, and so does one of them when the other could not be reached; anything else (a server down, or the two at odds) is
+// that the Reliquarium could not be reached.
+const gate = computed(() => {
+  if (busy.value) return 'busy'
+  const { status: g } = gallery
+  const l = librarius.status
+  if (g === 'signin' && (l === 'signin' || l === 'unavailable')) return 'signin'
+  if (g === 'denied' && (l === 'denied' || l === 'unavailable')) return 'denied'
+  return 'unreachable'
+})
 const signIn = () => auth.signIn({ returnTo: route.fullPath })
 const retry = () => {
   gallery.load(auth.token)
   checkLibrarius()
+}
+async function retryLibrarius() {
+  if (retrying.value) return
+  retrying.value = true
+  try {
+    await checkLibrarius()
+  } finally {
+    retrying.value = false
+  }
 }
 
 const waiting = computed(() => gallery.review.items.length)
@@ -107,12 +137,12 @@ watch(
     />
 
     <div v-if="!open" class="rq-gate surface" :aria-busy="busy ? 'true' : undefined">
-      <template v-if="gallery.status === 'signin' && librarius.status === 'signin'">
+      <template v-if="gate === 'signin'">
         <p>Sign in with Discord to see the Reliquarium.</p>
         <button class="btn-ember" type="button" @click="signIn">Sign in with Discord</button>
       </template>
-      <p v-else-if="busy" role="status">Checking…</p>
-      <p v-else-if="gallery.status === 'denied' && librarius.status === 'denied'">Restricted to the XVIIIth Legion.</p>
+      <p v-else-if="gate === 'busy'" role="status">Checking…</p>
+      <p v-else-if="gate === 'denied'">Restricted to the XVIIIth Legion.</p>
       <template v-else>
         <p role="alert">The Reliquarium couldn't be reached.</p>
         <button class="btn-ember" type="button" @click="retry">Retry</button>
@@ -120,6 +150,11 @@ watch(
     </div>
 
     <template v-else>
+      <div v-if="(librariusDown || retrying) && galleryOpen" class="rq-outage">
+        <p role="status">The Librarius couldn't be reached.</p>
+        <button class="btn-ghost btn-sm" type="button" :disabled="retrying" @click="retryLibrarius">Retry</button>
+      </div>
+
       <nav class="rq-tabs" aria-label="Reliquarium sections">
         <RouterLink
           v-for="t in tabs"
