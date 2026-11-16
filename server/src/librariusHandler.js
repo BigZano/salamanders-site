@@ -12,11 +12,13 @@
  *
  * Reading messages. A page, or a poll for changes, answers `rev`, the number a poll asks from next: the highest of this
  * post's own. It is read from the store BEFORE the messages are, so a write that lands while they are read is sent again
- * by the next poll rather than missed. A write takes its number before it commits, so a poll also asks from 100 numbers
- * below the one it was given: the numbers are the sequence's, shared by every post, and a transaction (a batch of
- * messages, say) takes one for all its rows, so 100 is a hundred transactions of any post. The client replaces a message
- * by its id, so a message sent twice does no harm. A poll that is more than the store may answer at once (CHANGES_LIMIT)
- * is told to start over: `{ reset: true }`.
+ * by the next poll rather than missed. A write takes its number before it commits, so a poll is also sent again the
+ * newest 100 rows and deletes at or below the number it was given (CHANGES_SLACK): the numbers are the sequence's, shared
+ * by every post, and a transaction (a batch of messages, say) takes one for all its rows, so a write that commits late
+ * is still found. The client replaces a message by its id, so a message sent twice does no harm. Only what is NEW, after
+ * the number given, counts toward the limit (CHANGES_LIMIT): a poll that finds the limit filled is told to start over,
+ * `{ reset: true }`. What is sent again never does, or a quiet post whose newest rows lie within 100 numbers of its top
+ * would send every poll of it back to the start, for ever.
  *
  * Attachment links expire, and the link refresh (librariusLinks.js) keeps them ahead of that for posts that are read.
  * Any that lapse within five minutes of a read are renewed there and then (the first 50 shown), stored, and answered
@@ -38,7 +40,7 @@ const POST_ROUTE = /^\/librarius\/posts\/([^/]+)(?:\/(messages|changes|read))?$/
 
 const DEFAULT_LIMIT = 50
 const CHANGES_LIMIT = 200
-const CHANGES_SLACK = 100n
+const CHANGES_SLACK = 100
 const REFRESH_WITHIN_MS = 300_000
 const REFRESH_MAX = 50
 const QUOTE_LENGTH = 200
@@ -247,10 +249,8 @@ export function createLibrariusHandler({ access, store, guild, links, importer, 
     const since = parseSince(url.searchParams)
     if (since === null) return reply(400, { error: BAD_CURSOR })
     const rev = await store.currentRev(postId)
-    // Stryker disable next-line EqualityOperator: at exactly the slack, both ways ask from 0
-    const from = since > CHANGES_SLACK ? since - CHANGES_SLACK : 0n
-    const found = await store.changes(postId, String(from), CHANGES_LIMIT)
-    if (found.rows.length >= CHANGES_LIMIT || found.deleted.length >= CHANGES_LIMIT) return reply(200, { reset: true })
+    const found = await store.changes(postId, String(since), { limit: CHANGES_LIMIT, slack: CHANGES_SLACK })
+    if (found.full) return reply(200, { reset: true })
     const shown = await present(postId, found.rows)
     return reply(200, { messages: shown.messages, deleted: found.deleted, rev, people: shown.people })
   }

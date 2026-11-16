@@ -1355,9 +1355,28 @@ describe('the links of the attachments', () => {
 })
 
 describe('GET /librarius/posts/:id/changes', () => {
-  /** A store whose `changes` answers what is held after the number asked from, as the real one does. */
+  /**
+   * A store whose `changes` answers as the real one does: what is held after the number asked from (the oldest `limit`),
+   * and before it the `slack` newest at or below it that are sent again, oldest first, and `full` when what is new fills
+   * the limit.
+   */
   const holding = (rows, deleted = [], extra = {}) => ({
-    changes: (_post, since, limit) => ({ rows: rows.filter((r) => BigInt(r.rev) > BigInt(since)).slice(0, limit), deleted: deleted.filter((d) => BigInt(d.rev) > BigInt(since)).map((d) => d.id).slice(0, limit), rev: 'unused' }),
+    changes: (_post, since, { limit, slack }) => {
+      const after = BigInt(since)
+      const byRev = (a, b) => (BigInt(a.rev) < BigInt(b.rev) ? -1 : BigInt(a.rev) > BigInt(b.rev) ? 1 : 0)
+      const split = (list) => ({
+        fresh: list.filter((r) => BigInt(r.rev) > after).sort(byRev).slice(0, limit),
+        back: list.filter((r) => BigInt(r.rev) <= after && BigInt(r.rev) > after - BigInt(slack)).sort((a, b) => byRev(b, a)).slice(0, slack).reverse(),
+      })
+      const messages = split(rows)
+      const gone = split(deleted)
+      return {
+        rows: [...messages.back, ...messages.fresh],
+        deleted: [...gone.back, ...gone.fresh].map((d) => d.id),
+        rev: 'unused',
+        full: messages.fresh.length >= limit || gone.fresh.length >= limit,
+      }
+    },
     ...extra,
   })
 
@@ -1386,7 +1405,7 @@ describe('GET /librarius/posts/:id/changes', () => {
         currentRev: () => String(live),
         changes: () => {
           live = 560
-          return { rows: [], deleted: [], rev: '999' }
+          return { rows: [], deleted: [], rev: '999', full: false }
         },
       },
     })
@@ -1403,20 +1422,20 @@ describe('GET /librarius/posts/:id/changes', () => {
     }
   })
 
-  it('asks from 100 before the number it was given, 200 at a time', async () => {
-    for (const [since, from] of [['250', '150'], ['101', '1'], ['100', '0'], ['99', '0'], ['1', '0'], ['0', '0'], ['007', '0'], ['00250', '150'], ['9223372036854775807', '9223372036854775707'], ['9999', '9899'], ['1000', '900']]) {
+  it('asks the store for what is new after the number it was given, 200 at a time, with the 100 before it sent again', async () => {
+    for (const [since, asked] of [['250', '250'], ['101', '101'], ['0', '0'], ['007', '7'], ['00250', '250'], ['9223372036854775807', '9223372036854775807'], ['1000', '1000']]) {
       const { get, calls } = setup()
       expect((await get(changesPath(`?since=${since}`))).status).toBe(200)
-      expect(calls('changes')).toEqual([[POST, from, 200]])
+      expect(calls('changes')).toEqual([[POST, asked, { limit: 200, slack: 100 }]])
     }
   })
 
-  it('asks from 100 before the number it was given, whatever it is (property)', async () => {
+  it('asks the store from the number it was given, whatever it is (property)', async () => {
     await fc.assert(
       fc.asyncProperty(fc.bigInt({ min: 0n, max: BIGINT_MAX }), async (since) => {
         const { get, calls } = setup()
         await get(changesPath(`?since=${since}`))
-        expect(calls('changes')).toEqual([[POST, String(since > 100n ? since - 100n : 0n), 200]])
+        expect(calls('changes')).toEqual([[POST, String(since), { limit: 200, slack: 100 }]])
       }),
     )
   })
@@ -1477,13 +1496,67 @@ describe('GET /librarius/posts/:id/changes', () => {
     expect(refreshed).toEqual([])
   })
 
-  it('answers a reset for 200 deleted ids as for 200 messages, and for more than 200 of either', async () => {
+  it('answers a reset for 200 deleted ids as for 200 messages', async () => {
     const gone = Array.from({ length: 200 }, (_, i) => ({ id: String(BigInt('200000000000004000') + BigInt(i)), rev: String(300 + i) }))
     expect(await body(await setup({ store: holding([], gone) }).get(changesPath('?since=200')))).toStrictEqual({ reset: true })
-    const oversize = { changes: () => ({ rows: Array.from({ length: 201 }, (_, i) => row(String(BigInt('200000000000003000') + BigInt(i)))), deleted: [], rev: '1' }) }
-    expect(await body(await setup({ store: oversize }).get(changesPath('?since=200')))).toStrictEqual({ reset: true })
-    const manyGone = { changes: () => ({ rows: [], deleted: Array.from({ length: 201 }, (_, i) => String(BigInt('200000000000004000') + BigInt(i))), rev: '1' }) }
-    expect(await body(await setup({ store: manyGone }).get(changesPath('?since=200')))).toStrictEqual({ reset: true })
+  })
+
+  it('answers a reset when the store says the new changes may be more than it gave, and only then: it counts nothing itself', async () => {
+    const some = { changes: () => ({ rows: [row(M1)], deleted: [M2], rev: '1', full: true }) }
+    expect(await body(await setup({ store: some }).get(changesPath('?since=200')))).toStrictEqual({ reset: true })
+    const lots = { changes: () => ({ rows: Array.from({ length: 350 }, (_, i) => row(String(BigInt('200000000000003000') + BigInt(i)))), deleted: Array.from({ length: 350 }, (_, i) => String(BigInt('200000000000004000') + BigInt(i))), rev: '1', full: false }) }
+    const out = await body(await setup({ store: lots }).get(changesPath('?since=200')))
+    expect(out.reset).toBeUndefined()
+    expect(out.messages).toHaveLength(350)
+    expect(out.deleted).toHaveLength(350)
+  })
+
+  it('does not reset for rows it sends again, however many: 300 at or below the number asked from answer 100, and no reset', async () => {
+    // Five to a number, so that the newest 100 are the last twenty numbers, with no tie across the cut.
+    const rows = Array.from({ length: 300 }, (_, i) => row(String(BigInt('200000000000003000') + BigInt(i)), { rev: String(941 + Math.floor(i / 5)) }))
+    const gone = Array.from({ length: 300 }, (_, i) => ({ id: String(BigInt('200000000000004000') + BigInt(i)), rev: String(941 + Math.floor(i / 5)) }))
+    const { get } = setup({ store: holding(rows, gone, { currentRev: () => '1000' }) })
+    const res = await get(changesPath('?since=1000'))
+    expect(res.status).toBe(200)
+    const out = await body(res)
+    expect(out.reset).toBeUndefined()
+    // The order inside one number is the store's to choose, and the reader replaces by id: compare as sets.
+    expect(out.messages.map((m) => m.id).sort()).toEqual(rows.slice(200).map((r) => r.id))
+    expect(out.deleted.sort()).toEqual(gone.slice(200).map((g) => g.id))
+    expect(out.rev).toBe('1000')
+  })
+
+  it('still resets for 200 new rows, whatever it sends again beside them', async () => {
+    const back = Array.from({ length: 150 }, (_, i) => row(String(BigInt('200000000000003000') + BigInt(i)), { rev: String(900 + (i % 100)) }))
+    const fresh = Array.from({ length: 200 }, (_, i) => row(String(BigInt('200000000000005000') + BigInt(i)), { rev: String(1001 + i) }))
+    expect(await body(await setup({ store: holding([...back, ...fresh]) }).get(changesPath('?since=1000')))).toStrictEqual({ reset: true })
+    expect((await body(await setup({ store: holding([...back, ...fresh.slice(1)]) }).get(changesPath('?since=1000')))).reset).toBeUndefined()
+  })
+
+  it('never resets a reader who polls with the number it was given when nothing is written, however the post was written (property)', async () => {
+    await fc.assert(
+      fc.asyncProperty(
+        fc.array(fc.integer({ min: 1, max: 1500 }), { maxLength: 700 }),
+        fc.array(fc.integer({ min: 1, max: 1500 }), { maxLength: 400 }),
+        async (messageRevs, deleteRevs) => {
+          const rows = messageRevs.map((rev, i) => row(String(BigInt('200000000000010000') + BigInt(i)), { rev: String(rev) }))
+          const gone = deleteRevs.map((rev, i) => ({ id: String(BigInt('200000000000020000') + BigInt(i)), rev: String(rev) }))
+          const top = String(Math.max(0, ...messageRevs, ...deleteRevs))
+          const { get } = setup({ store: holding(rows, gone, { currentRev: () => top }) })
+          // The reader opens the post, and is told the number to poll from.
+          let rev = (await body(await get(messagesPath()))).rev
+          expect(rev).toBe(top)
+          for (let poll = 0; poll < 3; poll++) {
+            const out = await body(await get(changesPath(`?since=${rev}`)))
+            expect(out.reset).toBeUndefined()
+            expect(out.messages.length).toBeLessThanOrEqual(100)
+            rev = out.rev
+            expect(rev).toBe(top)
+          }
+        },
+      ),
+      { numRuns: 40 },
+    )
   })
 
   it('answers the changes themselves while one list is a message short of the limit', async () => {

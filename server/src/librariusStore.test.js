@@ -1408,103 +1408,187 @@ describe('listMessages', () => {
 })
 
 describe('changes', () => {
-  const MESSAGES = `select ${COLUMNS} from librarius_messages where post_id = $1 and rev > $2 order by rev limit $3`
-  const TOMBSTONES = 'select message_id, rev from librarius_tombstones where post_id = $1 and rev > $2 order by rev limit $3'
+  // What is new after the number asked from, then the newest few at or below it that are sent again.
+  const FRESH = `select ${COLUMNS} from librarius_messages where post_id = $1 and rev > $2 order by rev limit $3`
+  const SLACK = `select ${COLUMNS} from librarius_messages where post_id = $1 and rev <= $2::bigint and rev > $2::bigint - $3::bigint order by rev desc limit $3`
+  const FRESH_GONE = 'select message_id, rev from librarius_tombstones where post_id = $1 and rev > $2 order by rev limit $3'
+  const SLACK_GONE =
+    'select message_id, rev from librarius_tombstones where post_id = $1 and rev <= $2::bigint and rev > $2::bigint - $3::bigint order by rev desc limit $3'
+  const ATTACHMENTS = has('from librarius_attachments where message_id = any($1::bigint[])')
   const LIMIT = 200
+  const SLACK_ROWS = 100
+  const ask = (s, since = '5', options = { limit: LIMIT, slack: SLACK_ROWS }) => s.changes(POST, since, options)
 
-  it.each(labelled(['', '-1', '1.5', ' 1', '1 ', '1\n', 'x', '\uFF11', 12, 12n, null, undefined, {}, '9223372036854775808', '99999999999999999999']))(
+  it.each(labelled(['', '-1', '1.5', ' 1', '1 ', '1\n', 'x', '１', 12, 12n, null, undefined, {}, '9223372036854775808', '99999999999999999999']))(
     'refuses a since of %s with a TypeError before any query',
     async (_, since) => {
       const { pool, log } = fakePool()
-      await expect(store(pool).changes(POST, since, LIMIT)).rejects.toThrow('sinceRev must be the digits of a rev')
+      await expect(store(pool).changes(POST, since, { limit: LIMIT, slack: SLACK_ROWS })).rejects.toThrow('sinceRev must be the digits of a rev')
       expect(log).toEqual([])
     },
   )
 
   it.each(labelled([0, -1, 1.5, '5', NaN, null, undefined, Infinity, 2 ** 53, true, 10n]))('refuses a limit of %s with a RangeError before any query', async (_, limit) => {
     const { pool, log } = fakePool()
-    const failed = store(pool).changes(POST, '5', limit)
+    const failed = ask(store(pool), '5', { limit, slack: SLACK_ROWS })
     await expect(failed).rejects.toThrow(RangeError)
     await expect(failed).rejects.toThrow('limit must be a whole number from 1 to')
     expect(log).toEqual([])
   })
 
-  it('checks the post, then the since, then the limit', async () => {
+  it.each(labelled([0, -1, 1.5, '5', NaN, null, undefined, Infinity, 2 ** 53, true, 10n]))('refuses a slack of %s with a RangeError before any query', async (_, slack) => {
+    const { pool, log } = fakePool()
+    const failed = ask(store(pool), '5', { limit: LIMIT, slack })
+    await expect(failed).rejects.toThrow(RangeError)
+    await expect(failed).rejects.toThrow('slack must be a whole number from 1 to')
+    expect(log).toEqual([])
+  })
+
+  it.each(labelled([undefined, null, 200, '200', [], () => 200]))('refuses options of %s, which has no limit and no slack, with a RangeError before any query', async (_, options) => {
+    const { pool, log } = fakePool()
+    await expect(store(pool).changes(POST, '5', options)).rejects.toThrow(RangeError)
+    expect(log).toEqual([])
+  })
+
+  it('checks the post, then the since, then the limit, then the slack', async () => {
     const { pool } = fakePool()
-    await expect(store(pool).changes('nope', 'x', 0)).rejects.toThrow('postId must be a snowflake')
-    await expect(store(pool).changes(POST, 'x', 0)).rejects.toThrow('sinceRev must be the digits')
+    await expect(store(pool).changes('nope', 'x', { limit: 0, slack: 0 })).rejects.toThrow('postId must be a snowflake')
+    await expect(ask(store(pool), 'x', { limit: 0, slack: 0 })).rejects.toThrow('sinceRev must be the digits')
+    await expect(ask(store(pool), '5', { limit: 0, slack: 0 })).rejects.toThrow('limit must be')
+    await expect(ask(store(pool), '5', { limit: 5, slack: 0 })).rejects.toThrow('slack must be')
   })
 
   it('takes a since of 0, and the largest bigint', async () => {
     for (const since of ['0', '9223372036854775807']) {
       const { pool, log } = fakePool()
-      await store(pool).changes(POST, since, LIMIT)
+      await ask(store(pool), since)
       expect(log[0].params).toEqual([POST, since, LIMIT])
+      expect(log[1].params).toEqual([POST, since, SLACK_ROWS])
     }
   })
 
-  it('takes a limit of 1 and of the largest safe integer', async () => {
-    for (const limit of [1, Number.MAX_SAFE_INTEGER]) {
-      const { pool, log } = fakePool()
-      await store(pool).changes(POST, '5', limit)
-      expect(log.map((l) => l.params)).toEqual([[POST, '5', limit], [POST, '5', limit]])
+  it('takes a limit and a slack of 1 and of the largest safe integer', async () => {
+    for (const n of [1, Number.MAX_SAFE_INTEGER]) {
+      const wide = fakePool()
+      await ask(store(wide.pool), '5', { limit: n, slack: 7 })
+      expect(wide.log.map((l) => l.params[2])).toEqual([n, 7, n, 7])
+      const deep = fakePool()
+      await ask(store(deep.pool), '5', { limit: 7, slack: n })
+      expect(deep.log.map((l) => l.params[2])).toEqual([7, n, 7, n])
     }
   })
 
-  it('asks for the changed messages, their attachments and the deletes, in that order, as plain statements', async () => {
+  it('asks for what is new, then what is sent again, then the attachments of the lot, then the same two of the deletes, as plain statements', async () => {
     const { pool, log, release } = fakePool([
-      [MESSAGES, [dbMessage(MSG, { rev: '9' })]],
+      [FRESH, [dbMessage(MSG, { rev: '9' })]],
+      [SLACK, [dbMessage(MSG_2, { rev: '5' })]],
       ['from librarius_attachments', [dbAttachment(ATT, MSG)]],
     ])
-    await store(pool).changes(POST, '5', LIMIT)
-    expect(log.map((l) => l.sql)).toEqual([MESSAGES, has('from librarius_attachments where message_id = any($1::bigint[])'), TOMBSTONES])
-    expect(log.map((l) => l.params)).toEqual([[POST, '5', LIMIT], [[MSG]], [POST, '5', LIMIT]])
+    await ask(store(pool))
+    expect(log.map((l) => l.sql)).toEqual([FRESH, SLACK, ATTACHMENTS, FRESH_GONE, SLACK_GONE])
+    expect(log.map((l) => l.params)).toEqual([[POST, '5', LIMIT], [POST, '5', SLACK_ROWS], [[MSG_2, MSG]], [POST, '5', LIMIT], [POST, '5', SLACK_ROWS]])
     expect(release).not.toHaveBeenCalled()
   })
 
-  it('answers the messages with their attachments, the deleted ids, and the highest number seen', async () => {
+  it('answers what was sent again first and what is new after it, each oldest first, with their attachments', async () => {
     const { pool } = fakePool([
-      [MESSAGES, [dbMessage(MSG, { rev: '7' }), dbMessage(MSG_2, { rev: '9' })]],
-      ['from librarius_attachments', [dbAttachment(ATT, MSG_2, { filename: 'late.png' })]],
-      [TOMBSTONES, [{ message_id: MSG_3, rev: '8' }, { message_id: '200000000000000433', rev: '8' }]],
+      // The statements that look back answer newest first: the store turns them round.
+      [SLACK, [dbMessage(MSG_2, { rev: '5' }), dbMessage(MSG, { rev: '3' })]],
+      [FRESH, [dbMessage(MSG_3, { rev: '7' }), dbMessage('200000000000000433', { rev: '9' })]],
+      ['from librarius_attachments', [dbAttachment(ATT, MSG_3, { filename: 'late.png' })]],
+      [SLACK_GONE, [{ message_id: '200000000000000434', rev: '4' }, { message_id: '200000000000000435', rev: '2' }]],
+      [FRESH_GONE, [{ message_id: '200000000000000436', rev: '8' }]],
     ])
-    const out = await store(pool).changes(POST, '5', LIMIT)
-    expect(out.rows.map((r) => [r.id, r.rev, r.attachments.length])).toEqual([[MSG, '7', 0], [MSG_2, '9', 1]])
-    expect(out.rows[1].attachments[0].filename).toBe('late.png')
-    expect(out.deleted).toEqual([MSG_3, '200000000000000433'])
+    const out = await ask(store(pool))
+    expect(out.rows.map((r) => [r.id, r.rev, r.attachments.length])).toEqual([
+      [MSG, '3', 0],
+      [MSG_2, '5', 0],
+      [MSG_3, '7', 1],
+      ['200000000000000433', '9', 0],
+    ])
+    expect(out.rows[2].attachments[0].filename).toBe('late.png')
+    expect(out.deleted).toEqual(['200000000000000435', '200000000000000434', '200000000000000436'])
     expect(out.rev).toBe('9')
+    expect(out.full).toBe(false)
   })
 
-  it('moves to a delete when that is the newest change', async () => {
-    const { pool } = fakePool([
-      [MESSAGES, [dbMessage(MSG, { rev: '7' })]],
-      [TOMBSTONES, [{ message_id: MSG_3, rev: '12' }]],
-    ])
-    expect((await store(pool).changes(POST, '5', LIMIT)).rev).toBe('12')
+  it('answers the number to ask from next: the highest among what is new, or the one asked from', async () => {
+    const delete12 = fakePool([[FRESH, [dbMessage(MSG, { rev: '7' })]], [FRESH_GONE, [{ message_id: MSG_3, rev: '12' }]]])
+    expect((await ask(store(delete12.pool))).rev).toBe('12')
+    const compared = fakePool([[FRESH, [dbMessage(MSG, { rev: '99' })]], [FRESH_GONE, [{ message_id: MSG_3, rev: '100' }]]])
+    expect((await ask(store(compared.pool))).rev).toBe('100')
+    const flipped = fakePool([[FRESH, [dbMessage(MSG, { rev: '100' })]], [FRESH_GONE, [{ message_id: MSG_3, rev: '99' }]]])
+    expect((await ask(store(flipped.pool))).rev).toBe('100')
   })
 
-  it('compares the numbers as numbers: 100 is above 99', async () => {
-    const { pool } = fakePool([
-      [MESSAGES, [dbMessage(MSG, { rev: '99' })]],
-      [TOMBSTONES, [{ message_id: MSG_3, rev: '100' }]],
-    ])
-    expect((await store(pool).changes(POST, '5', LIMIT)).rev).toBe('100')
-    const flipped = fakePool([
-      [MESSAGES, [dbMessage(MSG, { rev: '100' })]],
-      [TOMBSTONES, [{ message_id: MSG_3, rev: '99' }]],
-    ])
-    expect((await store(flipped.pool).changes(POST, '5', LIMIT)).rev).toBe('100')
-  })
-
-  it('stays where it was asked from when nothing changed, and asks for no attachments', async () => {
-    const { pool, log } = fakePool()
-    expect(await store(pool).changes(POST, '41', LIMIT)).toEqual({ rows: [], deleted: [], rev: '41' })
-    expect(log.map((l) => l.sql)).toEqual([MESSAGES, TOMBSTONES])
+  it('stays where it was asked from when nothing is new, whatever it sends again, and asks for no attachments when it has no rows', async () => {
+    const quiet = fakePool()
+    expect(await ask(store(quiet.pool), '41')).toEqual({ rows: [], deleted: [], rev: '41', full: false })
+    expect(quiet.log.map((l) => l.sql)).toEqual([FRESH, SLACK, FRESH_GONE, SLACK_GONE])
+    // What is sent again is at or below the number asked from, so it never moves it.
+    const again = fakePool([[SLACK, [dbMessage(MSG, { rev: '41' }), dbMessage(MSG_2, { rev: '38' })]], [SLACK_GONE, [{ message_id: MSG_3, rev: '40' }]]])
+    const out = await ask(store(again.pool), '41')
+    expect(out.rev).toBe('41')
+    expect(out.rows).toHaveLength(2)
+    expect(out.deleted).toEqual([MSG_3])
   })
 
   it('writes the number it stays at without leading zeros', async () => {
     const { pool } = fakePool()
-    expect((await store(pool).changes(POST, '007', LIMIT)).rev).toBe('7')
+    expect((await ask(store(pool), '007')).rev).toBe('7')
+  })
+
+  describe('full', () => {
+    const many = (count, from = FIRST) => ids(from, count).map((id, i) => dbMessage(id, { rev: String(500 + i) }))
+    const gone = (count) => ids('200000000000002000', count).map((id, i) => ({ message_id: id, rev: String(500 + i) }))
+    const run = (script, options) => ask(store(fakePool(script).pool), '400', options)
+
+    it('is true when what is new fills the limit, in messages or in deletes, and false one short of it', async () => {
+      expect((await run([[FRESH, many(5)]], { limit: 5, slack: 3 })).full).toBe(true)
+      expect((await run([[FRESH_GONE, gone(5)]], { limit: 5, slack: 3 })).full).toBe(true)
+      expect((await run([[FRESH, many(4)], [FRESH_GONE, gone(4)]], { limit: 5, slack: 3 })).full).toBe(false)
+      expect((await run([[FRESH, many(6)]], { limit: 5, slack: 3 })).full).toBe(true)
+      expect((await run([[FRESH_GONE, gone(6)]], { limit: 5, slack: 3 })).full).toBe(true)
+    })
+
+    it('is true when both are full, and false when neither is', async () => {
+      expect((await run([[FRESH, many(5)], [FRESH_GONE, gone(5)]], { limit: 5, slack: 3 })).full).toBe(true)
+      expect((await run([], { limit: 5, slack: 3 })).full).toBe(false)
+    })
+
+    it('never counts what it sends again: any number of them, even more than the limit, leave it false', async () => {
+      const looking = (count) => ids('200000000000001500', count).map((id, i) => dbMessage(id, { rev: String(399 - i) }))
+      const out = await run([[SLACK, looking(9)], [SLACK_GONE, gone(9).map((g, i) => ({ ...g, rev: String(399 - i) }))]], { limit: 5, slack: 9 })
+      expect(out.full).toBe(false)
+      expect(out.rows).toHaveLength(9)
+      expect(out.deleted).toHaveLength(9)
+    })
+
+    it('counts only what is new, with what it sends again beside it (property)', async () => {
+      await fc.assert(
+        fc.asyncProperty(
+          fc.integer({ min: 1, max: 8 }),
+          fc.integer({ min: 0, max: 12 }),
+          fc.integer({ min: 0, max: 12 }),
+          fc.integer({ min: 0, max: 12 }),
+          fc.integer({ min: 0, max: 12 }),
+          async (limit, fresh, freshGone, slack, slackGone) => {
+            const out = await run(
+              [
+                [FRESH, many(fresh)],
+                [FRESH_GONE, gone(freshGone)],
+                [SLACK, ids('200000000000001500', slack).map((id, i) => dbMessage(id, { rev: String(399 - i) }))],
+                [SLACK_GONE, ids('200000000000002500', slackGone).map((id, i) => ({ message_id: id, rev: String(399 - i) }))],
+              ],
+              { limit, slack: 12 },
+            )
+            expect(out.full).toBe(fresh >= limit || freshGone >= limit)
+            expect(out.rows).toHaveLength(fresh + slack)
+            expect(out.deleted).toHaveLength(freshGone + slackGone)
+          },
+        ),
+      )
+    })
   })
 
   it('never answers a number below the one asked from, whatever the rows say (property)', async () => {
@@ -1515,15 +1599,21 @@ describe('changes', () => {
         fc.array(fc.bigInt({ min: 0n, max: 10n ** 12n }), { maxLength: 4 }),
         async (since, rowRevs, deleteRevs) => {
           const { pool } = fakePool([
-            [MESSAGES, rowRevs.map((r, i) => dbMessage(ids(FIRST, 4)[i], { rev: String(r) }))],
-            [TOMBSTONES, deleteRevs.map((r) => ({ message_id: MSG_3, rev: String(r) }))],
+            [FRESH, rowRevs.map((r, i) => dbMessage(ids(FIRST, 4)[i], { rev: String(r) }))],
+            [FRESH_GONE, deleteRevs.map((r) => ({ message_id: MSG_3, rev: String(r) }))],
           ])
-          const out = await store(pool).changes(POST, String(since), LIMIT)
+          const out = await ask(store(pool), String(since))
           const max = [since, ...rowRevs, ...deleteRevs].reduce((a, b) => (a > b ? a : b))
           expect(out.rev).toBe(String(max))
         },
       ),
     )
+  })
+
+  it('sends the caller values only as parameters', async () => {
+    const { pool, log } = fakePool()
+    await ask(store(pool), '12345', { limit: 77, slack: 33 })
+    for (const { sql } of log) expect(sql).not.toMatch(/12345|77|33/)
   })
 })
 

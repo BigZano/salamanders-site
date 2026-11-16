@@ -12,9 +12,9 @@
  * (deleteMessages) shares one, and a reaction change takes its own. A reader that holds the highest rev it has seen asks
  * changes() for what came after it. A write takes its number before it commits, so a reader that polls while a write is
  * still open can hold a number above the one the write then commits with; the numbers are the sequence's, shared by every
- * post, and that window is as short as the write. A reader covers it by asking from a few numbers below the one it holds
- * (the routes use 100, which counts transactions, not rows, since a batch shares its number), and a reader that reopens
- * the post starts clean.
+ * post, and that window is as short as the write. A reader covers it by having changes() send again the newest rows just at
+ * or below the number it holds (the routes ask for at most 100 rows, within 100 numbers of it; the numbers count
+ * transactions, not rows, since a batch shares its number), and a reader that reopens the post starts clean.
  *
  * Every caller value goes in as a $n parameter. The only text built into a statement is a fixed fragment or a
  * librarius_sync column name taken from SYNC_COLUMNS.
@@ -452,25 +452,52 @@ export function createLibrariusStore(pool) {
     },
 
     /**
-     * What changed in a post after `sinceRev` (the digits of a rev): the messages written since, with their attachments, and
-     * the ids of those deleted, oldest change first. At most `limit` of each (a whole number from 1), so a reader that asks
-     * from a long way back is not sent the whole post: a list that has `limit` entries may have been cut short, and the
-     * caller who sees one should start the reader afresh. → { rows, deleted, rev }, where rev is the highest number among
-     * what is answered, or `sinceRev` when nothing changed: the number to ask from next.
+     * What changed in a post, for a reader that holds `sinceRev` (the digits of a rev): { rows, deleted, rev, full }.
+     * `options` is { limit, slack }, each a whole number from 1.
+     *
+     * Two parts are read, each of the messages written and of the ids deleted:
+     * - what is NEW: after `sinceRev`, the oldest `limit`, with their attachments;
+     * - what is SENT AGAIN: at or below `sinceRev` and above `sinceRev - slack`, the newest `slack` of them. A write takes its
+     *   rev before it commits, so one that took a number below the reader's can commit after the reader moved past it, and
+     *   only a look back finds it. The reader replaces a message by its id, so one it has already is no harm.
+     *
+     * `rows` and `deleted` hold what is sent again first and what is new after it, each oldest first. `full` is true when
+     * what is new, messages or deletes, fills `limit`: more may be waiting than was read, and the caller who sees it should
+     * start the reader afresh. What is sent again never makes it true: it is a constant few, and counting it would answer
+     * a quiet post whose newest rows lie within `slack` of its top as one with too much new, to the same reader every poll.
+     * `rev` is the highest number among what is answered, or `sinceRev` when nothing changed: the number to ask from next.
      */
-    async changes(postId, sinceRev, limit) {
+    async changes(postId, sinceRev, options) {
       needId(postId, 'postId')
       needRev(sinceRev)
+      const { limit, slack } = options ?? {}
       needCount(limit, 'limit')
-      const { rows } = await pool.query(`${POST_MESSAGES} and rev > $2 order by rev limit $3`, [postId, sinceRev, limit])
+      needCount(slack, 'slack')
+      const { rows: fresh } = await pool.query(`${POST_MESSAGES} and rev > $2 order by rev limit $3`, [postId, sinceRev, limit])
+      const { rows: back } = await pool.query(
+        `${POST_MESSAGES} and rev <= $2::bigint and rev > $2::bigint - $3::bigint order by rev desc limit $3`,
+        [postId, sinceRev, slack],
+      )
+      // The look back is read newest first, to take the newest, and is answered oldest first.
+      const rows = [...back.reverse(), ...fresh]
       const shown = await withAttachments(rows)
-      const { rows: gone } = await pool.query(
+      const { rows: freshGone } = await pool.query(
         'select message_id, rev from librarius_tombstones where post_id = $1 and rev > $2 order by rev limit $3',
         [postId, sinceRev, limit],
       )
+      const { rows: backGone } = await pool.query(
+        'select message_id, rev from librarius_tombstones where post_id = $1 and rev <= $2::bigint and rev > $2::bigint - $3::bigint order by rev desc limit $3',
+        [postId, sinceRev, slack],
+      )
+      const gone = [...backGone.reverse(), ...freshGone]
       // Stryker disable next-line EqualityOperator: when two revs are equal, taking either gives the same number
       const rev = [...rows, ...gone].reduce((top, r) => (BigInt(r.rev) > top ? BigInt(r.rev) : top), BigInt(sinceRev))
-      return { rows: shown, deleted: gone.map((g) => g.message_id), rev: String(rev) }
+      return {
+        rows: shown,
+        deleted: gone.map((g) => g.message_id),
+        rev: String(rev),
+        full: fresh.length >= limit || freshGone.length >= limit,
+      }
     },
 
     /**
