@@ -67,6 +67,9 @@ const GATED = [
   'server/src/librariusLinks.js',
   'server/src/librariusText.js',
   'server/src/librariusHandler.js',
+  'src/lib/librarius/api.js',
+  'src/lib/librarius/snowflake.js',
+  'src/stores/librarius.js',
 ]
 
 export default defineConfig({
