@@ -7,16 +7,20 @@
  * module, in and out: a number would lose digits. A caller's id that is not a snowflake that fits a bigint is a
  * TypeError before any query, since a bad id inside a batch would otherwise fail the whole transaction.
  *
- * Every message write, and every delete, is stamped with the next number of the librarius_rev sequence (rev). A reader
- * that holds the highest rev it has seen asks changes() for what came after it. Rows are stamped as they are written,
- * so a reader that polls while a long write is still open can pass a number that the write takes later; that window
- * is as short as the write, and a reader that reopens the post starts clean.
+ * Every message write, and every delete, is stamped with a number of the librarius_rev sequence (rev). A transaction takes
+ * ONE number as it begins and stamps every row it writes with it: a batch of messages (upsertMessages) or of deletes
+ * (deleteMessages) shares one, and a reaction change takes its own. A reader that holds the highest rev it has seen asks
+ * changes() for what came after it. A write takes its number before it commits, so a reader that polls while a write is
+ * still open can hold a number above the one the write then commits with; the numbers are the sequence's, shared by every
+ * post, and that window is as short as the write. A reader covers it by asking from a few numbers below the one it holds
+ * (the routes use 100, which counts transactions, not rows, since a batch shares its number), and a reader that reopens
+ * the post starts clean.
  *
  * Every caller value goes in as a $n parameter. The only text built into a statement is a fixed fragment or a
  * librarius_sync column name taken from SYNC_COLUMNS.
  */
 import { createInTx } from './inTx.js'
-import { applyReaction } from './librariusParse.js'
+import { applyReaction, attachmentUrl } from './librariusParse.js'
 
 const SNOWFLAKE = /^\d{17,20}$/
 // The digits of a rev: it is a bigint, so at most 19 of them.
@@ -36,18 +40,18 @@ const POST_MESSAGES = `select ${MESSAGE_COLUMNS} from librarius_messages where p
 const REPLIES = '(select count(*)::int from librarius_messages m where m.post_id = p.id and m.id <> p.id)'
 
 /**
- * Insert a message, or update what Discord can change on it, stamping a new rev either way. → { id } when written.
- * `reactions` is the one column a caller may ask to leave alone on an update: see UPSERT_KEEPING_REACTIONS.
+ * Insert a message, or update what Discord can change on it, stamping the rev it is given ($15) either way. → { id } when
+ * written. `reactions` is the one column a caller may ask to leave alone on an update: see UPSERT_KEEPING_REACTIONS.
  */
 const upsertMessageSql = (updatesReactions) => `insert into librarius_messages
-    (id, post_id, author_id, author_name, author_avatar, webhook_id, kind, content, embeds, stickers, reactions, reply_to, created_at, edited_at)
-  select $1::bigint, $2::bigint, $3::bigint, $4::text, $5::text, $6::bigint, $7::smallint, $8::text, $9::jsonb, $10::jsonb, $11::jsonb, $12::bigint, $13::timestamptz, $14::timestamptz
+    (id, post_id, author_id, author_name, author_avatar, webhook_id, kind, content, embeds, stickers, reactions, reply_to, created_at, edited_at, rev)
+  select $1::bigint, $2::bigint, $3::bigint, $4::text, $5::text, $6::bigint, $7::smallint, $8::text, $9::jsonb, $10::jsonb, $11::jsonb, $12::bigint, $13::timestamptz, $14::timestamptz, $15::bigint
   where exists (select 1 from librarius_posts where id = $2)
   on conflict (id) do update set
     author_id = excluded.author_id, author_name = excluded.author_name, author_avatar = excluded.author_avatar,
     webhook_id = excluded.webhook_id, kind = excluded.kind, content = excluded.content, embeds = excluded.embeds,
     stickers = excluded.stickers, ${updatesReactions ? 'reactions = excluded.reactions, ' : ''}reply_to = excluded.reply_to,
-    edited_at = excluded.edited_at, rev = nextval('librarius_rev')
+    edited_at = excluded.edited_at, rev = excluded.rev
   returning id`
 
 const UPSERT_MESSAGE = upsertMessageSql(true)
@@ -79,6 +83,12 @@ const LIST_POSTS = `select p.id, p.title, p.tag_ids, p.pinned, p.locked, p.archi
   left join lateral (select att.id, att.url, att.expires_at from librarius_attachments att
                       where att.message_id = lm.id and att.content_type like 'image/%' order by att.position limit 1) im on true
   order by p.pinned desc, coalesce(lm.created_at, p.created_at) desc, p.id desc`
+
+/** The next number of the librarius_rev sequence, as text: a transaction takes one, and stamps everything it writes with it. */
+async function nextRev(q) {
+  const { rows } = await q.query("select nextval('librarius_rev') as rev")
+  return rows[0].rev
+}
 
 /** A guard for every id a statement matches or stores: a snowflake string that fits a bigint, else a TypeError. */
 function needId(value, what) {
@@ -250,7 +260,7 @@ export function createLibrariusStore(pool) {
     },
 
     /**
-     * Write parseMessage rows, each with a new rev, and replace each one's attachments, all in one transaction. A message
+     * Write parseMessage rows, all with one new rev (taken once, as the transaction begins), and replace each one's attachments, all in one transaction. A message
      * whose post is not stored is skipped. Every row is checked before the first is written.
      *
      * With `keepReactions: true` a message that is already stored keeps the reactions it has, whatever the row says,
@@ -263,6 +273,7 @@ export function createLibrariusStore(pool) {
       for (const m of rows) checkMessage(m)
       if (rows.length === 0) return
       return inTx(async (q) => {
+        const rev = await nextRev(q)
         for (const m of rows) {
           const { rows: written } = await q.query(keepReactions ? UPSERT_KEEPING_REACTIONS : UPSERT_MESSAGE, [
             m.id,
@@ -279,6 +290,7 @@ export function createLibrariusStore(pool) {
             m.replyTo,
             m.createdAt,
             m.editedAt,
+            rev,
           ])
           if (written.length === 0) continue
           await q.query('delete from librarius_attachments where message_id = $1', [m.id])
@@ -294,17 +306,18 @@ export function createLibrariusStore(pool) {
     },
 
     /**
-     * Delete messages, noting each stored one in the tombstones first (with a new rev) so a reader learns of it. One
-     * transaction. Their attachments go with them. An empty list sends nothing.
+     * Delete messages, noting each stored one in the tombstones first (all with one new rev, taken once) so a reader learns
+     * of it. One transaction. Their attachments go with them. An empty list sends nothing.
      */
     async deleteMessages(ids) {
       needList(ids, 'ids')
       for (const id of ids) needId(id, 'messageId')
       if (ids.length === 0) return
       return inTx(async (q) => {
+        const rev = await nextRev(q)
         await q.query(
-          'insert into librarius_tombstones (message_id, post_id) select id, post_id from librarius_messages where id = any($1::bigint[])',
-          [ids],
+          'insert into librarius_tombstones (message_id, post_id, rev) select id, post_id, $2::bigint from librarius_messages where id = any($1::bigint[])',
+          [ids, rev],
         )
         await q.query('delete from librarius_messages where id = any($1::bigint[])', [ids])
       })
@@ -478,13 +491,16 @@ export function createLibrariusStore(pool) {
     },
 
     /**
-     * The highest rev any stored message or delete note holds, as text ('0' for an empty store): what a reader asks changes()
-     * from after it loads a post. It is read from the rows, not the sequence, so a number taken by a write that has not
-     * committed yet is never passed.
+     * The highest rev any stored message or delete note of the post holds, as text ('0' for a post with none): what a reader
+     * asks changes() from after it loads the post. It is read from the rows, not the sequence, so a number taken by a write
+     * that has not committed yet is never passed, and from the post's own rows (the (post_id, rev) indexes), so it costs
+     * the size of one post, not of the forum.
      */
-    async currentRev() {
+    async currentRev(postId) {
+      needId(postId, 'postId')
       const { rows } = await pool.query(
-        'select greatest(coalesce((select max(rev) from librarius_messages), 0), coalesce((select max(rev) from librarius_tombstones), 0)) as rev',
+        'select greatest(coalesce((select max(rev) from librarius_messages where post_id = $1), 0), coalesce((select max(rev) from librarius_tombstones where post_id = $1), 0)) as rev',
+        [postId],
       )
       return rows[0].rev
     },
@@ -578,12 +594,16 @@ export function createLibrariusStore(pool) {
       return rows.map((r) => ({ id: r.id, url: r.url }))
     },
 
-    /** Replace the link and expiry (a time, or null) of each attachment: [{ id, url, expiresAt }], one statement. */
+    /**
+     * Replace the link and expiry (a time, or null) of each attachment: [{ id, url, expiresAt }], one statement. A link that
+     * is not on Discord's CDN attachments path (the check a message's attachment passes when it is parsed) is a TypeError
+     * before any query, so what is stored never leaves that host, whoever asked for it.
+     */
     async updateAttachmentUrls(updates) {
       needList(updates, 'updates')
       for (const u of updates) {
         needId(u.id, 'attachment id')
-        if (typeof u.url !== 'string' || u.url === '') throw new TypeError('url must be a non-empty string')
+        if (attachmentUrl(u.url) === null) throw new TypeError("url must be a link on Discord's CDN attachments path")
       }
       const expiries = updates.map((u) => (u.expiresAt === null ? null : needTime(u.expiresAt, 'expiresAt')))
       if (updates.length === 0) return

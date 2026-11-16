@@ -249,8 +249,9 @@ then the gateway's live events), and the site reads that copy. Nothing here writ
 `docs/superpowers/specs/2026-11-15-librarius-design.md`. Access follows the forum in Discord: a member may read it
 here exactly when Discord would let them open it, worked out from the guild's roles and the forum's permission
 overwrites (View Channel and Read Message History, `librariusPerms.js`). The guild owner and Administrators read it
-too, as in Discord, and a role the forum shuts out does not. Reads reuse a verdict for 30 seconds; marking a post read
-asks Discord afresh. Any Discord failure answers 503, and responses are never cached.
+too, as in Discord, and a role the forum shuts out does not. Every route reuses a verdict for 30 seconds, marking a post
+read included: it writes only the caller's own read mark. Any Discord failure answers 503, and responses are never
+cached.
 
 | Endpoint | Who | Notes |
 |---|---|---|

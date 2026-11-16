@@ -287,13 +287,14 @@ describe('createLibrariusHandler: the gates, in order', () => {
     expect(log).toEqual([])
   })
 
-  it('asks GETs for the cached verdict and the PUT for a fresh one', async () => {
+  it('asks for the cached verdict on every route, the PUT included: it writes only the caller\'s own read mark', async () => {
     const { get, put, asked } = setup()
     await get('/librarius/me')
     await get('/librarius/posts')
     expect(asked).toEqual([{ fresh: false }, { fresh: false }])
-    await put(`/librarius/posts/${POST}/read`, JSON.stringify({ messageId: M1 }))
-    expect(asked).toEqual([{ fresh: false }, { fresh: false }, { fresh: true }])
+    const res = await put(`/librarius/posts/${POST}/read`, JSON.stringify({ messageId: M1 }))
+    expect(res.status).toBe(204)
+    expect(asked).toEqual([{ fresh: false }, { fresh: false }, { fresh: false }])
   })
 
   it('answers 503 when Discord cannot be reached while the verdict is worked out, on every route', async () => {
@@ -458,6 +459,28 @@ describe('GET /librarius/posts', () => {
     const list = [post(POST, { posterIds: [ALICE, BOB] })]
     const { get } = setup({ store: { listPosts: () => list }, roster: () => null })
     expect((await body(await get('/librarius/posts'))).people).toEqual({ [ALICE]: { name: 'Test Alice', avatar: avatar(ALICE) } })
+  })
+
+  it('names whoever the latest line of a post mentions, from the roster', async () => {
+    const list = [
+      post(POST, { latest: { id: M2, authorId: ALICE, authorName: 'Test Alice', authorAvatar: avatar(ALICE), content: `hello <@${CARA}> and <@!${DAN}>, not <@&${BOB}> or <#${BOB}> or <@${STRANGER}>`, image: null }, posterIds: [] }),
+      post(POST_2, { latest: { id: M3, authorId: ALICE, authorName: 'Test Alice', authorAvatar: avatar(ALICE), content: `again <@${CARA}>`, image: null }, posterIds: [] }),
+    ]
+    const { get } = setup({ store: { listPosts: () => list }, roster: () => [member(CARA, 'Cara Now'), member(DAN, 'Dan Now', { avatar: null }), member(BOB, 'Bob Now')] })
+    const out = await body(await get('/librarius/posts'))
+    expect(out.people).toEqual({
+      [ALICE]: { name: 'Test Alice', avatar: avatar(ALICE) },
+      [CARA]: { name: 'Cara Now', avatar: avatar(`now-${CARA}`) },
+      [DAN]: { name: 'Dan Now', avatar: null },
+    })
+  })
+
+  it('leaves out a mention nobody can name: the roster has not loaded, or does not have them', async () => {
+    const list = [post(POST, { latest: { id: M2, authorId: ALICE, authorName: 'Test Alice', authorAvatar: null, content: `hello <@${CARA}>`, image: null }, posterIds: [] }), post(POST_2, { latest: null, posterIds: [] })]
+    for (const roster of [() => null, () => [member(DAN, 'Dan Now')]]) {
+      const out = await body(await setup({ store: { listPosts: () => list }, roster }).get('/librarius/posts'))
+      expect(Object.keys(out.people)).toEqual([ALICE])
+    }
   })
 
   it("keeps the snapshot of an author's newest message when several posts carry one", async () => {
@@ -642,9 +665,10 @@ describe('GET /librarius/posts', () => {
 })
 
 describe('GET /librarius/posts/:id', () => {
-  const found = { post: { id: POST, ownerId: ALICE, title: 'A test post', tagIds: [], pinned: false, locked: false, archived: false, createdAt: '2026-11-01T10:00:00.000Z', replies: 7 }, lastRead: M2 }
+  const foundPost = () => ({ post: { id: POST, ownerId: ALICE, title: 'A test post', tagIds: [], pinned: false, locked: false, archived: false, createdAt: '2026-11-01T10:00:00.000Z', replies: 7 }, lastRead: M2 })
 
   it('answers the post, where the member has read to, and the number to poll from; and notes that it was opened', async () => {
+    const found = foundPost()
     const { get, calls, names } = setup({ store: { getPost: () => found, currentRev: () => '812' } })
     const res = await get(`/librarius/posts/${POST}`)
     expect(res.status).toBe(200)
@@ -654,8 +678,17 @@ describe('GET /librarius/posts/:id', () => {
     expect(names().indexOf('getPost')).toBeLessThan(names().indexOf('markViewed'))
   })
 
+  it("asks for the number to poll from of this post alone, and answers that post's", async () => {
+    const revs = { [POST]: '812', [POST_2]: '3' }
+    for (const [id, rev] of Object.entries(revs)) {
+      const { get, calls } = setup({ store: { getPost: () => foundPost(), currentRev: (postId) => revs[postId] } })
+      expect((await body(await get(`/librarius/posts/${id}`))).rev).toBe(rev)
+      expect(calls('currentRev')).toEqual([[id]])
+    }
+  })
+
   it('answers a null lastRead for a post the member has not read', async () => {
-    const { get } = setup({ store: { getPost: () => ({ ...found, lastRead: null }) } })
+    const { get } = setup({ store: { getPost: () => ({ ...foundPost(), lastRead: null }) } })
     expect((await body(await get(`/librarius/posts/${POST}`))).lastRead).toBeNull()
   })
 
@@ -670,6 +703,7 @@ describe('GET /librarius/posts/:id', () => {
   it.each(['abc', '1', '1234567890123456', '123456789012345678901', '9223372036854775808', '99999999999999999999', '-200000000000000410', '200000000000000410.5', '0x2000000000000041', '%32%30%30%30%30%30%30%30%30%30%30%30%30%30%30%34%31%30', '2000000000000004%0A', '2000000000000004%31%30%20', 'null', 'undefined'])(
     'answers 404 for the post id %s without asking the store',
     async (id) => {
+      const found = foundPost()
       const { get, log } = setup({ store: { getPost: () => found } })
       const res = await get(`/librarius/posts/${id}`)
       expect(res.status).toBe(404)
@@ -680,6 +714,7 @@ describe('GET /librarius/posts/:id', () => {
 
   it('takes the ends of the id range: 17 digits up to the largest bigint', async () => {
     for (const id of ['10000000000000000', '9223372036854775807']) {
+      const found = foundPost()
       const { get, calls } = setup({ store: { getPost: () => found } })
       expect((await get(`/librarius/posts/${id}`)).status).toBe(200)
       expect(calls('getPost')).toEqual([[id, READER.id]])
@@ -690,6 +725,7 @@ describe('GET /librarius/posts/:id', () => {
     const fits = (s) => /^\d{17,20}$/.test(s) && BigInt(s) <= BIGINT_MAX
     await fc.assert(
       fc.asyncProperty(fc.string({ maxLength: 24 }), async (s) => {
+        const found = foundPost()
         const { get, calls } = setup({ store: { getPost: () => found } })
         const res = await get(`/librarius/posts/${encodeURIComponent(s)}`)
         if (fits(s)) {
@@ -704,6 +740,7 @@ describe('GET /librarius/posts/:id', () => {
     await fc.assert(
       fc.asyncProperty(fc.bigInt({ min: 0n, max: 2n ** 70n }), async (n) => {
         const s = String(n)
+        const found = foundPost()
         const { get, calls } = setup({ store: { getPost: () => found } })
         const res = await get(`/librarius/posts/${s}`)
         expect(res.status).toBe(fits(s) ? 200 : 404)
@@ -919,6 +956,15 @@ describe('GET /librarius/posts/:id/messages: the answer', () => {
     expect(names().indexOf('currentRev')).toBeLessThan(names().indexOf('listMessages'))
   })
 
+  it("asks for the number to poll from of this post alone, and answers that post's", async () => {
+    const revs = { [POST]: '812', [POST_2]: '3' }
+    for (const [id, rev] of Object.entries(revs)) {
+      const { get, calls } = setup({ store: { currentRev: (postId) => revs[postId] } })
+      expect((await body(await get(`/librarius/posts/${id}/messages`))).rev).toBe(rev)
+      expect(calls('currentRev')).toEqual([[id]])
+    }
+  })
+
   it('names nobody in a message, but its author and those it mentions', async () => {
     const { get } = setup({
       roster: () => [member(CARA, 'Cara Now'), member(DAN, 'Dan Now')],
@@ -1088,6 +1134,32 @@ describe('the reply line of a message', () => {
       [BOB]: { name: 'Bob Now', avatar: avatar(`now-${BOB}`) },
       [CARA]: { name: 'Cara Then', avatar: null },
     })
+  })
+
+  it('names whoever a quoted message mentions, as far as the quote shows it', async () => {
+    const mention = (id) => `<@${id}>`
+    const roster = () => [member(CARA, 'Cara Now'), member(DAN, 'Dan Now'), member(BOB, 'Bob Now')]
+    const stored = (content) => [{ id: M1, authorId: BOB, authorName: 'Test Bob', authorAvatar: null, content }]
+    const run = async (content) => body(await setup({ roster, store: { ...page([row(M3, { replyTo: M1, content: 'plain' })]), quotedMessages: () => stored(content) } }).get(messagesPath()))
+
+    // Shown in the quote: named.
+    expect(Object.keys((await run(`hi ${mention(CARA)} and <@!${DAN}>`)).people).sort()).toEqual([ALICE, BOB, CARA, DAN].sort())
+    // Cut off by the 200 characters of the quote, whole or in part: not shown, so not named.
+    const upTo = (n) => 'x'.repeat(n)
+    expect(Object.keys((await run(`${upTo(200)}${mention(CARA)}`)).people).sort()).toEqual([ALICE, BOB].sort())
+    expect(Object.keys((await run(`${upTo(190)}${mention(CARA)}`)).people).sort()).toEqual([ALICE, BOB].sort())
+    // The last one that fits, 200 characters to its closing bracket: named.
+    const fits = `${upTo(200 - mention(CARA).length)}${mention(CARA)}`
+    expect(Array.from(fits)).toHaveLength(200)
+    expect(Object.keys((await run(fits)).people).sort()).toEqual([ALICE, BOB, CARA].sort())
+  })
+
+  it('names whoever a quoted message of the page mentions, as far as the quote shows it', async () => {
+    // The page's own message M1 mentions Cara past its 200th character, so the quote does not show it, but M1 itself does.
+    const rows = [row(M1, { content: `${'x'.repeat(205)}<@${CARA}>` }), row(M2, { replyTo: M1 })]
+    const out = await body(await setup({ roster: () => [member(CARA, 'Cara Now')], store: page(rows) }).get(messagesPath()))
+    expect(out.messages[1].replyTo.content).toBe('x'.repeat(200))
+    expect(Object.keys(out.people).sort()).toEqual([ALICE, CARA].sort())
   })
 
   it('does not list the author of a message that is quoted by nobody on the page', async () => {
@@ -1320,6 +1392,15 @@ describe('GET /librarius/posts/:id/changes', () => {
     })
     expect((await body(await get(changesPath('?since=400')))).rev).toBe('500')
     expect(names().indexOf('currentRev')).toBeLessThan(names().indexOf('changes'))
+  })
+
+  it("asks for the number to poll from of this post alone, and answers that post's", async () => {
+    const revs = { [POST]: '812', [POST_2]: '3' }
+    for (const [id, rev] of Object.entries(revs)) {
+      const { get, calls } = setup({ store: { currentRev: (postId) => revs[postId] } })
+      expect((await body(await get(`/librarius/posts/${id}/changes?since=0`))).rev).toBe(rev)
+      expect(calls('currentRev')).toEqual([[id]])
+    }
   })
 
   it('asks from 100 before the number it was given, 200 at a time', async () => {

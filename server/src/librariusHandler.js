@@ -5,16 +5,18 @@
  * Gates, in order: a path that is not /librarius or under it is none of this handler's (null); an unknown route is 404; an
  * unconfigured Librarius is 503; then librariusAccess.js gives a verdict: none is 401, Discord down is 503. /librarius/me
  * answers any signed-in user, and tells someone who may not read the forum only that (`access: false`); every other route
- * needs a reader (403). GETs may use the short-lived cached verdict, and the PUT asks Discord afresh. No route reads its
- * body before those checks, and no error message echoes what was sent. Responses are never cached.
+ * needs a reader (403). Every route uses the short-lived cached verdict, the PUT too: it writes only the caller's own read
+ * mark. No route reads its body before those checks, and no error message echoes what was sent. Responses are never cached.
  *
  * A post or message id that is no snowflake that fits a bigint never reaches the store: a post is 404, a cursor 400.
  *
- * Reading messages. A page, or a poll for changes, answers `rev`, the number a poll asks from next. It is read from the
- * store BEFORE the messages are, so a write that lands while they are read is sent again by the next poll rather than
- * missed. A write takes its number as it is made and commits later, so a poll also asks from 100 numbers below the one
- * it was given (the client replaces a message by its id, so a message sent twice does no harm). A poll that is more
- * than the store may answer at once (CHANGES_LIMIT) is told to start over: `{ reset: true }`.
+ * Reading messages. A page, or a poll for changes, answers `rev`, the number a poll asks from next: the highest of this
+ * post's own. It is read from the store BEFORE the messages are, so a write that lands while they are read is sent again
+ * by the next poll rather than missed. A write takes its number before it commits, so a poll also asks from 100 numbers
+ * below the one it was given: the numbers are the sequence's, shared by every post, and a transaction (a batch of
+ * messages, say) takes one for all its rows, so 100 is a hundred transactions of any post. The client replaces a message
+ * by its id, so a message sent twice does no harm. A poll that is more than the store may answer at once (CHANGES_LIMIT)
+ * is told to start over: `{ reset: true }`.
  *
  * Attachment links expire, and the link refresh (librariusLinks.js) keeps them ahead of that for posts that are read.
  * Any that lapse within five minutes of a read are renewed there and then (the first 50 shown), stored, and answered
@@ -45,6 +47,9 @@ const JSON_MAX_BYTES = 1024
 const NO_SUCH_POST = 'No such post.'
 const BAD_CURSOR = 'That page cursor is not valid.'
 const BAD_MESSAGE = 'That message id is not valid.'
+
+/** → the ids of the members a text mentions, `<@id>` or `<@!id>`, each as often as it does. */
+const mentionsIn = (text) => Array.from(text.matchAll(MENTION), (m) => m[1])
 
 /** The first 200 characters of a message, counted as characters so that no pair is cut in two. */
 const quote = (text) => Array.from(text).slice(0, QUOTE_LENGTH).join('')
@@ -117,8 +122,12 @@ export function createLibrariusHandler({ access, store, guild, links, importer, 
     for (const m of rows) {
       directory.note(m.authorId, m.authorName, m.authorAvatar, m.id)
       const target = quoted.get(m.replyTo)
-      if (target !== undefined) directory.note(target.authorId, target.authorName, target.authorAvatar, target.id)
-      for (const mention of m.content.matchAll(MENTION)) directory.want(mention[1])
+      if (target !== undefined) {
+        directory.note(target.authorId, target.authorName, target.authorAvatar, target.id)
+        // The quote shows only its first 200 characters, and so only the mentions in those.
+        for (const id of mentionsIn(quote(target.content))) directory.want(id)
+      }
+      for (const id of mentionsIn(m.content)) directory.want(id)
     }
 
     const messages = rows.map((m) => {
@@ -182,8 +191,11 @@ export function createLibrariusHandler({ access, store, guild, links, importer, 
     const renewed = await renewedLinks(list.map((post) => post.latest?.image).filter(Boolean))
     const directory = createDirectory(await members())
     for (const post of list) {
-      if (post.latest !== null) directory.note(post.latest.authorId, post.latest.authorName, post.latest.authorAvatar, post.latest.id)
       for (const id of post.posterIds) directory.want(id)
+      if (post.latest === null) continue
+      directory.note(post.latest.authorId, post.latest.authorName, post.latest.authorAvatar, post.latest.id)
+      // The list shows the latest line, with the mentions in it.
+      for (const id of mentionsIn(post.latest.content)) directory.want(id)
     }
     const shown = list.map((post) => {
       const fresh = renewed.get(post.latest?.image?.id)
@@ -197,7 +209,7 @@ export function createLibrariusHandler({ access, store, guild, links, importer, 
     const found = await store.getPost(id, verdict.user.id)
     if (found === null) return reply(404, { error: NO_SUCH_POST })
     await store.markViewed(id)
-    return reply(200, { post: found.post, lastRead: found.lastRead, rev: await store.currentRev() })
+    return reply(200, { post: found.post, lastRead: found.lastRead, rev: await store.currentRev(id) })
   }
 
   /** → { limit, before | after | around } for a page request, or null when it is not one. */
@@ -218,7 +230,7 @@ export function createLibrariusHandler({ access, store, guild, links, importer, 
   async function messages(postId, url) {
     const page = parsePage(url.searchParams)
     if (page === null) return reply(400, { error: BAD_CURSOR })
-    const rev = await store.currentRev()
+    const rev = await store.currentRev(postId)
     const { rows, hasOlder, hasNewer } = await store.listMessages(postId, page)
     const shown = await present(postId, rows)
     return reply(200, { messages: shown.messages, hasOlder, hasNewer, people: shown.people, rev })
@@ -234,7 +246,7 @@ export function createLibrariusHandler({ access, store, guild, links, importer, 
   async function changes(postId, url) {
     const since = parseSince(url.searchParams)
     if (since === null) return reply(400, { error: BAD_CURSOR })
-    const rev = await store.currentRev()
+    const rev = await store.currentRev(postId)
     // Stryker disable next-line EqualityOperator: at exactly the slack, both ways ask from 0
     const from = since > CHANGES_SLACK ? since - CHANGES_SLACK : 0n
     const found = await store.changes(postId, String(from), CHANGES_LIMIT)
@@ -277,7 +289,7 @@ export function createLibrariusHandler({ access, store, guild, links, importer, 
     if (!route) return reply(404, { error: 'Not found.' })
     if (!configured) return reply(503, { error: 'The Librarius is not configured.' })
     try {
-      const verdict = await access.resolve(request, { fresh: request.method !== 'GET' })
+      const verdict = await access.resolve(request, { fresh: false })
       if (!verdict) return reply(401, { error: 'Sign in with Discord.' })
       if (!verdict.read && !route.me) return reply(403, { error: 'Restricted to those who can read the Librarius in Discord.' })
       return await route.run(request, verdict, url)

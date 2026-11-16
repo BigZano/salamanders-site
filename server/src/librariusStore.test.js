@@ -1,7 +1,7 @@
 import { describe, it, expect, vi } from 'vitest'
 import * as fc from 'fast-check'
 import { createLibrariusStore } from './librariusStore.js'
-import { applyReaction } from './librariusParse.js'
+import { applyReaction, attachmentUrl } from './librariusParse.js'
 
 // The SQL itself is proven against real Postgres by the e2e stack. Here a recording pool pins what the store asks
 // for, in what order, with which parameters, and what it does on failure, as galleryStore.test.js does.
@@ -20,6 +20,14 @@ function fakePool(script = []) {
     return { rows: out }
   }
   return { pool: { query, connect: async () => ({ query, release }) }, log, release, sqls: () => log.map((l) => l.sql) }
+}
+
+// The statement a write takes its number of the sequence with, and a pool that hands the numbers out from 900, one per
+// ask, after whatever `script` answers first.
+const REV = "select nextval('librarius_rev') as rev"
+function revPool(script = []) {
+  let next = 900
+  return fakePool([...script, ['select nextval', () => [{ rev: String(next++) }]]])
 }
 
 // Invented ids, all in the 400-499 range. None of them is a real post, member or message.
@@ -211,6 +219,7 @@ describe('createLibrariusStore: ids', () => {
     ['listMessages after', (s, bad) => s.listMessages(POST, { after: bad, limit: 5 }), 'after', true],
     ['listMessages around', (s, bad) => s.listMessages(POST, { around: bad, limit: 5 }), 'around', true],
     ['changes', (s, bad) => s.changes(bad, '0', 200), 'postId'],
+    ['currentRev', (s, bad) => s.currentRev(bad), 'postId'],
     ['quotedMessages postId', (s, bad) => s.quotedMessages(bad, [MSG]), 'postId'],
     ['quotedMessages messageId', (s, bad) => s.quotedMessages(POST, [MSG, bad]), 'messageId'],
     ['setRead memberId', (s, bad) => s.setRead(bad, POST, MSG), 'memberId'],
@@ -221,7 +230,7 @@ describe('createLibrariusStore: ids', () => {
     ['setImportCursor postId', (s, bad) => s.setImportCursor(bad, MSG), 'postId'],
     ['setImportCursor messageId', (s, bad) => s.setImportCursor(POST, bad), 'messageId'],
     ['windowIds', (s, bad) => s.windowIds(bad, 10), 'postId'],
-    ['updateAttachmentUrls', (s, bad) => s.updateAttachmentUrls([{ id: bad, url: 'https://x.test/', expiresAt: null }]), 'attachment id'],
+    ['updateAttachmentUrls', (s, bad) => s.updateAttachmentUrls([{ id: bad, url: 'https://cdn.discordapp.com/attachments/1/2/f.png?ex=6540a0b3', expiresAt: null }]), 'attachment id'],
   ])('%s: a non-snowflake throws TypeError before any query', async (_, call, what, undefinedMeansNone) => {
     // An undefined cursor means none was given, so it is no bad id for those.
     for (const bad of BAD_IDS.filter((v) => !(undefinedMeansNone && v === undefined))) {
@@ -394,23 +403,23 @@ describe('deletePostsNotIn', () => {
 
 describe('upsertMessages', () => {
   const INSERT =
-    `insert into librarius_messages (id, post_id, author_id, author_name, author_avatar, webhook_id, kind, content, embeds, stickers, reactions, reply_to, created_at, edited_at) ` +
-    `select $1::bigint, $2::bigint, $3::bigint, $4::text, $5::text, $6::bigint, $7::smallint, $8::text, $9::jsonb, $10::jsonb, $11::jsonb, $12::bigint, $13::timestamptz, $14::timestamptz ` +
+    `insert into librarius_messages (id, post_id, author_id, author_name, author_avatar, webhook_id, kind, content, embeds, stickers, reactions, reply_to, created_at, edited_at, rev) ` +
+    `select $1::bigint, $2::bigint, $3::bigint, $4::text, $5::text, $6::bigint, $7::smallint, $8::text, $9::jsonb, $10::jsonb, $11::jsonb, $12::bigint, $13::timestamptz, $14::timestamptz, $15::bigint ` +
     `where exists (select 1 from librarius_posts where id = $2) ` +
     `on conflict (id) do update set author_id = excluded.author_id, author_name = excluded.author_name, author_avatar = excluded.author_avatar, ` +
     `webhook_id = excluded.webhook_id, kind = excluded.kind, content = excluded.content, embeds = excluded.embeds, stickers = excluded.stickers, ` +
-    `reactions = excluded.reactions, reply_to = excluded.reply_to, edited_at = excluded.edited_at, rev = nextval('librarius_rev') returning id`
+    `reactions = excluded.reactions, reply_to = excluded.reply_to, edited_at = excluded.edited_at, rev = excluded.rev returning id`
   const DELETE_ATTACHMENTS = 'delete from librarius_attachments where message_id = $1'
   const INSERT_ATTACHMENT =
     'insert into librarius_attachments (id, message_id, position, filename, content_type, size, width, height, url, proxy_url, expires_at) ' +
     'values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11) on conflict (id) do nothing'
 
   it('writes a message and replaces its attachments, in one transaction', async () => {
-    const { pool, log, release } = fakePool([['insert into librarius_messages', [{ id: MSG }]]])
+    const { pool, log, release } = revPool([['insert into librarius_messages', [{ id: MSG }]]])
     const m = message()
     expect(await store(pool).upsertMessages([m])).toBeUndefined()
-    expect(log.map((l) => l.sql)).toEqual(['begin', INSERT, DELETE_ATTACHMENTS, INSERT_ATTACHMENT, 'commit'])
-    expect(log[1].params).toEqual([
+    expect(log.map((l) => l.sql)).toEqual(['begin', REV, INSERT, DELETE_ATTACHMENTS, INSERT_ATTACHMENT, 'commit'])
+    expect(log[2].params).toEqual([
       MSG,
       POST,
       AUTHOR,
@@ -425,9 +434,10 @@ describe('upsertMessages', () => {
       null,
       '2026-11-02T18:30:00.123000+00:00',
       null,
+      '900',
     ])
-    expect(log[2].params).toEqual([MSG])
-    expect(log[3].params).toEqual([
+    expect(log[3].params).toEqual([MSG])
+    expect(log[4].params).toEqual([
       ATT,
       MSG,
       0,
@@ -443,38 +453,86 @@ describe('upsertMessages', () => {
     expect(release).toHaveBeenCalledTimes(1)
   })
 
-  it('stamps a new number on every write: an update takes the next number of the sequence, an insert the default', async () => {
-    const { pool, log } = fakePool([['insert into librarius_messages', [{ id: MSG }]]])
+  it('takes one number of the sequence for the whole transaction, as its first statement, and stamps it on an insert and on an update alike', async () => {
+    const { pool, log } = revPool([['insert into librarius_messages', [{ id: MSG }]]])
     await store(pool).upsertMessages([message()])
-    expect(log[1].sql).toContain("rev = nextval('librarius_rev')")
-    expect(log[1].sql).not.toContain('(id, post_id, author_id, author_name, author_avatar, webhook_id, kind, content, embeds, stickers, reactions, reply_to, created_at, edited_at, rev)')
+    expect(log.map((l) => l.sql).slice(0, 3)).toEqual(['begin', REV, INSERT])
+    expect(log[1].params).toBeUndefined()
+    expect(log[2].params[14]).toBe('900')
+    // The insert carries the number, and so does what a conflict updates; the statement asks the sequence for nothing.
+    expect(log[2].sql).toContain('edited_at, rev) select')
+    expect(log[2].sql).toContain('rev = excluded.rev returning id')
+    expect(log[2].sql).not.toContain('nextval')
+  })
+
+  it('stamps every message of a batch with the same number, from one ask of the sequence', async () => {
+    const { pool, log, sqls } = revPool([['insert into librarius_messages', [{ id: MSG }]]])
+    await store(pool).upsertMessages([message({ id: MSG }), message({ id: MSG_2 }), message({ id: MSG_3 })])
+    expect(sqls().filter((q) => q === REV)).toHaveLength(1)
+    const inserts = log.filter((l) => l.sql === INSERT)
+    expect(inserts.map((l) => l.params[0])).toEqual([MSG, MSG_2, MSG_3])
+    expect(inserts.map((l) => l.params[14])).toEqual(['900', '900', '900'])
+  })
+
+  it('takes a new number for each batch, and the batch is stamped with the number it was handed (property)', async () => {
+    await fc.assert(
+      fc.asyncProperty(fc.bigInt({ min: 1n, max: 9223372036854775000n }), fc.integer({ min: 1, max: 6 }), async (rev, count) => {
+        const { pool, log } = fakePool([
+          ['insert into librarius_messages', [{ id: MSG }]],
+          ['select nextval', [{ rev: String(rev) }]],
+        ])
+        await store(pool).upsertMessages(ids(FIRST, count).map((id) => message({ id })))
+        const inserts = log.filter((l) => l.sql === INSERT)
+        expect(inserts).toHaveLength(count)
+        expect(new Set(inserts.map((l) => l.params[14]))).toEqual(new Set([String(rev)]))
+        expect(log.filter((l) => l.sql === REV)).toHaveLength(1)
+      }),
+    )
+    const { pool, log } = revPool([['insert into librarius_messages', [{ id: MSG }]]])
+    await store(pool).upsertMessages([message()])
+    await store(pool).upsertMessages([message()])
+    expect(log.filter((l) => l.sql === INSERT).map((l) => l.params[14])).toEqual(['900', '901'])
+  })
+
+  it('takes no number when there is nothing to write', async () => {
+    const { pool, sqls } = revPool()
+    await store(pool).upsertMessages([])
+    expect(sqls()).toEqual([])
+  })
+
+  it('rolls back, and writes nothing, when the sequence cannot be asked', async () => {
+    const err = boom()
+    const { pool, sqls } = fakePool([['select nextval', err]])
+    await expect(store(pool).upsertMessages([message()])).rejects.toBe(err)
+    expect(sqls()).toEqual(['begin', REV, 'rollback'])
   })
 
   it('never moves a message to another post or rewrites when it was written', async () => {
-    const { pool, log } = fakePool([['insert into librarius_messages', [{ id: MSG }]]])
+    const { pool, log } = revPool([['insert into librarius_messages', [{ id: MSG }]]])
     await store(pool).upsertMessages([message()])
-    const update = log[1].sql.slice(log[1].sql.indexOf('do update set'))
+    const update = log[2].sql.slice(log[2].sql.indexOf('do update set'))
     expect(update).not.toContain('post_id')
     expect(update).not.toContain('created_at')
   })
 
   it('sends the lists as json text, never as a Postgres array', async () => {
-    const { pool, log } = fakePool([['insert into librarius_messages', [{ id: MSG }]]])
+    const { pool, log } = revPool([['insert into librarius_messages', [{ id: MSG }]]])
     await store(pool).upsertMessages([message({ embeds: [], stickers: [], reactions: [] })])
-    expect(log[1].params.slice(8, 11)).toEqual(['[]', '[]', '[]'])
+    expect(log[2].params.slice(8, 11)).toEqual(['[]', '[]', '[]'])
   })
 
   it('skips a message whose post is not stored: the insert answers nothing, so its attachments are left alone', async () => {
-    const { pool, sqls } = fakePool([['insert into librarius_messages', []]])
+    const { pool, sqls } = revPool([['insert into librarius_messages', []]])
     await store(pool).upsertMessages([message()])
-    expect(sqls()).toEqual(['begin', INSERT, 'commit'])
+    expect(sqls()).toEqual(['begin', REV, INSERT, 'commit'])
   })
 
   it('goes on with the next message after a skipped one, in the order given', async () => {
-    const { pool, log } = fakePool([['insert into librarius_messages', (p) => (p[0] === MSG ? [] : [{ id: p[0] }])]])
+    const { pool, log } = revPool([['insert into librarius_messages', (p) => (p[0] === MSG ? [] : [{ id: p[0] }])]])
     await store(pool).upsertMessages([message({ id: MSG }), message({ id: MSG_2, attachments: [attachment({ id: ATT_2 })] }), message({ id: MSG_3, attachments: [] })])
     expect(log.map((l) => [l.sql === INSERT ? 'message' : l.sql, l.params?.[0]])).toEqual([
       ['begin', undefined],
+      [REV, undefined],
       ['message', MSG],
       ['message', MSG_2],
       [DELETE_ATTACHMENTS, MSG_2],
@@ -486,26 +544,26 @@ describe('upsertMessages', () => {
   })
 
   it('drops the attachments of a message that has none now', async () => {
-    const { pool, sqls } = fakePool([['insert into librarius_messages', [{ id: MSG }]]])
+    const { pool, sqls } = revPool([['insert into librarius_messages', [{ id: MSG }]]])
     await store(pool).upsertMessages([message({ attachments: [] })])
-    expect(sqls()).toEqual(['begin', INSERT, DELETE_ATTACHMENTS, 'commit'])
+    expect(sqls()).toEqual(['begin', REV, INSERT, DELETE_ATTACHMENTS, 'commit'])
   })
 
   it('writes an attachment at each position it was given, one statement each, after the delete', async () => {
-    const { pool, log } = fakePool([['insert into librarius_messages', [{ id: MSG }]]])
+    const { pool, log } = revPool([['insert into librarius_messages', [{ id: MSG }]]])
     const second = attachment({ id: ATT_2, position: 1, contentType: null, width: null, height: null, proxyUrl: null, expiresAt: null })
     await store(pool).upsertMessages([message({ attachments: [attachment(), second] })])
-    expect(log.map((l) => l.sql)).toEqual(['begin', INSERT, DELETE_ATTACHMENTS, INSERT_ATTACHMENT, INSERT_ATTACHMENT, 'commit'])
-    expect(log[4].params).toEqual([ATT_2, MSG, 1, 'map.png', null, 2048, null, null, second.url, null, null])
+    expect(log.map((l) => l.sql)).toEqual(['begin', REV, INSERT, DELETE_ATTACHMENTS, INSERT_ATTACHMENT, INSERT_ATTACHMENT, 'commit'])
+    expect(log[5].params).toEqual([ATT_2, MSG, 1, 'map.png', null, 2048, null, null, second.url, null, null])
   })
 
   it('takes a reply and a webhook message', async () => {
-    const { pool, log } = fakePool([['insert into librarius_messages', [{ id: MSG }]]])
+    const { pool, log } = revPool([['insert into librarius_messages', [{ id: MSG }]]])
     await store(pool).upsertMessages([message({ webhookId: HOOK, replyTo: MSG_2, kind: 19, editedAt: '2026-11-02T19:00:00.000000+00:00' })])
-    expect(log[1].params[5]).toBe(HOOK)
-    expect(log[1].params[6]).toBe(19)
-    expect(log[1].params[11]).toBe(MSG_2)
-    expect(log[1].params[13]).toBe('2026-11-02T19:00:00.000000+00:00')
+    expect(log[2].params[5]).toBe(HOOK)
+    expect(log[2].params[6]).toBe(19)
+    expect(log[2].params[11]).toBe(MSG_2)
+    expect(log[2].params[13]).toBe('2026-11-02T19:00:00.000000+00:00')
   })
 
   it('sends nothing for an empty list: no transaction is opened', async () => {
@@ -521,28 +579,28 @@ describe('upsertMessages', () => {
     const KEEPING = INSERT.replace('reactions = excluded.reactions, ', '')
 
     it('leaves the stored reactions alone when the message exists, and still inserts them when it does not', async () => {
-      const { pool, log } = fakePool([['insert into librarius_messages', [{ id: MSG }]]])
+      const { pool, log } = revPool([['insert into librarius_messages', [{ id: MSG }]]])
       const m = message()
       expect(await store(pool).upsertMessages([m], { keepReactions: true })).toBeUndefined()
       expect(KEEPING).not.toBe(INSERT)
-      expect(log.map((l) => l.sql)).toEqual(['begin', KEEPING, DELETE_ATTACHMENTS, INSERT_ATTACHMENT, 'commit'])
-      expect(log[1].sql.slice(log[1].sql.indexOf('do update set'))).not.toContain('reactions')
-      expect(log[1].sql.slice(0, log[1].sql.indexOf('do update set'))).toContain('$11::jsonb')
-      expect(log[1].params[10]).toBe(JSON.stringify(m.reactions))
+      expect(log.map((l) => l.sql)).toEqual(['begin', REV, KEEPING, DELETE_ATTACHMENTS, INSERT_ATTACHMENT, 'commit'])
+      expect(log[2].sql.slice(log[2].sql.indexOf('do update set'))).not.toContain('reactions')
+      expect(log[2].sql.slice(0, log[2].sql.indexOf('do update set'))).toContain('$11::jsonb')
+      expect(log[2].params[10]).toBe(JSON.stringify(m.reactions))
     })
 
     it('changes nothing else about the write: the same parameters and the same stamp of a new number', async () => {
-      const keep = fakePool([['insert into librarius_messages', [{ id: MSG }]]])
-      const full = fakePool([['insert into librarius_messages', [{ id: MSG }]]])
+      const keep = revPool([['insert into librarius_messages', [{ id: MSG }]]])
+      const full = revPool([['insert into librarius_messages', [{ id: MSG }]]])
       await store(keep.pool).upsertMessages([message()], { keepReactions: true })
       await store(full.pool).upsertMessages([message()])
       expect(keep.log.map((l) => l.params)).toEqual(full.log.map((l) => l.params))
-      expect(keep.log[1].sql).toContain("rev = nextval('librarius_rev')")
-      expect(keep.log[1].sql).toContain('edited_at = excluded.edited_at')
+      expect(keep.log[2].sql).toContain('rev = excluded.rev')
+      expect(keep.log[2].sql).toContain('edited_at = excluded.edited_at')
     })
 
     it('applies to every message of a batch', async () => {
-      const { pool, log } = fakePool([['insert into librarius_messages', [{ id: MSG }]]])
+      const { pool, log } = revPool([['insert into librarius_messages', [{ id: MSG }]]])
       await store(pool).upsertMessages([message({ id: MSG }), message({ id: MSG_2 })], { keepReactions: true })
       expect(log.filter((l) => l.sql.startsWith('insert into librarius_messages')).map((l) => l.sql)).toEqual([KEEPING, KEEPING])
     })
@@ -550,14 +608,14 @@ describe('upsertMessages', () => {
     it.each([[undefined], [{}], [{ keepReactions: undefined }], [{ keepReactions: false }]])(
       'writes the reactions as before when the options are %j',
       async (options) => {
-        const { pool, log } = fakePool([['insert into librarius_messages', [{ id: MSG }]]])
+        const { pool, log } = revPool([['insert into librarius_messages', [{ id: MSG }]]])
         await store(pool).upsertMessages([message()], options)
-        expect(log[1].sql).toBe(INSERT)
+        expect(log[2].sql).toBe(INSERT)
       },
     )
 
     it.each([[1], [0], ['true'], [null], [{}], [[]]])('refuses %j, which is not true or false, before any query', async (bad) => {
-      const { pool, log } = fakePool([['insert into librarius_messages', [{ id: MSG }]]])
+      const { pool, log } = revPool([['insert into librarius_messages', [{ id: MSG }]]])
       await expect(store(pool).upsertMessages([message()], { keepReactions: bad })).rejects.toThrow('keepReactions must be true or false')
       expect(log).toEqual([])
     })
@@ -570,9 +628,9 @@ describe('upsertMessages', () => {
 
     it('rolls back and gives the error to the caller when the write fails', async () => {
       const err = boom()
-      const { pool, sqls } = fakePool([['insert into librarius_messages', err]])
+      const { pool, sqls } = revPool([['insert into librarius_messages', err]])
       await expect(store(pool).upsertMessages([message()], { keepReactions: true })).rejects.toBe(err)
-      expect(sqls()).toEqual(['begin', KEEPING, 'rollback'])
+      expect(sqls()).toEqual(['begin', REV, KEEPING, 'rollback'])
     })
   })
 
@@ -599,7 +657,7 @@ describe('upsertMessages', () => {
   })
 
   it('checks every message before it writes any: one bad message in a batch writes none', async () => {
-    const { pool, log } = fakePool([['insert into librarius_messages', [{ id: MSG }]]])
+    const { pool, log } = revPool([['insert into librarius_messages', [{ id: MSG }]]])
     await expect(store(pool).upsertMessages([message(), message({ id: MSG_2, authorId: 'x' })])).rejects.toThrow(TypeError)
     expect(log).toEqual([])
   })
@@ -621,12 +679,12 @@ describe('upsertMessages', () => {
   })
 
   it.each([
-    ['the message insert', 'insert into librarius_messages', ['begin', INSERT, 'rollback']],
-    ['the attachment delete', 'delete from librarius_attachments', ['begin', INSERT, DELETE_ATTACHMENTS, 'rollback']],
-    ['an attachment insert', 'insert into librarius_attachments', ['begin', INSERT, DELETE_ATTACHMENTS, INSERT_ATTACHMENT, 'rollback']],
+    ['the message insert', 'insert into librarius_messages', ['begin', REV, INSERT, 'rollback']],
+    ['the attachment delete', 'delete from librarius_attachments', ['begin', REV, INSERT, DELETE_ATTACHMENTS, 'rollback']],
+    ['an attachment insert', 'insert into librarius_attachments', ['begin', REV, INSERT, DELETE_ATTACHMENTS, INSERT_ATTACHMENT, 'rollback']],
   ])('rolls everything back when %s fails, and gives the error to the caller', async (_, fragment, expected) => {
     const err = boom()
-    const { pool, sqls, release } = fakePool([
+    const { pool, sqls, release } = revPool([
       [fragment, err],
       ['insert into librarius_messages', [{ id: MSG }]],
     ])
@@ -636,16 +694,16 @@ describe('upsertMessages', () => {
   })
 
   it('sends the same statements whatever the text in the messages, and the text only as parameters (property)', async () => {
-    const base = fakePool([['insert into librarius_messages', [{ id: MSG }]]])
+    const base = revPool([['insert into librarius_messages', [{ id: MSG }]]])
     await store(base.pool).upsertMessages([message()])
     await fc.assert(
       fc.asyncProperty(fc.string(), fc.string(), fc.string(), async (name, content, file) => {
-        const { pool, log } = fakePool([['insert into librarius_messages', [{ id: MSG }]]])
+        const { pool, log } = revPool([['insert into librarius_messages', [{ id: MSG }]]])
         await store(pool).upsertMessages([message({ authorName: name, content, attachments: [attachment({ filename: file })] })])
         expect(log.map((l) => l.sql)).toEqual(base.log.map((l) => l.sql))
-        expect(log[1].params[3]).toBe(name)
-        expect(log[1].params[7]).toBe(content)
-        expect(log[3].params[3]).toBe(file)
+        expect(log[2].params[3]).toBe(name)
+        expect(log[2].params[7]).toBe(content)
+        expect(log[4].params[3]).toBe(file)
       }),
     )
   })
@@ -653,18 +711,39 @@ describe('upsertMessages', () => {
 
 describe('deleteMessages', () => {
   it('notes each message that is stored, then deletes them, in one transaction', async () => {
-    const { pool, log, release } = fakePool()
+    const { pool, log, release } = revPool()
     expect(await store(pool).deleteMessages([MSG, MSG_2])).toBeUndefined()
     expect(log).toEqual([
       { sql: 'begin', params: undefined },
+      { sql: REV, params: undefined },
       {
-        sql: 'insert into librarius_tombstones (message_id, post_id) select id, post_id from librarius_messages where id = any($1::bigint[])',
-        params: [[MSG, MSG_2]],
+        sql: 'insert into librarius_tombstones (message_id, post_id, rev) select id, post_id, $2::bigint from librarius_messages where id = any($1::bigint[])',
+        params: [[MSG, MSG_2], '900'],
       },
       { sql: 'delete from librarius_messages where id = any($1::bigint[])', params: [[MSG, MSG_2]] },
       { sql: 'commit', params: undefined },
     ])
     expect(release).toHaveBeenCalledTimes(1)
+  })
+
+  it('stamps every note of the batch with the one number it took, whatever the batch (property)', async () => {
+    await fc.assert(
+      fc.asyncProperty(fc.bigInt({ min: 1n, max: 9223372036854775000n }), fc.integer({ min: 1, max: 20 }), async (rev, count) => {
+        const { pool, log } = fakePool([['select nextval', [{ rev: String(rev) }]]])
+        await store(pool).deleteMessages(ids(FIRST, count))
+        expect(log.filter((l) => l.sql === REV)).toHaveLength(1)
+        const notes = log.filter((l) => l.sql.startsWith('insert into librarius_tombstones'))
+        expect(notes).toHaveLength(1)
+        expect(notes[0].params).toEqual([ids(FIRST, count), String(rev)])
+      }),
+    )
+  })
+
+  it('takes a new number for each batch', async () => {
+    const { pool, log } = revPool()
+    await store(pool).deleteMessages([MSG])
+    await store(pool).deleteMessages([MSG_2])
+    expect(log.filter((l) => l.sql.startsWith('insert into librarius_tombstones')).map((l) => l.params[1])).toEqual(['900', '901'])
   })
 
   it('sends nothing for an empty list: no transaction is opened', async () => {
@@ -681,11 +760,12 @@ describe('deleteMessages', () => {
   })
 
   it.each([
-    ['the note', 'insert into librarius_tombstones', ['begin', has('insert into librarius_tombstones'), 'rollback']],
-    ['the delete', 'delete from librarius_messages', ['begin', has('insert into librarius_tombstones'), has('delete from librarius_messages'), 'rollback']],
+    ['the sequence', 'select nextval', ['begin', REV, 'rollback']],
+    ['the note', 'insert into librarius_tombstones', ['begin', REV, has('insert into librarius_tombstones'), 'rollback']],
+    ['the delete', 'delete from librarius_messages', ['begin', REV, has('insert into librarius_tombstones'), has('delete from librarius_messages'), 'rollback']],
   ])('rolls back when %s fails, so no message is noted without being deleted', async (_, fragment, expected) => {
     const err = boom()
-    const { pool, sqls, release } = fakePool([[fragment, err]])
+    const { pool, sqls, release } = revPool([[fragment, err]])
     await expect(store(pool).deleteMessages([MSG])).rejects.toBe(err)
     expect(sqls()).toEqual(expected)
     expect(release).toHaveBeenCalledTimes(1)
@@ -1495,21 +1575,29 @@ describe('quotedMessages', () => {
 })
 
 describe('currentRev', () => {
-  it('answers the highest number any stored message or delete note holds, so nothing in flight is skipped', async () => {
+  const SQL =
+    'select greatest(coalesce((select max(rev) from librarius_messages where post_id = $1), 0), coalesce((select max(rev) from librarius_tombstones where post_id = $1), 0)) as rev'
+
+  it("answers the highest number any stored message or delete note of the post holds, so nothing in flight is skipped, and asks for that post's alone", async () => {
     const { pool, log, release } = fakePool([['select greatest', [{ rev: '4812' }]]])
-    expect(await store(pool).currentRev()).toBe('4812')
-    expect(log).toEqual([
-      {
-        sql: 'select greatest(coalesce((select max(rev) from librarius_messages), 0), coalesce((select max(rev) from librarius_tombstones), 0)) as rev',
-        params: undefined,
-      },
-    ])
+    expect(await store(pool).currentRev(POST)).toBe('4812')
+    expect(log).toEqual([{ sql: SQL, params: [POST] }])
     expect(release).not.toHaveBeenCalled()
   })
 
-  it('answers 0 for a store with nothing in it, as text', async () => {
+  it('asks for the post it was given, whichever it is (property)', async () => {
+    await fc.assert(
+      fc.asyncProperty(fc.bigInt({ min: 10n ** 16n, max: 9223372036854775807n }), async (id) => {
+        const { pool, log } = fakePool([['select greatest', [{ rev: '1' }]]])
+        await store(pool).currentRev(String(id))
+        expect(log.map((l) => l.params)).toEqual([[String(id)]])
+      }),
+    )
+  })
+
+  it('answers 0 for a post with nothing in it, as text', async () => {
     const { pool } = fakePool([['greatest', [{ rev: '0' }]]])
-    expect(await store(pool).currentRev()).toBe('0')
+    expect(await store(pool).currentRev(POST)).toBe('0')
   })
 })
 
@@ -1797,10 +1885,75 @@ describe('updateAttachmentUrls', () => {
     expect(log).toEqual([])
   })
 
-  it.each([undefined, null, '', 5, {}, []])('refuses a url of %j before any query', async (bad) => {
+  const NOT_CDN = "url must be a link on Discord's CDN attachments path"
+
+  it.each(
+    labelled([
+      undefined,
+      null,
+      '',
+      5,
+      {},
+      [],
+      ' ',
+      'x',
+      'https://x.test/',
+      'https://cdn.discordapp.com/attachments',
+      'https://cdn.discordapp.com/',
+      'http://cdn.discordapp.com/attachments/1/2/f.png?ex=6540a0b3',
+      'HTTPS://CDN.DISCORDAPP.COM/attachments/1/2/f.png?ex=6540a0b3',
+      ' https://cdn.discordapp.com/attachments/1/2/f.png?ex=6540a0b3',
+      'https://cdn.discordapp.com.evil.test/attachments/1/2/f.png?ex=6540a0b3',
+      'https://cdn.discordapp.com@evil.test/attachments/1/2/f.png',
+      'https://evil.test/https://cdn.discordapp.com/attachments/1/2/f.png',
+      'https://cdn.discordapp.com:444/attachments/1/2/f.png',
+      'https://cdn.discordapp.com/attachments/../avatars/1/f.png',
+      'https://cdn.discordapp.com/attachments/%2e%2e/avatars/1/f.png',
+      'https://cdn.discordapp.com/attachments/1/../../avatars/1/f.png',
+      'https://cdn.discordapp.com/avatars/1/f.png',
+      'https://media.discordapp.net/attachments/1/2/f.png?ex=6540a0b3',
+      'ftp://cdn.discordapp.com/attachments/1/2/f.png',
+      'javascript:alert(1)',
+      'data:text/html,x',
+      '//cdn.discordapp.com/attachments/1/2/f.png',
+    ]),
+  )('refuses a url of %s before any query: only a link on the CDN attachments path may be stored', async (_, bad) => {
     const { pool, log } = fakePool()
-    await expect(store(pool).updateAttachmentUrls([{ id: ATT, url: url(1), expiresAt: null }, { id: ATT_2, url: bad, expiresAt: null }])).rejects.toThrow('url must be a non-empty string')
+    const failed = store(pool).updateAttachmentUrls([{ id: ATT, url: url(1), expiresAt: null }, { id: ATT_2, url: bad, expiresAt: null }])
+    await expect(failed).rejects.toThrow(TypeError)
+    await expect(failed).rejects.toThrow(NOT_CDN)
     expect(log).toEqual([])
+  })
+
+  it('takes a link on the CDN attachments path, whatever follows it', async () => {
+    for (const good of [url(1), 'https://cdn.discordapp.com/attachments/1/2/f.png', 'https://cdn.discordapp.com/attachments/1/2/f%20g.png?ex=6540a0b3&is=1&hm=2#top', 'https://cdn.discordapp.com/attachments/']) {
+      const { pool, log } = fakePool()
+      await store(pool).updateAttachmentUrls([{ id: ATT, url: good, expiresAt: null }])
+      expect(log).toHaveLength(1)
+      expect(log[0].params[1]).toEqual([good])
+    }
+  })
+
+  it('judges a link as parseMessage does, whatever it holds (property)', async () => {
+    await fc.assert(
+      fc.asyncProperty(fc.constantFrom('https://cdn.discordapp.com/attachments/', 'https://cdn.discordapp.com/', 'https://x.test/'), fc.string({ maxLength: 40 }), async (head, tail) => {
+        const link = head + tail
+        const { pool, log } = fakePool()
+        const done = store(pool).updateAttachmentUrls([{ id: ATT, url: link, expiresAt: null }])
+        if (attachmentUrl(link) === null) {
+          await expect(done).rejects.toThrow(NOT_CDN)
+          expect(log).toEqual([])
+        } else {
+          await done
+          expect(log).toHaveLength(1)
+        }
+      }),
+    )
+  })
+
+  it('checks the id of an entry before its link', async () => {
+    const { pool } = fakePool()
+    await expect(store(pool).updateAttachmentUrls([{ id: 'x', url: 'https://x.test/', expiresAt: null }])).rejects.toThrow('attachment id must be a snowflake')
   })
 
   it.each([undefined, 'soon', NaN, {}, true])('refuses an expiry of %j (null is allowed, undefined is not) before any query', async (bad) => {
@@ -1850,11 +2003,11 @@ describe('every statement', () => {
       (s) => s.upsertPost(post({ title: hostile, tagIds: [hostile] })),
       (s) => s.upsertMessages([message({ authorName: hostile, content: hostile, authorAvatar: hostile, attachments: [attachment({ filename: hostile, url: hostile })] })]),
       (s) => s.adjustReaction(MSG, { id: null, name: 'x' }, 1),
-      (s) => s.updateAttachmentUrls([{ id: ATT, url: hostile, expiresAt: null }]),
+      (s) => s.updateAttachmentUrls([{ id: ATT, url: `https://cdn.discordapp.com/attachments/${hostile}`, expiresAt: null }]),
       (s) => s.setSync({ last_error: hostile }),
     ]
     for (const call of calls) {
-      const { pool, log } = fakePool([
+      const { pool, log } = revPool([
         ['insert into librarius_messages', [{ id: MSG }]],
         ['select reactions', [{ reactions: [] }]],
       ])
