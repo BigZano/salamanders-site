@@ -102,15 +102,17 @@ services:
   # this one and counts what the policy refuses. The builds API's address is invented (an https origin, which the policy takes
   # for its connect-src, and which the spec answers itself), so nothing here reaches the real api or the internet. It builds
   # into /tmp, leaving the repository as it was, and after `web` has installed the packages they both read.
+  # Like `playwright`, it shares web's network namespace: the browser then loads it as http://localhost:4173, a secure context,
+  # which WebCrypto (the Legion Archive's decryption) needs. It has no name of its own there, and listens on a port web does not.
   web-prod:
     image: oven/bun:1.4.4-alpine
     working_dir: /app
+    network_mode: service:web
     volumes:
       - ../:/app
     command: sh -c "bun run build -- --outDir /tmp/e2e-dist --emptyOutDir && bun run preview -- --outDir /tmp/e2e-dist --host 0.0.0.0 --port 4173 --strictPort"
     environment:
       VITE_BUILDS_API_URL: https://api.e2e.invalid
-      VITE_ALLOWED_HOSTS: web-prod
       # The same throwaway archive as `web`, which sealed it before it came up.
       ARCHIVE_LOCK: e2e/.archive/lock.json
       VITE_ARCHIVE_BASE: /archive-e2e/

@@ -8,8 +8,12 @@ import { test, expect } from '@playwright/test'
 // (...410) and does all its writing in the archived one (...411), so this file may read the active post and post into it, and
 // must not count anything in the archived one. The active post starts with 230 messages: its own and 229 replies.
 //
+// Nothing leaves the stack: the page may reach the site, the api and the mock, and any other address (the CDN links of the
+// attachments the mock hands out, say) is refused before it goes anywhere.
+//
 // The librarian has read nothing when the run begins, so the first opening of the active post is the newest page; the tests
-// run in order, and once the librarian has read to the newest message a later opening is around that message instead.
+// run in order, and once the librarian has read something a later opening is around the message read to instead (the live test
+// sets that to the newest message itself, so that it does not depend on what the page happened to have in view).
 const API = process.env.API_URL || 'http://api:8787'
 const MOCK = process.env.DISCORD_MOCK_URL || 'http://discord-mock:4400'
 
@@ -40,6 +44,28 @@ async function lastRead(request) {
 test.describe('Librarius pages', () => {
   test.describe.configure({ mode: 'serial' })
 
+  // The api is importing the forum when the stack comes up, and the pages answer "being brought over" until it is done.
+  test.beforeAll(async ({ playwright }) => {
+    test.setTimeout(90_000)
+    const request = await playwright.request.newContext()
+    try {
+      const done = async () => {
+        const res = await request.get(`${API}/librarius/me`, { headers: { Authorization: `Bearer ${LIBRARIAN}` } })
+        return res.status() === 200 && (await res.json()).ready
+      }
+      await expect.poll(done, { timeout: 75_000, intervals: [500], message: 'the import is done' }).toBe(true)
+    } finally {
+      await request.dispose()
+    }
+  })
+
+  test.beforeEach(async ({ context }) => {
+    await context.route(
+      (url) => !['localhost', 'api', 'discord-mock'].includes(url.hostname),
+      (route) => route.abort('failed'),
+    )
+  })
+
   test('a reader without the Legion role gets the Reliquarium with the Librarius tab, and no other', async ({ page }) => {
     await signIn(page, LIBRARIAN)
     // The nav offers the Reliquarium, and none of the member pages that the Legion role opens.
@@ -64,6 +90,8 @@ test.describe('Librarius pages', () => {
     await expect(page.getByText('Restricted to the XVIIIth Legion.')).toBeVisible()
     await expect(page.locator('.rq-tabs')).toHaveCount(0)
     await expect(page.locator('.lb-topics')).toHaveCount(0)
+    // Said again now that the page has answered: the link was absent before sign-in settled, and must not have come back since.
+    await expect(reliquariumLink(page)).toHaveCount(0)
     // A link straight to a post says no all the same.
     await page.goto(`/reliquarium/librarius/${ACTIVE}`)
     await expect(page.getByText('Restricted to the XVIIIth Legion.')).toBeVisible()
@@ -126,9 +154,12 @@ test.describe('Librarius pages', () => {
     const quoting = page.locator('.lb-msg', { hasText: 'E2E message 228 quoting message 3' })
     await expect(quoting.locator('.lb-reply')).toContainText('replying to E2E Archivist')
     await expect(quoting.locator('.lb-reply-quote')).toHaveText('E2E message 3')
-    // An attachment that is not on Discord's CDN never reached the page.
-    await expect(page.locator('.lb-msg', { hasText: 'E2E message 227 with an attachment' })).toBeVisible()
-    await expect(page.locator('.lb-attachment')).toHaveCount(0)
+    // An attachment that is not on Discord's CDN never reached the page, and one that is, though its link was about to lapse, did.
+    const offCdn = page.locator('.lb-msg', { hasText: 'E2E message 227 with an attachment' })
+    await expect(offCdn).toBeVisible()
+    await expect(offCdn.locator('.lb-attachment')).toHaveCount(0)
+    await expect(page.locator('.lb-msg', { hasText: 'E2E message 226 with an attachment' }).locator('.lb-attachment')).toHaveCount(1)
+    await expect(page.locator('.lb-attachment')).toHaveCount(1)
 
     const older = page.getByRole('button', { name: 'Load older' })
     await older.click()
@@ -147,7 +178,8 @@ test.describe('Librarius pages', () => {
     expect(ids[0]).toBe(`m-${ACTIVE}`)
     const numbers = ids.map((id) => BigInt(id.slice(2)))
     expect(numbers).toEqual([...numbers].sort((a, b) => (a < b ? -1 : 1)))
-    await expect(messages.nth(1)).toContainText('E2E message 1')
+    // The text of the message itself, whole: "E2E message 1", and not one of the many (10, 11, 100...) that start with it.
+    await expect(messages.nth(1).locator('.lb-body')).toHaveText('E2E message 1')
 
     // Reading it through marks it read: the browser's PUT is allowed to the api from the site's address, and the api keeps it.
     await expect.poll(() => lastRead(request), { timeout: 15_000, message: 'the page reports what it was read to' }).not.toBeNull()
@@ -156,24 +188,42 @@ test.describe('Librarius pages', () => {
 
   test('a message posted in Discord appears on the open post within 15 seconds', async ({ page, request }) => {
     test.setTimeout(90_000)
-    // The mock sends it down the gateway, and the api stores it; the page asks for what changed every 10 seconds.
-    await expect
-      .poll(async () => (await (await request.get(`${MOCK}/__test/librarius/gateway`)).json()).ready, { timeout: 30_000, message: 'the api is on the gateway' })
-      .toBeGreaterThan(0)
+    // A post opens around the message the reader has read to. The page's own report of that is whatever was in view when what was in
+    // view last changed, which after the test above is among the oldest messages, so it is set here to the newest message: the page
+    // opens at the end of the post, as a reader who is up to date does, and takes a new message in. (A post opened with newer
+    // messages beyond the page holds a gap, and would not.)
+    const newestPage = await request.get(`${API}/librarius/posts/${ACTIVE}/messages?limit=1`, { headers: { Authorization: `Bearer ${LIBRARIAN}` } })
+    const [newest] = (await newestPage.json()).messages
+    const marked = await request.put(`${API}/librarius/posts/${ACTIVE}/read`, { headers: { Authorization: `Bearer ${LIBRARIAN}` }, data: { messageId: newest.id } })
+    expect(marked.status()).toBe(204)
 
     await signIn(page, LIBRARIAN)
     await page.goto(`/reliquarium/librarius/${ACTIVE}`)
     const messages = page.locator('.lb-thread .lb-msg')
     await expect(messages.first()).toHaveAttribute('id', `m-${ACTIVE}`)
+    await expect(messages.last()).toHaveAttribute('id', `m-${newest.id}`)
+    await expect(page.getByRole('button', { name: 'Load newer' })).toHaveCount(0)
     const held = await messages.count()
 
+    // The mock sends it down the gateway, and the api stores it; the page asks for what changed every 10 seconds. The gateway
+    // may be down for a few seconds when it is sent: librarius-api.spec.js, in another worker, drops it to test the catch-up. A
+    // message sent then is not told to the api at all, and comes back only when the api has reconnected and caught up, and the
+    // page has polled: so the mock counts the drops, and a drop that came before the message was posted is one it is told of.
+    const gateway = async () => (await request.get(`${MOCK}/__test/librarius/gateway`)).json()
+    let before
+    await expect
+      .poll(async () => ((before = await gateway()).ready), { timeout: 30_000, message: 'the api is on the gateway' })
+      .toBeGreaterThan(0)
+
     const text = `E2E browser live message ${RUN}`
-    // The Scribe's, so it does not sit under the Archivist's reply 229 as part of the same run of messages, with no name over it.
+    // By the Scribe, one of the two who wrote the seeded messages.
     const posted = await request.post(`${MOCK}/__test/librarius/message`, { data: { post: ACTIVE, content: text, authorId: '200000000000000440' } })
     expect(posted.status()).toBe(200)
+    const dropped = (await gateway()).drops !== before.drops
     const live = page.locator('.lb-msg', { hasText: text })
-    await expect(live).toBeVisible({ timeout: 15_000 })
-    await expect(live).toContainText('E2E Scribe')
+    // 15 seconds: the page's poll (10) and what the api needs. After a drop: 3 down, a backoff of up to 4, the catch-up run, and a poll.
+    await expect(live).toBeVisible({ timeout: dropped ? 30_000 : 15_000 })
+    await expect(live.locator('.lb-body')).toHaveText(text)
     await expect(messages).toHaveCount(held + 1)
   })
 })

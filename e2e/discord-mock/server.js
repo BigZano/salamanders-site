@@ -290,6 +290,7 @@ const VIEW_CHANNEL = String(1n << 10n)
 // where a forum post's id is the id of its opening message), and the numbered replies that are not plain text.
 const ACTIVE_MESSAGES = 230
 const ATTACHMENT_REPLY = 227
+const EXPIRING_REPLY = 226
 const QUOTING_REPLY = 228
 const QUOTED_REPLY = 3
 const SNOWFLAKE = /^\d{17,20}$/
@@ -331,7 +332,27 @@ function addPost({ id, title, archived, tags, createdAt, archivedAt }) {
   forumMessages.set(id, [])
 }
 
-/** Stores a message in a post, as Discord would hold it, and → the message. A later one always has a larger id. */
+/**
+ * An attachment as Discord's CDN would have it, its signed link lapsing in two minutes: the api renews any link that lapses within
+ * five when it reads one, asking /v10/attachments/refresh-urls, so this one is renewed the first time a reader sees it.
+ */
+function expiringCdnAttachment(filename) {
+  const id = snowflake()
+  const ex = Math.floor((Date.now() + 120_000) / 1000).toString(16)
+  return {
+    id,
+    filename,
+    size: FIXTURES['art.png'].bytes.length,
+    content_type: FIXTURES['art.png'].type,
+    url: `https://cdn.discordapp.com/attachments/200000000000000450/${id}/${filename}?ex=${ex}&is=e2e&hm=e2e`,
+  }
+}
+
+/**
+ * Stores a message in a post, as Discord would hold it, and → the message. A later one always has a larger id. An attachment is
+ * the name of a file in ./fixtures, which is then at the mock's own address (not Discord's CDN, so the api must leave it out of
+ * what it keeps), or an attachment made as Discord would.
+ */
 function storeForumMessage(postId, { id = snowflake(), authorId, content, replyTo = null, attachments = [], at = new Date() }) {
   const message = {
     id,
@@ -341,15 +362,18 @@ function storeForumMessage(postId, { id = snowflake(), authorId, content, replyT
     timestamp: at.toISOString(),
     edited_timestamp: null,
     author: authorOf(authorId),
-    attachments: attachments.map((name) => ({
-      id: snowflake(),
-      filename: name,
-      size: FIXTURES[name].bytes.length,
-      content_type: FIXTURES[name].type,
-      // On the mock's own host, not Discord's CDN: the api must leave it out of what it keeps.
-      url: `${SELF}/cdn/${name}`,
-      proxy_url: `${SELF}/cdn/${name}`,
-    })),
+    attachments: attachments.map((a) =>
+      typeof a !== 'string'
+        ? a
+        : {
+            id: snowflake(),
+            filename: a,
+            size: FIXTURES[a].bytes.length,
+            content_type: FIXTURES[a].type,
+            url: `${SELF}/cdn/${a}`,
+            proxy_url: `${SELF}/cdn/${a}`,
+          },
+    ),
     embeds: [],
     reactions: [],
     ...(replyTo === null ? {} : { message_reference: { message_id: replyTo, channel_id: postId } }),
@@ -359,7 +383,8 @@ function storeForumMessage(postId, { id = snowflake(), authorId, content, replyT
 }
 
 // The active post: 230 messages (its own, then 229 replies), a day or so old, one a minute. Reply 3 is quoted by reply 228,
-// which is on the newest page while its target is far off it, and reply 227 carries an attachment of the mock's own host.
+// which is on the newest page while its target is far off it, reply 227 carries an attachment of the mock's own host (which the
+// api leaves out) and reply 226 one of Discord's CDN whose link is about to lapse (which the api keeps, and renews).
 {
   const MINUTE = 60_000
   const first = Date.now() - ACTIVE_MESSAGES * MINUTE
@@ -380,12 +405,15 @@ function storeForumMessage(postId, { id = snowflake(), authorId, content, replyT
         ? { id: ACTIVE_POST, authorId, content: 'E2E opening message', at }
         : n === ATTACHMENT_REPLY
           ? { authorId, content: `E2E message ${n} with an attachment on the mock's own host`, attachments: ['art.png'], at }
-          : n === QUOTING_REPLY
-            ? { authorId, content: `E2E message ${n} quoting message ${QUOTED_REPLY}`, replyTo: byNumber[QUOTED_REPLY].id, at }
-            : { authorId, content: `E2E message ${n}`, at }
+          : n === EXPIRING_REPLY
+            ? { authorId, content: `E2E message ${n} with an attachment on Discord's CDN`, attachments: [expiringCdnAttachment('e2e-expiring.png')], at }
+            : n === QUOTING_REPLY
+              ? { authorId, content: `E2E message ${n} quoting message ${QUOTED_REPLY}`, replyTo: byNumber[QUOTED_REPLY].id, at }
+              : { authorId, content: `E2E message ${n}`, at }
     byNumber.push(storeForumMessage(ACTIVE_POST, made))
   }
-  // The archived post: its own message and two replies.
+  // The archived post: its own message and two replies, the last with a picture of Discord's CDN whose link is about to lapse, which
+  // the topic list shows as the post's thumbnail (and renews).
   const archivedAt = new Date(Date.now() - 86_400_000)
   addPost({
     id: ARCHIVED_POST,
@@ -405,6 +433,7 @@ function storeForumMessage(postId, { id = snowflake(), authorId, content, replyT
     storeForumMessage(ARCHIVED_POST, {
       authorId: ARCHIVIST_ID,
       content: `E2E archived reply ${n}`,
+      attachments: n === 2 ? [expiringCdnAttachment('e2e-thumbnail.png')] : [],
       at: new Date(archivedAt.getTime() - (3 - n) * MINUTE),
     })
   }
@@ -424,6 +453,9 @@ const FORUM_OBJECT = {
   ],
   available_tags: [{ id: FORUM_TAG, name: 'E2E Tag', moderated: false, emoji_id: null, emoji_name: null }],
 }
+
+// The links the api has asked to have signed again (POST /v10/attachments/refresh-urls), in the order asked.
+const refreshesAsked = []
 
 const GUILD_EMOJI = [{ id: CUSTOM_EMOJI, name: 'e2e_aquila', animated: false, available: true }]
 
@@ -465,6 +497,9 @@ function findForumMessage(id) {
 
 // Until this time the gateway refuses a connection (the drop hook).
 let gatewayDownUntil = 0
+// How many times the gateway has been dropped (the drop hook): a spec that waits for a message to come down it can tell that a
+// drop in the meantime was the reason the message did not.
+let gatewayDrops = 0
 const sockets = new Set()
 const send = (socket, frame) => socket.send(JSON.stringify(frame))
 // Each socket numbers its own dispatches, from 1, as Discord's sequence does for a session.
@@ -533,7 +568,11 @@ async function librariusHook(request, url) {
   if (!pathname.startsWith('/__test/librarius/')) return null
 
   if (pathname === '/__test/librarius/gateway' && request.method === 'GET') {
-    return withCors(Response.json({ ready: readySockets() }))
+    return withCors(Response.json({ ready: readySockets(), drops: gatewayDrops }))
+  }
+  // Every link the api has asked to have signed again, in the order asked.
+  if (pathname === '/__test/librarius/refreshes' && request.method === 'GET') {
+    return withCors(Response.json({ asked: refreshesAsked }))
   }
   if (request.method !== 'POST') return null
   const body = await request.json().catch(() => null)
@@ -607,6 +646,7 @@ async function librariusHook(request, url) {
     const downMs = body?.downMs
     if (!Number.isSafeInteger(downMs) || downMs < 0) return bad('Need downMs, a whole number of milliseconds.')
     gatewayDownUntil = Date.now() + downMs
+    gatewayDrops += 1
     const closing = [...sockets]
     sockets.clear()
     for (const socket of closing) socket.close(4000, 'e2e drop')
@@ -756,6 +796,7 @@ Bun.serve({
       if (!Array.isArray(body?.attachment_urls) || !body.attachment_urls.every((u) => typeof u === 'string')) {
         return withCors(Response.json({ message: 'Invalid Form Body', code: 50035 }, { status: 400 }))
       }
+      refreshesAsked.push(...body.attachment_urls)
       const pairs = body.attachment_urls.flatMap((original) => {
         const refreshed = refreshedLink(original)
         return refreshed === null ? [] : [{ original, refreshed }]

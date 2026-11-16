@@ -74,6 +74,13 @@ async function everyMessage(request, postId) {
 
 const newest = async (request, postId) => (await json(request, `/librarius/posts/${postId}/messages`)).messages
 
+/** Every link the api has asked the mock (Discord) to sign again, in the order asked. */
+const refreshesAsked = async (request) => (await (await request.get(`${MOCK}/__test/librarius/refreshes`)).json()).asked
+/** The `ex` of a signed Discord link: when it lapses, in seconds. */
+const lapse = (link) => Number.parseInt(new URL(link).searchParams.get('ex'), 16)
+const MINUTE = 60_000
+const HOUR = 60 * MINUTE
+
 test.describe('Librarius API', () => {
   test.describe.configure({ mode: 'serial' })
 
@@ -190,6 +197,47 @@ test.describe('Librarius API', () => {
     expect(raw.attachments[0].url.startsWith(`${MOCK}/cdn/`)).toBe(true)
   })
 
+  test('an attachment on the CDN whose link is about to lapse is kept, and its link renewed through Discord', async ({ request }) => {
+    const sent = (await newest(request, ACTIVE)).find((m) => m.content.startsWith('E2E message 226 '))
+    expect(sent, 'the message with the expiring attachment is on the newest page').toBeTruthy()
+    // Kept: it is on Discord's CDN attachments path, which is the allowlist (unlike the one on the mock's own host, above).
+    expect(sent.attachments).toHaveLength(1)
+    const [kept] = sent.attachments
+    expect(kept).toMatchObject({ filename: 'e2e-expiring.png', contentType: 'image/png' })
+    expect(kept.url.startsWith('https://cdn.discordapp.com/attachments/')).toBe(true)
+
+    // Discord's own copy lapses within five minutes (the mock made it so, two minutes after it began), so reading it asked Discord
+    // for a new link, and what came back is what the page is given: a day ahead, and not the link Discord held.
+    const raw = await (await request.get(`${MOCK}/v10/channels/${ACTIVE}/messages/${sent.id}`)).json()
+    const old = raw.attachments[0].url
+    expect(lapse(old) * 1000).toBeLessThan(Date.now() + 5 * MINUTE)
+    expect(lapse(kept.url)).toBeGreaterThan(lapse(old))
+    expect(lapse(kept.url) * 1000).toBeGreaterThan(Date.now() + HOUR)
+    const asked = await refreshesAsked(request)
+    expect(asked, 'the api asked Discord to sign the old link again').toContain(old)
+
+    // Stored: read again, it is the same link, and Discord is not asked about it again, since it no longer lapses within five minutes.
+    const askedOfIt = asked.filter((link) => link === old).length
+    const again = (await newest(request, ACTIVE)).find((m) => m.id === sent.id)
+    expect(again.attachments[0].url).toBe(kept.url)
+    expect((await refreshesAsked(request)).filter((link) => link === old).length).toBe(askedOfIt)
+  })
+
+  test('the topic list renews the link of a post\'s thumbnail, and says when the new one lapses', async ({ request }) => {
+    // The archived post's newest message has a picture whose link is about to lapse, and no one need have opened the post.
+    const { posts } = await json(request, '/librarius/posts')
+    const { latest } = posts.find((p) => p.id === ARCHIVED)
+    expect(latest.content).toBe('E2E archived reply 2')
+    expect(latest.image).toMatchObject({ url: expect.stringMatching(/^https:\/\/cdn\.discordapp\.com\/attachments\//), expiresAt: expect.any(String) })
+    const raw = await (await request.get(`${MOCK}/v10/channels/${ARCHIVED}/messages/${latest.id}`)).json()
+    const old = raw.attachments[0].url
+    expect(lapse(latest.image.url)).toBeGreaterThan(lapse(old))
+    // It lapses where its own link says, a day ahead: the store holds the new expiry as well as the new link.
+    expect(Date.parse(latest.image.expiresAt)).toBe(lapse(latest.image.url) * 1000)
+    expect(Date.parse(latest.image.expiresAt)).toBeGreaterThan(Date.now() + HOUR)
+    expect(await refreshesAsked(request)).toContain(old)
+  })
+
   test('the guild\'s emoji are listed', async ({ request }) => {
     expect(await json(request, '/librarius/emoji')).toEqual({ emoji: [{ id: EMOJI, name: 'e2e_aquila', animated: false }] })
   })
@@ -220,6 +268,9 @@ test.describe('Librarius API', () => {
       const answer = await json(request, `/librarius/posts/${ACTIVE}/changes?since=${since}`)
       expect(answer.reset, `poll ${poll} from ${since}`).toBeUndefined()
       expect(Array.isArray(answer.messages)).toBe(true)
+      // The first poll is made on the very case at issue: all 230 messages lie within a few revs of the top, so the rows sent
+      // again (the newest 100 of them) are there, and they were not counted as new.
+      if (poll === 1) expect(answer.messages.length, 'the rows a poll sends again').toBeGreaterThanOrEqual(100)
       expect(Array.isArray(answer.deleted)).toBe(true)
       expect(BigInt(answer.rev)).toBeGreaterThanOrEqual(BigInt(since))
       since = answer.rev

@@ -1,4 +1,5 @@
 import { test, expect } from '@playwright/test'
+import { createHash } from 'node:crypto'
 import { readFileSync } from 'node:fs'
 
 // The site's Content-Security-Policy, against the production build (the `web-prod` service in docker-compose.yml: `vite build`
@@ -13,15 +14,31 @@ import { readFileSync } from 'node:fs'
 // that is the network's (a frame that cannot load) makes no event, and only the policy's own makes one. That an address got
 // as far as `reached` is how this spec knows the policy lets it through, so the pages are fed the very addresses it names.
 //
+// What this covers, and what it does not. Covered: the policy in the built page's <meta> tag, as a browser enforces it, on each
+// page below, as a reader of everything, with each host the policy names for a picture, a clip, a player and a call asked for by
+// a page that has data for it (R2 for a picture and for a clip, Discord's CDN and media proxy, YouTube, Twitch and Medal players,
+// the api, Discord's sign-in) and the Legion Archive opened and read on a page served from http://localhost (a secure context,
+// so WebCrypto is there). Not covered: a header (the site is served from a host that sends none, so the policy is a tag), what a
+// player's own page does inside its frame (the frame is refused at the network), a page this list leaves out, or a state of a page
+// this data does not reach (an error, an empty list, the Deathwatch's other areas).
+//
 // The api and the people in it are invented, as in the other specs: the ids are in the range the Librarius fixtures use. The one
 // picture and the one clip that every picture and clip is answered with are the mock's own fixtures.
 const fixture = (name) => readFileSync(new URL(`../discord-mock/fixtures/${name}`, import.meta.url))
 const PICTURE = fixture('art.png')
 const CLIP = fixture('clip.webm')
-const PROD = process.env.PROD_URL || 'http://web-prod:4173'
+// web-prod shares web's network (docker-compose.yml), so from the browser it is on localhost: a secure context, which WebCrypto needs.
+const PROD = process.env.PROD_URL || 'http://localhost:4173'
 const API = 'https://api.e2e.invalid'
 const DISCORD = 'https://discord.com/api'
 const TOKEN = 'e2e-csp-token'
+
+// The Legion Archive's throwaway key, the one docker-compose.yml seals the e2e fixture with (E2E_ARCHIVE_KEY, ARCHIVE_KEY), and its
+// id as the api gives it: the first 16 hex digits of the key's SHA-256. The page is handed it by the invented api, as a member would
+// be, and opens the sealed fixture that web-prod serves.
+const ARCHIVE_KEY = 'ZTJlLXRocm93YXdheS1rZXktMzItYnl0ZXMtbG9uZyE='
+const ARCHIVE_KID = createHash('sha256').update(Buffer.from(ARCHIVE_KEY, 'base64')).digest('hex').slice(0, 16)
+const ARCHIVE_SENTINEL = 'FIXTURE-PLAINTEXT-SENTINEL-accolades'
 
 const GUILD = '1322056087792521269'
 const FORUM = '200000000000000400'
@@ -39,8 +56,6 @@ const PROXY = 'https://media.discordapp.net'
 const R2 = 'https://e2e-csp.r2.cloudflarestorage.com'
 
 // --- What the api answers, by route ---
-
-const author = (id, name) => ({ id, name, avatar: `${CDN}/avatars/${id}/${'a'.repeat(32)}.png?size=64` })
 
 const MESSAGES = [
   {
@@ -128,6 +143,49 @@ const CLIPS = [
     postedAt: NOW,
     author: { name: 'E2E Archivist' },
   },
+  {
+    id: 'e2e-clip-twitch',
+    kind: 'clip',
+    source: 'discord',
+    media: 'embed',
+    status: 'approved',
+    title: 'A Twitch clip',
+    url: 'https://clips.twitch.tv/E2eCspTwitchClip',
+    contentType: null,
+    bytes: null,
+    postedAt: NOW,
+    author: { name: 'E2E Scribe' },
+  },
+  {
+    id: 'e2e-clip-medal',
+    kind: 'clip',
+    source: 'discord',
+    media: 'embed',
+    status: 'approved',
+    title: 'A Medal clip',
+    url: 'https://medal.tv/clips/e2eCspMedalClip',
+    contentType: null,
+    bytes: null,
+    postedAt: NOW,
+    author: { name: 'E2E Archivist' },
+  },
+]
+
+// A piece of art, a picture stored in the gallery's bucket.
+const ART = [
+  {
+    id: 'e2e-art-stored',
+    kind: 'art',
+    source: 'upload',
+    media: 'image',
+    status: 'approved',
+    title: 'A stored picture',
+    url: `${R2}/e2e-bucket/art/e2e-art.png?X-Amz-Algorithm=e2e&X-Amz-Signature=e2e`,
+    contentType: 'image/png',
+    bytes: 1024,
+    postedAt: NOW,
+    author: { name: 'E2E Scribe' },
+  },
 ]
 
 const BUILD = {
@@ -173,7 +231,8 @@ function answer(method, pathname) {
     'GET /roster/public': PUBLIC_ROSTER,
     'GET /gallery/me': { access: true, approver: false },
     'GET /gallery/clips': { items: CLIPS, next: null },
-    'GET /gallery/art': { items: [], next: null },
+    'GET /gallery/art': { items: ART, next: null },
+    'GET /archive/key': { key: ARCHIVE_KEY, kid: ARCHIVE_KID },
     'GET /librarius/me': {
       access: true,
       ready: true,
@@ -229,8 +288,10 @@ const CORS = {
 
 /**
  * Sets a context up: answers the api and Discord's sign-in check, answers every picture or clip asked of any other address with
- * the mock's own file and refuses the rest (each noted by host in `reached`), and collects each policy violation in the list it
- * returns. A violation is collected from every page and frame of the context, and survives the page being left.
+ * the mock's own file and refuses the rest, and collects each policy violation in the list it returns. A violation is collected from
+ * every page and frame of the context, and survives the page being left. `reached` holds what got as far as the network, as
+ * "<kind> <host>": the kind is `image`, `media`, `frame` (a frame's page) or `fetch`, so that the host that a policy lets a picture
+ * through is not taken for one that lets a clip through.
  */
 async function arm(context) {
   const violations = []
@@ -244,15 +305,18 @@ async function arm(context) {
     )
   })
 
+  const reach = (request, kind) => reached.add(`${kind} ${new URL(request.url()).hostname}`)
+
   // Routes run last-registered first, so this one, which takes everything else, is the last to be asked. A picture or a clip
   // loads (from the files of the mock), so that the page draws it and a test can find it; a frame, a script or a call is refused.
   await context.route(
     (url) => url.origin !== new URL(PROD).origin,
     (route) => {
       const request = route.request()
-      reached.add(new URL(request.url()).hostname)
-      if (request.resourceType() === 'image') return route.fulfill({ status: 200, contentType: 'image/png', body: PICTURE })
-      if (request.resourceType() === 'media') return route.fulfill({ status: 200, contentType: 'video/webm', body: CLIP })
+      const kind = request.isNavigationRequest() && request.frame().parentFrame() !== null ? 'frame' : request.resourceType()
+      reach(request, kind)
+      if (kind === 'image') return route.fulfill({ status: 200, contentType: 'image/png', body: PICTURE })
+      if (kind === 'media') return route.fulfill({ status: 200, contentType: 'video/webm', body: CLIP })
       return route.abort('failed')
     },
   )
@@ -264,7 +328,7 @@ async function arm(context) {
   })
   await context.route(`${API}/**`, (route) => {
     const request = route.request()
-    reached.add(new URL(request.url()).hostname)
+    reach(request, 'fetch')
     if (request.method() === 'OPTIONS') return route.fulfill({ status: 204, headers: CORS })
     const found = answer(request.method(), new URL(request.url()).pathname)
     if (found === null) return route.fulfill({ status: 404, contentType: 'application/json', headers: CORS, body: JSON.stringify({ error: 'Not found.' }) })
@@ -282,7 +346,10 @@ async function signIn(page) {
 }
 
 const settle = async (page) => {
-  await page.waitForLoadState('networkidle')
+  // As quiet as the page gets, within reason: on the clips page, whose three player frames are refused at the network, Playwright's
+  // idle state once did not come in 30 seconds with every request in the trace finished or failed, and a page that does not go
+  // quiet is not one that broke the policy. What the page was made to draw has been waited for, by name, before this.
+  await page.waitForLoadState('networkidle', { timeout: 5_000 }).catch(() => {})
   // A violation is an event of its own, a moment after the request that caused it.
   await page.waitForTimeout(500)
 }
@@ -296,28 +363,50 @@ const PAGES = [
   { name: 'the armoury', path: '/armoury', ready: (page) => expect(page.getByRole('heading', { name: 'Weapon Armoury', level: 1 })).toBeVisible() },
   { name: 'the builds', path: '/builds', ready: (page) => expect(page.getByText('An E2E build')).toBeVisible() },
   { name: 'the companies', path: '/companies', ready: (page) => expect(page.getByRole('heading', { name: 'Companies & Sections', level: 1 })).toBeVisible() },
-  // The Accolades are sealed and opened with WebCrypto, which a page served over plain http from another host does not have: all
-  // that is asked of it here is that it gets as far as its gate.
-  { name: 'the accolades', path: '/accolades', ready: (page) => expect(page.locator('main, #app').first()).toBeVisible() },
+  // The Legion Archive: the api hands this member the key, and the page opens the sealed fixture (served by web-prod, from its
+  // own origin) with WebCrypto, which needs the secure context that http://localhost is. What it reads is what the fixture says.
+  { name: 'the accolades, opened with the archive key', path: '/accolades', ready: (page) => expect(page.locator('.arch-thread')).toContainText(ARCHIVE_SENTINEL) },
   {
-    name: 'the clips, a stored video and a YouTube player',
+    name: 'the clips, a stored video and the players of YouTube, Twitch and Medal',
     path: '/reliquarium/clips',
     ready: async (page) => {
       const video = page.locator('video.rq-video')
       await expect(video).toHaveAttribute('src', new RegExp(`^${R2}/e2e-bucket/clips/`))
       // It loads: the bucket is one the policy lets a clip be played from.
       await expect.poll(() => video.evaluate((v) => v.readyState)).toBeGreaterThanOrEqual(1)
-      const card = page.locator('.rq-card', { hasText: 'A YouTube clip' })
-      await card.getByRole('button', { name: 'Play' }).click()
-      await expect(card.locator('iframe.rq-frame')).toHaveAttribute('src', 'https://www.youtube.com/embed/e2eCspYT001?rel=0')
+      // A link to a player site stays a card until it is played, and then a frame of that site is made.
+      const players = {
+        'A YouTube clip': 'https://www.youtube.com/embed/e2eCspYT001?rel=0',
+        'A Twitch clip': `https://clips.twitch.tv/embed?clip=E2eCspTwitchClip&parent=${new URL(PROD).hostname}`,
+        'A Medal clip': 'https://medal.tv/clip/e2eCspMedalClip?autoplay=0&loop=0&muted=0&cta=0',
+      }
+      for (const [title, src] of Object.entries(players)) {
+        const card = page.locator('.rq-card', { hasText: title })
+        await card.getByRole('button', { name: 'Play' }).click()
+        await expect(card.locator('iframe.rq-frame')).toHaveAttribute('src', src)
+      }
     },
-    reaches: [new URL(R2).hostname, 'www.youtube.com'],
+    reaches: [`media ${new URL(R2).hostname}`, 'frame www.youtube.com', 'frame clips.twitch.tv', 'frame medal.tv'],
+  },
+  {
+    name: 'the art, a picture stored in the gallery\'s bucket, and the same at full size',
+    path: '/reliquarium/art',
+    ready: async (page) => {
+      const picture = page.locator('img.rq-img')
+      await expect(picture).toHaveAttribute('src', new RegExp(`^${R2}/e2e-bucket/art/`))
+      await expect.poll(() => picture.evaluate((img) => img.naturalWidth)).toBeGreaterThan(0)
+      await page.locator('.rq-open').click()
+      const full = page.locator('img.rq-lightbox-img')
+      await expect(full).toHaveAttribute('src', new RegExp(`^${R2}/e2e-bucket/art/`))
+      await expect.poll(() => full.evaluate((img) => img.naturalWidth)).toBeGreaterThan(0)
+    },
+    reaches: [`image ${new URL(R2).hostname}`],
   },
   {
     name: 'the Librarius topic list, with a picture and avatars from Discord',
     path: '/reliquarium/librarius',
     ready: (page) => expect(page.locator('a.lb-topic', { hasText: 'E2E Active Post' })).toBeVisible(),
-    reaches: ['cdn.discordapp.com'],
+    reaches: ['image cdn.discordapp.com'],
   },
   {
     name: 'a Librarius post, with a picture, a custom emoji and an embed',
@@ -331,7 +420,7 @@ const PAGES = [
       for (const src of await emoji.evaluateAll((nodes) => nodes.map((node) => node.src))) expect(src).toMatch(new RegExp(`^${CDN}/emojis/${EMOJI}\\.webp`))
       await expect(page.locator('img.lb-embed-thumb')).toHaveAttribute('src', new RegExp(`^${PROXY}/external/`))
     },
-    reaches: ['cdn.discordapp.com', 'media.discordapp.net'],
+    reaches: ['image cdn.discordapp.com', 'image media.discordapp.net'],
   },
   { name: 'the Deathwatch hub', path: '/deathwatch', ready: (page) => expect(page.getByRole('heading', { name: 'Watch Fortress Ebonhold', level: 1 })).toBeVisible() },
 ]
