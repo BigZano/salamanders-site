@@ -355,6 +355,188 @@ a.lb-file {
   color: var(--color-pewter);
 }
 
+/* The topic list: a bar of filters, then a row for each post. A row is one link, as tall as its words and never narrower
+ * than a finger; the surface is the gallery's own card (panel-forge). */
+.lb-topics {
+  min-width: 0;
+}
+.lb-note {
+  margin: 1rem 0;
+  font-size: var(--text-md);
+  color: var(--color-smoke);
+}
+.lb-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 1rem;
+  padding: 1.5rem 1.25rem;
+  border-radius: var(--radius-md);
+  color: var(--color-pewter);
+}
+.lb-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.6rem 1rem;
+  margin-bottom: 1rem;
+}
+.lb-chips {
+  display: flex;
+  flex-wrap: wrap;
+  flex: 1 1 auto;
+  gap: 0.4rem;
+}
+.lb-chip {
+  min-height: var(--tap);
+  padding: 0.3rem 0.85rem;
+  font-size: var(--text-sm);
+  color: var(--color-smoke);
+  background: rgba(5, 10, 8, 0.6);
+  border: 1px solid var(--color-ash);
+  border-radius: var(--radius-pill);
+  cursor: pointer;
+}
+.lb-chip[aria-pressed='true'] {
+  color: var(--color-drake);
+  background: rgba(89, 214, 108, 0.1);
+  border-color: rgba(89, 214, 108, 0.5);
+}
+.lb-sort {
+  min-height: var(--tap);
+  padding: 0.3rem 0.6rem;
+  font-size: var(--text-sm);
+  color: var(--color-bone);
+  background: rgba(5, 10, 8, 0.6);
+  border: 1px solid var(--color-ash);
+  border-radius: var(--radius-sm);
+}
+.lb-start {
+  margin-left: auto;
+}
+
+.lb-rows {
+  display: flex;
+  flex-direction: column;
+  gap: 0.6rem;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.lb-rows > li {
+  min-width: 0;
+}
+.lb-topic {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 0.9rem;
+  min-height: var(--tap);
+  padding: 0.8rem 1rem;
+  border-radius: var(--radius-md);
+  color: var(--color-bone);
+  text-decoration: none;
+}
+.lb-pinned {
+  border-left: 3px solid var(--color-gold);
+}
+.lb-topic-main {
+  display: flex;
+  flex-direction: column;
+  flex: 1 1 auto;
+  gap: 0.3rem;
+  min-width: 0;
+}
+.lb-topic-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 0.25rem 0.6rem;
+}
+.lb-topic-title {
+  font-family: var(--font-display);
+  font-size: var(--text-base);
+  font-weight: 700;
+  color: var(--color-whitehot);
+  overflow-wrap: anywhere;
+  unicode-bidi: isolate;
+}
+.lb-pin {
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--color-gold);
+}
+.lb-tag {
+  padding: 0 0.5rem;
+  font-size: var(--text-xs);
+  color: var(--color-smoke);
+  border: 1px solid var(--color-ash-2);
+  border-radius: var(--radius-pill);
+  overflow-wrap: anywhere;
+  unicode-bidi: isolate;
+}
+.lb-new {
+  padding: 0 0.5rem;
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  color: var(--color-ember-ink);
+  background: var(--color-ember);
+  border-radius: var(--radius-pill);
+}
+.lb-topic-latest {
+  font-size: var(--text-md);
+  color: var(--color-pewter);
+  overflow-wrap: anywhere;
+  unicode-bidi: isolate;
+}
+.lb-topic-author {
+  font-weight: 600;
+  color: var(--color-bone);
+}
+.lb-topic-meta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.2rem 0.4rem;
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  color: var(--color-faint);
+}
+.lb-posters {
+  display: inline-flex;
+  margin-left: 0.3rem;
+}
+.lb-poster {
+  display: block;
+  width: 1.5rem;
+  height: 1.5rem;
+  margin-left: -0.4rem;
+  border: 2px solid var(--color-basalt);
+  border-radius: var(--radius-pill);
+  object-fit: cover;
+  background: var(--color-ash);
+}
+.lb-poster:first-child {
+  margin-left: 0;
+}
+.lb-poster.lb-initials {
+  font-size: var(--text-xs);
+  letter-spacing: 0;
+}
+.lb-thumb {
+  flex: none;
+  width: 4.5rem;
+  height: 4.5rem;
+  object-fit: cover;
+  border-radius: var(--radius-sm);
+  background: var(--color-basalt-2);
+}
+.lb-archived {
+  margin-top: 0.8rem;
+}
+
 @media (hover: hover) and (pointer: fine) {
   .lb-reply:hover {
     color: var(--color-bone);
@@ -368,6 +550,13 @@ a.lb-file {
     box-shadow: inset 0 0 0 1px rgba(253, 184, 37, 0.5);
   }
   a.lb-file:hover {
+    border-color: var(--color-ash-2);
+  }
+  .lb-topic:hover {
+    border-color: var(--color-ash-2);
+  }
+  .lb-chip:hover {
+    color: var(--color-bone);
     border-color: var(--color-ash-2);
   }
 }
