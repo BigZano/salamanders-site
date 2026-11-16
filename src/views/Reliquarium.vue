@@ -1,51 +1,90 @@
 <script setup>
-// The Reliquarium: the Legion's clips and art. This page is the gate (it shows the galleries only to someone the
+// The Reliquarium: the Legion's Librarius, clips and art. This page is the gate (it shows them only to someone the
 // server clears, and otherwise says why not), the tab bar, and whichever tab the address names. It trusts nothing
-// but the server's answer: the `isMember` hint that shows the nav entry is not consulted here, and the state in
-// the store only decides what to show (the server checks every read and write again).
+// but the server's answers: the `isMember` and `librarius` hints that show the nav entry are not consulted here, and
+// the state in the stores only decides what to show (the server checks every read and write again).
+//
+// Two servers' checks decide who sees what, and they are separate: the galleries' (the Legion role) and the Librarius's
+// (Discord's own permissions on its forum, which a person may hold without the role). The page is open to someone either
+// lets in, and each adds its own tabs: the Librarius first, then the galleries'. It waits for both answers before it
+// chooses a tab, so that the first tab is never the galleries' for a reader who is a moment from being shown the Librarius.
 import { computed, watch } from 'vue'
 import { useRoute } from 'vue-router'
 import { useAuth } from '../stores/auth'
 import { useGallery } from '../stores/gallery'
+import { useLibrarius } from '../stores/librarius'
 import PageHeader from '../components/PageHeader.vue'
 import GalleryGrid from '../components/gallery/GalleryGrid.vue'
 import SubmitForm from '../components/gallery/SubmitForm.vue'
 import MineList from '../components/gallery/MineList.vue'
 import ReviewQueue from '../components/gallery/ReviewQueue.vue'
+import TopicList from '../components/librarius/TopicList.vue'
+import PostPage from '../components/librarius/PostPage.vue'
 import '../components/gallery/gallery.css'
 
 const auth = useAuth()
 const gallery = useGallery()
+const librarius = useLibrarius()
 const route = useRoute()
 
-// auth.token reads storage and isn't reactive; auth.member is (signing out clears it), so it drives the check.
-// Signing out also empties the store, so nothing of the last person's lists is left for the next.
+// Asks the Librarius, and tells the nav what it learned, so that its Reliquarium link follows (a person let in, or let out,
+// since they signed in). Only an answer says anything: an outage or a refused token leaves what the nav knew as it was.
+async function checkLibrarius() {
+  await librarius.load(auth.token)
+  const { status } = librarius
+  if (status === 'allowed' || status === 'importing') auth.noteLibrarius(true)
+  else if (status === 'denied') auth.noteLibrarius(false)
+}
+
+// auth.token reads storage and isn't reactive; whether auth.member is there is (signing out clears it), so it drives the
+// check. It is whether there is a member that is watched, not the member itself: the nav is told what the Librarius said
+// by replacing the member, and that must not start the checks again.
+// Signing out also empties the stores, so nothing of the last person's lists is left for the next.
 watch(
-  () => auth.member,
-  (member) => {
-    if (!member) gallery.reset()
+  () => Boolean(auth.member),
+  (signedIn) => {
+    if (!signedIn) {
+      gallery.reset()
+      librarius.reset()
+    }
     gallery.load(auth.token)
+    checkLibrarius()
   },
   { immediate: true },
 )
 
-const busy = computed(() => gallery.status === 'idle' || gallery.status === 'checking')
+const pending = (status) => status === 'idle' || status === 'checking'
+const galleryOpen = computed(() => gallery.status === 'allowed')
+// A Librarius still being brought over from Discord is the reader's to see, with a word about the wait.
+const librariusOpen = computed(() => librarius.status === 'allowed' || librarius.status === 'importing')
+const busy = computed(() => pending(gallery.status) || pending(librarius.status))
+const open = computed(() => !busy.value && (galleryOpen.value || librariusOpen.value))
 const signIn = () => auth.signIn({ returnTo: route.fullPath })
-const retry = () => gallery.load(auth.token)
+const retry = () => {
+  gallery.load(auth.token)
+  checkLibrarius()
+}
 
 const waiting = computed(() => gallery.review.items.length)
 const tabs = computed(() => [
-  { key: 'clips', label: 'Clips' },
-  { key: 'art', label: 'Artwork' },
-  { key: 'submit', label: 'Submit' },
-  { key: 'mine', label: 'Mine' },
-  ...(gallery.approver ? [{ key: 'review', label: 'Review' }] : []),
+  ...(librariusOpen.value ? [{ key: 'librarius', label: 'Librarius' }] : []),
+  ...(galleryOpen.value
+    ? [
+        { key: 'clips', label: 'Clips' },
+        { key: 'art', label: 'Artwork' },
+        { key: 'submit', label: 'Submit' },
+        { key: 'mine', label: 'Mine' },
+        ...(gallery.approver ? [{ key: 'review', label: 'Review' }] : []),
+      ]
+    : []),
 ])
-// A tab the person may not see (Review, for a member) shows the Clips, and marks Clips as the open tab.
+// A tab the person may not see (Review, for a member; the Clips, for someone the galleries refuse) shows the first tab they
+// may, and marks it as the open tab: the Librarius, else the Clips. A post is on the Librarius tab.
 const tab = computed(() => {
-  const asked = route.params.tab || 'clips'
-  return tabs.value.some((t) => t.key === asked) ? asked : 'clips'
+  const asked = route.name === 'reliquarium-post' ? 'librarius' : route.params.tab
+  return tabs.value.some((t) => t.key === asked) ? asked : tabs.value[0]?.key
 })
+const onPost = computed(() => route.name === 'reliquarium-post')
 
 // The number on the Review tab is what the queue holds, so an approver's queue is fetched as soon as the page
 // opens, whichever tab it opens on. (On the Review tab the queue fetches itself.) Only once the check has settled:
@@ -61,15 +100,19 @@ watch(
 
 <template>
   <section class="rq">
-    <PageHeader eyebrow="Members only" title="Reliquarium" lede="Clips and artwork from the Legion, kept in one place." />
+    <PageHeader
+      eyebrow="Members only"
+      title="Reliquarium"
+      lede="The Librarius, clips and artwork from the Legion, kept in one place."
+    />
 
-    <div v-if="gallery.status !== 'allowed'" class="rq-gate surface" :aria-busy="busy ? 'true' : undefined">
-      <template v-if="gallery.status === 'signin'">
+    <div v-if="!open" class="rq-gate surface" :aria-busy="busy ? 'true' : undefined">
+      <template v-if="gallery.status === 'signin' && librarius.status === 'signin'">
         <p>Sign in with Discord to see the Reliquarium.</p>
         <button class="btn-ember" type="button" @click="signIn">Sign in with Discord</button>
       </template>
       <p v-else-if="busy" role="status">Checking…</p>
-      <p v-else-if="gallery.status === 'denied'">Restricted to the XVIIIth Legion.</p>
+      <p v-else-if="gallery.status === 'denied' && librarius.status === 'denied'">Restricted to the XVIIIth Legion.</p>
       <template v-else>
         <p role="alert">The Reliquarium couldn't be reached.</p>
         <button class="btn-ember" type="button" @click="retry">Retry</button>
@@ -90,7 +133,15 @@ watch(
         </RouterLink>
       </nav>
 
-      <GalleryGrid v-if="tab === 'clips' || tab === 'art'" :key="tab" :kind="tab" />
+      <template v-if="tab === 'librarius'">
+        <div v-if="librarius.status === 'importing'" class="lb-empty panel-forge">
+          <p role="status">The Librarius is being brought over from Discord. Check back in a few minutes.</p>
+        </div>
+        <!-- Keyed by the post, so that another post is a new page, never the old one with a new id. -->
+        <PostPage v-else-if="onPost" :key="route.params.postId" :post-id="route.params.postId" />
+        <TopicList v-else />
+      </template>
+      <GalleryGrid v-else-if="tab === 'clips' || tab === 'art'" :key="tab" :kind="tab" />
       <SubmitForm v-else-if="tab === 'submit'" />
       <MineList v-else-if="tab === 'mine'" />
       <ReviewQueue v-else />

@@ -48,6 +48,59 @@ describe('useNavLinks', () => {
     expect(labels(useNavLinks())).not.toContain('Reliquarium')
   })
 
+  it('gives someone who is no member but may read the Librarius the base links plus the Reliquarium, and nothing of the member pages', () => {
+    state.auth.member = { isMember: false, librarius: true }
+    const links = useNavLinks()
+    expect(labels(links)).toEqual(['Home', 'Perk Builder', 'Armoury', 'Builds', 'Companies', 'Reliquarium'])
+    expect(links.value.at(-1)).toEqual({ to: '/reliquarium', label: 'Reliquarium', section: true })
+    for (const hidden of ['Accolades', 'Ranks', 'Reports']) expect(labels(links)).not.toContain(hidden)
+  })
+
+  it('puts a Librarius reader who is not a member before Version History, as members have the Reliquarium before it', () => {
+    state.auth.member = { isMember: false, librarius: true }
+    state.corrections.privileges = { historyViewer: true }
+    expect(labels(useNavLinks())).toEqual(['Home', 'Perk Builder', 'Armoury', 'Builds', 'Companies', 'Reliquarium', 'Version History'])
+  })
+
+  it('leaves a member the list they had, whatever the Librarius says', () => {
+    for (const librarius of [true, false, undefined]) {
+      state.auth.member = { isMember: true, librarius }
+      expect(labels(useNavLinks()), String(librarius)).toEqual([
+        'Home',
+        'Perk Builder',
+        'Armoury',
+        'Builds',
+        'Companies',
+        'Accolades',
+        'Ranks',
+        'Reliquarium',
+        'Reports',
+      ])
+    }
+  })
+
+  it('shows no Reliquarium unless the Librarius flag is plainly true', () => {
+    for (const librarius of [false, undefined, null, 0, 1, '', 'true', 'yes', [], {}]) {
+      state.auth.member = { isMember: false, librarius }
+      expect(labels(useNavLinks()), JSON.stringify(librarius)).not.toContain('Reliquarium')
+    }
+  })
+
+  it('shows nobody who is signed out the Reliquarium, even if a flag lingers', () => {
+    state.auth.member = null
+    expect(labels(useNavLinks())).not.toContain('Reliquarium')
+  })
+
+  it('follows the Librarius flag as it is learned', () => {
+    state.auth.member = { isMember: false, librarius: false }
+    const links = useNavLinks()
+    expect(labels(links)).not.toContain('Reliquarium')
+    state.auth.member = { isMember: false, librarius: true }
+    expect(labels(links)).toContain('Reliquarium')
+    state.auth.member = { isMember: false, librarius: false }
+    expect(labels(links)).not.toContain('Reliquarium')
+  })
+
   it('has no Roster link for anyone: the roster lives on Companies now', () => {
     for (const member of [null, { isMember: false }, { isMember: true }]) {
       state.auth.member = member
