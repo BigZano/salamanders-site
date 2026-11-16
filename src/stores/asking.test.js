@@ -25,12 +25,34 @@ describe('statusOf', () => {
     }
   })
 
+  // The rest of the error is whatever the generator makes of it, and is never turned into text: a null-prototype object, a
+  // Symbol or an object whose `toString` is a number cannot be, and the property is about the status alone.
   it('maps any status the same way whatever else the error carries (property)', () => {
     fc.assert(
       fc.property(fc.anything(), fc.integer({ min: -1000, max: 1000 }), (extra, status) => {
         const expected = status === 401 ? 'signin' : status === 403 ? 'denied' : 'unavailable'
-        expect(statusOf({ message: String(extra), status })).toBe(expected)
+        expect(statusOf({ message: extra, status, extra })).toBe(expected)
       }),
+      {
+        // What the property once broke on, kept: the label it built from these threw.
+        examples: [
+          [{ toString: 0 }, 0],
+          [Object.create(null), 401],
+          [Symbol('odd'), 403],
+          [{ toString: null, valueOf: null }, 500],
+        ],
+      },
+    )
+  })
+
+  it('answers for anything that was thrown, and never throws itself (property)', () => {
+    fc.assert(
+      fc.property(fc.anything(), (thrown) => {
+        const status = thrown?.status
+        const expected = status === 401 ? 'signin' : status === 403 ? 'denied' : 'unavailable'
+        expect(statusOf(thrown)).toBe(expected)
+      }),
+      { examples: [[Object.create(null)], [Symbol('odd')], [{ toString: 0 }], [{ status: 401 }], [{ status: 403 }], [null], [undefined]] },
     )
   })
 })
@@ -208,6 +230,28 @@ describe('attempt', () => {
       }),
     ).rejects.toBe(down)
     expect(store.error).toBe('sync')
+  })
+
+  it('keeps a message only when it is text, and reports the plain one for any other kind of message', async () => {
+    for (const message of [42, 0, true, false, null, undefined, {}, [], ['text'], Symbol('m'), 7n, () => 'text', { toString: () => 'text' }, { toString: 0 }]) {
+      const store = { error: '' }
+      const thrown = { message }
+      await expect(attempt(store, async () => Promise.reject(thrown))).rejects.toBe(thrown)
+      expect(store.error, String(typeof message)).toBe('Something went wrong.')
+    }
+  })
+
+  it('keeps the message of anything that was thrown as a string, and throws that same thing on (property)', async () => {
+    await fc.assert(
+      fc.asyncProperty(fc.anything(), async (thrown) => {
+        const store = { error: '' }
+        await expect(attempt(store, async () => Promise.reject(thrown))).rejects.toBe(thrown)
+        const message = thrown?.message
+        expect(typeof store.error).toBe('string')
+        expect(store.error).toBe(typeof message === 'string' && message !== '' ? message : 'Something went wrong.')
+      }),
+      { examples: [[Object.create(null)], [Symbol('odd')], [{ message: { toString: 0 } }], [{ message: 42 }], [{ message: 'plain' }]] },
+    )
   })
 
   it('forgets an earlier error even when the run fails', async () => {

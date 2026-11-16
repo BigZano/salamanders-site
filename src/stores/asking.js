@@ -23,12 +23,15 @@ export async function unlessStale(now, ask) {
 }
 
 // Runs one action: the message of a failure is kept in `error` for the page to show, and the failure goes on to the caller.
+// `error` is always text: a failure with no message, or one whose message is not text (a number, an object), is reported
+// with a plain one.
 export async function attempt(store, run) {
   store.error = ''
   try {
     return await run()
   } catch (err) {
-    store.error = err?.message || 'Something went wrong.'
+    const message = err?.message
+    store.error = typeof message === 'string' && message !== '' ? message : 'Something went wrong.'
     throw err
   }
 }
