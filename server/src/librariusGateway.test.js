@@ -19,6 +19,8 @@ const NOON = '2026-11-15T12:00:00.000Z'
 const MAX_TIMER_MS = 2 ** 31 - 1
 const HELLO_TIMEOUT = 30_000
 const DISPATCH_TIMEOUT = 15_000
+const READY_TIMEOUT = 30_000
+const HELD = 60_000
 
 /** A WebSocket that records what it was given and lets the test play the server. close() does not close by itself. */
 class FakeSocket {
@@ -71,6 +73,7 @@ function rig(over = {}) {
   const plan = []
   const dispatched = []
   const logged = []
+  let gatewayCalls = 0
   class Sock extends FakeSocket {
     constructor(url) {
       if (failures.length) throw failures.shift()
@@ -80,7 +83,8 @@ function rig(over = {}) {
   }
   const discord = {
     async gatewayBot() {
-      const next = plan.length ? plan.shift() : { url: GATEWAY, remaining: 5, resetAfterMs: 0 }
+      gatewayCalls += 1
+      const next = plan.length ? plan.shift() : { url: GATEWAY, remaining: 1000, resetAfterMs: 0 }
       if (next instanceof Error) throw next
       if (typeof next === 'function') return next()
       return next
@@ -95,9 +99,12 @@ function rig(over = {}) {
     WebSocketImpl: Sock,
     random: () => 0.5,
     log: (line) => logged.push(String(line)),
+    // Most tests are about something else than being made ready in time, and leave a socket that has had its HELLO
+    // sitting for minutes. A test of readiness passes `readyTimeoutMs: undefined` for the default.
+    readyTimeoutMs: MAX_TIMER_MS,
     ...over,
   })
-  return { gateway, sockets, plan, failures, dispatched, logged }
+  return { gateway, sockets, plan, failures, dispatched, logged, calls: () => gatewayCalls }
 }
 
 /** Starts the gateway, opens its socket, plays HELLO and READY. Returns the socket. */
@@ -120,6 +127,12 @@ async function opened(r) {
 }
 
 const hello = (sock, interval = INTERVAL) => sock.receive({ op: 10, d: { heartbeat_interval: interval } })
+const READY_MESSAGE = { op: 0, t: 'READY', s: 1, d: { session_id: SESSION, resume_gateway_url: RESUME } }
+
+/** Moves the clock on until the gateway has made one more socket than `count`. */
+async function untilSocket(r, count) {
+  for (let i = 0; i < 400 && r.sockets.length <= count; i++) await tick(500)
+}
 
 beforeEach(() => {
   vi.useFakeTimers()
@@ -164,7 +177,16 @@ describe('createGateway: the boundary', () => {
     ['NaN intents', { intents: Number.NaN }, RangeError, 'intents must be a whole number of 0 or more.'],
     ['infinite intents', { intents: Infinity }, RangeError, 'intents must be a whole number of 0 or more.'],
     ['intents past the safe integers', { intents: 2 ** 53 }, RangeError, 'intents must be a whole number of 0 or more.'],
-    ...['helloTimeoutMs', 'dispatchTimeoutMs'].flatMap((name) =>
+    ...[
+      ['a string', '50'],
+      ['null', null],
+      ['a fraction', 1.5],
+      ['a negative number', -1],
+      ['NaN', Number.NaN],
+      ['Infinity', Infinity],
+      ['past the safe integers', 2 ** 53],
+    ].map(([what, value]) => [`identifyFloor of ${what}`, { identifyFloor: value }, RangeError, 'identifyFloor must be a whole number of 0 or more.']),
+    ...['helloTimeoutMs', 'dispatchTimeoutMs', 'readyTimeoutMs'].flatMap((name) =>
       [
         ['0', 0],
         ['a negative number', -1],
@@ -188,8 +210,11 @@ describe('createGateway: the boundary', () => {
 
   it('takes zero intents, the shortest and longest timeouts a timer can hold, and a client with only the required options', () => {
     expect(() => createGateway({ ...good(), intents: 0 })).not.toThrow()
-    expect(() => createGateway({ ...good(), helloTimeoutMs: 1, dispatchTimeoutMs: 1 })).not.toThrow()
-    expect(() => createGateway({ ...good(), helloTimeoutMs: MAX_TIMER_MS, dispatchTimeoutMs: MAX_TIMER_MS })).not.toThrow()
+    expect(() => createGateway({ ...good(), identifyFloor: 0 })).not.toThrow()
+    expect(() => createGateway({ ...good(), helloTimeoutMs: 1, dispatchTimeoutMs: 1, readyTimeoutMs: 1 })).not.toThrow()
+    expect(() =>
+      createGateway({ ...good(), helloTimeoutMs: MAX_TIMER_MS, dispatchTimeoutMs: MAX_TIMER_MS, readyTimeoutMs: MAX_TIMER_MS }),
+    ).not.toThrow()
     expect(() => createGateway(good())).not.toThrow()
   })
 
@@ -203,7 +228,7 @@ describe('createGateway: the boundary', () => {
 describe('connecting', () => {
   it('connects to the address gatewayBot gave, with the version and encoding asked for', async () => {
     const r = rig()
-    r.plan.push({ url: 'wss://one.test', remaining: 3, resetAfterMs: 0 })
+    r.plan.push({ url: 'wss://one.test', remaining: 1000, resetAfterMs: 0 })
     const started = r.gateway.start()
     expect(r.gateway.status().state).toBe('connecting')
     await started
@@ -218,16 +243,46 @@ describe('connecting', () => {
     ['ws://one.test:8080', `ws://one.test:8080${QUERY}`],
   ])('builds the address from %s', async (url, expected) => {
     const r = rig()
-    r.plan.push({ url, remaining: 3, resetAfterMs: 0 })
+    r.plan.push({ url, remaining: 1000, resetAfterMs: 0 })
     await r.gateway.start()
     expect(r.sockets.map((s) => s.url)).toEqual([expected])
   })
 
-  it('connects at once while sessions remain, even when only one is left', async () => {
-    const r = rig()
-    r.plan.push({ url: GATEWAY, remaining: 1, resetAfterMs: 99_999 })
-    await r.gateway.start()
-    expect(r.sockets).toHaveLength(1)
+  it('connects at once when more than 50 sessions remain, and waits for the window to reset when 50 or fewer do', async () => {
+    const more = rig()
+    more.plan.push({ url: GATEWAY, remaining: 51, resetAfterMs: 99_999 })
+    await more.gateway.start()
+    expect(more.sockets).toHaveLength(1)
+
+    const edge = rig()
+    edge.plan.push({ url: GATEWAY, remaining: 50, resetAfterMs: 99_999 })
+    await edge.gateway.start()
+    expect(edge.sockets).toHaveLength(0)
+    expect(edge.gateway.status().state).toBe('waiting')
+    await tick(99_998)
+    expect(edge.sockets).toHaveLength(0)
+    await tick(1)
+    expect(edge.sockets).toHaveLength(1)
+  })
+
+  it('waits for the window to reset when no more than identifyFloor sessions remain, and not otherwise', async () => {
+    await fc.assert(
+      fc.asyncProperty(fc.integer({ min: 0, max: 120 }), fc.integer({ min: 0, max: 200 }), async (floor, remaining) => {
+        const r = rig({ identifyFloor: floor })
+        r.plan.push({ url: 'wss://one.test', remaining, resetAfterMs: 5000 })
+        await r.gateway.start()
+        if (remaining <= floor) {
+          expect(r.sockets).toHaveLength(0)
+          expect(r.gateway.status().state).toBe('waiting')
+          await tick(4999)
+          expect(r.sockets).toHaveLength(0)
+          await tick(1)
+        }
+        expect(r.sockets.map((s) => s.url)).toEqual([`wss://one.test${QUERY}`])
+        r.gateway.stop()
+      }),
+      { numRuns: 40 },
+    )
   })
 
   it('waits resetAfterMs, no more and no less, when no sessions remain', async () => {
@@ -285,7 +340,7 @@ describe('gatewayBot and the socket constructor failing', () => {
   it.each([
     ['null', null],
     ['an object with no url', {}],
-    ['a url that is not a string', { url: 5, remaining: 3, resetAfterMs: 0 }],
+    ['a url that is not a string', { url: 5, remaining: 1000, resetAfterMs: 0 }],
   ])('treats an answer of %s as a failure and tries again', async (_name, answer) => {
     const r = rig()
     r.plan.push(answer)
@@ -345,9 +400,13 @@ describe('gatewayBot and the socket constructor failing', () => {
 
   it('replaces the token and every kind of link in a failure with a marker', async () => {
     const r = rig()
-    r.plan.push(new Error(`bad ${TOKEN} at http://a.test/p?x=1 and https://b.test/q and ws://c.test/r and wss://d.test/s end`))
+    r.plan.push(
+      new Error(
+        `bad ${TOKEN} at http://a.test/p?x=1 and https://b.test/q and ws://c.test/r and wss://d.test/s and HTTPS://E.test/u and cdn.discordapp.com/attachments/1/2/x.png?ex=1 end`,
+      ),
+    )
     await r.gateway.start()
-    expect(r.gateway.status().lastError).toContain('bad [token] at [link] and [link] and [link] and [link] end')
+    expect(r.gateway.status().lastError).toContain('bad [token] at [link] and [link] and [link] and [link] and [link] and [link] end')
   })
 
   it('cuts a long failure to 200 characters', async () => {
@@ -401,7 +460,7 @@ describe('gatewayBot and the socket constructor failing', () => {
     r.plan.push(() => new Promise((resolve) => (answer = resolve)))
     const started = r.gateway.start()
     r.gateway.stop()
-    answer({ url: GATEWAY, remaining: 5, resetAfterMs: 0 })
+    answer({ url: GATEWAY, remaining: 1000, resetAfterMs: 0 })
     await started
     await tick(600_000)
     expect(r.sockets).toHaveLength(0)
@@ -695,7 +754,7 @@ describe('identifying and resuming', () => {
     ['a resume address that is only a scheme word', { session_id: SESSION, resume_gateway_url: 'wss' }],
   ])('stays ready but cannot resume after a READY with %s', async (_name, d) => {
     const r = rig()
-    r.plan.push({ url: FRESH, remaining: 5, resetAfterMs: 0 })
+    r.plan.push({ url: FRESH, remaining: 1000, resetAfterMs: 0 })
     await r.gateway.start()
     const sock = r.sockets[0]
     sock.open()
@@ -784,17 +843,22 @@ describe('op 7, op 9 and READY', () => {
     ['a string', 'true'],
     ['1', 1],
     ['missing', undefined],
-  ])('drops the session on op 9 with d %s, and identifies again on the same socket', async (_name, d) => {
+  ])('drops the session on op 9 with d %s, closes with 4000 and comes back through gatewayBot', async (_name, d) => {
     const r = rig()
     const sock = await ready(r, { s: 3 })
-    const before = sock.sent.length
+    r.plan.push({ url: FRESH, remaining: 1000, resetAfterMs: 0 })
     sock.receive({ op: 9, d })
-    expect(sock.closed).toEqual([])
-    expect(sock.sent).toHaveLength(before)
+    expect(sock.closed).toEqual([4000])
+    expect(r.gateway.status().state).toBe('waiting')
+    expect(r.gateway.status().lastError).toBeNull()
     await tick(2999)
-    expect(sock.sent).toHaveLength(before)
+    expect(r.sockets).toHaveLength(1)
     await tick(1)
-    expect(sock.sent.slice(before)).toEqual([
+    expect(r.sockets.map((s) => s.url)).toEqual([`${GATEWAY}${QUERY}`, `${FRESH}${QUERY}`])
+    const next = r.sockets[1]
+    next.open()
+    hello(next)
+    expect(next.sent).toEqual([
       {
         op: 2,
         d: {
@@ -804,45 +868,46 @@ describe('op 7, op 9 and READY', () => {
         },
       },
     ])
-    expect(r.sockets).toHaveLength(1)
   })
 
-  it('waits between 1 and 5 seconds, by random(), before it identifies again', async () => {
+  it('waits between 1 and 5 seconds, by random(), before it connects again after op 9', async () => {
     await fc.assert(
       fc.asyncProperty(fc.integer({ min: 0, max: 7 }), async (eighths) => {
         const r = rig({ random: () => eighths / 8 })
         const sock = await opened(r)
         hello(sock, 1_000_000)
-        sock.receive({ op: 0, t: 'READY', s: 1, d: { session_id: SESSION, resume_gateway_url: RESUME } })
+        sock.receive(READY_MESSAGE)
         sock.receive({ op: 9, d: false })
         const wait = 1000 + eighths * 500
         await tick(wait - 1)
-        expect(identifies(sock)).toHaveLength(1)
+        expect(r.sockets).toHaveLength(1)
         await tick(1)
-        expect(identifies(sock)).toHaveLength(2)
+        expect(r.sockets).toHaveLength(2)
         r.gateway.stop()
       }),
       { numRuns: 20 },
     )
   })
 
-  it('identifies once even when op 9 comes twice', async () => {
+  it('reconnects once even when op 9 comes twice', async () => {
     const r = rig()
     const sock = await ready(r)
     sock.receive({ op: 9, d: false })
-    await tick(1000)
     sock.receive({ op: 9, d: false })
-    await tick(10_000)
-    expect(identifies(sock)).toHaveLength(2)
+    await tick(3000)
+    sock.receive({ op: 9, d: false })
+    await tick(HELLO_TIMEOUT - 3001)
+    expect(sock.closed).toEqual([4000])
+    expect(r.sockets).toHaveLength(2)
   })
 
-  it('does not resume after op 9 with d false, even once the socket drops', async () => {
+  it('does not resume after op 9 with d false, even when the old socket reports a close', async () => {
     const r = rig()
     const sock = await ready(r)
-    r.plan.push({ url: FRESH, remaining: 5, resetAfterMs: 0 })
+    r.plan.push({ url: FRESH, remaining: 1000, resetAfterMs: 0 })
     sock.receive({ op: 9, d: false })
     sock.drop(1006)
-    await tick(1000)
+    await tick(3000)
     const next = r.sockets[1]
     expect(next.url).toBe(`${FRESH}${QUERY}`)
     next.open()
@@ -1034,46 +1099,394 @@ describe('dispatches', () => {
     expect(heartbeats(sock).at(-1)).toEqual({ op: 1, d: 2 })
   })
 
-  it('resets the backoff on READY', async () => {
+  it.each([
+    ['READY', { op: 0, t: 'READY', s: 1, d: { session_id: SESSION, resume_gateway_url: RESUME } }],
+    ['RESUMED', { op: 0, t: 'RESUMED', s: 2, d: {} }],
+  ])('forgives the earlier failures only once the connection %s brought has held for 60 seconds', async (_name, message) => {
+    // Three drops in a row, so that the next wait is 8 seconds.
+    const wearOut = async (r) => {
+      await r.gateway.start()
+      for (const wait of [1000, 2000, 4000]) {
+        r.sockets.at(-1).drop(1006)
+        await tick(wait)
+      }
+      expect(r.sockets).toHaveLength(4)
+      const sock = r.sockets[3]
+      sock.open()
+      hello(sock)
+      sock.receive(message)
+      return sock
+    }
+
+    const early = rig()
+    const quick = await wearOut(early)
+    await tick(HELD - 1)
+    quick.drop(1006)
+    await tick(7999)
+    expect(early.sockets).toHaveLength(4)
+    await tick(1)
+    expect(early.sockets).toHaveLength(5)
+
+    const held = rig()
+    const steady = await wearOut(held)
+    await tick(HELD)
+    steady.drop(1006)
+    await tick(999)
+    expect(held.sockets).toHaveLength(4)
+    await tick(1)
+    expect(held.sockets).toHaveLength(5)
+  })
+
+  it('counts from the latest READY, and stops counting once the connection is gone', async () => {
+    const r = rig()
+    const first = await ready(r)
+    await tick(30_000)
+    first.receive(READY_MESSAGE)
+    await tick(10_000)
+    first.drop(1006)
+    // Drops in a row until past the first READY's minute and short of the second's: no wait may be forgiven.
+    for (const wait of [1000, 2000, 4000, 8000, 16_000]) {
+      await tick(wait)
+      r.sockets.at(-1).drop(1006)
+    }
+    expect(r.sockets).toHaveLength(6)
+    // Every wait so far has doubled; the sixth drop waits 32 seconds, whatever either READY's timer would say.
+    await tick(31_999)
+    expect(r.sockets).toHaveLength(6)
+    await tick(1)
+    expect(r.sockets).toHaveLength(7)
+    r.sockets.at(-1).drop(1006)
+    await tick(59_999)
+    expect(r.sockets).toHaveLength(7)
+    await tick(1)
+    expect(r.sockets).toHaveLength(8)
+  })
+})
+
+describe('the identify budget', () => {
+  const identifiesOf = (r) => r.sockets.reduce((n, sock) => n + identifies(sock).length, 0)
+
+  it('never identifies without asking gatewayBot first, and backs off further each time a new session is thrown away', async () => {
     const r = rig()
     await r.gateway.start()
-    r.sockets[0].drop(1006)
-    await tick(1000)
-    r.sockets[1].drop(1006)
-    await tick(2000)
-    r.sockets[2].drop(1006)
-    await tick(4000)
-    expect(r.sockets).toHaveLength(4)
-    const sock = r.sockets[3]
-    sock.open()
-    hello(sock)
-    sock.receive({ op: 0, t: 'READY', s: 1, d: { session_id: SESSION, resume_gateway_url: RESUME } })
-    sock.drop(1006)
-    await tick(999)
+    let wait
+    for (wait of [3000, 3000, 4000, 8000, 16_000, 32_000, 60_000, 60_000]) {
+      const sock = r.sockets.at(-1)
+      const count = r.sockets.length
+      sock.open()
+      hello(sock)
+      sock.receive(READY_MESSAGE)
+      sock.receive({ op: 9, d: false })
+      await tick(wait - 1)
+      expect(r.sockets).toHaveLength(count)
+      await tick(1)
+      expect(r.sockets).toHaveLength(count + 1)
+    }
+    expect(r.sockets.every((sock) => resumes(sock).length === 0)).toBe(true)
+    expect(identifiesOf(r)).toBeLessThanOrEqual(r.calls())
+    expect(r.calls()).toBe(r.sockets.length)
+  })
+
+  it('does the same when a drop and a resume come in between', async () => {
+    const r = rig()
+    const waits = [1000, 3000, 4000, 8000]
+    const first = await ready(r)
+    first.drop(1006)
+    await tick(waits[0])
+    // The resume is refused: a new session, through gatewayBot, after the longer of 1 to 5 seconds and the backoff.
+    const second = r.sockets[1]
+    expect(second.url).toBe(`${RESUME}${QUERY}`)
+    second.open()
+    hello(second)
+    expect(resumes(second)).toHaveLength(1)
+    second.receive({ op: 9, d: false })
+    await tick(waits[1] - 1)
+    expect(r.sockets).toHaveLength(2)
+    await tick(1)
+    const third = r.sockets[2]
+    expect(third.url).toBe(`${GATEWAY}${QUERY}`)
+    third.open()
+    hello(third)
+    third.receive(READY_MESSAGE)
+    third.drop(1006)
+    await tick(waits[2])
+    const fourth = r.sockets[3]
+    expect(fourth.url).toBe(`${RESUME}${QUERY}`)
+    fourth.open()
+    hello(fourth)
+    fourth.receive({ op: 9, d: false })
+    await tick(waits[3] - 1)
     expect(r.sockets).toHaveLength(4)
     await tick(1)
     expect(r.sockets).toHaveLength(5)
+    expect(identifiesOf(r)).toBeLessThanOrEqual(r.calls())
+    expect(r.calls()).toBe(3)
+  })
+})
+
+describe('a session that cannot be resumed', () => {
+  const fails = [
+    ['a close', async (r) => r.sockets.at(-1).drop(1006)],
+    ['an error event', async (r) => r.sockets.at(-1).fail()],
+    ['no HELLO', async () => tick(HELLO_TIMEOUT)],
+    ['op 9 with d true', async (r) => {
+      r.sockets.at(-1).open()
+      hello(r.sockets.at(-1))
+      r.sockets.at(-1).receive({ op: 9, d: true })
+    }],
+  ]
+
+  it.each(fails)('is forgotten after three resumes that ended in %s, and the next connect identifies', async (_name, fail) => {
+    const r = rig()
+    const first = await ready(r, { s: 20 })
+    first.drop(1006)
+    for (let attempt = 1; attempt <= 3; attempt++) {
+      await untilSocket(r, attempt)
+      expect(r.sockets[attempt].url).toBe(`${RESUME}${QUERY}`)
+      await fail(r)
+    }
+    expect(r.sockets).toHaveLength(4)
+    r.plan.push({ url: FRESH, remaining: 1000, resetAfterMs: 0 })
+    await untilSocket(r, 4)
+    const next = r.sockets[4]
+    expect(next.url).toBe(`${FRESH}${QUERY}`)
+    next.open()
+    hello(next)
+    expect(resumes(next)).toEqual([])
+    expect(identifies(next)).toHaveLength(1)
+    await tick(FIRST_BEAT)
+    expect(heartbeats(next)).toEqual([{ op: 1, d: null }])
   })
 
-  it('resets the backoff on RESUMED', async () => {
+  it('is forgotten after three resumes that could not even make a socket', async () => {
+    const r = rig()
+    const first = await ready(r)
+    r.failures.push(new Error('no route'), new Error('no route'), new Error('no route'))
+    first.drop(1006)
+    await tick(1000 + 2000 + 4000)
+    expect(r.sockets).toHaveLength(1)
+    expect(r.gateway.status().state).toBe('waiting')
+    r.plan.push({ url: FRESH, remaining: 1000, resetAfterMs: 0 })
+    await tick(8000)
+    expect(r.sockets.map((s) => s.url)).toEqual([`${GATEWAY}${QUERY}`, `${FRESH}${QUERY}`])
+  })
+
+  it('keeps resuming while the attempts are not three in a row, a RESUMED starting the count again', async () => {
     const r = rig()
     const first = await ready(r)
     first.drop(1006)
-    await tick(1000)
+    // Two failed resumes, then one that works.
+    await untilSocket(r, 1)
     r.sockets[1].drop(1006)
-    await tick(2000)
+    await untilSocket(r, 2)
     r.sockets[2].drop(1006)
-    await tick(4000)
-    expect(r.sockets).toHaveLength(4)
-    const sock = r.sockets[3]
-    sock.open()
-    hello(sock)
-    sock.receive({ op: 0, t: 'RESUMED', s: 2, d: {} })
-    sock.drop(1006)
-    await tick(999)
-    expect(r.sockets).toHaveLength(4)
+    await untilSocket(r, 3)
+    const good = r.sockets[3]
+    expect(good.url).toBe(`${RESUME}${QUERY}`)
+    good.open()
+    hello(good)
+    good.receive({ op: 0, t: 'RESUMED', s: 2, d: {} })
+    good.drop(1006)
+    // Three more failed resumes before a new session is asked for.
+    for (let attempt = 4; attempt <= 6; attempt++) {
+      await untilSocket(r, attempt)
+      expect(r.sockets[attempt].url).toBe(`${RESUME}${QUERY}`)
+      r.sockets[attempt].drop(1006)
+    }
+    r.plan.push({ url: FRESH, remaining: 1000, resetAfterMs: 0 })
+    await untilSocket(r, 7)
+    expect(r.sockets[7].url).toBe(`${FRESH}${QUERY}`)
+  })
+
+  it('starts the count again with each READY, so a new session is resumed three times too', async () => {
+    const r = rig()
+    const first = await ready(r)
+    first.drop(1006)
+    for (let attempt = 1; attempt <= 3; attempt++) {
+      await untilSocket(r, attempt)
+      r.sockets[attempt].drop(1006)
+    }
+    r.plan.push({ url: FRESH, remaining: 1000, resetAfterMs: 0 })
+    await untilSocket(r, 4)
+    const fresh = r.sockets[4]
+    fresh.open()
+    hello(fresh)
+    fresh.receive({ op: 0, t: 'READY', s: 1, d: { session_id: OTHER_SESSION, resume_gateway_url: RESUME } })
+    fresh.drop(1006)
+    for (let attempt = 5; attempt <= 7; attempt++) {
+      await untilSocket(r, attempt)
+      expect(r.sockets[attempt].url).toBe(`${RESUME}${QUERY}`)
+      r.sockets[attempt].drop(1006)
+    }
+  })
+})
+
+describe('a connection that never becomes ready', () => {
+  it('is closed with 4000 30 seconds after IDENTIFY, and tried again', async () => {
+    const r = rig({ readyTimeoutMs: undefined })
+    const sock = await opened(r)
+    await tick(5000)
+    hello(sock, 1_000_000)
+    await tick(READY_TIMEOUT - 1)
+    expect(sock.closed).toEqual([])
+    expect(r.gateway.status().state).toBe('connecting')
     await tick(1)
-    expect(r.sockets).toHaveLength(5)
+    expect(sock.closed).toEqual([4000])
+    expect(r.gateway.status().state).toBe('waiting')
+    expect(r.gateway.status().lastError).toMatch(/ready/i)
+    await tick(999)
+    expect(r.sockets).toHaveLength(1)
+    await tick(1)
+    expect(r.sockets).toHaveLength(2)
+  })
+
+  it('is closed 30 seconds after RESUME too', async () => {
+    const r = rig({ readyTimeoutMs: undefined })
+    const first = await ready(r)
+    first.drop(1006)
+    await tick(1000)
+    const sock = r.sockets[1]
+    sock.open()
+    hello(sock, 1_000_000)
+    expect(resumes(sock)).toHaveLength(1)
+    await tick(READY_TIMEOUT - 1)
+    expect(sock.closed).toEqual([])
+    await tick(1)
+    expect(sock.closed).toEqual([4000])
+  })
+
+  it('waits as long as readyTimeoutMs says, no more and no less', async () => {
+    await fc.assert(
+      fc.asyncProperty(fc.integer({ min: 1, max: 200_000 }), async (wait) => {
+        const r = rig({ readyTimeoutMs: wait })
+        const sock = await opened(r)
+        hello(sock, 1_000_000)
+        await tick(wait - 1)
+        expect(sock.closed).toEqual([])
+        await tick(1)
+        expect(sock.closed).toEqual([4000])
+        r.gateway.stop()
+      }),
+      { numRuns: 25 },
+    )
+  })
+
+  it.each([
+    ['READY', { op: 0, t: 'READY', s: 1, d: { session_id: SESSION, resume_gateway_url: RESUME } }],
+    ['RESUMED', { op: 0, t: 'RESUMED', s: 1, d: {} }],
+  ])('is not closed once %s has come', async (_name, message) => {
+    const r = rig({ readyTimeoutMs: undefined })
+    const sock = await opened(r)
+    hello(sock, 1_000_000)
+    sock.receive(message)
+    await tick(2 * READY_TIMEOUT)
+    expect(sock.closed).toEqual([])
+    expect(r.sockets).toHaveLength(1)
+  })
+
+  it('is not made ready by an event that is neither', async () => {
+    const r = rig({ readyTimeoutMs: undefined })
+    const sock = await opened(r)
+    hello(sock, 1_000_000)
+    sock.receive({ op: 0, t: 'A_THING', s: 1, d: {} })
+    await tick(READY_TIMEOUT)
+    expect(sock.closed).toEqual([4000])
+  })
+
+  it('does not hold a socket that dropped before READY to account for the one that replaced it', async () => {
+    const r = rig({ readyTimeoutMs: undefined })
+    const first = await opened(r)
+    hello(first, 1_000_000)
+    first.drop(1006)
+    await tick(1000)
+    const second = r.sockets[1]
+    second.open()
+    hello(second, 1_000_000)
+    await tick(READY_TIMEOUT - 1000)
+    expect(second.closed).toEqual([])
+    await tick(1000)
+    expect(second.closed).toEqual([4000])
+  })
+
+  it('leaves a socket alone that failed for good, or that was stopped, before READY', async () => {
+    const r = rig({ readyTimeoutMs: undefined })
+    const failed = await opened(r)
+    hello(failed, 1_000_000)
+    failed.drop(4004)
+    await tick(2 * READY_TIMEOUT)
+    expect(failed.closed).toEqual([])
+    expect(r.gateway.status().state).toBe('failed')
+
+    const q = rig({ readyTimeoutMs: undefined })
+    const stopped = await opened(q)
+    hello(stopped, 1_000_000)
+    q.gateway.stop()
+    await tick(2 * READY_TIMEOUT)
+    expect(stopped.closed).toEqual([1000])
+    expect(q.sockets).toHaveLength(1)
+  })
+})
+
+describe('a failure that cannot be reported', () => {
+  it('does not stop the handlers: a handler that fails with an error that cannot even be read, or a log that throws', async () => {
+    const hostile = {
+      get name() {
+        throw new Error('no name')
+      },
+      get message() {
+        return Symbol('no message')
+      },
+    }
+    const seen = []
+    const r = rig({
+      onDispatch: (t) => {
+        seen.push(t)
+        if (t === 'BAD_THING') throw hostile
+        if (t === 'WORSE_THING') return Promise.reject(Symbol('worse'))
+      },
+      log: () => {
+        throw new Error('the log is down')
+      },
+    })
+    const sock = await ready(r)
+    for (const [i, t] of ['BAD_THING', 'WORSE_THING', 'GOOD_THING'].entries()) sock.receive({ op: 0, t, s: 2 + i, d: {} })
+    await tick(0)
+    expect(seen).toEqual(['READY', 'BAD_THING', 'WORSE_THING', 'GOOD_THING'])
+    expect(r.gateway.status().state).toBe('ready')
+    expect(r.gateway.status().lastError).toMatch(/WORSE_THING/)
+    sock.receive({ op: 0, t: 'LATER_THING', s: 9, d: {} })
+    await tick(0)
+    expect(seen.at(-1)).toBe('LATER_THING')
+  })
+
+  it('does not stop a drop being tried again when the log throws', async () => {
+    const r = rig({
+      log: () => {
+        throw new Error('the log is down')
+      },
+    })
+    const sock = await ready(r)
+    sock.drop(1006)
+    expect(r.gateway.status().lastError).toContain('1006')
+    await tick(1000)
+    expect(r.sockets).toHaveLength(2)
+  })
+
+  it('words a failure that cannot be read, from gatewayBot, as an error with no text', async () => {
+    const r = rig({
+      discord: {
+        gatewayBot: async () => {
+          throw {
+            get name() {
+              throw new Error('no name')
+            },
+          }
+        },
+      },
+    })
+    await expect(r.gateway.start()).resolves.not.toThrow()
+    expect(r.gateway.status().lastError).toMatch(/Error: $/)
+    expect(r.gateway.status().state).toBe('waiting')
   })
 })
 
@@ -1139,7 +1552,7 @@ describe('closes and the backoff', () => {
   it.each([4007, 4009])('drops the session on close code %i and identifies again', async (code) => {
     const r = rig()
     const sock = await ready(r, { s: 8 })
-    r.plan.push({ url: FRESH, remaining: 5, resetAfterMs: 0 })
+    r.plan.push({ url: FRESH, remaining: 1000, resetAfterMs: 0 })
     sock.drop(code)
     expect(r.gateway.status().state).toBe('waiting')
     await tick(999)
@@ -1270,14 +1683,14 @@ describe('stop', () => {
     expect(r.gateway.status().state).toBe('stopped')
   })
 
-  it('cancels an identify that is waiting after op 9', async () => {
+  it('cancels the reconnect that is waiting after op 9', async () => {
     const r = rig()
     const sock = await ready(r)
     sock.receive({ op: 9, d: false })
-    const before = sock.sent.length
     r.gateway.stop()
     await tick(600_000)
-    expect(sock.sent).toHaveLength(before)
+    expect(r.sockets).toHaveLength(1)
+    expect(r.gateway.status().state).toBe('stopped')
   })
 
   it('can be called before start, twice, and after a failure', async () => {
@@ -1598,11 +2011,26 @@ describe('a handler that takes too long', () => {
     expect(timeouts[0].cleared).toBe(true)
   })
 
+  it('records a handler that failed without the token or a link, whatever the event is called', async () => {
+    const r = rig({
+      onDispatch: () => {
+        throw new Error('broke')
+      },
+    })
+    const sock = await ready(r)
+    sock.receive({ op: 0, t: `EVIL ${TOKEN} https://cdn.test/x?sig=${TOKEN}`, s: 2, d: {} })
+    await tick(0)
+    const { lastError } = r.gateway.status()
+    expect(lastError).toMatch(/EVIL \[token\] \[link\]/)
+    expect(lastError).not.toContain(TOKEN)
+    expect(r.logged.join('\n')).not.toContain(TOKEN)
+  })
+
   it('records it without the token or a link, whatever the event is called', async () => {
     const r = rig({ onDispatch: () => new Promise(() => {}) })
     const sock = await ready(r)
     await tick(DISPATCH_TIMEOUT)
-    sock.receive({ op: 0, t: `${'A'.repeat(150)} ${TOKEN} https://cdn.test/x?sig=${TOKEN}`, s: 2, d: {} })
+    sock.receive({ op: 0, t: `EVIL ${TOKEN} ${'A'.repeat(150)} https://cdn.test/x?sig=${TOKEN}`, s: 2, d: {} })
     await tick(DISPATCH_TIMEOUT)
     const { lastError } = r.gateway.status()
     expect(lastError).toMatch(/took too long/)
@@ -1738,7 +2166,7 @@ describe('the token', () => {
     note()
     sock.fail()
     note()
-    await tick(1000)
+    await untilSocket(r, 1)
     r.sockets[1].open()
     hello(r.sockets[1], 1000)
     r.sockets[1].drop(4004)
@@ -1760,15 +2188,15 @@ describe('the options it is given, and the ones it defaults', () => {
         if (jobs[id]) jobs[id].over = true
       },
     }
-    const r = rig({ timers })
+    const r = rig({ timers, readyTimeoutMs: undefined })
     const sock = await opened(r)
     hello(sock)
-    expect(jobs.map((j) => j.ms)).toEqual([HELLO_TIMEOUT, FIRST_BEAT])
+    expect(jobs.map((j) => j.ms)).toEqual([HELLO_TIMEOUT, FIRST_BEAT, READY_TIMEOUT])
     expect(jobs[0].over).toBe(true)
     jobs[1].over = true
     jobs[1].fn()
     expect(heartbeats(sock)).toHaveLength(1)
-    expect(jobs.map((j) => j.ms)).toEqual([HELLO_TIMEOUT, FIRST_BEAT, INTERVAL])
+    expect(jobs.map((j) => j.ms)).toEqual([HELLO_TIMEOUT, FIRST_BEAT, READY_TIMEOUT, INTERVAL])
     r.gateway.stop()
     for (const job of jobs.filter((j) => !j.over)) job.fn()
     expect(heartbeats(sock)).toHaveLength(1)
@@ -1791,7 +2219,7 @@ describe('the options it is given, and the ones it defaults', () => {
         async gatewayBot() {
           bot += 1
           if (bot === 1) throw new Error(`down: ${TOKEN}`)
-          return { url: GATEWAY, remaining: 5, resetAfterMs: 0 }
+          return { url: GATEWAY, remaining: 1000, resetAfterMs: 0 }
         },
       },
       botToken: TOKEN,
