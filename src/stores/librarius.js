@@ -153,20 +153,22 @@ const later = (a, b) => (a === null ? b : b === null ? a : BigInt(b) > BigInt(a)
 // Stryker disable next-line EqualityOperator: equal revs are the same text, so `<` and `<=` answer alike
 const earlier = (a, b) => (BigInt(b) < BigInt(a) ? b : a)
 
-// Opens a post: the post itself, then a page of its messages around the reader's place or else the newest page. Asked for
-// the post that is open (a poll was told to start over), it keeps showing it until the new one lands, and it keeps the
-// reader's place if that is further on than the server knows (its report may not have landed).
-async function open(store, token, id) {
+// Opens a post: the post itself, then a page of its messages around `around` (a message id the caller names, to jump to a
+// date), else around the reader's place, else the newest page. Asked for the post that is open (a poll was told to start
+// over, or the reader jumped), it keeps showing it until the new one lands, and it keeps the reader's place if that is
+// further on than the server knows (its report may not have landed): a jump moves the page, never the mark.
+async function open(store, token, id, around) {
   gen.post++
   gen.poll++
   if (store.post?.id !== id) store.post = null
   const found = await readOrRefuse(store, () => gen.post, () => api.getPost(token, id))
   if (found === STALE) return
   const lastRead = later(found.lastRead, store.post?.id === id ? store.post.lastRead : null)
+  const anchor = around ?? lastRead
   const page = await readOrRefuse(
     store,
     () => gen.post,
-    () => api.listMessages(token, id, lastRead === null ? {} : { around: lastRead }),
+    () => api.listMessages(token, id, anchor === null ? {} : { around: anchor }),
   )
   if (page === STALE) return
   // The rev is the earlier of the two, so that whatever changed between the two reads is sent again by the next poll.
@@ -247,8 +249,14 @@ export const useLibrarius = defineStore('librarius', {
       })
     },
 
-    openPost(token, id) {
-      return attempt(this, () => open(this, token, id))
+    // `around`, a message id, opens the post on the page about that message instead of about the reader's place.
+    openPost(token, id, { around } = {}) {
+      return attempt(this, async () => {
+        if (around !== undefined && around !== null && (typeof around !== 'string' || !MESSAGE_ID.test(around))) {
+          throw new TypeError('openPost takes the id of a message to open around.')
+        }
+        return open(this, token, id, around)
+      })
     },
 
     loadOlder(token) {

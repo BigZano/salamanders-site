@@ -356,6 +356,73 @@ describe('librarius store: opening a post', () => {
     expect(s.post).toMatchObject({ lastRead: mid(450), hasOlder: true, hasNewer: true })
   })
 
+  describe('opening around a message the caller names', () => {
+    it('asks for the page around that message, not the last read, and still puts the reader\'s mark in the post', async () => {
+      getPost.mockResolvedValue(found({ lastRead: mid(450) }))
+      listMessages.mockResolvedValue(pageOf([409, 410, 411], { hasOlder: true, hasNewer: true }))
+      await s.openPost('tok', POST, { around: mid(410) })
+      expect(listMessages).toHaveBeenCalledTimes(1)
+      expect(listMessages.mock.calls[0].slice(0, 2)).toEqual(['tok', POST])
+      expect(listMessages.mock.calls[0][2]).toStrictEqual({ around: mid(410) })
+      expect(s.post).toMatchObject({ lastRead: mid(450), hasOlder: true, hasNewer: true })
+      expect(ids(s.post.messages)).toEqual([mid(409), mid(410), mid(411)])
+    })
+
+    it('does the same for a reader with no mark, who would otherwise be given the newest page', async () => {
+      getPost.mockResolvedValue(found())
+      listMessages.mockResolvedValue(pageOf([409, 410]))
+      await s.openPost('tok', POST, { around: mid(410) })
+      expect(listMessages.mock.calls[0][2]).toStrictEqual({ around: mid(410) })
+      expect(s.post.lastRead).toBeNull()
+    })
+
+    it('keeps the post on the page while the new run is on its way, so that a jump does not blank it', async () => {
+      seed([401, 402], { lastRead: mid(402) })
+      const d = deferred()
+      getPost.mockResolvedValue(found({ lastRead: mid(400) }))
+      listMessages.mockReturnValue(d.promise)
+      const p = s.openPost('tok', POST, { around: mid(480) })
+      await tick()
+      expect(ids(s.post.messages)).toEqual([mid(401), mid(402)])
+      d.resolve(pageOf([479, 480]))
+      await p
+      expect(ids(s.post.messages)).toEqual([mid(479), mid(480)])
+      expect(s.post.lastRead).toBe(mid(402))
+    })
+
+    it('is the same as no option for an option that is undefined or null', async () => {
+      for (const opts of [undefined, {}, { around: undefined }, { around: null }]) {
+        listMessages.mockClear()
+        getPost.mockResolvedValue(found({ lastRead: mid(450) }))
+        listMessages.mockResolvedValue(pageOf([449, 450]))
+        await s.openPost('tok', POST, opts)
+        expect(listMessages.mock.calls[0][2], JSON.stringify(opts)).toStrictEqual({ around: mid(450) })
+      }
+    })
+
+    it('refuses what is no message id before asking the server anything, and says so in `error`', async () => {
+      for (const around of ['', 'abc', '12345', '1'.repeat(21), '20000000000000041x', ' 200000000000000410', 200000000000000410, {}, [], true]) {
+        s.error = ''
+        await expect(s.openPost('tok', POST, { around }), String(around)).rejects.toThrow(new TypeError('openPost takes the id of a message to open around.'))
+        expect(s.error, String(around)).toBe('openPost takes the id of a message to open around.')
+      }
+      expect(getPost).not.toHaveBeenCalled()
+      expect(listMessages).not.toHaveBeenCalled()
+    })
+
+    it('a late answer for an older opening around a date does not replace a newer one', async () => {
+      const slow = deferred()
+      getPost.mockResolvedValue(found())
+      listMessages.mockReturnValueOnce(slow.promise).mockResolvedValueOnce(pageOf([490, 491]))
+      const a = s.openPost('tok', POST, { around: mid(410) })
+      await tick()
+      await s.openPost('tok', POST, { around: mid(490) })
+      slow.resolve(pageOf([409, 410]))
+      await a
+      expect(ids(s.post.messages)).toEqual([mid(490), mid(491)])
+    })
+  })
+
   it('does not ask for the messages until the post has answered', async () => {
     const d = deferred()
     getPost.mockReturnValue(d.promise)
