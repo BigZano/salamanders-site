@@ -69,9 +69,10 @@ const DISCORD_API_BASE = process.env.DISCORD_API_BASE || 'https://discord.com/ap
 /** What a log may say of a failure: its name and message, with the bot token and every link cut out, in 200 characters. */
 const describeForLog = (err) => describeFailure(err, { secret: BOT_TOKEN })
 
-// A rejection nobody waited for, or an exception nobody caught, must not take the whole API down: Bun exits on either
-// unless something is listening. Both are logged the way every other failure is (no token, no link) and never thrown
-// again, and the log line itself is guarded, since a handler that throws ends the process all the same.
+/**
+ * Log what nothing handled, the way every other failure is logged (no token, no link). The log line itself is guarded: a
+ * handler that throws ends the process all the same.
+ */
 function logUnhandled(kind, err) {
   try {
     console.error(`${kind}: ${describeForLog(err)}`)
@@ -79,8 +80,6 @@ function logUnhandled(kind, err) {
     // The log is gone (a closed stderr, say): there is nowhere left to say it.
   }
 }
-process.on('unhandledRejection', (reason) => logUnhandled('Unhandled rejection', reason))
-process.on('uncaughtException', (err) => logUnhandled('Uncaught exception', err))
 
 const pool = new Pool({ connectionString: process.env.DATABASE_URL })
 
@@ -256,7 +255,8 @@ if (librariusConfigured) {
       access,
       forumId: librarius.forumId,
       fetchMessage: discord.message,
-      // The gateway's READY starts the catch-up: the same run as the one at boot, if that is still going.
+      // The gateway's READY starts the catch-up. A run already going is not shared: this queues one follow-up pass, which
+      // starts as the going one ends (librariusImport.js).
       onReady: () => importer.run(),
     })
     const gateway = createGateway({ discord, botToken: BOT_TOKEN, onDispatch: ingest.dispatch })
@@ -427,6 +427,14 @@ Bun.serve({
 })
 
 console.log(`Builds API listening on :${PORT}`)
+
+// A rejection nobody waited for, or an exception nobody caught, must not take a running API down: Bun exits on either
+// unless something is listening. Both are logged and never thrown again. They are registered only now that the server is
+// listening, and not at the top: a failure while starting (the port taken, a constructor that throws) has to end the
+// process, so that docker's `unless-stopped` starts it again. With the handler already in place that failure would be
+// logged and swallowed, and a timer (the gallery poll's) would keep a process alive with nothing listening.
+process.on('unhandledRejection', (reason) => logUnhandled('Unhandled rejection', reason))
+process.on('uncaughtException', (err) => logUnhandled('Uncaught exception', err))
 
 // Not waited for, and after Bun.serve: a slow database or a failing step must never keep the server from listening.
 startLibrarius().catch((err) => console.error(`Librarius: startup failed: ${describeForLog(err)}`))

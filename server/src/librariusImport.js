@@ -7,7 +7,7 @@
  *   onPostsListed = () => {} })
  *   → { run() → Promise<void>, start(), stop(), status() → what store.syncStatus() says }
  *
- * run() never rejects. Everything a run writes is an upsert, a delete of what Discord no longer holds, or a cursor that
+ * run() never rejects, and what it logs can never fail it: a log that throws is ignored. Everything a run writes is an upsert, a delete of what Discord no longer holds, or a cursor that
  * only moves forward, so one that repeats or is cut short does no harm. Only one run goes at a time: a run asked for while
  * one is going waits for it, and every call made during it shares ONE follow-up run, which starts as soon as the current
  * one ends. The gateway may ask for a catch-up while an earlier run is still working, and what that run has already read
@@ -116,8 +116,18 @@ export function createImport({
   if (typeof onPostsListed !== 'function') throw new TypeError('onPostsListed must be a function.')
 
   const stamp = () => new Date(now()).toISOString()
-  // Stryker disable next-line ArrowFunction,StringLiteral: what is logged is for the owner to read, and no test asserts it
-  const report = (text) => log(`Librarius import: ${text}`)
+  // What the log does can never fail the run: a log that throws (a closed stderr, say) must not skip what follows it, the
+  // count of failures, the timer and the record of what went wrong.
+  // Stryker disable next-line ArrowFunction,BlockStatement: what is logged is for the owner to read, and no test asserts it
+  const report = (text) => {
+    // Stryker disable next-line BlockStatement: as above
+    try {
+      // Stryker disable next-line StringLiteral: as above
+      log(`Librarius import: ${text}`)
+    } catch {
+      // Nothing is left to say it with.
+    }
+  }
   // Whether a run is going, the follow-up that calls made during it share (null when none was asked for), and how many runs
   // in a row have failed.
   let running = false
@@ -253,7 +263,7 @@ export function createImport({
   function launch() {
     timers.clearTimeout(timer)
     running = true
-    // Nothing in execute() is meant to throw. If it does anyway (a log that throws, say), the run still ends, and run()
+    // Nothing in execute() is meant to throw. If it does anyway (a timer that throws, say), the run still ends, and run()
     // still never rejects.
     return execute().then(finish, finish)
   }

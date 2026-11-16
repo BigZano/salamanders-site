@@ -283,8 +283,9 @@ listening: the roster warm-up, the posts load, the import (in the background), t
 timer and the gateway connection. The import comes round on its own: once after start, again after every gateway READY,
 and 6 hours after the last run ended whoever started it. A run that fails is tried again after 5, 10 and 20 minutes, then
 every 30 minutes, and a run that finishes starts the steps over. A step that fails to start is logged as `Librarius: ...`
-(never the token or a link) and the rest go on; none of it can keep the API from listening. A rejection or exception that
-nothing handles anywhere in the API is logged the same way and no longer ends the process.
+(never the token or a link) and the rest go on; none of it can keep the API from listening. Once the API is listening, a rejection or
+exception that nothing handles is logged the same way and no longer ends the process; a failure while it is starting (the
+port taken, say) still does, so that docker restarts it.
 
 **Bot permissions:** View Channel and Read Message History on the forum (granted 2026-11-15), and the Message Content
 intent toggle on the bot's page in the Discord Developer Portal, already on for the Reliquarium (without it the gateway
@@ -310,13 +311,15 @@ Rollout:
      last_error from librarius_sync;'` shows `import_done` true and an empty `last_error` (and `/librarius/me` says
      `ready: true` for a reader);
    - port 8787 is no longer reachable from another machine on the LAN;
-   - a link refresh moved a link forward: open a post with files, then, 10 minutes or more later, run the query below
-     for the soonest-expiring attachments of posts viewed in the last day. None should have an `expires_at` in the past or
-     within the next two hours; Discord signs its links for about a day, so a day after the import the soonest `expires_at`
-     should still be hours ahead rather than having come round to the past.
+   - a link refresh moved links forward. Pick one post whose files were imported a day or more ago, so that their links
+     have lapsed or lapse within two hours (a link further off is left alone, by design). Note their `expires_at` with
+     the query below (its post id in place of `<post id>`), open the post on the site, and run the query again 10 minutes or
+     more later: they should be later than before, and more than an hour away. Look at that one post, not at the whole
+     table: a link sits between 1 hour 50 minutes and 2 hours from lapsing for up to one pass before it is renewed, and a
+     link Discord will not renew (its message is gone there) stays in the past.
 
      ```sh
-     docker compose exec -T db psql -U salamanders salamanders_builds -c "select a.id, a.expires_at from librarius_attachments a join librarius_messages m on m.id = a.message_id join librarius_posts p on p.id = m.post_id where p.viewed_at > now() - interval '1 day' order by a.expires_at limit 5;"
+     docker compose exec -T db psql -U salamanders salamanders_builds -c "select a.id, a.expires_at from librarius_attachments a join librarius_messages m on m.id = a.message_id where m.post_id = <post id> order by a.expires_at limit 5;"
      ```
 
 If the import never finishes (`import_done` stays false), read `last_error` in the same table: the import retries by itself

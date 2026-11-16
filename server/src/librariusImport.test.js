@@ -969,6 +969,20 @@ describe('rows the store refuses', () => {
     expect(w.discord.calls.some((c) => c[1] === OUT_OF_RANGE)).toBe(false)
   })
 
+  it('skips a refused row and goes on when the log that would say so throws', async () => {
+    const w = setup({
+      active: [thread(1), thread(9, { id: OUT_OF_RANGE })],
+      channels: { [postId(1)]: channel(1, 1, 3) },
+      log: () => {
+        throw new Error('the log is closed')
+      },
+    })
+    await w.imp.run()
+    expect(await w.imp.status()).toMatchObject({ importDone: true, lastError: null })
+    expect([...w.store.posts.keys()]).toEqual([postId(1)])
+    expect(idsOf(w, 1)).toHaveLength(3)
+  })
+
   it('takes a thread whose id is the largest a bigint holds, and keeps its stored post through the delete', async () => {
     const MAX = '9223372036854775807'
     const w = setup({
@@ -1484,6 +1498,30 @@ describe('the timer chain', () => {
     state.broken = true
     await fire(w)
     expect(delays(w)).toEqual([300_000])
+  })
+
+  const BROKEN_LOG = () => {
+    throw new Error('the log is closed')
+  }
+
+  it('counts a failed run and sets the retry timer even when the log throws, and still writes the failure down', async () => {
+    const { w } = flaky({ log: BROKEN_LOG })
+    w.imp.start()
+    await fire(w)
+    expect(delays(w)).toEqual([300_000])
+    expect((await w.imp.status()).lastError).toBe('Error: Discord is unreachable.')
+    await fire(w)
+    expect(delays(w)).toEqual([600_000])
+  })
+
+  it('does the same when the failure cannot be written down either and the log throws about that too', async () => {
+    const { w } = flaky({ log: BROKEN_LOG })
+    w.store.failWhen('setSync', (patch) => 'last_error' in patch, new Error('database is down'))
+    w.imp.start()
+    await fire(w)
+    expect(delays(w)).toEqual([300_000])
+    await fire(w)
+    expect(delays(w)).toEqual([600_000])
   })
 
   it('takes the retry steps it is given, and keeps the last one', async () => {
