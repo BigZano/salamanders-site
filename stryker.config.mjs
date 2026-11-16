@@ -70,6 +70,8 @@ export default {
     'server/src/librariusHandler.js',
     'src/lib/librarius/api.js',
     'src/lib/librarius/snowflake.js',
+    'src/lib/librarius/layout.js',
+    'src/lib/librarius/render.js',
     'src/stores/librarius.js',
   ],
   coverageAnalysis: 'perTest',

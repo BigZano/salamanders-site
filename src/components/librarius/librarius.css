@@ -1,0 +1,373 @@
+/* The Librarius: the Legion's Discord forum, read on the site.
+ *
+ * Phone first. A message is an avatar and a column; a grouped one keeps the column and drops the avatar. Pictures and
+ * embeds never grow wider than the column, every link is at least 44px tall on a touch screen (var(--tap)), and nothing
+ * needs a hover to be found. Everything uses the site's tokens (style.css); class names start with lb- so none reaches
+ * another page. What Discord's text turns into (.md-*) is styled here too, but only inside a message (.lb-msg).
+ * tests: librarius.css.test.js pins these promises, motionPolicy.test.js sweeps the motion rules. */
+
+/* One message. The anchor of a link to it (#m-<id>) lands below the site's bar. */
+.lb-msg {
+  display: grid;
+  grid-template-columns: 2.5rem minmax(0, 1fr);
+  gap: 0 0.75rem;
+  padding: 0.7rem 0 0.2rem;
+  scroll-margin-top: 5rem;
+  color: var(--color-bone);
+}
+/* A grouped message sits close under the one before it, like a line of the same speech. */
+.lb-grouped {
+  padding-top: 0.1rem;
+}
+
+/* The opening message, and any long one or one with a heading or pictures: a panel, with room around it and a larger
+ * body, keeping the avatar beside its name. */
+.lb-article {
+  padding: 1.1rem 1rem;
+  margin: 0.8rem 0;
+  background: rgba(14, 28, 22, 0.5);
+  border: 1px solid var(--color-ash);
+  border-radius: var(--radius-md);
+}
+.lb-article .lb-body {
+  font-size: var(--text-base);
+  line-height: 1.7;
+}
+.lb-article .lb-head {
+  margin-bottom: 0.5rem;
+}
+@media (min-width: 600px) {
+  .lb-article {
+    padding: 1.4rem 1.6rem;
+  }
+}
+
+/* The avatar: a round picture, or the author's initials where there is none. */
+.lb-avatar {
+  display: block;
+  width: 2.5rem;
+  height: 2.5rem;
+  border-radius: var(--radius-pill);
+  object-fit: cover;
+  background: var(--color-ash);
+}
+.lb-initials {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-family: var(--font-display);
+  font-size: var(--text-md);
+  letter-spacing: 0.04em;
+  color: var(--color-pewter);
+}
+.lb-main {
+  min-width: 0;
+}
+
+.lb-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 0.15rem 0.6rem;
+}
+.lb-name {
+  font-weight: 600;
+  color: var(--color-whitehot);
+  /* A name with a right-to-left override in it cannot reorder what is beside it. */
+  unicode-bidi: isolate;
+  overflow-wrap: anywhere;
+}
+.lb-time {
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  color: var(--color-faint);
+}
+
+/* The line above a message that answers another: a link to the message, as tall as a finger on a phone, its words on
+ * one line cut with an ellipsis. */
+.lb-reply {
+  display: flex;
+  align-items: center;
+  min-height: var(--tap);
+  margin-bottom: 0.25rem;
+  padding-left: 0.6rem;
+  font-size: var(--text-sm);
+  color: var(--color-smoke);
+  border-left: 2px solid var(--color-ash-2);
+  text-decoration: none;
+}
+.lb-reply-text {
+  min-width: 0;
+  line-height: 1.5;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  unicode-bidi: isolate;
+}
+.lb-reply-name {
+  color: var(--color-pewter);
+  font-weight: 600;
+}
+
+.lb-body {
+  line-height: 1.55;
+  overflow-wrap: anywhere;
+  /* Text with a right-to-left override in it stays in its own block. */
+  unicode-bidi: isolate;
+}
+.lb-body .md > :first-child {
+  margin-top: 0;
+}
+
+/* Discord's text, in the Librarius's own words for it. */
+.lb-msg .md-h {
+  font-family: var(--font-display);
+  font-weight: 700;
+  line-height: 1.15;
+  margin: 1.2rem 0 0.5rem;
+}
+.lb-msg .md-h1 {
+  font-size: var(--text-xl);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+.lb-msg .md-h2 {
+  font-size: var(--text-lg);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+.lb-msg .md-h3 {
+  font-size: var(--text-base);
+  letter-spacing: 0.02em;
+}
+.lb-msg .md-line {
+  margin: 0.15rem 0;
+}
+.lb-msg .md-blank {
+  height: 0.8rem;
+}
+.lb-msg .md-sub {
+  margin: 0.2rem 0;
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  color: var(--color-smoke);
+}
+.lb-msg strong {
+  color: var(--color-whitehot);
+}
+.lb-msg .md-quote {
+  margin: 0.5rem 0;
+  padding: 0.5rem 0.9rem;
+  border-radius: var(--radius-sm);
+  background: rgba(0, 0, 0, 0.32);
+  border-left: 2px solid var(--color-drake);
+}
+.lb-msg ul.md-list,
+.lb-msg ol.md-list {
+  margin: 0.3rem 0;
+  padding-left: 1.5rem;
+}
+.lb-msg .md-link {
+  color: var(--color-bone);
+  text-decoration: underline;
+  text-decoration-color: var(--color-drake);
+  text-decoration-thickness: 1px;
+  text-underline-offset: 3px;
+}
+.lb-msg .md-ext::after {
+  content: '\2197';
+  margin-left: 0.15em;
+  font-size: 0.75em;
+  color: var(--color-smoke);
+}
+.lb-msg .md-unlinked {
+  overflow-wrap: anywhere;
+}
+.lb-msg .md-code {
+  padding: 0 0.3em;
+  font-family: var(--font-mono);
+  font-size: 0.85em;
+  background: rgba(0, 0, 0, 0.45);
+  border: 1px solid var(--color-ash);
+  border-radius: var(--radius-sm);
+}
+.lb-msg .md-pre {
+  margin: 0.5rem 0;
+  padding: 0.8rem 1rem;
+  overflow-x: auto;
+  font-family: var(--font-mono);
+  font-size: var(--text-sm);
+  background: rgba(0, 0, 0, 0.5);
+  border: 1px solid var(--color-ash);
+  border-radius: var(--radius-sm);
+}
+.lb-msg .md-mention {
+  padding: 0 0.25em;
+  font-weight: 600;
+  color: var(--role, var(--color-cobalt));
+  background: color-mix(in srgb, var(--role, var(--color-cobalt)) 22%, transparent);
+  border-radius: var(--radius-md);
+}
+/* A spoiler is hatched over until it is tapped; its words are hidden from the eye, not from a screen reader. */
+.lb-msg .md-spoiler {
+  color: transparent;
+  cursor: pointer;
+  background: repeating-linear-gradient(135deg, var(--color-basalt-3) 0 5px, var(--color-basalt-2) 5px 10px);
+  border-radius: var(--radius-sm);
+  box-shadow: inset 0 0 0 1px rgba(253, 184, 37, 0.22);
+}
+.lb-msg .md-spoiler * {
+  visibility: hidden;
+}
+.lb-msg .md-spoiler.is-shown {
+  color: inherit;
+  cursor: auto;
+  background: rgba(255, 255, 255, 0.06);
+  box-shadow: none;
+}
+.lb-msg .md-spoiler.is-shown * {
+  visibility: visible;
+}
+
+/* A custom emoji sits in the line of text; in a reaction it is a little larger. */
+.lb-emoji {
+  display: inline-block;
+  width: 1.375em;
+  height: 1.375em;
+  vertical-align: -0.3em;
+  object-fit: contain;
+}
+
+/* Attachments, embeds and stickers sit under the text, each in its own block. */
+.lb-attachment {
+  margin: 0.5rem 0 0;
+}
+.lb-image {
+  display: block;
+  /* The width and height in the markup reserve the room; these keep the picture inside the column at its own shape. */
+  width: auto;
+  height: auto;
+  max-width: 100%;
+  max-height: 32rem;
+  border-radius: var(--radius-md);
+  background: var(--color-basalt-2);
+}
+/* A picture that would not load, in the place it would have been. */
+.lb-missing {
+  display: inline-block;
+  padding: 0.6rem 1rem;
+  font-size: var(--text-sm);
+  color: var(--color-faint);
+  border: 1px dashed var(--color-ash-2);
+  border-radius: var(--radius-md);
+}
+/* A file, a video included: a link, as tall as a finger. */
+.lb-file {
+  display: inline-flex;
+  align-items: center;
+  max-width: 100%;
+  min-height: var(--tap);
+  padding: 0.35rem 0.9rem;
+  font-size: var(--text-sm);
+  color: var(--color-bone);
+  overflow-wrap: anywhere;
+  background: rgba(14, 28, 22, 0.5);
+  border: 1px solid var(--color-ash);
+  border-radius: var(--radius-sm);
+  text-decoration: none;
+}
+a.lb-file {
+  color: var(--color-drake);
+}
+
+.lb-embed {
+  max-width: 34rem;
+  margin: 0.5rem 0 0;
+  padding: 0.6rem 0.9rem;
+  background: rgba(14, 28, 22, 0.5);
+  border-left: 3px solid var(--color-gold);
+  border-radius: var(--radius-sm);
+  overflow-wrap: anywhere;
+  unicode-bidi: isolate;
+}
+.lb-embed p {
+  margin: 0.1rem 0;
+}
+.lb-embed-provider {
+  font-size: var(--text-xs);
+  color: var(--color-faint);
+}
+.lb-embed-title {
+  font-weight: 600;
+}
+.lb-embed-title a {
+  color: var(--color-drake);
+  text-underline-offset: 3px;
+}
+.lb-embed-description {
+  margin-top: 0.2rem;
+  font-size: var(--text-md);
+  color: var(--color-pewter);
+}
+.lb-embed-thumb,
+.lb-embed-image {
+  display: block;
+  max-width: 100%;
+  height: auto;
+  margin-top: 0.5rem;
+  border-radius: var(--radius-sm);
+}
+.lb-embed-thumb {
+  max-width: 6rem;
+}
+.lb-embed-image {
+  max-height: 24rem;
+}
+.lb-sticker {
+  margin: 0.5rem 0 0;
+  font-family: var(--font-mono);
+  font-size: var(--text-sm);
+  color: var(--color-faint);
+}
+
+/* Reactions: read-only chips, wrapping onto more lines rather than scrolling. */
+.lb-reactions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.35rem;
+  margin: 0.5rem 0 0;
+  padding: 0;
+  list-style: none;
+}
+.lb-reaction {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+  padding: 0.1rem 0.6rem;
+  font-size: var(--text-sm);
+  background: rgba(14, 28, 22, 0.6);
+  border: 1px solid var(--color-ash);
+  border-radius: var(--radius-pill);
+}
+.lb-count {
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  color: var(--color-pewter);
+}
+
+@media (hover: hover) and (pointer: fine) {
+  .lb-reply:hover {
+    color: var(--color-bone);
+    border-left-color: var(--color-drake);
+  }
+  .lb-msg .md-link:hover {
+    color: var(--color-whitehot);
+    text-decoration-color: var(--color-drake);
+  }
+  .lb-msg .md-spoiler:hover {
+    box-shadow: inset 0 0 0 1px rgba(253, 184, 37, 0.5);
+  }
+  a.lb-file:hover {
+    border-color: var(--color-ash-2);
+  }
+}
