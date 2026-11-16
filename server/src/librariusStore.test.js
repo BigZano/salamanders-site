@@ -1934,6 +1934,22 @@ describe('updateAttachmentUrls', () => {
     }
   })
 
+  it('stores the link as the check normalises it, so that what is kept is what was judged (and what parseMessage would keep)', async () => {
+    const written = [
+      'https://cdn.discordapp.com/attachments/1/2/a file.png?ex=6540a0b3',
+      'https://cdn.discordapp.com/attachments/\\..\\x/f.png',
+      'https://cdn.discordapp.com/attachments/1/./2/f.png',
+    ]
+    const { pool, log } = fakePool()
+    await store(pool).updateAttachmentUrls(written.map((link, i) => ({ id: [ATT, ATT_2, MSG][i], url: link, expiresAt: null })))
+    expect(log[0].params[1]).toEqual([
+      'https://cdn.discordapp.com/attachments/1/2/a%20file.png?ex=6540a0b3',
+      'https://cdn.discordapp.com/attachments/x/f.png',
+      'https://cdn.discordapp.com/attachments/1/2/f.png',
+    ])
+    expect(log[0].params[1]).toEqual(written.map((link) => attachmentUrl(link)))
+  })
+
   it('judges a link as parseMessage does, whatever it holds (property)', async () => {
     await fc.assert(
       fc.asyncProperty(fc.constantFrom('https://cdn.discordapp.com/attachments/', 'https://cdn.discordapp.com/', 'https://x.test/'), fc.string({ maxLength: 40 }), async (head, tail) => {
@@ -1946,6 +1962,7 @@ describe('updateAttachmentUrls', () => {
         } else {
           await done
           expect(log).toHaveLength(1)
+          expect(log[0].params[1]).toEqual([attachmentUrl(link)])
         }
       }),
     )

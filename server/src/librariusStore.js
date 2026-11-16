@@ -597,21 +597,25 @@ export function createLibrariusStore(pool) {
     /**
      * Replace the link and expiry (a time, or null) of each attachment: [{ id, url, expiresAt }], one statement. A link that
      * is not on Discord's CDN attachments path (the check a message's attachment passes when it is parsed) is a TypeError
-     * before any query, so what is stored never leaves that host, whoever asked for it.
+     * before any query, so what is stored never leaves that host, whoever asked for it. The link is stored as that check
+     * normalises it (as parseMessage keeps it), not as it was written.
      */
     async updateAttachmentUrls(updates) {
       needList(updates, 'updates')
-      for (const u of updates) {
+      // What is stored is the link as the check normalises it, the same as parseMessage keeps, so it is the very link that was judged.
+      const urls = updates.map((u) => {
         needId(u.id, 'attachment id')
-        if (attachmentUrl(u.url) === null) throw new TypeError("url must be a link on Discord's CDN attachments path")
-      }
+        const url = attachmentUrl(u.url)
+        if (url === null) throw new TypeError("url must be a link on Discord's CDN attachments path")
+        return url
+      })
       const expiries = updates.map((u) => (u.expiresAt === null ? null : needTime(u.expiresAt, 'expiresAt')))
       if (updates.length === 0) return
       await pool.query(
         `update librarius_attachments a set url = u.url, expires_at = u.expires_at
            from unnest($1::bigint[], $2::text[], $3::timestamptz[]) as u (id, url, expires_at)
           where a.id = u.id`,
-        [updates.map((u) => u.id), updates.map((u) => u.url), expiries],
+        [updates.map((u) => u.id), urls, expiries],
       )
     },
 
