@@ -14,6 +14,11 @@
  * clips channel the api polls, Discord's CDN its attachments download from, and the R2 bucket they are copied
  * into (path-style, at /<bucket>/<key>, which is where server/src/r2.js puts an object for R2_ENDPOINT
  * http://discord-mock:4400).
+ *
+ * And it stands in for the Librarius's one outside service, Discord itself (e2e/tests/librarius*.spec.js): the guild's forum
+ * (its permission overwrites and tags), its posts and their messages, the guild's emoji, the attachment refresh, and a live
+ * gateway WebSocket at /gateway that the api's connection reads. Test hooks under /__test/librarius change the forum the way
+ * Discord would, and tell the gateway's listeners.
  */
 const PORT = Number(process.env.PORT || 4400)
 // How the api and the browser reach this mock: the address an attachment's CDN link names.
@@ -50,6 +55,10 @@ const USERS = {
   'test-granted-token': { id: '200000000000000003', username: 'granted-tester' },
   // Reliquarium curator (e2e/tests/gallery-api.spec.js): an invented id, here and in GALLERY_MEMBERS.
   'test-curator-token': { id: '200000000000000302', username: 'curator-tester' },
+  // The Librarius (e2e/tests/librarius-api.spec.js): invented ids, here and in LIBRARIUS_MEMBERS. The librarian holds the
+  // reader role and no Legion role; the shut-out one holds it too, but a member overwrite on the forum denies them View.
+  'test-librarian-token': { id: '200000000000000402', username: 'librarian-tester' },
+  'test-shut-out-token': { id: '200000000000000403', username: 'shut-out-tester' },
 }
 const LEGION_ROLE = '1377787723976409211'
 const RECLUSIARCH_ROLE = '1323334632904855592'
@@ -87,6 +96,14 @@ const DEATHWATCH_MEMBERS = {
 const CURATOR_ROLE = '200000000000000301'
 const GALLERY_MEMBERS = {
   '200000000000000302': { roles: [LEGION_ROLE, CURATOR_ROLE] },
+}
+// The Librarius reader role (the forum's overwrites let it in) and its two holders, neither a Legion member. Kept out of
+// MEMBERS for the same reason as the Deathwatch testers. A Legion member such as test-member-token holds no reader role,
+// so the forum is shut to them as it is to everyone else.
+const READER_ROLE = '200000000000000401'
+const LIBRARIUS_MEMBERS = {
+  '200000000000000402': { roles: [READER_ROLE] },
+  '200000000000000403': { roles: [READER_ROLE] },
 }
 // Guild membership as Discord's bot endpoint would report it.
 const MEMBERS = {
@@ -163,13 +180,14 @@ function postMessage(user, content, names) {
 const PRE_LAUNCH_TITLE = 'E2E posted before launch'
 postMessage(USERS['test-member-token'], PRE_LAUNCH_TITLE, ['clip.mp4'])
 
-// Discord's answer to GET /channels/:id/messages: at most `limit` (1 to 100, default 50), newest first. With
-// `after`, the `limit` messages just after that id (the oldest ones past it), still newest first.
-function messagesPage(params) {
+// Discord's answer to GET /channels/:id/messages for a channel whose messages are `list`, oldest first: at most `limit`
+// (1 to 100, default 50), newest first. With `after`, the `limit` messages just after that id (the oldest ones past it),
+// still newest first.
+function messagesPage(list, params) {
   const limit = Math.min(Math.max(Number.parseInt(params.get('limit') ?? '50', 10) || 50, 1), 100)
   const after = params.get('after')
   if (after !== null && !/^\d{1,20}$/.test(after)) return null
-  const picked = after === null ? channel.slice(-limit) : channel.filter((m) => BigInt(m.id) > BigInt(after)).slice(0, limit)
+  const picked = after === null ? list.slice(-limit) : list.filter((m) => BigInt(m.id) > BigInt(after)).slice(0, limit)
   return picked.reverse()
 }
 
@@ -239,6 +257,357 @@ async function r2(request, key) {
   return new Response(request.method === 'HEAD' ? null : body, { status: range ? 206 : 200, headers })
 }
 
+// --- The Librarius: the guild's forum, its posts and a live gateway, all in memory ---
+
+// Invented ids, in the range the Librarius's fixtures use. e2e/docker-compose.yml hands the api the forum's
+// (LIBRARIUS_CHANNEL_ID); the reader role and the two members are in the tables above. A post's id is fixed, and is the id of
+// its opening message; every other message gets an id from snowflake(), as the clips channel's do.
+const FORUM = '200000000000000400'
+const SHUT_OUT_ID = '200000000000000403'
+const ACTIVE_POST = '200000000000000410'
+const ARCHIVED_POST = '200000000000000411'
+const FORUM_TAG = '200000000000000420'
+const CUSTOM_EMOJI = '200000000000000430'
+// Two authors who are not in the guild's member list, so a page names them by the name their messages carry.
+const SCRIBE_ID = '200000000000000440'
+const ARCHIVIST_ID = '200000000000000441'
+// The user the gateway's READY names: the bot the api connects as.
+const BOT_ID = '200000000000000499'
+const READER_COLOR = 0x3a5246
+// What @everyone holds in the guild: View Channel, Send Messages, Read Message History, Send Messages in Threads and
+// Add Reactions. The forum's overwrites then take View away from everyone but the reader role.
+const EVERYONE_PERMISSIONS = '274877975616'
+const VIEW_CHANNEL = String(1n << 10n)
+// The Librarius's two seeded posts: how many messages the active one holds (its first is the post itself, as in Discord,
+// where a forum post's id is the id of its opening message), and the numbered replies that are not plain text.
+const ACTIVE_MESSAGES = 230
+const ATTACHMENT_REPLY = 227
+const QUOTING_REPLY = 228
+const QUOTED_REPLY = 3
+const SNOWFLAKE = /^\d{17,20}$/
+
+const LIBRARIUS_PEOPLE = {
+  [SCRIBE_ID]: { id: SCRIBE_ID, username: 'e2e-scribe', global_name: 'E2E Scribe' },
+  [ARCHIVIST_ID]: { id: ARCHIVIST_ID, username: 'e2e-archivist', global_name: 'E2E Archivist' },
+}
+
+// The author object of a message: a test token's user, one of the two above, or an unknown id made up a name.
+function authorOf(id) {
+  const user = Object.values(USERS).find((u) => u.id === id)
+  if (user) return { id, username: user.username, global_name: null }
+  return LIBRARIUS_PEOPLE[id] ?? { id, username: `user-${id}`, global_name: null }
+}
+
+// post id → the thread as Discord describes it, and post id → its messages, oldest first.
+const forumPosts = new Map()
+const forumMessages = new Map()
+
+function addPost({ id, title, archived, tags, createdAt, archivedAt }) {
+  forumPosts.set(id, {
+    id,
+    type: 11,
+    guild_id: GUILD_ID,
+    parent_id: FORUM,
+    owner_id: SCRIBE_ID,
+    name: title,
+    flags: 0,
+    applied_tags: tags,
+    thread_metadata: {
+      archived,
+      locked: false,
+      auto_archive_duration: 10080,
+      create_timestamp: createdAt.toISOString(),
+      archive_timestamp: archivedAt.toISOString(),
+    },
+  })
+  forumMessages.set(id, [])
+}
+
+/** Stores a message in a post, as Discord would hold it, and → the message. A later one always has a larger id. */
+function storeForumMessage(postId, { id = snowflake(), authorId, content, replyTo = null, attachments = [], at = new Date() }) {
+  const message = {
+    id,
+    channel_id: postId,
+    type: replyTo === null ? 0 : 19,
+    content,
+    timestamp: at.toISOString(),
+    edited_timestamp: null,
+    author: authorOf(authorId),
+    attachments: attachments.map((name) => ({
+      id: snowflake(),
+      filename: name,
+      size: FIXTURES[name].bytes.length,
+      content_type: FIXTURES[name].type,
+      // On the mock's own host, not Discord's CDN: the api must leave it out of what it keeps.
+      url: `${SELF}/cdn/${name}`,
+      proxy_url: `${SELF}/cdn/${name}`,
+    })),
+    embeds: [],
+    reactions: [],
+    ...(replyTo === null ? {} : { message_reference: { message_id: replyTo, channel_id: postId } }),
+  }
+  forumMessages.get(postId).push(message)
+  return message
+}
+
+// The active post: 230 messages (its own, then 229 replies), a day or so old, one a minute. Reply 3 is quoted by reply 228,
+// which is on the newest page while its target is far off it, and reply 227 carries an attachment of the mock's own host.
+{
+  const MINUTE = 60_000
+  const first = Date.now() - ACTIVE_MESSAGES * MINUTE
+  addPost({
+    id: ACTIVE_POST,
+    title: 'E2E Active Post',
+    archived: false,
+    tags: [FORUM_TAG],
+    createdAt: new Date(first),
+    archivedAt: new Date(first),
+  })
+  const byNumber = []
+  for (let n = 0; n < ACTIVE_MESSAGES; n++) {
+    const at = new Date(first + n * MINUTE)
+    const authorId = n % 2 === 0 ? SCRIBE_ID : ARCHIVIST_ID
+    const made =
+      n === 0
+        ? { id: ACTIVE_POST, authorId, content: 'E2E opening message', at }
+        : n === ATTACHMENT_REPLY
+          ? { authorId, content: `E2E message ${n} with an attachment on the mock's own host`, attachments: ['art.png'], at }
+          : n === QUOTING_REPLY
+            ? { authorId, content: `E2E message ${n} quoting message ${QUOTED_REPLY}`, replyTo: byNumber[QUOTED_REPLY].id, at }
+            : { authorId, content: `E2E message ${n}`, at }
+    byNumber.push(storeForumMessage(ACTIVE_POST, made))
+  }
+  // The archived post: its own message and two replies.
+  const archivedAt = new Date(Date.now() - 86_400_000)
+  addPost({
+    id: ARCHIVED_POST,
+    title: 'E2E Archived Post',
+    archived: true,
+    tags: [],
+    createdAt: new Date(archivedAt.getTime() - 3 * MINUTE),
+    archivedAt,
+  })
+  storeForumMessage(ARCHIVED_POST, {
+    id: ARCHIVED_POST,
+    authorId: SCRIBE_ID,
+    content: 'E2E archived opening message',
+    at: new Date(archivedAt.getTime() - 3 * MINUTE),
+  })
+  for (const n of [1, 2]) {
+    storeForumMessage(ARCHIVED_POST, {
+      authorId: ARCHIVIST_ID,
+      content: `E2E archived reply ${n}`,
+      at: new Date(archivedAt.getTime() - (3 - n) * MINUTE),
+    })
+  }
+}
+
+// The forum as Discord describes it to the bot: View Channel is denied to @everyone, given back to the reader role, and
+// denied to the shut-out member again, whatever their role says.
+const FORUM_OBJECT = {
+  id: FORUM,
+  guild_id: GUILD_ID,
+  type: 15,
+  name: 'e2e-librarius',
+  permission_overwrites: [
+    { id: GUILD_ID, type: 0, allow: '0', deny: VIEW_CHANNEL },
+    { id: READER_ROLE, type: 0, allow: VIEW_CHANNEL, deny: '0' },
+    { id: SHUT_OUT_ID, type: 1, allow: '0', deny: VIEW_CHANNEL },
+  ],
+  available_tags: [{ id: FORUM_TAG, name: 'E2E Tag', moderated: false, emoji_id: null, emoji_name: null }],
+}
+
+const GUILD_EMOJI = [{ id: CUSTOM_EMOJI, name: 'e2e_aquila', animated: false, available: true }]
+
+// The posts of the forum that are archived (or not), as the threads endpoints list them: newest archive first.
+const threadsWhere = (archived) =>
+  [...forumPosts.values()]
+    .filter((t) => t.thread_metadata.archived === archived)
+    .sort((a, b) => Date.parse(b.thread_metadata.archive_timestamp) - Date.parse(a.thread_metadata.archive_timestamp))
+
+// One page of GET /channels/:forum/threads/archived/public: `limit` threads archived before `before`, and whether more follow.
+function archivedPage(params) {
+  const limit = Math.min(Math.max(Number.parseInt(params.get('limit') ?? '50', 10) || 50, 1), 100)
+  const before = params.get('before')
+  if (before !== null && Number.isNaN(Date.parse(before))) return null
+  const older = threadsWhere(true).filter((t) => before === null || Date.parse(t.thread_metadata.archive_timestamp) < Date.parse(before))
+  return { threads: older.slice(0, limit), members: [], has_more: older.length > limit }
+}
+
+// A signed attachment link, asked to be signed again: the same address with an `ex` a day from now.
+function refreshedLink(link) {
+  try {
+    const url = new URL(link)
+    url.searchParams.set('ex', Math.floor((Date.now() + 86_400_000) / 1000).toString(16))
+    return url.href
+  } catch {
+    return null
+  }
+}
+
+function findForumMessage(id) {
+  for (const [postId, list] of forumMessages) {
+    const message = list.find((m) => m.id === id)
+    if (message) return { postId, list, message }
+  }
+  return null
+}
+
+// --- The gateway: every connection of the api, and what is sent down them ---
+
+// Until this time the gateway refuses a connection (the drop hook).
+let gatewayDownUntil = 0
+const sockets = new Set()
+const send = (socket, frame) => socket.send(JSON.stringify(frame))
+// Each socket numbers its own dispatches, from 1, as Discord's sequence does for a session.
+function dispatchTo(socket, t, d) {
+  socket.data.seq += 1
+  send(socket, { op: 0, t, s: socket.data.seq, d })
+}
+// Only a socket that has been identified, or has resumed, hears of the forum.
+function broadcast(t, d) {
+  for (const socket of sockets) if (socket.data.ready) dispatchTo(socket, t, d)
+}
+const readySockets = () => [...sockets].filter((socket) => socket.data.ready).length
+
+const gateway = {
+  open(socket) {
+    sockets.add(socket)
+    send(socket, { op: 10, d: { heartbeat_interval: 1000 } })
+  },
+  message(socket, data) {
+    let frame
+    try {
+      frame = JSON.parse(String(data))
+    } catch {
+      return
+    }
+    if (frame?.op === 1) {
+      send(socket, { op: 11 })
+    } else if (frame?.op === 2 || frame?.op === 6) {
+      // A resume is answered with READY too, not Discord's RESUMED, so that the api catches up on what it missed.
+      socket.data.ready = true
+      dispatchTo(socket, 'READY', {
+        v: 10,
+        session_id: crypto.randomUUID(),
+        resume_gateway_url: `${SELF.replace(/^http/, 'ws')}/gateway`,
+        user: { id: BOT_ID, username: 'e2e-librarius-bot', bot: true },
+        guilds: [],
+      })
+    }
+  },
+  close(socket) {
+    sockets.delete(socket)
+  },
+}
+
+// The body of a hook that makes a message → { post, content, authorId, attachments } or null when it is not one.
+function newMessage(body) {
+  const names = body?.attachments ?? []
+  const ok =
+    body !== null &&
+    typeof body === 'object' &&
+    forumMessages.has(body.post) &&
+    typeof body.content === 'string' &&
+    typeof body.authorId === 'string' &&
+    SNOWFLAKE.test(body.authorId) &&
+    Array.isArray(names) &&
+    names.every((n) => Object.hasOwn(FIXTURES, n))
+  return ok ? { post: body.post, content: body.content, authorId: body.authorId, attachments: names } : null
+}
+
+const bad = (why) => withCors(Response.json({ error: why }, { status: 400 }))
+
+// The Librarius's test hooks, which change the forum as Discord would and tell the gateway's listeners. → a Response, or null
+// for a path that is none of them.
+async function librariusHook(request, url) {
+  const { pathname } = url
+  if (!pathname.startsWith('/__test/librarius/')) return null
+
+  if (pathname === '/__test/librarius/gateway' && request.method === 'GET') {
+    return withCors(Response.json({ ready: readySockets() }))
+  }
+  if (request.method !== 'POST') return null
+  const body = await request.json().catch(() => null)
+
+  // A message is posted in a post: stored, and MESSAGE_CREATE sent. `quiet-message` stores it and sends nothing: what a
+  // gateway that was down never heard.
+  if (pathname === '/__test/librarius/message' || pathname === '/__test/librarius/quiet-message') {
+    const made = newMessage(body)
+    if (made === null) return bad('Need a known post, content, an authorId, and attachments named from ./fixtures.')
+    const message = storeForumMessage(made.post, made)
+    if (pathname.endsWith('/message')) broadcast('MESSAGE_CREATE', { ...message, guild_id: GUILD_ID })
+    return withCors(Response.json({ id: message.id }))
+  }
+
+  const edit = pathname.match(/^\/__test\/librarius\/edit\/(\d+)$/)
+  if (edit) {
+    const found = findForumMessage(edit[1])
+    if (found === null) return withCors(Response.json({ error: 'No such message.' }, { status: 404 }))
+    if (typeof body?.content !== 'string') return bad('Need content.')
+    found.message.content = body.content
+    found.message.edited_timestamp = new Date().toISOString()
+    broadcast('MESSAGE_UPDATE', { ...found.message, guild_id: GUILD_ID })
+    return withCors(Response.json({ edited: found.message.id }))
+  }
+
+  const remove = pathname.match(/^\/__test\/librarius\/delete\/(\d+)$/)
+  if (remove) {
+    const found = findForumMessage(remove[1])
+    if (found === null) return withCors(Response.json({ error: 'No such message.' }, { status: 404 }))
+    found.list.splice(found.list.indexOf(found.message), 1)
+    broadcast('MESSAGE_DELETE', { id: found.message.id, channel_id: found.postId, guild_id: GUILD_ID })
+    return withCors(Response.json({ deleted: found.message.id }))
+  }
+
+  const react = pathname.match(/^\/__test\/librarius\/react\/(\d+)$/)
+  if (react) {
+    const found = findForumMessage(react[1])
+    if (found === null) return withCors(Response.json({ error: 'No such message.' }, { status: 404 }))
+    // An emoji is its name (a unicode one) or { id, name } (a custom one), as Discord names it.
+    const emoji = typeof body?.emoji === 'string' ? { id: null, name: body.emoji } : body?.emoji
+    const valid =
+      typeof emoji === 'object' &&
+      emoji !== null &&
+      typeof emoji.name === 'string' &&
+      (emoji.id === undefined || emoji.id === null || (typeof emoji.id === 'string' && SNOWFLAKE.test(emoji.id))) &&
+      typeof body.userId === 'string' &&
+      SNOWFLAKE.test(body.userId)
+    if (!valid) return bad('Need an emoji (a name, or { id, name }) and a userId.')
+    const named = { id: emoji.id ?? null, name: emoji.name }
+    const same = (r) => (named.id === null ? r.emoji.id === null && r.emoji.name === named.name : r.emoji.id === named.id)
+    const held = found.message.reactions.find(same)
+    const mine = body.userId === BOT_ID
+    if (held) {
+      held.count += 1
+      held.me ||= mine
+    } else {
+      found.message.reactions.push({ emoji: named, count: 1, me: mine })
+    }
+    broadcast('MESSAGE_REACTION_ADD', {
+      user_id: body.userId,
+      channel_id: found.postId,
+      message_id: found.message.id,
+      guild_id: GUILD_ID,
+      emoji: named,
+    })
+    return withCors(Response.json({ reacted: found.message.id }))
+  }
+
+  // The gateway goes down: every socket is closed with 4000, which a client may resume from, and none is let in for downMs.
+  if (pathname === '/__test/librarius/drop') {
+    const downMs = body?.downMs
+    if (!Number.isSafeInteger(downMs) || downMs < 0) return bad('Need downMs, a whole number of milliseconds.')
+    gatewayDownUntil = Date.now() + downMs
+    const closing = [...sockets]
+    sockets.clear()
+    for (const socket of closing) socket.close(4000, 'e2e drop')
+    return withCors(Response.json({ closed: closing.length }))
+  }
+
+  return null
+}
+
 // The browser calls this cross-origin (from wherever "web" is served), unlike
 // the real discord.com/api which already sends permissive CORS headers for
 // exactly this kind of client-side OAuth flow — this mock has to do the same.
@@ -251,10 +620,18 @@ function withCors(res) {
 
 Bun.serve({
   port: PORT,
-  async fetch(request) {
+  async fetch(request, server) {
     if (request.method === 'OPTIONS') return withCors(new Response(null, { status: 204 }))
 
     const url = new URL(request.url)
+
+    // The Librarius's live feed. The api asks for it at /gateway/?v=10&encoding=json. A client that is let in speaks the
+    // gateway's protocol (see `gateway` above); during a drop (the hook) it is refused, as a gateway that is down would.
+    if (url.pathname === '/gateway' || url.pathname === '/gateway/') {
+      if (Date.now() < gatewayDownUntil) return new Response('The gateway is down.', { status: 503 })
+      if (server.upgrade(request, { data: { seq: 0, ready: false } })) return undefined
+      return new Response('Expected a WebSocket.', { status: 426 })
+    }
 
     if (url.pathname === '/users/@me') {
       const auth = request.headers.get('Authorization') || ''
@@ -266,16 +643,19 @@ Bun.serve({
       return withCors(Response.json(user))
     }
 
-    // Guild role table (Administrator checks). Nobody is an admin except the Deathwatch-area owner and
-    // Administrator testers; everyone else, the Legion testers included, is not.
+    // Guild role table (Administrator checks, and the Librarius's reading of who may open the forum). Nobody is an admin
+    // except the Deathwatch-area owner and Administrator testers; everyone else, the Legion testers included, is not.
+    // @everyone (whose id is the guild's) may look and read, which the forum's overwrites then take away.
     if (url.pathname === `/v10/guilds/${GUILD_ID}`) {
       return withCors(
         Response.json({
+          id: GUILD_ID,
           owner_id: GUILD_OWNER_ID,
           roles: [
-            { id: GUILD_ID, permissions: '0' },
-            { id: RECLUSIARCH_ROLE, permissions: '0' },
-            { id: ADMINISTRATOR_ROLE, permissions: '8' },
+            { id: GUILD_ID, name: '@everyone', color: 0, permissions: EVERYONE_PERMISSIONS },
+            { id: RECLUSIARCH_ROLE, name: 'E2E Reclusiarch', color: 0, permissions: '0' },
+            { id: ADMINISTRATOR_ROLE, name: 'E2E Administrator', color: 0, permissions: '8' },
+            { id: READER_ROLE, name: 'E2E Reader', color: READER_COLOR, permissions: '0' },
           ],
         }),
       )
@@ -297,7 +677,10 @@ Bun.serve({
     // The Techmarine and Forge testers hold mod roles; nobody else does.
     const memberMatch = url.pathname.match(/^\/v10\/guilds\/[^/]+\/members\/([^/]+)$/)
     if (memberMatch) {
-      const member = MEMBERS[memberMatch[1]] ?? DEATHWATCH_MEMBERS[memberMatch[1]] ?? GALLERY_MEMBERS[memberMatch[1]]
+      const member = MEMBERS[memberMatch[1]] ??
+        DEATHWATCH_MEMBERS[memberMatch[1]] ??
+        GALLERY_MEMBERS[memberMatch[1]] ??
+        LIBRARIUS_MEMBERS[memberMatch[1]]
       return withCors(member ? Response.json({ joined_at: JOINED, ...member }) : Response.json({ message: 'Unknown Member' }, { status: 404 }))
     }
 
@@ -321,16 +704,54 @@ Bun.serve({
       return withCors(Response.json({ rejoined: rejoin[1] }))
     }
 
-    // The clips channel, as the bot reads it (server/src/galleryDiscord.js). Any other channel is unknown.
+    // The channels the bot reads the messages of: the clips channel (server/src/galleryDiscord.js) and the Librarius's
+    // posts (server/src/librariusDiscord.js). Any other channel is unknown.
     const channelMatch = url.pathname.match(/^\/v10\/channels\/(\d+)\/messages(?:\/(\d+))?$/)
     if (channelMatch && request.method === 'GET') {
-      if (channelMatch[1] !== GALLERY_CHANNEL) return withCors(Response.json({ message: 'Unknown Channel', code: 10003 }, { status: 404 }))
+      const list = channelMatch[1] === GALLERY_CHANNEL ? channel : forumMessages.get(channelMatch[1])
+      if (list === undefined) return withCors(Response.json({ message: 'Unknown Channel', code: 10003 }, { status: 404 }))
       if (channelMatch[2] !== undefined) {
-        const message = channel.find((m) => m.id === channelMatch[2])
+        const message = list.find((m) => m.id === channelMatch[2])
         return withCors(message ? Response.json(message) : Response.json({ message: 'Unknown Message', code: 10008 }, { status: 404 }))
       }
-      const page = messagesPage(url.searchParams)
+      const page = messagesPage(list, url.searchParams)
       return withCors(page ? Response.json(page) : Response.json({ message: 'Invalid Form Body', code: 50035 }, { status: 400 }))
+    }
+
+    // The Librarius, as the bot reads it: the forum itself, its threads and the guild's emoji.
+    if (request.method === 'GET') {
+      if (url.pathname === `/v10/channels/${FORUM}`) return withCors(Response.json(FORUM_OBJECT))
+      if (url.pathname === `/v10/guilds/${GUILD_ID}/threads/active`) {
+        return withCors(Response.json({ threads: threadsWhere(false), members: [] }))
+      }
+      if (url.pathname === `/v10/channels/${FORUM}/threads/archived/public`) {
+        const page = archivedPage(url.searchParams)
+        return withCors(page ? Response.json(page) : Response.json({ message: 'Invalid Form Body', code: 50035 }, { status: 400 }))
+      }
+      if (url.pathname === `/v10/guilds/${GUILD_ID}/emojis`) return withCors(Response.json(GUILD_EMOJI))
+      // Where to connect to the live feed, and how many sessions are left to start.
+      if (url.pathname === '/v10/gateway/bot') {
+        return withCors(
+          Response.json({
+            url: `${SELF.replace(/^http/, 'ws')}/gateway`,
+            shards: 1,
+            session_start_limit: { total: 1000, remaining: 1000, reset_after: 0, max_concurrency: 1 },
+          }),
+        )
+      }
+    }
+
+    // Asks Discord to sign attachment links again: each comes back with a later `ex`.
+    if (url.pathname === '/v10/attachments/refresh-urls' && request.method === 'POST') {
+      const body = await request.json().catch(() => null)
+      if (!Array.isArray(body?.attachment_urls) || !body.attachment_urls.every((u) => typeof u === 'string')) {
+        return withCors(Response.json({ message: 'Invalid Form Body', code: 50035 }, { status: 400 }))
+      }
+      const pairs = body.attachment_urls.flatMap((original) => {
+        const refreshed = refreshedLink(original)
+        return refreshed === null ? [] : [{ original, refreshed }]
+      })
+      return withCors(Response.json({ refreshed_urls: pairs }))
     }
 
     // Discord's CDN: an attachment's download link.
@@ -363,8 +784,12 @@ Bun.serve({
       return withCors(Response.json({ deleted: at !== -1 }))
     }
 
+    const hooked = await librariusHook(request, url)
+    if (hooked) return hooked
+
     return withCors(new Response('Not found', { status: 404 }))
   },
+  websocket: gateway,
 })
 
 console.log(`Discord mock listening on :${PORT}`)

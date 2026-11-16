@@ -65,6 +65,10 @@ services:
       GALLERY_CURATOR_ROLE_ID: '200000000000000301'
       # Every second, so a clip posted by a spec is stored, or a deleted one gone, within a couple of seconds.
       GALLERY_POLL_MS: '1000'
+      # The Librarius (tests/librarius-api.spec.js, tests/librarius.spec.js). discord-mock stands in for Discord's
+      # forum, its REST routes and its gateway (DISCORD_API_BASE above names it, so the api opens the gateway over ws://).
+      # An invented id, the same as in discord-mock/server.js.
+      LIBRARIUS_CHANNEL_ID: '200000000000000400'
     healthcheck:
       test: ['CMD', 'bun', '-e', "fetch('http://localhost:8787/health').then((r)=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
       interval: 2s
