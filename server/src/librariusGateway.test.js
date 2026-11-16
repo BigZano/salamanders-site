@@ -2039,6 +2039,98 @@ describe('a handler that takes too long', () => {
     expect(lastError.length).toBeLessThanOrEqual(200)
     expect(r.logged.join('\n')).not.toContain(TOKEN)
   })
+
+  /** A value that blows up at any touch: a revoked Proxy, one whose traps throw, and a Proxy whose target is a function. */
+  const untouchable = () => {
+    const revoked = Proxy.revocable({}, {})
+    revoked.revoke()
+    const trapped = new Proxy(
+      {},
+      {
+        get() {
+          throw new Error('get trap')
+        },
+        has() {
+          throw new Error('has trap')
+        },
+        getPrototypeOf() {
+          throw new Error('getPrototypeOf trap')
+        },
+      },
+    )
+    return [revoked.proxy, trapped]
+  }
+
+  it.each([
+    ['rejects with', (value) => Promise.reject(value)],
+    ['throws', (value) => {
+      throw value
+    }],
+  ])('goes on to the next events when a handler %s something that cannot be touched', async (_name, fail) => {
+    for (const value of untouchable()) {
+      const seen = []
+      const r = rig({
+        onDispatch: (t) => {
+          seen.push(t)
+          if (t === 'BAD_THING') return fail(value)
+        },
+      })
+      const sock = await ready(r)
+      for (const [i, t] of ['BAD_THING', 'SECOND_THING', 'THIRD_THING'].entries()) sock.receive({ op: 0, t, s: 2 + i, d: {} })
+      await tick(0)
+      expect(seen).toEqual(['READY', 'BAD_THING', 'SECOND_THING', 'THIRD_THING'])
+      expect(r.gateway.status().state).toBe('ready')
+      expect(r.gateway.status().lastError).toMatch(/could not handle BAD_THING/)
+      expect(r.gateway.status().lastError).not.toMatch(/too long/)
+      expect(sock.closed).toEqual([])
+      r.gateway.stop()
+    }
+  })
+
+  it('goes on to the next events when a handler fails with something that cannot be touched, after it timed out', async () => {
+    const [value] = untouchable()
+    const calls = []
+    const seen = []
+    const r = rig({
+      onDispatch: (t) => {
+        seen.push(t)
+        if (t === 'HANG_THING') return new Promise((_, reject) => calls.push(reject))
+      },
+    })
+    const sock = await ready(r)
+    for (const [i, t] of ['HANG_THING', 'NEXT_THING'].entries()) sock.receive({ op: 0, t, s: 2 + i, d: {} })
+    await tick(DISPATCH_TIMEOUT)
+    calls[0](value)
+    await tick(0)
+    sock.receive({ op: 0, t: 'LAST_THING', s: 4, d: {} })
+    await tick(0)
+    expect(seen).toEqual(['READY', 'HANG_THING', 'NEXT_THING', 'LAST_THING'])
+    expect(r.gateway.status().lastError).toMatch(/took too long on HANG_THING/)
+  })
+
+  it('goes on to the next events when the timers fail while a handler is waited for', async () => {
+    const jobs = []
+    const timers = {
+      setTimeout: (fn, ms) => jobs.push({ fn, ms }) - 1,
+      clearTimeout: (id) => {
+        if (jobs[id]?.ms === DISPATCH_TIMEOUT) throw new Error('the timer is broken')
+      },
+    }
+    const seen = []
+    const r = rig({
+      timers,
+      onDispatch: (t) => {
+        seen.push(t)
+      },
+    })
+    const sock = await opened(r)
+    hello(sock)
+    for (const [i, t] of ['FIRST_THING', 'SECOND_THING', 'THIRD_THING'].entries()) sock.receive({ op: 0, t, s: 1 + i, d: {} })
+    await tick(0)
+    expect(seen).toEqual(['FIRST_THING', 'SECOND_THING', 'THIRD_THING'])
+    expect(r.gateway.status().lastError).toMatch(/THIRD_THING.*the timer is broken/)
+    expect(r.gateway.status().state).toBe('connecting')
+  })
 })
 
 describe('hostile messages', () => {

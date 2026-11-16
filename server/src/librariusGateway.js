@@ -94,8 +94,9 @@ const MAX_TIMER_MS = 2 ** 31 - 1 // a longer delay makes a timer fire at once
 const STABLE_MS = 60_000
 const MAX_RESUMES = 3
 
-// What a handler that ran out of time is recorded as; nothing else makes one of these.
-class DispatchTimeout extends Error {}
+// What a handler that ran out of time is rejected with. It is compared by identity, which cannot fail, and nothing a
+// handler throws can be taken for it.
+const TIMED_OUT = Symbol('timed out')
 
 const needDelay = (value, name) => {
   if (!Number.isSafeInteger(value) || value < 1 || value > MAX_TIMER_MS) {
@@ -375,21 +376,25 @@ export function createGateway({
       becameReady()
     }
     // One at a time, in order: a later event can depend on an earlier one, and the sequence number has moved on already.
-    handling = handling.then(() => handle(t, d))
+    // Nothing may break the chain, or no later event would be handled: what handle() cannot deal with is recorded here.
+    handling = handling
+      .then(() => handle(t, d))
+      .catch((err) => fault(`The Librarius gateway could not finish handling ${t}: ${words(err)}`))
   }
 
-  // Waits for onDispatch, for as long as dispatchTimeoutMs allows. It never throws. Once the race is lost, the handler's
-  // promise is still being watched by it, so a late failure is not left unhandled, and is ignored.
+  // Waits for onDispatch, for as long as dispatchTimeoutMs allows. Whatever the handler does is recorded, not thrown. Once
+  // the race is lost, the handler's promise is still being watched by it, so a late failure is not left unhandled, and is
+  // ignored.
   async function handle(t, d) {
     let timer
     const tooLong = new Promise((_, reject) => {
-      timer = timers.setTimeout(() => reject(new DispatchTimeout()), dispatchTimeoutMs)
+      timer = timers.setTimeout(() => reject(TIMED_OUT), dispatchTimeoutMs)
     })
     try {
       await Promise.race([new Promise((resolve) => resolve(onDispatch(t, d))), tooLong])
     } catch (err) {
       fault(
-        err instanceof DispatchTimeout
+        err === TIMED_OUT
           ? `A Librarius gateway handler took too long on ${t}.`
           : `The Librarius gateway could not handle ${t}: ${words(err)}`,
       )
