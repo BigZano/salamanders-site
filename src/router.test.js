@@ -3,6 +3,11 @@ import { describe, it, expect, beforeAll, vi } from 'vitest'
 import { router } from './router'
 import { DEATHWATCH_SHOWS_MOUNTAIN } from './lib/deathwatch/mountain'
 
+// The Reliquarium is a lazy route, and the first test to ask for it would load it, and every gated module under it,
+// inside that test. A gated module that loads inside a test has its top-level constants counted as covered by that test,
+// and the mutation run then reports each constant a survivor. Loading it here, with the file, keeps them static.
+await import('./views/Reliquarium.vue')
+
 // jsdom has no scrolling; the router's scrollBehavior asks for it after every navigation.
 beforeAll(() => {
   window.scrollTo = vi.fn()

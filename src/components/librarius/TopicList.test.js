@@ -347,6 +347,26 @@ describe('TopicList: a row', () => {
     expect(posters[0].text()).toBe('TM')
   })
 
+  it('turns a poster whose picture fails to load into the initials in a circle', async () => {
+    const w = await show([post(430, { posterIds: [TOR, IXEN] }), post(431, { posterIds: [TOR] })])
+    const first = w.findAll('.lb-topic')[0]
+    expect(first.findAll('img.lb-poster')).toHaveLength(1)
+    await first.find('img.lb-poster').trigger('error')
+    expect(first.find('img.lb-poster').exists()).toBe(false)
+    expect(first.findAll('.lb-poster.lb-initials').map((p) => p.text())).toEqual(['TM', 'IC'])
+    expect(first.find('.lb-posters').attributes('aria-label')).toBe('Recent posters: Tor Mardan, Ixen Calloway')
+  })
+
+  it('tries the picture of a poster again when its address changes', async () => {
+    const w = await show([post(430, { posterIds: [TOR] })])
+    await w.find('img.lb-poster').trigger('error')
+    expect(w.find('img.lb-poster').exists()).toBe(false)
+    listPosts.mockResolvedValue({ posts: [post(430, { posterIds: [TOR] })], people: { ...PEOPLE, [TOR]: { name: 'Tor Mardan', avatar: 'https://cdn.discordapp.com/avatars/200000000000000410/bbbb.png?size=64' } } })
+    await store.loadPosts('tok')
+    await flushPromises()
+    expect(w.find('img.lb-poster').attributes('src')).toBe('https://cdn.discordapp.com/avatars/200000000000000410/bbbb.png?size=64')
+  })
+
   it('shows the author and no text for a newest message with no text, or text that is no text', async () => {
     for (const content of ['', '   ', null, undefined, 42, {}]) {
       const w = await show([post(430, { latest: { ...post(430).latest, content } })])
@@ -370,6 +390,135 @@ describe('TopicList: a row', () => {
     expect(w.find('.lb-topic-author').text()).toBe(markup)
     expect(w.find('.lb-topic img[src="x"]').exists()).toBe(false)
     expect(w.find('script').exists()).toBe(false)
+  })
+})
+
+describe('TopicList: a spoiler thumbnail', () => {
+  const SPOILER = 'https://cdn.discordapp.com/attachments/200000000000000401/200000000000000460/SPOILER_file.png?ex=65f0&hm=ab12'
+  const withImage = (url, over = {}) => post(430, { latest: { ...post(430).latest, image: { id: mid(460), url, expiresAt: null, ...over } } })
+
+  it('is blurred, with "Spoiler" over it, when the last segment of the address begins SPOILER_', async () => {
+    const w = await show([withImage(SPOILER)])
+    const img = w.find('img.lb-thumb')
+    expect(img.attributes('src')).toBe(SPOILER)
+    expect(img.classes()).toContain('lb-blurred')
+    expect(w.find('.lb-spoiler-tag').text()).toBe('Spoiler')
+    expect(w.find('.lb-thumb-wrap').classes()).toContain('lb-spoiler-thumb')
+    expect(w.find('a.lb-topic').find('.lb-spoiler-tag').exists()).toBe(true)
+  })
+
+  it.each([
+    'https://cdn.discordapp.com/attachments/1/2/spoiler_file.png',
+    'https://cdn.discordapp.com/attachments/1/2/Spoiler_File.PNG?ex=1',
+    'https://cdn.discordapp.com/attachments/1/2/SPOILER_file.png#x',
+  ])('blurs %s whatever its case', async (url) => {
+    const w = await show([withImage(url)])
+    expect(w.find('img.lb-thumb').classes()).toContain('lb-blurred')
+  })
+
+  it.each([
+    CDN,
+    'https://cdn.discordapp.com/attachments/1/SPOILER_dir/file.png',
+    'https://cdn.discordapp.com/attachments/1/2/file.png?name=SPOILER_file.png',
+    'https://cdn.discordapp.com/attachments/1/2/my_SPOILER_file.png',
+    'https://cdn.discordapp.com/attachments/1/2/SPOILER-file.png',
+  ])('does not blur %s', async (url) => {
+    const w = await show([withImage(url)])
+    expect(w.find('img.lb-thumb').classes()).not.toContain('lb-blurred')
+    expect(w.find('.lb-spoiler-tag').exists()).toBe(false)
+    expect(w.find('.lb-thumb-wrap').classes()).not.toContain('lb-spoiler-thumb')
+  })
+
+  it('does not blur the picture of another row', async () => {
+    const w = await show([withImage(SPOILER), { ...withImage(CDN), id: mid(431) }])
+    const imgs = w.findAll('img.lb-thumb')
+    expect(imgs.map((i) => i.classes().includes('lb-blurred'))).toEqual([true, false])
+  })
+
+  it('is dropped, as a thumbnail is, when it fails to load', async () => {
+    const w = await show([withImage(SPOILER)])
+    await w.find('img.lb-thumb').trigger('error')
+    expect(w.find('img.lb-thumb').exists()).toBe(false)
+    expect(w.find('.lb-spoiler-tag').exists()).toBe(false)
+  })
+
+  it('has no thumbnail, and so nothing blurred, for a picture that is not on the CDN', async () => {
+    const w = await show([withImage('https://evil.example/SPOILER_a.png')])
+    expect(w.find('img.lb-thumb').exists()).toBe(false)
+    expect(w.find('.lb-spoiler-tag').exists()).toBe(false)
+  })
+})
+
+describe('TopicList: rows that are not as expected', () => {
+  it('shows a post whose reply count is no count, without the count', async () => {
+    for (const replies of ['3', 'many', null, undefined, NaN, Infinity, -1, 1.5, {}, [], 2 ** 53]) {
+      const w = await show([post(430, { replies, posterIds: [] })])
+      expect(titles(w), String(replies)).toEqual(['Invented post 430'])
+      expect(w.find('.lb-topic-meta').text(), String(replies)).not.toMatch(/repl/)
+      expect(w.find('.lb-topic-meta time').exists()).toBe(true)
+      // No dot is left standing in front of the time.
+      expect(w.find('.lb-topic-meta').text(), String(replies)).toMatch(/^[^·]+$/)
+    }
+  })
+
+  it('puts the dot between the count and the time only when there are both', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] })
+    vi.setSystemTime(new Date(NOW))
+    const both = await show([post(430, { posterIds: [], replies: 3 })])
+    expect(both.find('.lb-topic-meta').text()).toBe('3 replies · 2m ago')
+    const noTime = await show([post(430, { posterIds: [], replies: 3, lastActivityAt: 'sometime' })])
+    expect(noTime.find('.lb-topic-meta').text()).toBe('3 replies')
+  })
+
+  it('shows a post whose posters are no list, without any poster', async () => {
+    for (const posterIds of ['abc', 'a,b', {}, 7, true]) {
+      const w = await show([post(430, { posterIds })])
+      expect(titles(w), JSON.stringify(posterIds)).toEqual(['Invented post 430'])
+      expect(w.find('.lb-posters').exists()).toBe(false)
+    }
+    const w = await show([post(430, { posterIds: [TOR, 7, IXEN] })])
+    expect(w.findAll('.lb-poster')).toHaveLength(2)
+  })
+
+  it('shows a post whose tags are no list, without a tag, and leaves it out of any tag chosen', async () => {
+    for (const tagIds of ['abc', TAG_A, {}, 7, true, null, undefined]) {
+      const w = await show([post(430, { tagIds }), post(431, { tagIds: [TAG_A] })])
+      expect(titles(w), JSON.stringify(tagIds)).toEqual(['Invented post 430', 'Invented post 431'])
+      expect(w.findAll('.lb-topic')[0].findAll('.lb-tag')).toHaveLength(0)
+      await buttonNamed(w, 'Lore').trigger('click')
+      expect(titles(w), JSON.stringify(tagIds)).toEqual(['Invented post 431'])
+    }
+  })
+
+  it('shows no "new" badge for an unread count that is no count', async () => {
+    for (const unread of ['5', null, undefined, -3, 1.5, NaN, Infinity, {}, [], true, 0]) {
+      const w = await show([post(430, { unread })])
+      expect(w.find('.lb-new').exists(), String(unread)).toBe(false)
+      expect(titles(w)).toEqual(['Invented post 430'])
+    }
+  })
+
+  it('counts a post as pinned or archived only when it says true', async () => {
+    const w = await show([post(430, { pinned: 'yes', archived: 1 }), post(431, { pinned: 1, archived: 'yes' })])
+    expect(titles(w)).toEqual(['Invented post 430', 'Invented post 431'])
+    expect(w.text()).not.toContain('Pinned')
+    expect(w.findAll('button').filter((b) => /archived/.test(b.text()))).toHaveLength(0)
+  })
+
+  it('shows a post whose newest message has a picture that is no object, without a thumbnail', async () => {
+    for (const image of ['x', 7, [], {}, { url: 7 }, true]) {
+      const w = await show([post(430, { latest: { ...post(430).latest, image } })])
+      expect(titles(w), JSON.stringify(image)).toEqual(['Invented post 430'])
+      expect(w.find('img.lb-thumb').exists()).toBe(false)
+    }
+  })
+
+  it('keeps every other part of a row that has an odd part', async () => {
+    const w = await show([post(430, { replies: 'x', posterIds: 'x', tagIds: 'x', unread: 4, pinned: true })])
+    const row = w.find('.lb-topic')
+    expect(row.text()).toContain('Pinned')
+    expect(row.text()).toContain('4 new')
+    expect(row.find('.lb-topic-latest').text()).toContain('Hello there')
   })
 })
 
@@ -558,6 +707,46 @@ describe('TopicList: refreshing', () => {
     const w = await show([post(430)], { flush: false })
     await settle(0)
     leave(w)
+    await settle(120_000)
+    expect(listPosts).toHaveBeenCalledTimes(1)
+  })
+
+  it('does not poll while the first answer is still on its way, and waits a full 30 seconds after it comes', async () => {
+    const first = deferred()
+    listPosts.mockReturnValue(first.promise)
+    await show(null, { flush: false })
+    await settle(0)
+    expect(listPosts).toHaveBeenCalledTimes(1)
+    await settle(120_000)
+    expect(listPosts).toHaveBeenCalledTimes(1)
+    first.resolve({ posts: [post(430)], people: PEOPLE })
+    await settle(0)
+    await settle(29_999)
+    expect(listPosts).toHaveBeenCalledTimes(1)
+    await settle(1)
+    expect(listPosts).toHaveBeenCalledTimes(2)
+  })
+
+  it('polls on after a first answer that failed', async () => {
+    const first = deferred()
+    listPosts.mockReturnValue(first.promise)
+    await show(null, { flush: false })
+    await settle(0)
+    first.reject(Object.assign(new Error('down'), { status: 503 }))
+    await settle(0)
+    listPosts.mockResolvedValue({ posts: [post(430)], people: PEOPLE })
+    await settle(30_000)
+    expect(listPosts).toHaveBeenCalledTimes(2)
+  })
+
+  it('starts no timer when the page is left before the first answer comes', async () => {
+    const first = deferred()
+    listPosts.mockReturnValue(first.promise)
+    const w = await show(null, { flush: false })
+    await settle(0)
+    leave(w)
+    first.resolve({ posts: [], people: {} })
+    await settle(0)
     await settle(120_000)
     expect(listPosts).toHaveBeenCalledTimes(1)
   })

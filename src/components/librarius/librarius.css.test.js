@@ -66,6 +66,33 @@ describe('librarius.css', () => {
     expect(rule('.lb-article .lb-body')).toMatch(/font-size:\s*var\(--text-base\)/)
   })
 
+  it('blurs a spoiler picture, clips the blur to the picture, and puts the word over it', () => {
+    expect(rule('.lb-blurred')).toMatch(/filter:\s*blur\(/)
+    expect(rule('.lb-spoiler-image')).toMatch(/overflow:\s*hidden/)
+    expect(rule('.lb-spoiler-image')).toMatch(/cursor:\s*pointer/)
+    expect(rule('.lb-spoiler-image')).toMatch(/position:\s*relative/)
+    expect(rule('.lb-spoiler-tag')).toMatch(/position:\s*absolute/)
+    expect(rule('.lb-spoiler-tag')).toMatch(/inset:\s*0/)
+    expect(rule('.lb-spoiler-tag')).toMatch(/font-size:\s*var\(--text-md\)/)
+    expect(rule('.lb-spoiler-thumb .lb-blurred')).toMatch(/filter:\s*blur\(/)
+    expect(rule('.lb-spoiler-thumb .lb-spoiler-tag')).toMatch(/font-size:\s*var\(--text-xs\)/)
+  })
+
+  it('keeps the thumbnail in a tile that clips it, so a blur stays inside', () => {
+    expect(rule('.lb-thumb-wrap')).toMatch(/overflow:\s*hidden/)
+    expect(rule('.lb-thumb-wrap')).toMatch(/width:\s*4\.5rem/)
+    expect(rule('.lb-thumb')).toMatch(/width:\s*100%/)
+    expect(rule('.lb-thumb')).toMatch(/height:\s*100%/)
+  })
+
+  it('makes the initials that stand in for a picture a circle, in a message and in a row', () => {
+    expect(rule('.lb-initials')).toMatch(/display:\s*flex/)
+    expect(rule('.lb-initials')).toMatch(/align-items:\s*center/)
+    expect(rule('.lb-initials')).toMatch(/justify-content:\s*center/)
+    expect(rule('.lb-poster')).toMatch(/border-radius:\s*var\(--radius-pill\)/)
+    expect(rule('.lb-avatar')).toMatch(/border-radius:\s*var\(--radius-pill\)/)
+  })
+
   it('rounds the avatar with the site\'s pill radius, and the boxes with its radii', () => {
     expect(rule('.lb-avatar')).toMatch(/border-radius:\s*var\(--radius-pill\)/)
     expect(rule('.lb-article')).toMatch(/border-radius:\s*var\(--radius-md\)/)

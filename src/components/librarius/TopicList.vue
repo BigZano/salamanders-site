@@ -8,19 +8,16 @@
 import { computed, onBeforeUnmount, onMounted, reactive, ref } from 'vue'
 import { useAuth } from '../../stores/auth'
 import { useLibrarius } from '../../stores/librarius'
-import { excerpt } from '../../lib/librarius/layout'
+import { ago, excerpt, isSpoilerFile, repliesText, sortPosts } from '../../lib/librarius/layout'
 import { attachmentUrl } from '../../lib/librarius/render'
 import { initials, safeAvatar } from '../../lib/rosterAvatar'
 import './librarius.css'
 
 const POLL_MS = 30_000
-const MINUTE = 60_000
-const HOUR = 60 * MINUTE
-const DAY = 24 * HOUR
 const SNOWFLAKE = /^\d{17,20}$/
 const SORTS = [
-  { key: 'activity', label: 'Latest activity', field: 'lastActivityAt' },
-  { key: 'created', label: 'Newest', field: 'createdAt' },
+  { key: 'activity', label: 'Latest activity' },
+  { key: 'created', label: 'Newest' },
 ]
 
 const store = useLibrarius()
@@ -29,8 +26,9 @@ const auth = useAuth()
 const tag = ref(null)
 const sort = ref('activity')
 const showArchived = ref(false)
-// A thumbnail that failed to load, by its address: a renewed link is a new address, so it is tried again.
+// A thumbnail or an avatar that failed to load, by its address: a renewed link is a new address, so it is tried again.
 const failedThumbs = reactive(new Set())
+const failedAvatars = reactive(new Set())
 
 // Whether the first answer has come, and whether the last ask failed. A failure shows only while there is nothing else to
 // show: a list already on the page stays through a poll that fails.
@@ -58,9 +56,11 @@ function wait() {
   }, POLL_MS)
 }
 
+// The poll waits for the first answer, so that a slow first answer is never asked again on top of itself.
 onMounted(() => {
-  refresh()
-  wait()
+  refresh().finally(() => {
+    if (!stopped) wait()
+  })
 })
 onBeforeUnmount(() => {
   stopped = true
@@ -78,48 +78,35 @@ const discord = computed(() => {
 
 const known = (id) => (Object.hasOwn(store.people, id) ? store.people[id] : null)
 
-// → how long ago, in the biggest unit that fits; a date for a month or more; '' for a time that is none.
-function ago(iso, now) {
-  const then = Date.parse(iso)
-  if (Number.isNaN(then)) return ''
-  const age = now - then
-  if (age < MINUTE) return 'just now'
-  if (age < HOUR) return `${Math.floor(age / MINUTE)}m ago`
-  if (age < DAY) return `${Math.floor(age / HOUR)}h ago`
-  if (age < 30 * DAY) return `${Math.floor(age / DAY)}d ago`
-  return new Date(then).toLocaleDateString(undefined, { year: 'numeric', month: 'short', day: 'numeric' })
-}
-
 const number = (n) => n.toLocaleString('en')
-const repliesText = (n) => `${number(n)} ${n === 1 ? 'reply' : 'replies'}`
-const when = (iso) => (Number.isNaN(Date.parse(iso)) ? 0 : Date.parse(iso))
+// What the server sends for a part of a row may be odd: a part that is not what it should be is left out of the row.
+const list = (value) => (Array.isArray(value) ? value : [])
 
 function row(post, now) {
   const latest = post.latest
-  const posters = (post.posterIds ?? [])
+  const posters = list(post.posterIds)
     .slice(0, 3)
     .map(known)
     .filter(Boolean)
     .map((person) => ({ name: person.name, avatar: safeAvatar(person.avatar) }))
+  const thumb = latest?.image ? attachmentUrl(latest.image.url) : null
   return {
     id: post.id,
     title: post.title,
-    pinned: post.pinned,
-    archived: post.archived,
-    unread: post.unread,
-    tags: (post.tagIds ?? []).map((id) => tagNames.value.get(id)).filter(Boolean),
+    pinned: post.pinned === true,
+    archived: post.archived === true,
+    unread: Number.isSafeInteger(post.unread) && post.unread > 0 ? post.unread : 0,
+    tags: list(post.tagIds).map((id) => tagNames.value.get(id)).filter(Boolean),
     latest: latest && {
       name: known(latest.authorId)?.name || latest.authorName,
       text: typeof latest.content === 'string' ? excerpt(latest.content, 120) : '',
-      thumb: latest.image ? attachmentUrl(latest.image.url) : null,
+      thumb,
+      spoiler: isSpoilerFile(thumb),
     },
     replies: repliesText(post.replies),
     activityAt: post.lastActivityAt,
     activity: ago(post.lastActivityAt, now),
     posters,
-    // What the list is ordered on, by the sort chosen.
-    keys: { lastActivityAt: when(post.lastActivityAt), createdAt: when(post.createdAt) },
-    tagIds: post.tagIds ?? [],
   }
 }
 
@@ -127,11 +114,8 @@ function row(post, now) {
 // stay in the order the server sent.
 const rows = computed(() => {
   const now = Date.now()
-  const field = SORTS.find((s) => s.key === sort.value).field
-  return store.posts
-    .map((post) => row(post, now))
-    .filter((r) => tag.value === null || r.tagIds.includes(tag.value))
-    .sort((a, b) => Number(b.pinned) - Number(a.pinned) || b.keys[field] - a.keys[field])
+  const chosen = store.posts.filter((post) => tag.value === null || list(post.tagIds).includes(tag.value))
+  return sortPosts(chosen, sort.value).map((post) => row(post, now))
 })
 const open = computed(() => rows.value.filter((r) => !r.archived))
 const archived = computed(() => rows.value.filter((r) => r.archived))
@@ -177,26 +161,30 @@ const shown = computed(() => (showArchived.value ? [...open.value, ...archived.v
               </span>
               <span v-if="r.latest" class="lb-topic-latest"><b class="lb-topic-author">{{ r.latest.name }}</b>: <span class="lb-topic-text">{{ r.latest.text }}</span></span>
               <span class="lb-topic-meta">
-                {{ r.replies }}
-                <template v-if="r.activity">· <time :datetime="r.activityAt">{{ r.activity }}</time></template>
+                <template v-if="r.replies">{{ r.replies }}</template>
+                <template v-if="r.replies && r.activity"> · </template>
+                <time v-if="r.activity" :datetime="r.activityAt">{{ r.activity }}</time>
                 <span v-if="r.posters.length" class="lb-posters" role="img" :aria-label="`Recent posters: ${r.posters.map((p) => p.name).join(', ')}`">
                   <template v-for="(p, i) in r.posters" :key="i">
-                    <img v-if="p.avatar" class="lb-poster" :src="p.avatar" alt="" width="24" height="24" loading="lazy" />
+                    <img v-if="p.avatar && !failedAvatars.has(p.avatar)" class="lb-poster" :src="p.avatar" alt="" width="24" height="24" loading="lazy" @error="failedAvatars.add(p.avatar)" />
                     <span v-else class="lb-poster lb-initials" aria-hidden="true">{{ initials(p.name) }}</span>
                   </template>
                 </span>
               </span>
             </span>
-            <img
-              v-if="r.latest && r.latest.thumb && !failedThumbs.has(r.latest.thumb)"
-              class="lb-thumb"
-              :src="r.latest.thumb"
-              alt=""
-              width="72"
-              height="72"
-              loading="lazy"
-              @error="failedThumbs.add(r.latest.thumb)"
-            />
+            <span v-if="r.latest && r.latest.thumb && !failedThumbs.has(r.latest.thumb)" class="lb-thumb-wrap" :class="{ 'lb-spoiler-thumb': r.latest.spoiler }">
+              <img
+                class="lb-thumb"
+                :class="{ 'lb-blurred': r.latest.spoiler }"
+                :src="r.latest.thumb"
+                alt=""
+                width="72"
+                height="72"
+                loading="lazy"
+                @error="failedThumbs.add(r.latest.thumb)"
+              />
+              <span v-if="r.latest.spoiler" class="lb-spoiler-tag">Spoiler</span>
+            </span>
           </RouterLink>
         </li>
       </ul>

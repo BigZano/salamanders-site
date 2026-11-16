@@ -13,6 +13,7 @@ const TOR = '200000000000000410'
 const WARDENS = '200000000000000420'
 const PLAIN = '200000000000000421'
 const ROUTE = '/reliquarium/librarius/'
+const EMOJI_ID = '200000000000000430'
 
 const make = (over = {}) =>
   createRenderCtx({
@@ -68,14 +69,15 @@ describe('createRenderCtx', () => {
 })
 
 describe('link: a Discord link to a post', () => {
-  const { link } = make()
 
   it('goes to the post, as a route', () => {
+    const { link } = make()
     expect(link(`https://discord.com/channels/${GUILD}/${POST}`)).toStrictEqual({ kind: 'route', to: `${ROUTE}${POST}` })
     expect(link(`https://discord.com/channels/${GUILD}/${POST_TWO}`)).toStrictEqual({ kind: 'route', to: `${ROUTE}${POST_TWO}` })
   })
 
   it('goes to the message, as a hash, when it names one', () => {
+    const { link } = make()
     expect(link(`https://discord.com/channels/${GUILD}/${POST}/${MESSAGE}`)).toStrictEqual({
       kind: 'route',
       to: `${ROUTE}${POST}#m-${MESSAGE}`,
@@ -83,6 +85,7 @@ describe('link: a Discord link to a post', () => {
   })
 
   it('takes the other hosts and shapes Discord links come in', () => {
+    const { link } = make()
     for (const host of ['discord.com', 'ptb.discord.com', 'canary.discord.com', 'discordapp.com', 'ptb.discordapp.com']) {
       expect(link(`https://${host}/channels/${GUILD}/${POST}`), host).toStrictEqual({ kind: 'route', to: `${ROUTE}${POST}` })
     }
@@ -96,6 +99,7 @@ describe('link: a Discord link to a post', () => {
   })
 
   it('goes to the post for a channel mention, whatever the guild the mention is read in', () => {
+    const { link } = make()
     // The mention names no guild: the ctx's own guild is not the one the archive's code assumes for a bare mention.
     expect(GUILD).not.toBe(GUILD_ID)
     expect(link(`<#${POST}>`)).toStrictEqual({ kind: 'route', to: `${ROUTE}${POST}` })
@@ -103,6 +107,7 @@ describe('link: a Discord link to a post', () => {
   })
 
   it('is an external link when the guild is not ours, even for a channel that is a post', () => {
+    const { link } = make()
     for (const other of [GUILD_ID, '200000000000000499', '@me']) {
       const href = `https://discord.com/channels/${other}/${POST}`
       expect(link(href), other).toStrictEqual({ kind: 'external', href })
@@ -110,12 +115,14 @@ describe('link: a Discord link to a post', () => {
   })
 
   it('is an external link for a channel that is no post, and text for a mention of one', () => {
+    const { link } = make()
     const href = `https://discord.com/channels/${GUILD}/${OTHER_CHANNEL}/${MESSAGE}`
     expect(link(href)).toStrictEqual({ kind: 'external', href })
     expect(link(`<#${OTHER_CHANNEL}>`)).toStrictEqual({ kind: 'text' })
   })
 
   it('is an external link for any other Discord address', () => {
+    const { link } = make()
     for (const href of [
       'https://discord.com/',
       'https://discord.gg/abcdef',
@@ -132,9 +139,9 @@ describe('link: a Discord link to a post', () => {
 })
 
 describe('link: every other address', () => {
-  const { link } = make()
 
   it('is an external link, as written, for an https address', () => {
+    const { link } = make()
     for (const href of [
       'https://example.org',
       'https://example.org/',
@@ -149,6 +156,7 @@ describe('link: every other address', () => {
   })
 
   it('is text for a scheme that is not https', () => {
+    const { link } = make()
     for (const href of [
       'javascript:alert(1)',
       'JaVaScRiPt:alert(1)',
@@ -177,12 +185,14 @@ describe('link: every other address', () => {
   })
 
   it('is text for an https address with no host', () => {
+    const { link } = make()
     for (const href of ['https:', 'https:/', 'https://', 'https:///x', 'https://?x', 'https://#x', 'https://\\x', 'https:example.org', 'https:\\\\example.org']) {
       expect(link(href), href).toStrictEqual({ kind: 'text' })
     }
   })
 
   it('is text for an address with white space, a control character or an invisible one in it', () => {
+    const { link } = make()
     for (const href of [
       ' https://example.org',
       'https://example.org ',
@@ -210,24 +220,28 @@ describe('link: every other address', () => {
   })
 
   it('keeps ordinary letters from other scripts in an address', () => {
+    const { link } = make()
     for (const href of ['https://пример.рф/путь', 'https://example.org/日本語', 'https://example.org/😀']) {
       expect(link(href), href).toStrictEqual({ kind: 'external', href })
     }
   })
 
   it('is text for what is no address', () => {
+    const { link } = make()
     for (const href of ['', ' ', 'hello', '<#123>', `<@${TOR}>`, `<#${POST}`, `#${POST}`, POST, `<#${POST}>x`, '<>', '[x](y)']) {
       expect(link(href), href).toStrictEqual({ kind: 'text' })
     }
   })
 
   it('is text for what is no string', () => {
+    const { link } = make()
     for (const href of [undefined, null, 5, true, {}, [], ['https://example.org'], { toString: () => 'https://example.org' }]) {
       expect(link(href), String(href)).toStrictEqual({ kind: 'text' })
     }
   })
 
   it('answers one of three kinds, and an external link keeps the very text it was given, for any text', () => {
+    const { link } = make()
     fc.assert(
       fc.property(fc.string({ maxLength: 60 }), (href) => {
         const r = link(href)
@@ -248,13 +262,14 @@ describe('link: every other address', () => {
 })
 
 describe('mention', () => {
-  const { mention } = make()
 
   it('is a member by name from the people the page knows', () => {
+    const { mention } = make()
     expect(mention({ kind: 'user', id: TOR })).toStrictEqual({ label: '@Tor Mardan', color: null })
   })
 
   it('is an unknown member for one it does not know, or one with no name', () => {
+    const { mention } = make()
     expect(mention({ kind: 'user', id: '200000000000000499' })).toStrictEqual({ label: '@unknown-member', color: null })
     for (const name of ['', null, undefined, 5, {}]) {
       const { mention: m } = make({ people: { [TOR]: { name, avatar: null } } })
@@ -265,6 +280,7 @@ describe('mention', () => {
   })
 
   it('does not take a name off the prototype of the table', () => {
+    const { mention } = make()
     for (const id of ['constructor', '__proto__', 'toString', 'hasOwnProperty', 'valueOf']) {
       expect(mention({ kind: 'user', id }), id).toStrictEqual({ label: '@unknown-member', color: null })
     }
@@ -279,10 +295,12 @@ describe('mention', () => {
   })
 
   it('is a role by name with its colour', () => {
+    const { mention } = make()
     expect(mention({ kind: 'role', id: WARDENS })).toStrictEqual({ label: '@Wardens', color: '#aa3322' })
   })
 
   it('has no colour for a role with none', () => {
+    const { mention } = make()
     expect(mention({ kind: 'role', id: PLAIN })).toStrictEqual({ label: '@Plain', color: null })
     const { mention: m } = make({ roles: [{ id: WARDENS, name: 'Wardens' }] })
     expect(m({ kind: 'role', id: WARDENS })).toStrictEqual({ label: '@Wardens', color: null })
@@ -306,6 +324,7 @@ describe('mention', () => {
   })
 
   it('is an unknown role for one it does not know, or one with no name', () => {
+    const { mention } = make()
     expect(mention({ kind: 'role', id: '200000000000000499' })).toStrictEqual({ label: '@unknown-role', color: null })
     for (const name of ['', null, undefined, 5]) {
       const { mention: m } = make({ roles: [{ id: WARDENS, name, color: '#aa3322' }] })
@@ -314,16 +333,19 @@ describe('mention', () => {
   })
 
   it('looks a role up among the roles, not among the people', () => {
+    const { mention } = make()
     expect(mention({ kind: 'role', id: TOR }).label).toBe('@unknown-role')
     expect(mention({ kind: 'user', id: WARDENS }).label).toBe('@unknown-member')
   })
 
   it('is the title of a post for a channel that is one', () => {
+    const { mention } = make()
     expect(mention({ kind: 'channel', id: POST })).toStrictEqual({ label: 'The Long Road', color: null })
     expect(mention({ kind: 'channel', id: POST_TWO })).toStrictEqual({ label: 'Supply Lines', color: null })
   })
 
   it('is #channel for a channel that is no post, or a post with no title', () => {
+    const { mention } = make()
     expect(mention({ kind: 'channel', id: OTHER_CHANNEL })).toStrictEqual({ label: '#channel', color: null })
     for (const title of ['', null, undefined, 5]) {
       const { mention: m } = make({ postTitles: new Map([[POST, title]]) })
@@ -332,11 +354,13 @@ describe('mention', () => {
   })
 
   it('is #channel for a kind it does not know', () => {
+    const { mention } = make()
     expect(mention({ kind: 'everyone', id: POST })).toStrictEqual({ label: '#channel', color: null })
     expect(mention({ kind: undefined, id: POST })).toStrictEqual({ label: '#channel', color: null })
   })
 
   it('never answers a label that is empty', () => {
+    const { mention } = make()
     const kinds = ['user', 'role', 'channel', 'other']
     fc.assert(
       fc.property(fc.constantFrom(...kinds), fc.string({ maxLength: 30 }), (kind, id) => {
@@ -349,10 +373,9 @@ describe('mention', () => {
 })
 
 describe('emoji', () => {
-  const { emoji } = make()
-  const EMOJI_ID = '200000000000000430'
 
   it('is the image on Discord\'s CDN, webp for a still emoji', () => {
+    const { emoji } = make()
     const v = emoji({ type: 'emoji', name: 'wolf', id: EMOJI_ID, animated: false, raw: `<:wolf:${EMOJI_ID}>` })
     expect(v.type).toBe('img')
     expect(v.props).toStrictEqual({
@@ -364,29 +387,34 @@ describe('emoji', () => {
   })
 
   it('is a gif for an animated one', () => {
+    const { emoji } = make()
     const v = emoji({ name: 'wolf', id: EMOJI_ID, animated: true })
     expect(v.props.src).toBe(`https://cdn.discordapp.com/emojis/${EMOJI_ID}.gif?size=48`)
   })
 
   it('is still for anything that is not true', () => {
+    const { emoji } = make()
     for (const animated of [false, undefined, null, 0, 1, 'true', 'a']) {
       expect(emoji({ name: 'wolf', id: EMOJI_ID, animated }).props.src, String(animated)).toBe(`https://cdn.discordapp.com/emojis/${EMOJI_ID}.webp?size=48`)
     }
   })
 
   it('takes the ids of 17 to 20 digits', () => {
+    const { emoji } = make()
     for (const id of ['12345678901234567', '123456789012345678', '12345678901234567890']) {
       expect(emoji({ name: 'x', id, animated: false }).props.src, id).toBe(`https://cdn.discordapp.com/emojis/${id}.webp?size=48`)
     }
   })
 
   it('is its name as text when the id is no id, so no address is made of it', () => {
+    const { emoji } = make()
     for (const id of ['', 'abc', '1234567890123456', '123456789012345678901', '12345678901234567x', `${EMOJI_ID}/../x`, `${EMOJI_ID}.png?x`, `x${EMOJI_ID}`, `${EMOJI_ID}\n`, null, undefined, 5, 12345678901234567, {}, { toString: () => EMOJI_ID }, [EMOJI_ID]]) {
       expect(emoji({ name: 'wolf', id, animated: false }), String(id)).toBe(':wolf:')
     }
   })
 
   it('names an emoji that has no name, or one that is no word, as "emoji"', () => {
+    const { emoji } = make()
     for (const name of [null, undefined, '', 5, 'a b', '<script>', 'a'.repeat(33), 'x"onerror="y']) {
       expect(emoji({ name, id: EMOJI_ID, animated: false }).props.alt, String(name)).toBe(':emoji:')
       expect(emoji({ name, id: 'bad', animated: false }), String(name)).toBe(':emoji:')

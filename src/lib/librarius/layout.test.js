@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest'
 import fc from 'fast-check'
 import { parse, plainText, walk } from '../archive/markdown'
-import { isArticle, groupMessages, excerpt, firstUnread, railMonths, isImage } from './layout'
+import { isArticle, groupMessages, excerpt, firstUnread, railMonths, isImage, isSpoilerFile, ago, sortPosts, repliesText, sizeText } from './layout'
 
 // Invented ids only (the 200000000000000400 range), and invented names.
 const ID = (n) => `2000000000000004${String(n).padStart(2, '0')}`
@@ -27,6 +27,16 @@ const message = (n, over = {}) => ({
   ...over,
 })
 const article = (m) => isArticle(m, parse(m.content))
+// The fastest of a few runs: a busy machine slows some of them, while code that does too much work for hostile text is
+// slow in every one.
+const fastest = (run, times = 5) =>
+  Math.min(
+    ...Array.from({ length: times }, () => {
+      const start = performance.now()
+      run()
+      return performance.now() - start
+    }),
+  )
 
 describe('isImage', () => {
   it.each([
@@ -356,20 +366,28 @@ describe('excerpt', () => {
 
   it('stays quick on a hostile run of nested markers', () => {
     const run = '**__~~||'.repeat(500)
-    const start = performance.now()
-    const out = excerpt(run)
-    expect(performance.now() - start).toBeLessThan(200)
-    expect(Array.from(out).length).toBeLessThanOrEqual(120)
+    expect(fastest(() => excerpt(run))).toBeLessThan(200)
+    expect(Array.from(excerpt(run)).length).toBeLessThanOrEqual(120)
   })
 
   it('is the plain text of the parse, spoilers masked, collapsed and cut, whatever the content', () => {
-    // The model: the same parse with each spoiler turned into the mask in place, read by the archive's plainText.
+    // The model: the same parse, each spoiler turned into the mask in place, and a text node (or address) that holds a
+    // `||` no spoiler took cut there and ended with the mask and a sentinel; the archive's plainText then reads it all,
+    // and what comes after the sentinel is dropped.
     const maskedText = (content) => {
       const nodes = parse(content)
+      let closed = false
       walk(nodes, (node) => {
         if (node.type === 'spoiler') Object.assign(node, { type: 'text', value: '▒▒▒', children: undefined })
+        else if (!closed && node.type === 'url' && node.href.includes('||')) {
+          closed = true
+          Object.assign(node, { type: 'text', value: node.href.slice(0, node.href.indexOf('||')) + '▒▒▒\u0000' })
+        } else if (!closed && node.type === 'text' && node.value.includes('||')) {
+          closed = true
+          node.value = node.value.slice(0, node.value.indexOf('||')) + '▒▒▒\u0000'
+        }
       })
-      return plainText(nodes).replace(/\s+/g, ' ').trim()
+      return plainText(nodes).split('\u0000')[0].replace(/\s+/g, ' ').trim()
     }
     fc.assert(
       fc.property(fc.string({ maxLength: 400 }), fc.integer({ min: 1, max: 150 }), (content, max) => {
@@ -439,11 +457,13 @@ describe('excerpt', () => {
       expect(excerpt('- # heading ||secret|| in a list')).toBe(`heading ${MASK} in a list`)
     })
 
-    it('does not mask what is not a spoiler', () => {
-      expect(excerpt('only one || bar')).toBe('only one || bar')
-      expect(excerpt('escaped \\||not a spoiler\\||')).toBe('escaped ||not a spoiler||')
+    it('does not mask what is not a spoiler: code stays as it was written', () => {
       expect(excerpt('`||in code||`')).toBe('||in code||')
+      expect(excerpt('`a || b`')).toBe('a || b')
       expect(excerpt('```\n||in a block||\n```')).toBe('||in a block||')
+      expect(excerpt('```\n||not closed\n```')).toBe('||not closed')
+      expect(excerpt('a | b | c')).toBe('a | b | c')
+      expect(excerpt('||')).toBe('▒▒▒')
     })
 
     it('does not show the secret when the cut falls in front of, in, or behind the mask', () => {
@@ -487,25 +507,119 @@ describe('excerpt', () => {
       )
     })
 
+    describe('a spoiler a preview cut open (no `||` to close it): fail closed', () => {
+      it('masks from the unmatched `||` to the end, so a spoiler cut at 200 characters hides what is left of it', () => {
+        const content = `Ending: ||the traitor was ${'x'.repeat(300)}||`
+        const out = excerpt(content.slice(0, 200))
+        expect(out).toBe(`Ending: ${MASK}`)
+        expect(out).not.toContain('traitor')
+      })
+
+      it('masks a lone `||` and what follows, wherever it is', () => {
+        expect(excerpt('||')).toBe(MASK)
+        expect(excerpt('|||')).toBe(MASK)
+        expect(excerpt('||secret')).toBe(MASK)
+        expect(excerpt('a || b')).toBe(`a ${MASK}`)
+        expect(excerpt('visible ||hidden')).toBe(`visible ${MASK}`)
+        expect(excerpt('only one || bar')).toBe(`only one ${MASK}`)
+      })
+
+      it('drops every node after it, of any kind', () => {
+        expect(excerpt('visible ||hidden and **more** `code` https://x.example <@200000000000000410> <:w:200000000000000430> ~~s~~ tail')).toBe(`visible ${MASK}`)
+        expect(excerpt('visible ||hidden https://x.example/secret')).toBe(`visible ${MASK}`)
+        expect(excerpt('visible ||hidden\n```\nblock secret\n```\ntail')).toBe(`visible ${MASK}`)
+      })
+
+      it('drops the lines after it, so a spoiler across lines is masked in a preview', () => {
+        expect(excerpt('||line one\nline two||')).toBe(MASK)
+        expect(excerpt('||line one\nline two\nline three||')).toBe(MASK)
+        expect(excerpt('first\n||second\nthird')).toBe(`first ${MASK}`)
+        expect(excerpt('first\n\n||second\n\nthird\n\nfourth||')).toBe(`first ${MASK}`)
+      })
+
+      it('keeps the spoilers that closed before it, masked, and the text before it', () => {
+        expect(excerpt('||a|| and ||b')).toBe(`${MASK} and ${MASK}`)
+        expect(excerpt('plain ||a|| mid ||b|| and ||c secret')).toBe(`plain ${MASK} mid ${MASK} and ${MASK}`)
+      })
+
+      it('masks from the unmatched `||` inside nested formatting, and drops what follows the formatting too', () => {
+        expect(excerpt('**bold ||secret** tail')).toBe(`bold ${MASK}`)
+        expect(excerpt('**bold __under ~~strike ||secret~~ x__ x** tail')).toBe(`bold under strike ${MASK}`)
+        expect(excerpt('*it ||secret* tail')).toBe(`it ${MASK}`)
+        expect(excerpt('***both ||secret*** tail')).toBe(`both ${MASK}`)
+        expect(excerpt('> quoted **bold ||secret** after\nnext line')).toBe(`quoted bold ${MASK}`)
+        expect(excerpt('# Title ||secret\nbody')).toBe(`Title ${MASK}`)
+        expect(excerpt('-# small ||secret\nbody')).toBe(`small ${MASK}`)
+        expect(excerpt('[go ||secret](https://example.org/a) after')).toBe(`go ${MASK}`)
+        expect(excerpt('[go ||secret](https://example.org/a) after\nmore')).toBe(`go ${MASK}`)
+      })
+
+      it('masks from the unmatched `||` inside a list, and drops the items after it', () => {
+        expect(excerpt('- one\n- two ||secret\n- three')).toBe(`one two ${MASK}`)
+        expect(excerpt('- one\n  - deeper ||secret\n  - deeper still\n- three')).toBe(`one deeper ${MASK}`)
+        expect(excerpt('1. first\n2. second ||secret\n3. third')).toBe(`first second ${MASK}`)
+        expect(excerpt('- # heading ||secret\n- three')).toBe(`heading ${MASK}`)
+        expect(excerpt('> - in a quote ||secret\n> - more')).toBe(`in a quote ${MASK}`)
+      })
+
+      it('masks an address that swallowed the opener, from the `||` on', () => {
+        expect(excerpt('see https://example.org/x||secret|| now')).toBe(`see https://example.org/x${MASK}`)
+        expect(excerpt('see <https://example.org/x||secret> now')).toBe(`see https://example.org/x${MASK}`)
+      })
+
+      it('does not take a `||` in the address behind a link\'s words, which is never shown', () => {
+        expect(excerpt('[words](https://example.org/a||b) tail')).toBe('words tail')
+        expect(excerpt('[words](https://example.org/a||b||c) tail')).toBe('words tail')
+      })
+
+      it('treats an escaped `||` as an opener too, since a preview cannot tell it from one', () => {
+        expect(excerpt('escaped \\||not a spoiler\\|| tail')).toBe(`escaped ${MASK}`)
+      })
+
+      it('still cuts to the length asked for, after the mask', () => {
+        expect(excerpt(`${'a'.repeat(117)} ||secret and more`)).toBe(`${'a'.repeat(117)} ▒…`)
+        expect(excerpt('abc ||secret', 6)).toBe('abc ▒…')
+        expect(excerpt('abc ||secret', 7)).toBe(`abc ${MASK}`)
+        expect(excerpt('||secret', 1)).toBe('…')
+      })
+
+      it('shows nothing that comes after an unmatched `||`, for any text before and after it, and any length', () => {
+        // What follows the opener holds ZQ in every word and no `|`, so nothing can close the opener and any ZQ in the
+        // excerpt came from after it. What comes before is digits.
+        const word = fc.stringMatching(/^[a-z]{3,8}$/).map((w) => `ZQ${w}`)
+        const mark = fc.constantFrom('', '', '**', '__', '~~', '*', '`', '> ', '- ', '# ', '-# ', '[', ']( https://example.org', '<', ':', '\\')
+        const after = fc.array(fc.tuple(mark, word), { minLength: 1, maxLength: 8 }).map((parts) => parts.map(([m, w]) => m + w).join(' '))
+        const lines = fc.array(after, { minLength: 1, maxLength: 4 }).map((ls) => ls.join('\n'))
+        const before = fc.array(fc.stringMatching(/^[0-9]{1,6}$/), { maxLength: 5 }).map((ws) => ws.join(' '))
+        fc.assert(
+          fc.property(before, lines, fc.integer({ min: 1, max: 200 }), (lead, rest, max) => {
+            const content = `${lead} ||${rest}`
+            expect(excerpt(content, max)).not.toMatch(/ZQ|zq/)
+            expect(excerpt(content, 100_000)).toBe(`${lead} ${MASK}`.trim())
+          }),
+          { numRuns: 300 },
+        )
+      })
+    })
+
     it('is quick on a hostile run of spoilers', () => {
-      const start = performance.now()
-      const out = excerpt('||x||'.repeat(800))
-      expect(performance.now() - start).toBeLessThan(200)
-      expect(out).toBe('▒'.repeat(119) + '…')
+      const run = '||x||'.repeat(800)
+      expect(fastest(() => excerpt(run))).toBeLessThan(200)
+      expect(excerpt(run)).toBe('▒'.repeat(119) + '…')
     })
   })
 })
 
 describe('firstUnread', () => {
-  const list = [message(1), message(2), message(3), message(4)]
+  const messages = () => [message(1), message(2), message(3), message(4)]
 
   it('is null when nothing has been read', () => {
-    expect(firstUnread(list, null)).toBeNull()
+    expect(firstUnread(messages(), null)).toBeNull()
     expect(firstUnread([], null)).toBeNull()
   })
 
   it('is null for a position that was never set, as for null', () => {
-    expect(firstUnread(list, undefined)).toBeNull()
+    expect(firstUnread(messages(), undefined)).toBeNull()
   })
 
   it('is null for no messages', () => {
@@ -513,19 +627,19 @@ describe('firstUnread', () => {
   })
 
   it('is the first message after the one that was read last', () => {
-    expect(firstUnread(list, ID(2))).toBe(ID(3))
-    expect(firstUnread(list, ID(1))).toBe(ID(2))
-    expect(firstUnread(list, ID(3))).toBe(ID(4))
+    expect(firstUnread(messages(), ID(2))).toBe(ID(3))
+    expect(firstUnread(messages(), ID(1))).toBe(ID(2))
+    expect(firstUnread(messages(), ID(3))).toBe(ID(4))
   })
 
   it('is the first message when the last read is before them all', () => {
-    expect(firstUnread(list, '200000000000000100')).toBe(ID(1))
-    expect(firstUnread(list, '0')).toBe(ID(1))
+    expect(firstUnread(messages(), '200000000000000100')).toBe(ID(1))
+    expect(firstUnread(messages(), '0')).toBe(ID(1))
   })
 
   it('is null when the last read is the newest, or past it', () => {
-    expect(firstUnread(list, ID(4))).toBeNull()
-    expect(firstUnread(list, '200000000000000999')).toBeNull()
+    expect(firstUnread(messages(), ID(4))).toBeNull()
+    expect(firstUnread(messages(), '200000000000000999')).toBeNull()
   })
 
   it('compares ids as numbers, not as text', () => {
@@ -550,12 +664,12 @@ describe('firstUnread', () => {
   })
 
   it('is a string, the id of the message', () => {
-    expect(typeof firstUnread(list, ID(1))).toBe('string')
+    expect(typeof firstUnread(messages(), ID(1))).toBe('string')
   })
 
   it('refuses a position that is no id, and a message with no id', () => {
     for (const bad of ['', 'abc', '12x', '-5', '1.5', ' 7', '7 ', 7, 0, {}, [], true, '1'.repeat(21)]) {
-      expect(() => firstUnread(list, bad), String(bad)).toThrow(/string of 1 to 20 digits/)
+      expect(() => firstUnread(messages(), bad), String(bad)).toThrow(/string of 1 to 20 digits/)
     }
     expect(() => firstUnread([message(1, { id: 'abc' })], ID(1))).toThrow(/string of 1 to 20 digits/)
     expect(() => firstUnread([message(1, { id: 5 })], ID(1))).toThrow(/string of 1 to 20 digits/)
@@ -695,6 +809,255 @@ describe('railMonths', () => {
           expect(m.at.getUTCHours() + m.at.getUTCMinutes() + m.at.getUTCSeconds() + m.at.getUTCMilliseconds()).toBe(0)
           expect(m.label).toMatch(/^[A-Z][a-z]{2} \d{4}$/)
         })
+      }),
+    )
+  })
+})
+
+describe('isSpoilerFile', () => {
+  it.each([
+    ['SPOILER_a.png', true],
+    ['spoiler_a.png', true],
+    ['Spoiler_A.PNG', true],
+    ['SpOiLeR_x', true],
+    ['SPOILER_', true],
+    ['SPOILER_#1.png', true],
+    ['SPOILER_what?.png', true],
+    ['https://cdn.discordapp.com/attachments/200000000000000401/200000000000000460/SPOILER_a.png', true],
+    ['https://cdn.discordapp.com/attachments/200000000000000401/200000000000000460/spoiler_a.png?ex=65f0&is=65e0&hm=ab12', true],
+    ['https://cdn.discordapp.com/attachments/1/2/SPOILER_a.png#frag', true],
+    ['https://cdn.discordapp.com/attachments/1/2/SPOILER_a.png?next=/b/c.png', true],
+    ['a.png', false],
+    ['photo.png', false],
+    ['', false],
+    ['SPOILER', false],
+    ['SPOILERa.png', false],
+    ['SPOILER-a.png', false],
+    ['SPOILER a.png', false],
+    [' SPOILER_a.png', false],
+    ['xSPOILER_a.png', false],
+    ['a_SPOILER_b.png', false],
+    ['a#SPOILER_b.png', false],
+    ['a?SPOILER_b.png', false],
+    ['https://cdn.discordapp.com/attachments/1/SPOILER_dir/a.png', false],
+    ['https://cdn.discordapp.com/attachments/1/2/a.png?name=SPOILER_a.png', false],
+    ['https://cdn.discordapp.com/attachments/1/2/a.png#SPOILER_a.png', false],
+    ['https://cdn.discordapp.com/attachments/1/2/a.png?next=/SPOILER_b.png', false],
+    ['https://cdn.discordapp.com/attachments/1/2/SPOILER_a.png/', false],
+    ['https://SPOILER_x.example/a.png', false],
+  ])('%j → %s', (nameOrUrl, expected) => {
+    expect(isSpoilerFile(nameOrUrl)).toBe(expected)
+  })
+
+  it('is false for what is no text', () => {
+    for (const value of [null, undefined, 5, true, {}, [], ['SPOILER_a.png'], { toString: () => 'SPOILER_a.png' }]) {
+      expect(isSpoilerFile(value), String(value)).toBe(false)
+    }
+  })
+
+  it('is true for any name that begins with the word in any case, and for any address that ends in one', () => {
+    const name = fc.stringMatching(/^[A-Za-z0-9._ -]{0,12}$/)
+    const cased = fc.array(fc.boolean(), { minLength: 8, maxLength: 8 }).map((flips) => [...'spoiler_'].map((c, i) => (flips[i] ? c.toUpperCase() : c)).join(''))
+    fc.assert(
+      fc.property(cased, name, name, (word, rest, dir) => {
+        expect(isSpoilerFile(word + rest)).toBe(true)
+        expect(isSpoilerFile(`https://cdn.discordapp.com/attachments/${dir.replace(/[?#/]/g, '')}/${word + rest}?ex=1#x`)).toBe(true)
+        expect(isSpoilerFile(`${word}${rest}/tail`)).toBe(false)
+        expect(isSpoilerFile(`x${word}${rest}`)).toBe(false)
+      }),
+    )
+  })
+})
+
+describe('ago', () => {
+  const NOW = Date.parse('2026-11-10T10:02:00.000Z')
+  const before = (ms) => new Date(NOW - ms).toISOString()
+  const SEC = 1000
+  const MIN = 60 * SEC
+  const HOUR = 60 * MIN
+  const DAY = 24 * HOUR
+
+  it.each([
+    [-DAY, 'just now'],
+    [-1, 'just now'],
+    [0, 'just now'],
+    [59 * SEC, 'just now'],
+    [MIN - 1, 'just now'],
+    [MIN, '1m ago'],
+    [90 * SEC, '1m ago'],
+    [2 * MIN, '2m ago'],
+    [HOUR - 1, '59m ago'],
+    [HOUR, '1h ago'],
+    [90 * MIN, '1h ago'],
+    [2 * HOUR, '2h ago'],
+    [DAY - 1, '23h ago'],
+    [DAY, '1d ago'],
+    [36 * HOUR, '1d ago'],
+    [6 * DAY, '6d ago'],
+    [30 * DAY - 1, '29d ago'],
+  ])('reads %i ms as "%s"', (ms, text) => {
+    expect(ago(before(ms), NOW)).toBe(text)
+  })
+
+  it('writes the date, in the reader\'s own style, for a month or more', () => {
+    for (const ms of [30 * DAY, 31 * DAY, 400 * DAY]) {
+      const then = NOW - ms
+      expect(ago(before(ms), NOW), String(ms)).toBe(new Date(then).toLocaleDateString(undefined, { year: 'numeric', month: 'short', day: 'numeric' }))
+    }
+    expect(ago(before(30 * DAY), NOW)).toMatch(/2026/)
+    expect(ago(before(30 * DAY), NOW)).not.toContain('ago')
+  })
+
+  it('writes nothing for a time that is no time', () => {
+    for (const bad of ['', 'yesterday-ish', 'Invalid Date', null, undefined, 5, {}, [], new Date(NOW)]) {
+      expect(ago(bad, NOW), String(bad)).toBe('')
+    }
+  })
+
+  it('refuses a clock that is no time', () => {
+    for (const bad of [NaN, Infinity, -Infinity, '5', null, undefined, new Date(NOW), {}]) {
+      expect(() => ago(before(0), bad), String(bad)).toThrow(TypeError)
+      expect(() => ago(before(0), bad), String(bad)).toThrow(/now must be a number of milliseconds/)
+    }
+  })
+
+  it('reads any age in the biggest unit that fits, whatever the age', () => {
+    fc.assert(
+      fc.property(fc.integer({ min: -DAY, max: 29 * DAY }), (ms) => {
+        const text = ago(before(ms), NOW)
+        if (ms < MIN) expect(text).toBe('just now')
+        else if (ms < HOUR) expect(text).toBe(`${Math.floor(ms / MIN)}m ago`)
+        else if (ms < DAY) expect(text).toBe(`${Math.floor(ms / HOUR)}h ago`)
+        else expect(text).toBe(`${Math.floor(ms / DAY)}d ago`)
+      }),
+    )
+  })
+})
+
+describe('sortPosts', () => {
+  const day = (n) => `2026-10-${String(n).padStart(2, '0')}T00:00:00.000Z`
+  const post = (id, activity, created, over = {}) => ({ id, pinned: false, lastActivityAt: day(activity), createdAt: day(created), ...over })
+  const ids = (posts) => posts.map((p) => p.id)
+
+  it('puts the pinned posts first, then the newest activity first', () => {
+    const posts = [post('a', 2, 1), post('b', 9, 2), post('c', 5, 3, { pinned: true }), post('d', 7, 4), post('e', 1, 5, { pinned: true })]
+    expect(ids(sortPosts(posts, 'activity'))).toEqual(['c', 'e', 'b', 'd', 'a'])
+  })
+
+  it('orders by the day a post was made for "created", pinned ones still first', () => {
+    const posts = [post('a', 2, 1), post('b', 9, 2), post('c', 5, 3, { pinned: true }), post('d', 7, 4), post('e', 1, 5, { pinned: true })]
+    expect(ids(sortPosts(posts, 'created'))).toEqual(['e', 'c', 'd', 'b', 'a'])
+  })
+
+  it('keeps the order it was given for posts that are level', () => {
+    const posts = [post('a', 3, 1), post('b', 3, 2), post('c', 3, 3), post('d', 4, 4), post('e', 3, 5, { pinned: true }), post('f', 3, 6, { pinned: true })]
+    expect(ids(sortPosts(posts, 'activity'))).toEqual(['e', 'f', 'd', 'a', 'b', 'c'])
+    expect(ids(sortPosts([post('x', 1, 4), post('y', 2, 4), post('z', 3, 4)], 'created'))).toEqual(['x', 'y', 'z'])
+  })
+
+  it('puts a post whose date is no date after the dated ones, and keeps those in the order given', () => {
+    const posts = [post('a', 1, 1, { lastActivityAt: 'later than never' }), post('b', 2, 1), post('c', 3, 1, { lastActivityAt: undefined }), post('d', 4, 1, { lastActivityAt: 7 }), post('e', 5, 1)]
+    expect(ids(sortPosts(posts, 'activity'))).toEqual(['e', 'b', 'a', 'c', 'd'])
+    expect(ids(sortPosts([post('a', 1, 1, { createdAt: null }), post('b', 2, 2)], 'created'))).toEqual(['b', 'a'])
+  })
+
+  it('counts only a pinned that is true', () => {
+    const posts = [post('a', 1, 1, { pinned: 'yes' }), post('b', 2, 1, { pinned: 1 }), post('c', 3, 1, { pinned: undefined }), post('d', 1, 1, { pinned: true })]
+    expect(ids(sortPosts(posts, 'activity'))).toEqual(['d', 'c', 'b', 'a'])
+  })
+
+  it('answers a new list, and changes neither the list nor the posts', () => {
+    const posts = [post('a', 1, 1), post('b', 2, 2)]
+    const copy = JSON.parse(JSON.stringify(posts))
+    const out = sortPosts(posts, 'activity')
+    expect(out).not.toBe(posts)
+    expect(posts).toEqual(copy)
+    expect(out[0]).toBe(posts[1])
+    expect(sortPosts([], 'activity')).toEqual([])
+  })
+
+  it('refuses what is no list, or a sort it does not know', () => {
+    for (const bad of [null, undefined, {}, 'abc', 5]) expect(() => sortPosts(bad, 'activity')).toThrow(/takes a list of posts/)
+    for (const bad of ['', 'Activity', 'latest', undefined, null, 'lastActivityAt', '__proto__']) expect(() => sortPosts([], bad), String(bad)).toThrow(/activity.*created/)
+  })
+
+  it('orders any posts: pinned first, then by the chosen date, newest first, level ones as given', () => {
+    const one = fc.record({ pinned: fc.boolean(), activity: fc.integer({ min: 1, max: 6 }), created: fc.integer({ min: 1, max: 6 }) })
+    fc.assert(
+      fc.property(fc.array(one, { maxLength: 20 }), fc.constantFrom('activity', 'created'), (specs, by) => {
+        const posts = specs.map((s, i) => post(`p${i}`, s.activity, s.created, { pinned: s.pinned }))
+        const out = sortPosts(posts, by)
+        expect(ids(out).sort()).toEqual(ids(posts).sort())
+        const key = (p) => Date.parse(by === 'activity' ? p.lastActivityAt : p.createdAt)
+        for (let i = 1; i < out.length; i++) {
+          const a = out[i - 1]
+          const b = out[i]
+          expect(Number(a.pinned) >= Number(b.pinned)).toBe(true)
+          if (a.pinned === b.pinned) {
+            expect(key(a) >= key(b)).toBe(true)
+            if (key(a) === key(b)) expect(posts.indexOf(a) < posts.indexOf(b)).toBe(true)
+          }
+        }
+      }),
+    )
+  })
+})
+
+describe('repliesText', () => {
+  it.each([
+    [0, '0 replies'],
+    [1, '1 reply'],
+    [2, '2 replies'],
+    [999, '999 replies'],
+    [1000, '1,000 replies'],
+    [7931, '7,931 replies'],
+    [1234567, '1,234,567 replies'],
+    [Number.MAX_SAFE_INTEGER, '9,007,199,254,740,991 replies'],
+  ])('writes %i as "%s"', (n, text) => {
+    expect(repliesText(n)).toBe(text)
+  })
+
+  it('writes nothing for what is no count', () => {
+    for (const bad of ['3', '', null, undefined, NaN, Infinity, -Infinity, -1, 1.5, 2 ** 53, {}, [], [3], true, 3n]) {
+      expect(repliesText(bad), String(bad)).toBe('')
+    }
+  })
+})
+
+describe('sizeText', () => {
+  it.each([
+    [0, '0 B'],
+    [1, '1 B'],
+    [1023, '1023 B'],
+    [1024, '1.0 KB'],
+    [1536, '1.5 KB'],
+    [1048575, '1024.0 KB'],
+    [1048576, '1.0 MB'],
+    [5 * 1048576, '5.0 MB'],
+    [26214400, '25.0 MB'],
+    [1073741823, '1024.0 MB'],
+    [1073741824, '1.0 GB'],
+    [5 * 1073741824, '5.0 GB'],
+    [1024 * 1073741824, '1024.0 GB'],
+    [2 ** 50, '1048576.0 GB'],
+  ])('writes %i bytes as "%s"', (bytes, text) => {
+    expect(sizeText(bytes)).toBe(text)
+  })
+
+  it('writes nothing for what is no size', () => {
+    for (const bad of ['5', '', null, undefined, NaN, Infinity, -Infinity, -1, 1.5, 0.5, 2 ** 53, {}, [], [5], true, 5n]) {
+      expect(sizeText(bad), String(bad)).toBe('')
+    }
+  })
+
+  it('counts in 1024s with one decimal, whatever the size', () => {
+    fc.assert(
+      fc.property(fc.integer({ min: 0, max: 2 ** 40 }), (bytes) => {
+        const text = sizeText(bytes)
+        if (bytes < 1024) expect(text).toBe(`${bytes} B`)
+        else if (bytes < 1024 ** 2) expect(text).toBe(`${(bytes / 1024).toFixed(1)} KB`)
+        else if (bytes < 1024 ** 3) expect(text).toBe(`${(bytes / 1024 ** 2).toFixed(1)} MB`)
+        else expect(text).toBe(`${(bytes / 1024 ** 3).toFixed(1)} GB`)
       }),
     )
   })
