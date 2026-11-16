@@ -26,17 +26,19 @@
  *       second end tag; the scanner ends it at the first, and reads what follows as page, scripts included;
  *     - NUL in a script: a browser reads it as U+FFFD; the scanner hashes the NUL;
  *     - a <script> inside a <title> or a <textarea>, which is only text to a browser: the scanner hashes it;
- *     - a quote inside an unquoted attribute value (<meta a=b"c>): a browser ends the tag at its ">"; the scanner takes the
- *       quote to open a quoted value, which runs to the next quote, and so reads the tags in between (a <script> among
- *       them) as part of this one; with no quote after it, the scanner does not read the tag at all.
+ *     - a quote inside an unquoted attribute value or in an attribute name (<meta a=b"c>, <meta a"b>): a browser ends the
+ *       tag at its ">"; the scanner takes the quote to open a quoted value, which runs to the next quote, and so reads the
+ *       tags in between (a <script> among them) as part of this one; with no quote after it, the scanner does not read the
+ *       tag at all.
  *   Every one of these fails closed. Where the scanner reads fewer scripts than a browser runs (the comments, the quote), or
  *   reads another text for one (double-escaped data, NUL), the browser finds no hash for the script and blocks it: the page
  *   loses a script, it never gains one. Where it reads a script a browser does not run as one (a <script> in a <title>; the
  *   second <script> of <script><!--<script>X</script><script>Y</script>-->Z</script>, which is one script to a browser, so
  *   the scanner allows the hash of Y), it allows the hash of text the page's author wrote, and nothing else. In no case is a
  *   hash made of text that is not between a tag and an end tag of the page (csp.test.mjs holds this for any page).
- *   scripts/check-csp.mjs gets its hashes from here, so these blind spots are its too: it cannot find a script this
- *   misses, and a browser is what shows one.
+ *   scripts/check-csp.mjs reads the built page with jsdom, an HTML parser that follows the standard, and fails, naming both
+ *   lists, when the scripts it finds are not the ones this scanner made the policy from: so these blind spots do not go
+ *   unseen in a build. (The scanner stays a scanner so that the build plugin does not have to load a DOM.)
  *
  * buildCsp({ apiOrigin, scriptHashes }) → the policy, on one line.
  *   apiOrigin     the origin the builds API answers from: a bare https://host or https://host:port, or, for a build
@@ -66,8 +68,8 @@ const LABEL = '[a-z0-9](?:[a-z0-9-]*[a-z0-9])?'
 const API_ORIGIN = new RegExp(`^(?:https://${LABEL}(?:\\.${LABEL})*|http://(?:localhost|127\\.0\\.0\\.1))(?::\\d{1,5})?$`)
 // What the page is read for, left to right: a comment (to skip), and the tags that matter: a script, the head and the end of
 // it, the body (which ends it too) and a meta (for the charset declaration). An attribute value may hold a ">" when it is
-// quoted (and a quote inside an unquoted value is the one case this reads wrongly: see the header). A name that goes on
-// (<header>, <script-x>) is another tag.
+// quoted (a quote in an unquoted value or in a name makes it read a tag wrongly, and it is not the only thing it reads as a
+// browser does not: see the header). A name that goes on (<header>, <script-x>) is another tag.
 const MARKUP = /<!--[\s\S]*?(?:-->|$)|<(\/?)(script|head|body|meta)(?=[\s/>])((?:"[^"]*"|'[^']*'|[^'">])*)>/gi
 // A script's text: up to its end tag, or to the end of the page if it never closes (which a browser does not run).
 const SCRIPT_TEXT = /[\s\S]*?(?=<\/script(?=[\s/>])|$)/iy

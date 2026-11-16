@@ -50,6 +50,32 @@ describe('pr-check workflow', () => {
   })
 })
 
+// The check reads the page with jsdom, a development dependency: so the workflow must have installed those before the check
+// (bun install does, unless it is told to leave them out), and in a step of its own before the build as well.
+const INSTALL = 'bun install --frozen-lockfile'
+const LEAVES_DEV_DEPENDENCIES_OUT = /--production|--omit[= ]dev|--only[= ]prod|NODE_ENV:\s*['"]?production/
+
+describe('the workflows install the development dependencies the check needs', () => {
+  it.each([
+    ['pr-check', workflow],
+    ['deploy', deploy],
+  ])('%s installs them, with the lockfile, in an earlier step than the check, and does not leave them out', (_, text) => {
+    expect(text).not.toBe('')
+    const install = stepOf(INSTALL, text)
+    expect(install).toBeGreaterThan(-1)
+    expect(install).toBeLessThan(stepOf('bun run build', text))
+    expect(install).toBeLessThan(stepOf(CHECK, text))
+    expect(text).not.toMatch(LEAVES_DEV_DEPENDENCIES_OUT)
+  })
+
+  it('runs the check with node, which jsdom runs in', () => {
+    expect(workflow).toMatch(/uses: actions\/setup-node@/)
+    expect(deploy).toMatch(/uses: actions\/setup-node@/)
+    expect(stepOf('actions/setup-node', workflow)).toBeLessThan(stepOf(CHECK, workflow))
+    expect(stepOf('actions/setup-node', deploy)).toBeLessThan(stepOf(CHECK, deploy))
+  })
+})
+
 describe('deploy workflow', () => {
   it('checks the Content-Security-Policy of the build it ships, in the very next step after the build', () => {
     expect(deploy).not.toBe('')

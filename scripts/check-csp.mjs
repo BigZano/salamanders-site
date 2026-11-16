@@ -1,9 +1,11 @@
 /**
  * Post-build check of the Content-Security-Policy that scripts/csp.mjs puts in index.html (and that public/404.html carries
  * as written): `node scripts/check-csp.mjs dist` exits 1, and says why, unless dist/index.html and dist/404.html each
- *   - have a policy meta tag as a child of <head>, put where a browser puts it: nothing before it that ends the head (an
- *     element a head cannot hold, or text), and no <script>, <link> or <base> before it, which would load or act before the
- *     policy applies; a report-only policy blocks nothing and does not count;
+ *   - have a policy meta tag as an element child of <head>, as a browser builds the page (a report-only policy blocks nothing
+ *     and does not count), with nothing before it in the page, in document order, but a <meta charset>, a <title> and a
+ *     <meta> with a name or a property (and another policy meta): a <script>, <link>, <base>, <style> or <iframe> there
+ *     would load or act before the policy applies, and any other element, or text that is not white space, before it ends the
+ *     head, which leaves the meta in the body, where it is ignored;
  *   - have the sha256 of each of their inline scripts in that policy's first script-src (without it the browser blocks the
  *     script, which for 404.html is the deep-link redirect);
  *   - do not weaken the script rules: no 'unsafe-inline', 'unsafe-eval', 'strict-dynamic', 'unsafe-hashes' or
@@ -16,14 +18,17 @@
  * directive is written twice a browser keeps the first, so the hashes and the two 'none' rules look at the first; the
  * other rules look at every source written.
  *
- * The page is read with node-html-parser, but the hashes of its inline scripts come from scripts/csp.mjs (the scanner that
- * wrote them into the policy), so what that scanner does not model is not checked here either (see csp.mjs); a browser is
- * what finds such a script, and it shows as a blocked script.
+ * The page is read with jsdom, which parses it by the HTML standard as a browser does (no script is run, and nothing is
+ * fetched), so that where things are is where a browser puts them, whatever the page is written like: an element left open,
+ * a comment that ends early, a stray end tag. The hashes of the inline scripts are those of the text jsdom finds in them,
+ * and they must be the very list scripts/csp.mjs's scanner made the policy from: when the two differ the check fails and
+ * names both lists, so that what the scanner does not model (see csp.mjs) shows up here, and is not shared.
  */
+import { createHash } from 'node:crypto'
 import { readFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { NodeType, parse } from 'node-html-parser'
+import { JSDOM } from 'jsdom'
 import { inlineScriptHashes } from './csp.mjs'
 
 const PAGES = ['index.html', '404.html']
@@ -36,16 +41,10 @@ const NO_SCHEME_ONLY_IN = [...NO_WEAKENING_IN, 'object-src', 'base-uri']
 // What takes the strength out of script-src and its kin, and of default-src, which they fall back to. 'unsafe-eval' is refused
 // in every directive (see policyFaults).
 const WEAKENING = new Set(["'unsafe-inline'", "'strict-dynamic'", "'unsafe-hashes'", "'wasm-unsafe-eval'"])
-// What a head can hold besides the three that act before a policy applies (ACTS_BEFORE_THE_POLICY). Anything else makes a
-// browser end the head, and what follows is in the body.
-const HEAD_ELEMENTS = new Set(['meta', 'noscript', 'style', 'template', 'title'])
-const ACTS_BEFORE_THE_POLICY = new Set(['script', 'link', 'base'])
 // All a browser reads of the start of a page to find its character encoding.
 const CHARSET_WINDOW = 1024
-// A character that is not white space to HTML (which has only tab, line feed, form feed, carriage return and space: not the
-// no-break space or a vertical tab, which JavaScript's trim() and \s take for white space), and a doctype, which is ignored.
-const NOT_HTML_SPACE = /[^\t\n\f\r ]/
-const DOCTYPE = /<!doctype[^>]*>/gi
+// A browser drops this at the start of the file before it parses; jsdom, given text, does not.
+const BYTE_ORDER_MARK = /^\uFEFF/
 
 /** → [[directive name, [source, …]], …] for a policy, names in lower case. (An empty directive is a name of '' and no sources.) */
 const directivesOf = (policy) =>
@@ -76,59 +75,56 @@ function policyFaults(policy, hashes) {
   return faults
 }
 
-/**
- * → what is wrong with some nodes that come before a policy meta (in the head, or before the head, in <html> or ahead of it):
- * text that is not white space and an element a head cannot hold start the body, and a <script>, <link> or <base> acts before
- * the policy does. (A browser starts a head of its own for what comes ahead of <head>.)
- */
-function placementFaults(before) {
+const hashOf = (text) => `'sha256-${createHash('sha256').update(text).digest('base64')}'`
+const list = (hashes) => (hashes.length === 0 ? '(none)' : hashes.join(' '))
+
+const isPolicyMeta = (element) => element.localName === 'meta' && element.getAttribute('http-equiv')?.toLowerCase() === 'content-security-policy'
+
+// A <meta> that loads nothing and changes nothing: a charset declaration, or a name or a property. A refresh, or any other
+// http-equiv, is not (and a policy before another is fine).
+const isHarmlessMeta = (element) => isPolicyMeta(element) || (!element.hasAttribute('http-equiv') && ['charset', 'name', 'property'].some((attribute) => element.hasAttribute(attribute)))
+
+/** → what is wrong with the elements that come before a policy meta, in document order (its own ancestors do not count). */
+function placementFaults(document, meta) {
   const faults = []
-  for (const node of before) {
-    if (node.nodeType === NodeType.TEXT_NODE) {
-      if (NOT_HTML_SPACE.test(node.rawText.replace(DOCTYPE, ''))) faults.push('text comes before the policy meta, which ends the head: a browser puts the meta in the body, and ignores it')
-    } else {
-      // (The parser leaves comments out, so what is not text is an element.)
-      const tag = node.tagName.toLowerCase()
-      if (ACTS_BEFORE_THE_POLICY.has(tag)) faults.push(`<${tag}> comes before the policy meta, so it loads or acts before the policy applies`)
-      else if (!HEAD_ELEMENTS.has(tag)) faults.push(`<${tag}> comes before the policy meta and ends the head: a browser puts the meta in the body, and ignores it`)
-    }
+  for (const element of document.querySelectorAll('*')) {
+    if (element === meta) break
+    if (element.contains(meta) || element.localName === 'title' || (element.localName === 'meta' && isHarmlessMeta(element))) continue
+    faults.push(`<${element.localName}> comes before the policy meta: only a charset declaration, a title and a meta with a name or property may, because the policy applies only to what follows it`)
   }
   return faults
 }
-
-// (A text node has no tag name.)
-/** → what is wrong with where a head sits: what comes before it, at each level up to the page, and any element it is inside. */
-function headFaults(head) {
-  const faults = []
-  for (let node = head; node.parentNode !== null; node = node.parentNode) {
-    const parent = node.parentNode
-    if (parent.tagName && parent.tagName !== 'HTML') {
-      faults.push(`the <head> is inside <${parent.tagName.toLowerCase()}>, where a browser ignores the tag: the policy meta is then in the body, and ignored`)
-    }
-    faults.push(...placementFaults(parent.childNodes.slice(0, parent.childNodes.indexOf(node))))
-  }
-  return faults
-}
-
-const isPolicyMeta = (node) => node.tagName === 'META' && node.getAttribute('http-equiv')?.toLowerCase() === 'content-security-policy'
 
 /** → what is wrong with one page's policy, as sentences. */
 function pageFaults(html) {
-  const head = parse(html).querySelector('head')
-  const nodes = head?.childNodes
-  const policies = nodes?.filter(isPolicyMeta) ?? []
-  if (policies.length === 0) return ['no Content-Security-Policy meta tag in <head>']
+  const source = html.replace(BYTE_ORDER_MARK, '')
+  // (No script is run and nothing is fetched, so there is nothing to close afterwards.)
+  const dom = new JSDOM(source, { includeNodeLocations: true })
+  const { document } = dom.window
+  const policies = [...document.head.children].filter(isPolicyMeta)
+  if (policies.length === 0) {
+    return [
+      [...document.querySelectorAll('meta')].some(isPolicyMeta)
+        ? 'no Content-Security-Policy meta tag in <head>: the policy meta of the page is in the <body>, where a browser ignores it, because something before it (an element a head cannot hold, or text that is not white space) ended the head'
+        : 'no Content-Security-Policy meta tag in <head>',
+    ]
+  }
   const faults = []
-  const charset = head.children.find((element) => element.tagName === 'META' && element.hasAttribute('charset'))
-  if (charset !== undefined && Buffer.byteLength(html.slice(0, charset.range[1])) > CHARSET_WINDOW) {
+  const charset = [...document.head.children].find((element) => element.localName === 'meta' && element.hasAttribute('charset'))
+  // The byte order mark is bytes of the file too, though it was taken off before the page was read.
+  const readFrom = html.length - source.length
+  if (charset !== undefined && Buffer.byteLength(html.slice(0, readFrom + dom.nodeLocation(charset).endOffset)) > CHARSET_WINDOW) {
     faults.push(`the <meta charset> declaration ends past byte ${CHARSET_WINDOW}, which is all a browser reads for it`)
   }
-  faults.push(...headFaults(head))
-  const hashes = inlineScriptHashes(html)
+  const hashes = [...document.querySelectorAll('script')].filter((script) => !script.hasAttribute('src')).map((script) => hashOf(script.textContent))
+  const scanned = inlineScriptHashes(html)
+  if (list(scanned) !== list(hashes)) {
+    faults.push(`csp.mjs reads the inline scripts of the page as ${list(scanned)}, but an HTML parser reads ${list(hashes)}: a browser runs what the parser reads, so the policy must hold those`)
+  }
   for (const meta of policies) {
     // Stryker disable next-line StringLiteral: a meta with no content is read as a policy with no directives, and any text with none reads the same
     const content = meta.getAttribute('content') ?? ''
-    faults.push(...placementFaults(nodes.slice(0, nodes.indexOf(meta))), ...policyFaults(content, hashes))
+    faults.push(...placementFaults(document, meta), ...policyFaults(content, hashes))
   }
   return faults
 }

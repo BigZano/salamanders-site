@@ -3,6 +3,7 @@ import fc from 'fast-check'
 import { mkdtemp, mkdir, writeFile, rm } from 'node:fs/promises'
 import { readFileSync } from 'node:fs'
 import { spawnSync } from 'node:child_process'
+import { createHash } from 'node:crypto'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -159,61 +160,161 @@ describe('checkCsp, the policy meta', () => {
   })
 })
 
-describe('checkCsp, what comes before the policy meta', () => {
+// What a page whose policy meta a browser ignores gets told: the meta is in the body, because something ended the head first.
+const IN_THE_BODY = /no Content-Security-Policy meta tag in <head>: .*in the <body>.*ended the head/
+
+describe('checkCsp, what comes before the policy meta, in the head', () => {
   it.each([
-    ['script', ['<script src="/a.js"></script>', '<SCRIPT SRC="/a.js"></SCRIPT>', '<script type="module" src="/a.js"></script>']],
-    ['link', ['<link rel="stylesheet" href="/a.css">', '<LINK REL=stylesheet HREF=/a.css>', '<link rel="preload" href="/a.js" as="script" />']],
-    ['base', ['<base href="/">', '<BASE HREF="https://evil.test/">', '<base target="_blank">']],
-  ])('fails a <%s> in the head before the policy meta, which loads or acts before the policy applies', async (tag, written) => {
-    for (const before of written) {
+    ['an inline script', '<script>alert(1)</script>'],
+    ['an external script', '<script src="/evil.js"></script>'],
+    ['a module script', '<script type="module" src="/evil.js"></script>'],
+    ['a script in capitals', '<SCRIPT SRC="/evil.js"></SCRIPT>'],
+    ['a stylesheet link', '<link rel="stylesheet" href="/a.css">'],
+    ['a preload link', '<link rel="preload" href="/a.js" as="script" />'],
+    ['a link in capitals', '<LINK REL=stylesheet HREF=/a.css>'],
+    ['a base', '<base href="/">'],
+    ['a base in capitals', '<BASE HREF="https://evil.test/">'],
+    ['a base for targets', '<base target="_blank">'],
+    ['a style', '<style>p { color: red }</style>'],
+    ['a noscript', '<noscript></noscript>'],
+    ['a template', '<template></template>'],
+    ['a refresh', '<meta http-equiv="refresh" content="999">'],
+    ['a refresh that has a name', '<meta name="x" http-equiv="refresh" content="0;url=https://evil.test/">'],
+    ['a refresh that has a charset', '<meta charset="UTF-8" http-equiv="refresh" content="0">'],
+    ['a meta with nothing that says what it is', '<meta content="x">'],
+    ['a default-style meta', '<meta http-equiv="default-style" content="x">'],
+  ])('fails %s before the policy meta, since the policy applies only to what follows it', async (_, before) => {
+    const found = await problems(page({ head: before + meta(GOOD) + INLINE }))
+    expect(found, before).toHaveLength(1)
+    expect(found[0]).toMatch(/comes before the policy meta: only a charset declaration, a title and a meta with a name or property may/)
+    expect(found[0]).toContain(`<${/^<(\w+)/.exec(before)[1].toLowerCase()}>`)
+  })
+
+  it('does not take for a harmless meta an element that only has the attribute of one: a charset, a name or a property', async () => {
+    for (const before of ['<script src="/a.js" charset="utf-8"></script>', '<link rel="stylesheet" href="/a.css" name="x">', '<base href="/" property="x">', '<style name="x"></style>', '<noscript name="x"></noscript>', '<template property="x"></template>']) {
       const found = await problems(page({ head: before + meta(GOOD) + INLINE }))
       expect(found, before).toHaveLength(1)
-      expect(found[0]).toContain(`<${tag}> comes before the policy meta, so it loads or acts before the policy applies`)
-      expect(found[0]).not.toMatch(/ends the head/)
+      expect(found[0]).toMatch(/comes before the policy meta/)
     }
   })
 
-  it('fails an inline script before the policy meta, and names it as one', async () => {
-    const found = await problems(page({ head: INLINE + meta(GOOD) }))
-    expect(found).toHaveLength(1)
-    expect(found[0]).toMatch(/<script> comes before the policy meta, so it loads or acts/)
+  it('names every element that comes before it, one finding each', async () => {
+    const found = await problems(page({ head: `<base href="/"><script src="/a.js"></script><style></style>${meta(GOOD)}${INLINE}` }))
+    expect(found).toHaveLength(3)
+    expect(found.map((f) => /<(\w+)>/.exec(f)[1])).toEqual(['base', 'script', 'style'])
   })
 
-  it.each(['div', 'img', 'p', 'a', 'span', 'h1', 'iframe', 'form', 'input', 'button', 'section'])(
-    'fails a <%s> in the head before the policy meta, which ends the head, so a browser puts the meta in the body and ignores it',
-    async (tag) => {
-      const found = await problems(page({ head: `<${tag}>${['img', 'input'].includes(tag) ? '' : `</${tag}>`}${meta(GOOD)}${INLINE}` }))
-      expect(found).toHaveLength(1)
-      expect(found[0]).toContain(`<${tag}>`)
-      expect(found[0]).toMatch(/ends the head/)
-    },
-  )
-
-  it('fails text in the head before the policy meta, which also ends the head', async () => {
-    const found = await problems(page({ head: `some text${meta(GOOD)}${INLINE}` }))
-    expect(found).toHaveLength(1)
-    expect(found[0]).toMatch(/text comes before the policy meta/)
-  })
-
-  it('names every such element, one finding each', async () => {
-    const found = await problems(page({ head: `<div></div><script src="/a.js"></script>text<base href="/">${meta(GOOD)}${INLINE}` }))
-    expect(found).toHaveLength(4)
-  })
-
-  it('allows the charset declaration, a title, other metas, a style, a noscript, a template, comments and white space before it', async () => {
-    const before = ['<title>t</title>', '<meta name="viewport" content="width=device-width">', '<style>p { color: red }</style>', '<noscript></noscript>', '<template></template>', '<!-- note -->', '\n  ', '<meta http-equiv="refresh" content="999">']
-    for (const one of before) expect(await problems(page({ head: one + meta(GOOD) + INLINE }))).toEqual([])
+  it('allows the charset declaration, a title, a meta with a name or a property, another policy, comments and white space before it', async () => {
+    const before = [
+      '<title>t</title>',
+      '<meta name="viewport" content="width=device-width">',
+      '<meta property="og:title" content="t">',
+      '<meta charset="UTF-8">',
+      meta(GOOD),
+      '<!-- note -->',
+      '\n  ',
+      '\t\f\r ',
+    ]
+    for (const one of before) expect(await problems(page({ head: one + meta(GOOD) + INLINE })), one).toEqual([])
     expect(await problems(page({ head: before.join('\n') + meta(GOOD) + INLINE }))).toEqual([])
   })
 
-  it('allows a script, a link or a base after the policy meta, where the policy applies to it', async () => {
-    expect(await problems(page({ head: `${meta(GOOD)}<base href="/"><link rel="icon" href="/a.png">${INLINE}<script type="module" src="/a.js"></script>` }))).toEqual([])
+  it.each([
+    ['an abrupt <!-->', '<!--><script src="/evil.js"></script>'],
+    ['an abrupt <!--->', '<!---><script src="/evil.js"></script>'],
+    ['a comment closed by --!>', '<!-- a --!><script src="/evil.js"></script>'],
+    ['a comment closed by --!> after text', '<!-- note: it is closed the odd way --!><base href="https://evil.test/">'],
+  ])('fails what follows %s, which is no comment to a browser, and a script there runs', async (_, hidden) => {
+    const found = await problems(page({ head: hidden + meta(GOOD) + INLINE }))
+    // Twice told: what is before the meta, and that csp.mjs's scanner took the scripts after the comment for comment.
+    expect(found).toHaveLength(2)
+    expect(found.filter((f) => /comes before the policy meta/.test(f))).toHaveLength(1)
+    expect(found.filter((f) => /csp\.mjs reads/.test(f))).toHaveLength(1)
   })
 
-  it('looks only at what is before each policy meta: a later one may follow a script', async () => {
+  it('judges each policy meta by what is before it: a later one may not follow a script', async () => {
     const found = await problems(page({ head: `${meta(GOOD)}${INLINE}${meta(GOOD)}` }))
     expect(found).toHaveLength(1)
-    expect(found[0]).toMatch(/<script> comes before the policy meta, so it loads or acts/)
+    expect(found[0]).toMatch(/<script> comes before the policy meta/)
+  })
+
+  it('allows a script, a link, a base or a style after the policy meta, where the policy applies to it', async () => {
+    expect(await problems(page({ head: `${meta(GOOD)}<base href="/"><link rel="icon" href="/a.png"><style></style>${INLINE}<script type="module" src="/a.js"></script>` }))).toEqual([])
+  })
+
+  it.each(['div', 'img', 'p', 'a', 'span', 'h1', 'iframe', 'form', 'input', 'button', 'section', 'table', 'object', 'embed', 'video', 'br', 'svg'])(
+    'fails a <%s> in the head before the policy meta: it ends the head, and the meta is in the body',
+    async (tag) => {
+      const element = ['img', 'input', 'embed', 'br'].includes(tag) ? `<${tag}>` : `<${tag}></${tag}>`
+      const found = await problems(page({ head: element + meta(GOOD) + INLINE }))
+      expect(found, element).toHaveLength(1)
+      expect(found[0]).toMatch(IN_THE_BODY)
+    },
+  )
+
+  it('fails an element that is not closed before the policy meta, however it is written (a parser that tidies it away would not)', async () => {
+    for (const open of ['<div>', '<section>', '<a href="/">', '<p>', '<span>', '<ul><li>']) {
+      const found = await problems(page({ head: open + meta(GOOD) + INLINE }))
+      expect(found, open).toHaveLength(1)
+      expect(found[0]).toMatch(IN_THE_BODY)
+    }
+  })
+
+  it.each([
+    ['text', 'some text'],
+    ['a no-break space', ' '],
+    ['a no-break space entity', '&nbsp;'],
+    ['a vertical tab', '\u000b'],
+    ['an em space', ' '],
+    ['an ideographic space', '　'],
+    ['a byte order mark that is not the first character', '﻿'],
+    ['a zero-width space', '​'],
+    ['a next line', '\u0085'],
+    ['a line separator', ' '],
+    ['white space and then text', ' \n x'],
+  ])('fails %s before the policy meta, which is not white space to HTML: it ends the head', async (_, text) => {
+    const found = await problems(page({ head: text + meta(GOOD) + INLINE }))
+    expect(found, JSON.stringify(text)).toHaveLength(1)
+    expect(found[0]).toMatch(IN_THE_BODY)
+  })
+
+  it.each([
+    ['a stray </body>', '</body>'],
+    ['a stray </br>', '</br>'],
+    ['a stray </html>', '</html>'],
+  ])('fails %s before the policy meta, which a browser takes for the end of the head', async (_, stray) => {
+    const found = await problems(page({ head: stray + meta(GOOD) + INLINE }))
+    expect(found, stray).toHaveLength(1)
+    expect(found[0]).toMatch(IN_THE_BODY)
+  })
+
+  it('does not mind a stray end tag that a browser ignores, nor a </head>, after which a browser still puts a meta in the head', async () => {
+    for (const stray of ['</p>', '</div>', '</span>', '</title>', '</script>', '</head>']) {
+      expect(await problems(page({ head: stray + meta(GOOD) + INLINE })), stray).toEqual([])
+    }
+  })
+
+  it('reads a character reference for a space as the space it is', async () => {
+    for (const reference of ['&#32;', '&#x20;', '&#9;', '&#10;']) {
+      expect(await problems(page({ head: reference + meta(GOOD) + INLINE })), reference).toEqual([])
+    }
+  })
+
+  it('names the body once, not each thing that came before the meta that ended the head', async () => {
+    const found = await problems(page({ head: `<div></div><script src="/a.js"></script>text<base href="/">${meta(GOOD)}${INLINE}` }))
+    expect(found).toHaveLength(1)
+    expect(found[0]).toMatch(IN_THE_BODY)
+  })
+
+  it('says the same when the policy is only in the body', async () => {
+    const found = await problems(`<!doctype html><html><head>${CHARSET}</head><body>${meta(GOOD)}${INLINE}</body></html>`)
+    expect(found).toHaveLength(1)
+    expect(found[0]).toMatch(IN_THE_BODY)
+  })
+
+  it('says there is none when there is no policy at all, and not that it is in the body', async () => {
+    const found = await problems(page({ head: INLINE }))
+    expect(found).toEqual([expect.stringMatching(/no Content-Security-Policy meta tag in <head>$/)])
   })
 })
 
@@ -231,8 +332,16 @@ describe('checkCsp, what comes before the head', () => {
       doc({ root: '' }),
       doc({ root: '', open: '', close: '' }),
       doc({ root: '<!doctype html>\n', open: '<HTML LANG="en">', close: '</HTML>' }),
+      doc({ root: '<!doctype html>', inHtml: '<!doctype html>' }),
+      doc({ root: '<!doctype html>', inHtml: '<!-->', head: meta(GOOD), open: '<html>' }),
     ]) {
       expect(await problems(written), written).toEqual([])
+    }
+  })
+
+  it('reads a character reference for a space as a space, and passes a byte order mark that begins the file', async () => {
+    for (const written of [doc({ inHtml: '&#32;' }), doc({ root: '&#32;<!doctype html>' }), doc({ root: '﻿<!doctype html>' }), doc({ root: '﻿' }), doc({ root: '﻿<!-- a -->\n' })]) {
+      expect(await problems(written), JSON.stringify(written)).toEqual([])
     }
   })
 
@@ -241,35 +350,58 @@ describe('checkCsp, what comes before the head', () => {
     ['an external script', '<script src="/evil.js"></script>'],
     ['a stylesheet link', '<link rel="stylesheet" href="/a.css">'],
     ['a base', '<base href="https://evil.test/">'],
+    ['a style', '<style></style>'],
     ['a script in capitals', '<SCRIPT SRC="/evil.js"></SCRIPT>'],
-  ])('fails %s between <html> and <head>, which a browser puts in an implied head ahead of the policy', async (_, element) => {
-    const found = await problems(doc({ inHtml: element }))
-    expect(found).toHaveLength(1)
-    expect(found[0]).toMatch(/comes before the policy meta, so it loads or acts before the policy applies/)
+  ])('fails %s between <html> and <head>, and before <html>, which a browser puts in an implied head ahead of the policy', async (_, element) => {
+    for (const written of [doc({ inHtml: element }), doc({ root: `<!doctype html>${element}` }), doc({ root: element })]) {
+      const found = await problems(written)
+      expect(found, written).toHaveLength(1)
+      expect(found[0]).toMatch(/comes before the policy meta: only a charset declaration/)
+    }
   })
 
   it.each([
-    ['a script', '<script src="/evil.js"></script>'],
-    ['a link', '<link rel="stylesheet" href="/a.css">'],
-    ['a base', '<base href="/">'],
-  ])('fails %s before <html>, which a browser puts in an implied head', async (_, element) => {
-    const found = await problems(doc({ root: `<!doctype html>${element}` }))
-    expect(found).toHaveLength(1)
-    expect(found[0]).toMatch(/comes before the policy meta, so it loads or acts/)
-    expect((await problems(doc({ root: element }))).length).toBe(1)
+    ['an abrupt <!-->', '<!--><script src="/evil.js"></script>'],
+    ['an abrupt <!--->', '<!---><script src="/evil.js"></script>'],
+    ['a comment closed by --!>', '<!-- a --!><script src="/evil.js"></script>'],
+  ])('fails a script after %s, before the head: the comment is over, and the script is not in it', async (_, hidden) => {
+    for (const written of [doc({ inHtml: hidden }), doc({ root: `<!doctype html>${hidden}` }), doc({ root: hidden })]) {
+      const found = await problems(written)
+      // Twice told: the script before the head, and csp.mjs's scanner, which took what follows the comment for comment.
+      expect(found, written).toHaveLength(2)
+      expect(found.filter((f) => /<script> comes before the policy meta/.test(f))).toHaveLength(1)
+      expect(found.filter((f) => /csp\.mjs reads/.test(f))).toHaveLength(1)
+    }
   })
 
-  it.each(['div', 'img', 'p', 'a', 'span', 'h1', 'iframe', 'form', 'input', 'button', 'section', 'body', 'table'])(
-    'fails a <%s> between <html> and <head>, and before <html>, which a browser reads as the start of the body',
+  it.each(['div', 'img', 'p', 'a', 'span', 'h1', 'iframe', 'form', 'input', 'button', 'section', 'body', 'table', 'object', 'embed'])(
+    'fails a <%s> between <html> and <head>, and before <html>: it starts the body, and the meta is in it',
     async (tag) => {
-      const element = ['img', 'input'].includes(tag) ? `<${tag}>` : `<${tag}></${tag}>`
+      const element = ['img', 'input', 'embed'].includes(tag) ? `<${tag}>` : `<${tag}></${tag}>`
       for (const written of [doc({ inHtml: element }), doc({ root: `<!doctype html>${element}` }), doc({ root: element })]) {
         const found = await problems(written)
         expect(found, written).toHaveLength(1)
-        expect(found[0]).toContain(`<${tag}> comes before the policy meta and ends the head`)
+        expect(found[0]).toMatch(IN_THE_BODY)
       }
     },
   )
+
+  it('fails an element that is not closed before the head, which a parser that tidies the page would erase', async () => {
+    for (const open of ['<div>', '<section>', '<a href="/">', '<p>', '<ul><li>', '<span>']) {
+      for (const written of [doc({ inHtml: open }), doc({ root: `<!doctype html>${open}` })]) {
+        const found = await problems(written)
+        expect(found, written).toHaveLength(1)
+        expect(found[0]).toMatch(IN_THE_BODY)
+      }
+    }
+  })
+
+  it('fails a 404.html that has an unclosed element before its head', async () => {
+    const found = await problems(page({ head: meta(GOOD) + INLINE }), REAL_404.replace('<head>', '<div><head>'))
+    expect(found).toHaveLength(1)
+    expect(found[0]).toContain(join(dir, '404.html'))
+    expect(found[0]).toMatch(IN_THE_BODY)
+  })
 
   it.each([
     ['text', 'text'],
@@ -278,17 +410,43 @@ describe('checkCsp, what comes before the head', () => {
     ['a vertical tab', '\u000b'],
     ['an em space', ' '],
     ['an ideographic space', '　'],
-    ['a byte order mark', '﻿'],
     ['a zero-width space', '​'],
     ['a next line', '\u0085'],
     ['a line separator', ' '],
-    ['a character reference', '&#32;'],
     ['white space and then text', ' \n x'],
-  ])('fails %s before the head, and after the charset declaration, since it is not white space to HTML and ends the head', async (_, text) => {
-    for (const written of [doc({ inHtml: text }), doc({ root: `<!doctype html>${text}` }), doc({ root: text }), doc({ head: text + meta(GOOD) + INLINE }), page({ head: text + meta(GOOD) + INLINE })]) {
+  ])('fails %s before the head, which is not white space to HTML and starts the body', async (_, text) => {
+    for (const written of [doc({ inHtml: text }), doc({ root: `<!doctype html>${text}` }), doc({ root: text })]) {
       const found = await problems(written)
       expect(found, JSON.stringify(written)).toHaveLength(1)
-      expect(found[0]).toMatch(/text comes before the policy meta/)
+      expect(found[0]).toMatch(IN_THE_BODY)
+    }
+  })
+
+  it('fails a byte order mark that is not the first character of the file', async () => {
+    for (const written of [doc({ inHtml: '﻿' }), doc({ root: '<!doctype html>﻿' }), doc({ root: ' ﻿' }), doc({ head: `﻿${meta(GOOD)}${INLINE}` })]) {
+      const found = await problems(written)
+      expect(found, JSON.stringify(written)).toHaveLength(1)
+      expect(found[0]).toMatch(IN_THE_BODY)
+    }
+  })
+
+  it.each([
+    ['a stray </body>', '</body>'],
+    ['a stray </br>', '</br>'],
+    ['a stray </html>', '</html>'],
+  ])('fails %s before the head: a browser starts a head, then the body, for it', async (_, stray) => {
+    for (const written of [doc({ inHtml: stray }), doc({ root: `<!doctype html>${stray}` }), doc({ root: stray })]) {
+      const found = await problems(written)
+      expect(found, written).toHaveLength(1)
+      expect(found[0]).toMatch(IN_THE_BODY)
+    }
+  })
+
+  it('does not mind a stray end tag before the head that a browser ignores', async () => {
+    for (const stray of ['</p>', '</div>', '</span>', '</title>']) {
+      for (const written of [doc({ inHtml: stray }), doc({ root: `<!doctype html>${stray}` })]) {
+        expect(await problems(written), written).toEqual([])
+      }
     }
   })
 
@@ -307,30 +465,24 @@ describe('checkCsp, what comes before the head', () => {
   })
 
   it.each([
-    ['body', '<html><body>', '</body></html>'],
-    ['div', '<div>', '</div>'],
-    ['div inside html', '<html><div>', '</div></html>'],
-    ['p', '<p>', '</p>'],
-  ])('fails a head inside a <%s>, where a browser ignores the tag and the meta is in the body', async (tag, open, close) => {
-    const written = `<!doctype html>${open}<head>${CHARSET}${meta(GOOD)}${INLINE}</head>${close}`
-    const found = await problems(written)
-    expect(found.some((p) => /the <head> is inside <(body|div|p)>/.test(p)), found.join('|')).toBe(true)
-  })
-
-  it('names each element a head is inside, and says what then happens to the meta', async () => {
-    const found = await problems(`<html><body><div><head>${CHARSET}${meta(GOOD)}${INLINE}</head></div></body></html>`)
-    expect(found.filter((p) => /the <head> is inside/.test(p))).toHaveLength(2)
-    expect(found.join('\n')).toMatch(/the <head> is inside <div>, where a browser ignores the tag: the policy meta is then in the body, and ignored/)
-    expect(found.join('\n')).toMatch(/the <head> is inside <body>/)
+    ['a body', '<html><body>', '</body></html>'],
+    ['a div', '<div>', '</div>'],
+    ['a div inside html', '<html><div>', '</div></html>'],
+    ['a p', '<p>', '</p>'],
+  ])('fails a head inside %s, where a browser ignores the tag and the meta is in the body', async (_, open, close) => {
+    const found = await problems(`<!doctype html>${open}<head>${CHARSET}${meta(GOOD)}${INLINE}</head>${close}`)
+    expect(found).toHaveLength(1)
+    expect(found[0]).toMatch(IN_THE_BODY)
   })
 
   it('allows a head inside <html> only: a nested <html> is read as the same one', async () => {
     expect(await problems(`<!doctype html><html><html lang="en"><head>${CHARSET}${meta(GOOD)}${INLINE}</head></html></html>`)).toEqual([])
   })
 
-  it('looks at what is before the head at every level, one finding each', async () => {
-    const found = await problems(`<script src="/a.js"></script><html><div></div>text<head>${CHARSET}<base href="/">${meta(GOOD)}${INLINE}</head><body></body></html>`)
-    expect(found).toHaveLength(4)
+  it('names each element that comes before the policy meta in the head, when the head has got that far', async () => {
+    const found = await problems(`<script src="/a.js"></script><html><head>${CHARSET}<base href="/">${meta(GOOD)}${INLINE}</head><body></body></html>`)
+    expect(found).toHaveLength(2)
+    expect(found.map((f) => /<(\w+)>/.exec(f)[1])).toEqual(['script', 'base'])
   })
 
   it('does not count what comes after the head, or is inside it after the policy', async () => {
@@ -393,6 +545,98 @@ describe('checkCsp, the charset declaration', () => {
       const found = await problems(`<!doctype html><html><head>${far}${declaration}${meta(GOOD)}${INLINE}</head></html>`)
       expect(found.some((p) => /charset/.test(p))).toBe(true)
     }
+  })
+})
+
+describe('checkCsp, the charset declaration and a byte order mark', () => {
+  const endingAt = (end, lead, policyMeta) => {
+    const open = `${lead}<!doctype html><html><head><!--`
+    const tail = `-->${CHARSET}`
+    const pad = end - Buffer.byteLength(open + tail)
+    expect(pad).toBeGreaterThanOrEqual(0)
+    return `${open}${'x'.repeat(pad)}${tail}${policyMeta}${INLINE}</head><body></body></html>`
+  }
+
+  it('counts the three bytes of a byte order mark that begins the file', async () => {
+    const withBom = (end) => endingAt(end, '﻿', meta(GOOD))
+    expect(Buffer.byteLength(withBom(1024).slice(0, withBom(1024).indexOf(CHARSET) + CHARSET.length))).toBe(1024)
+    expect(await problems(withBom(1024))).toEqual([])
+    const found = await problems(withBom(1025))
+    expect(found).toHaveLength(1)
+    expect(found[0]).toMatch(/charset.*1024/)
+  })
+
+  it('does not count a mark that is not there', async () => {
+    expect(await problems(endingAt(1024, '', meta(GOOD)))).toEqual([])
+    expect((await problems(endingAt(1025, '', meta(GOOD)))).length).toBe(1)
+  })
+})
+
+describe('checkCsp, the script hashes as an HTML parser reads them', () => {
+  const escaped = (hash) => hash.replace(/[+/]/g, '\\$&')
+  const NONE = '\\(none\\)'
+  const agree = (scanned, parsed) => new RegExp(`csp\\.mjs reads the inline scripts of the page as ${scanned}, but an HTML parser reads ${parsed}`)
+
+  it('agrees with csp.mjs for a plain page, and says nothing', async () => {
+    expect(await problems(page({ head: meta(GOOD) + INLINE }))).toEqual([])
+    expect(await problems(page({ head: meta(GOOD) }))).toEqual([])
+  })
+
+  it('reads line breaks the way a browser does, as the build does for a CRLF script', async () => {
+    const hash = `'sha256-${createHash('sha256').update('a\nb').digest('base64')}'`
+    const policyFor = (h) => policy(`default-src 'self'; script-src 'self' ${h}`)
+    expect(await problems(page({ head: meta(policyFor(hash)) + '<script>a\r\nb</script>' }))).toEqual([])
+    expect(await problems(page({ head: meta(policyFor(hash)) + '<script>a\rb</script>' }))).toEqual([])
+  })
+
+  it.each([
+    ['an abrupt <!-->', '<!--><script>alert(1)</script>'],
+    ['an abrupt <!--->', '<!---><script>alert(1)</script>'],
+    ['a comment closed by --!>', '<!-- a --!><script>alert(1)</script>'],
+    ['a <!-- that is only text in a <title>', '<title><!--</title><script>alert(1)</script>'],
+    ['a <!-- that is only text in a <textarea>', '<textarea><!--</textarea><script>alert(1)</script>'],
+    ['a <!-- that is only text in a <style>', '<style><!--</style><script>alert(1)</script>'],
+  ])('fails when the scanner of csp.mjs takes a script after %s for a comment, and names both lists', async (_, hidden) => {
+    // The script is real, and in the policy; csp.mjs did not see it, so the policy it would have written would not have it.
+    const found = await problems(page({ head: meta(GOOD), body: hidden }))
+    expect(found).toHaveLength(1)
+    expect(found[0]).toMatch(agree(NONE, escaped(ALERT)))
+  })
+
+  it('fails a script that csp.mjs read as another text than a browser does, and also that the policy does not hold the browser’s', async () => {
+    const found = await problems(page({ head: meta(GOOD), body: '<script><!--\nwindow.__ran = true // <script>\n//</script>\nvoid 0\n</script>' }))
+    expect(found).toHaveLength(2)
+    expect(found.some((f) => /csp\.mjs reads the inline scripts of the page as 'sha256-.*, but an HTML parser reads 'sha256-/.test(f))).toBe(true)
+    expect(found.some((f) => /inline script 'sha256-[A-Za-z0-9+/]{43}=' is not in script-src/.test(f))).toBe(true)
+  })
+
+  it('fails a NUL, which a browser reads as U+FFFD and csp.mjs hashes as it is', async () => {
+    const found = await problems(page({ head: meta(GOOD), body: '<script>a\u0000b</script>' }))
+    expect(found.some((f) => /csp\.mjs reads/.test(f))).toBe(true)
+    expect(found.some((f) => /not in script-src/.test(f))).toBe(true)
+  })
+
+  it('fails a script that csp.mjs reads inside a <title> and a browser does not, and names both lists', async () => {
+    const found = await problems(page({ head: meta(GOOD) + '<title><script>alert(1)</script></title>' }))
+    expect(found).toHaveLength(1)
+    expect(found[0]).toMatch(agree(escaped(ALERT), NONE))
+  })
+
+  it('names the lists in full, in the order of the page, when there are several', async () => {
+    const found = await problems(page({ head: meta(GOOD) + INLINE, body: '<!--><script></script><script>alert(1)</script>' }))
+    expect(found.some((f) => f.includes(`as ${ALERT}, but an HTML parser reads ${ALERT} ${EMPTY} ${ALERT}`))).toBe(true)
+  })
+
+  it('requires the hash of each script the parser finds in script-src, whatever csp.mjs found', async () => {
+    const found = await problems(page({ head: meta(GOOD) + INLINE, body: '<!--><script>other()</script>' }))
+    expect(found.some((f) => /inline script 'sha256-[A-Za-z0-9+/]{43}=' is not in script-src/.test(f))).toBe(true)
+    expect(found.some((f) => /csp\.mjs reads/.test(f))).toBe(true)
+  })
+
+  it('does not count a script in a template, which no browser runs, though csp.mjs reads it', async () => {
+    const found = await problems(page({ head: meta(GOOD) + INLINE, body: '<template><script>other()</script></template>' }))
+    expect(found).toHaveLength(1)
+    expect(found[0]).toMatch(/csp\.mjs reads/)
   })
 })
 

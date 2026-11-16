@@ -215,10 +215,13 @@ describe('inlineScriptHashes, where the scanner and a browser part', () => {
     expect(inlineScriptHashes(`${page}<script>other()</script>`)).toEqual([])
   })
 
-  it('reads a tag whose attribute value is unquoted but holds a quote as opening a quoted value, so what is in between is read as part of the tag: the scripts there are blocked', async () => {
+  it('reads a tag whose attribute value (or name) holds a quote as opening a quoted value, so what is in between is read as part of the tag: the scripts there are blocked', async () => {
     // A browser ends <meta a=b"c> at its ">", and runs the script after it. The scanner's quote runs to the next one, past it.
     expect(inlineScriptHashes(`<head><meta a=b"c><script>${RAN}</script><p title=q" x></head>`)).toEqual([])
     expect(inlineScriptHashes(`<head><meta a=b'c><script>${RAN}</script><p title=q' x></head>`)).toEqual([])
+    // The same for a quote in an attribute name.
+    expect(inlineScriptHashes(`<head><meta a"b><script>${RAN}</script><p title=q" x></head>`)).toEqual([])
+    expect(inlineScriptHashes(`<head><meta a'b><script>${RAN}</script><p title=q' x></head>`)).toEqual([])
     // With no later quote to close it, the tag is not read as a tag at all, and a script that is that tag is not read.
     expect(inlineScriptHashes(`<head><script a=b"c>${RAN}</script></head>`)).toEqual([])
     // And the tags after it are read again as soon as the quote is closed.
