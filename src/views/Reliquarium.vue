@@ -72,11 +72,15 @@ const open = computed(() => !busy.value && (galleryOpen.value || librariusOpen.v
 // What the gate says while the page is shut, from the two answers. Both settled: both asking to sign in, or both refusing, say
 // so, and so does one of them when the other could not be reached; anything else (a server down, or the two at odds) is
 // that the Reliquarium could not be reached.
+// The exception is a refusal by the galleries while the Librarius cannot be reached, for a reader whom the hint kept at sign-in
+// (see discordAuth.js) says may read the Librarius: they are told it is the Librarius that could not be reached, with a Retry for
+// it, and not that they are kept out. The hint only picks the message. It shows nothing: what opens is what the server says.
 const gate = computed(() => {
   if (busy.value) return 'busy'
   const { status: g } = gallery
   const l = librarius.status
   if (g === 'signin' && (l === 'signin' || l === 'unavailable')) return 'signin'
+  if (g === 'denied' && l === 'unavailable' && auth.member?.librarius === true) return 'librarius'
   if (g === 'denied' && (l === 'denied' || l === 'unavailable')) return 'denied'
   return 'unreachable'
 })
@@ -142,6 +146,10 @@ watch(
         <button class="btn-ember" type="button" @click="signIn">Sign in with Discord</button>
       </template>
       <p v-else-if="gate === 'busy'" role="status">Checking…</p>
+      <template v-else-if="gate === 'librarius'">
+        <p role="alert">The Librarius couldn't be reached.</p>
+        <button class="btn-ember" type="button" @click="retryLibrarius">Retry</button>
+      </template>
       <p v-else-if="gate === 'denied'">Restricted to the XVIIIth Legion.</p>
       <template v-else>
         <p role="alert">The Reliquarium couldn't be reached.</p>

@@ -774,6 +774,180 @@ describe('Reliquarium: who is kept out, or asked to sign in', () => {
     for (const call of [listClips, listArt, listMine, listReview, listPosts, getPost]) expect(call).not.toHaveBeenCalled()
   })
 
+  // The hint kept at sign-in (the Librarius flag of the sign-in record) only picks which message shows. It never shows content: a
+  // reader the stored hint says may read the Librarius, and who meets an outage, is told it is an outage and not that they are
+  // kept out; what the page then shows is what the server says.
+  describe('and the reader is known to read the Librarius', () => {
+    const OUTAGE = "The Librarius couldn't be reached."
+    const retryOf = (w) => w.findAll('button').find((b) => b.text() === 'Retry')
+
+    it('is told it is an outage, with Retry, and not that they are restricted', async () => {
+      for (const failure of [apiError(503), apiError(500), new Error('offline')]) {
+        signedInForReal({ librarius: true })
+        galleryRefuses()
+        getLibrariusMe.mockRejectedValue(failure)
+        for (const path of ['/reliquarium', '/reliquarium/librarius', `/reliquarium/librarius/${POST}`]) {
+          const { w } = await visit(path)
+          expect(w.find('[role="alert"]').text(), path).toBe(OUTAGE)
+          expect(w.text(), path).not.toContain('Restricted')
+          expect(retryOf(w), path).toBeDefined()
+          expect(w.findAll('button'), path).toHaveLength(1)
+          expect(tabs(w), path).toHaveLength(0)
+        }
+      }
+    })
+
+    it('is shown none of the Librarius meanwhile: the hint picks a message and nothing else', async () => {
+      signedInForReal({ librarius: true })
+      galleryRefuses()
+      getLibrariusMe.mockRejectedValue(apiError(503))
+      const { w } = await visit(`/reliquarium/librarius/${POST}`)
+      expect(w.find('.lb-post').exists()).toBe(false)
+      expect(w.find('.lb-topics').exists()).toBe(false)
+      for (const call of [listPosts, getPost, listMessages, listClips, listArt, listMine, listReview]) expect(call).not.toHaveBeenCalled()
+    })
+
+    it('asks the Librarius again, and not the galleries, on Retry, and is let into it when it answers', async () => {
+      signedInForReal({ librarius: true })
+      galleryRefuses()
+      getLibrariusMe.mockRejectedValueOnce(apiError(503))
+      const { w, router } = await visit(`/reliquarium/librarius/${POST}`)
+      librariusAllows()
+      await retryOf(w).trigger('click')
+      await flushPromises()
+      expect(getLibrariusMe).toHaveBeenCalledTimes(2)
+      expect(getLibrariusMe).toHaveBeenLastCalledWith('tok')
+      expect(getMe).toHaveBeenCalledTimes(1)
+      expect(tabNames(w)).toEqual(['Librarius'])
+      expect(currentTabs(w)).toEqual(['Librarius'])
+      expect(w.find('.lb-post-title').text()).toBe('The Long Road')
+      expect(w.text()).not.toContain(OUTAGE)
+      expect(router.currentRoute.value.fullPath).toBe(`/reliquarium/librarius/${POST}`)
+      expect(storedRecord().librarius).toBe(true)
+    })
+
+    it('opens the topic list on Retry when the address names no tab', async () => {
+      signedInForReal({ librarius: true })
+      galleryRefuses()
+      getLibrariusMe.mockRejectedValueOnce(apiError(503))
+      const { w } = await visit('/reliquarium')
+      librariusAllows()
+      await retryOf(w).trigger('click')
+      await flushPromises()
+      expect(tabNames(w)).toEqual(['Librarius'])
+      expect(topics(w)).toEqual(['The Long Road', 'Another Road'])
+    })
+
+    it('is told again, with Retry, when the second try fails too, and is not told twice at once', async () => {
+      signedInForReal({ librarius: true })
+      galleryRefuses()
+      const slow = deferred()
+      getLibrariusMe.mockRejectedValueOnce(apiError(503))
+      const { w } = await visit()
+      getLibrariusMe.mockReturnValue(slow.promise)
+      await retryOf(w).trigger('click')
+      await flushPromises()
+      expect(w.text()).toContain('Checking…')
+      expect(retryOf(w)).toBeUndefined()
+      slow.reject(apiError(503))
+      await flushPromises()
+      expect(getLibrariusMe).toHaveBeenCalledTimes(2)
+      expect(w.find('[role="alert"]').text()).toBe(OUTAGE)
+      expect(retryOf(w)).toBeDefined()
+      expect(storedRecord().librarius).toBe(true)
+    })
+
+    it('is told they are restricted, and the hint is withdrawn, when the Librarius then says it is not for them', async () => {
+      for (const answer of [{ access: false }, apiError(403)]) {
+        signedInForReal({ librarius: true })
+        galleryRefuses()
+        getLibrariusMe.mockRejectedValueOnce(apiError(503))
+        const { w } = await visit()
+        if (answer instanceof Error) getLibrariusMe.mockRejectedValue(answer)
+        else getLibrariusMe.mockResolvedValue(answer)
+        await retryOf(w).trigger('click')
+        await flushPromises()
+        expect(w.text()).toContain('Restricted to the XVIIIth Legion.')
+        expect(w.text()).not.toContain(OUTAGE)
+        expect(storedRecord().librarius).toBe(false)
+        expect(navLabels()).not.toContain('Reliquarium')
+      }
+    })
+
+    it('is asked to sign in, not told of an outage, when the galleries refuse the token', async () => {
+      signedInForReal({ librarius: true })
+      getMe.mockRejectedValue(apiError(401))
+      getLibrariusMe.mockRejectedValue(apiError(503))
+      const { w } = await visit()
+      expect(w.text()).toContain('Sign in with Discord to see the Reliquarium.')
+      expect(w.text()).not.toContain(OUTAGE)
+    })
+
+    it('is told the Reliquarium could not be reached, as before, when the galleries cannot be reached either', async () => {
+      signedInForReal({ librarius: true })
+      getMe.mockRejectedValue(apiError(503))
+      getLibrariusMe.mockRejectedValue(apiError(503))
+      const { w } = await visit()
+      expect(w.find('[role="alert"]').text()).toBe("The Reliquarium couldn't be reached.")
+    })
+
+    it('is let in at once, with a note above the galleries, when the galleries let them in', async () => {
+      signedInForReal({ librarius: true })
+      getLibrariusMe.mockRejectedValue(apiError(503))
+      const { w } = await visit()
+      expect(tabNames(w)).toEqual(['Clips', 'Artwork', 'Submit', 'Mine'])
+      expect(w.findAll('p').filter((p) => p.text() === OUTAGE)).toHaveLength(1)
+    })
+
+    it('shows the message to nobody the hint does not name, and the hint is read as a plain true only', async () => {
+      for (const librarius of [false, undefined, null, 0, 1, '', 'true', 'yes', [], {}, [true]]) {
+        state.auth = member()
+        state.auth.member = { id: '100000000000000001', isMember: true, librarius }
+        galleryRefuses()
+        getLibrariusMe.mockRejectedValue(apiError(503))
+        const { w } = await visit()
+        expect(w.text(), JSON.stringify(librarius)).toContain('Restricted to the XVIIIth Legion.')
+        expect(w.text(), JSON.stringify(librarius)).not.toContain(OUTAGE)
+        expect(w.findAll('button'), JSON.stringify(librarius)).toHaveLength(0)
+      }
+    })
+
+    it('keeps "Restricted" for a member the stored record does not name for the Librarius', async () => {
+      for (const librarius of [false, undefined]) {
+        signedInForReal({ isMember: true, librarius })
+        galleryRefuses()
+        getLibrariusMe.mockRejectedValue(apiError(503))
+        const { w } = await visit()
+        expect(w.text()).toContain('Restricted to the XVIIIth Legion.')
+        expect(w.findAll('button')).toHaveLength(0)
+      }
+    })
+
+    it('says "Restricted" when both refuse, whatever the hint says: only an outage is in doubt', async () => {
+      // A hint that stays true however the page learns of the refusal (a store that does not withdraw it).
+      state.auth = member()
+      state.auth.member = { id: '100000000000000001', isMember: true, librarius: true }
+      galleryRefuses()
+      for (const refusal of [() => getLibrariusMe.mockResolvedValue({ access: false }), () => getLibrariusMe.mockRejectedValue(apiError(403))]) {
+        refusal()
+        const { w } = await visit()
+        expect(w.text()).toContain('Restricted to the XVIIIth Legion.')
+        expect(w.text()).not.toContain(OUTAGE)
+        expect(w.findAll('button')).toHaveLength(0)
+      }
+    })
+
+    it('withdraws the hint, and so the message, when both refuse (the real store)', async () => {
+      signedInForReal({ librarius: true })
+      galleryRefuses()
+      getLibrariusMe.mockResolvedValue({ access: false })
+      const { w } = await visit()
+      expect(w.text()).toContain('Restricted to the XVIIIth Legion.')
+      expect(w.text()).not.toContain(OUTAGE)
+      expect(storedRecord().librarius).toBe(false)
+    })
+  })
+
   it('asks for sign-in when the galleries refuse the token and the Librarius cannot be reached, and brings the reader back', async () => {
     for (const failure of [apiError(503), new Error('offline')]) {
       getMe.mockRejectedValue(apiError(401))
