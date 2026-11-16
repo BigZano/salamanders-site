@@ -214,14 +214,28 @@ function fakeStore({ posts = [], messages = [], cursors = {}, sync } = {}) {
   return s
 }
 
+/** Timers that run nothing by themselves: a test fires the live ones, as librariusLinks.test.js does. */
+function fakeTimers() {
+  const jobs = []
+  return {
+    jobs,
+    setTimeout: (fn, ms) => jobs.push({ fn, ms, over: false }) - 1,
+    clearTimeout: (id) => {
+      if (jobs[id]) jobs[id].over = true
+    },
+    live: () => jobs.filter((j) => !j.over),
+  }
+}
+
 /** A world: the fake Discord, the fake store, a clock that moves a second with every call to Discord, and the importer. */
 function setup({ active, archived, channels, pageSize, archivedAnswer, windowSize, store: storeOptions, ...over } = {}) {
   const clock = { t: T0, now: () => clock.t }
   const discord = fakeDiscord({ active, archived, channels, pageSize, archivedAnswer, clock })
   const store = fakeStore(storeOptions)
   const logs = []
-  const imp = createImport({ discord, store, forumId: FORUM, windowSize, now: clock.now, log: (...a) => logs.push(a.join(' ')), ...over })
-  return { clock, discord, store, logs, imp }
+  const timers = fakeTimers()
+  const imp = createImport({ discord, store, forumId: FORUM, windowSize, now: clock.now, timers, log: (...a) => logs.push(a.join(' ')), ...over })
+  return { clock, discord, store, logs, timers, imp }
 }
 
 const reads = (w) => w.discord.calls.filter((c) => c[0] === 'messagesAfter')
@@ -308,7 +322,7 @@ describe('createImport options', () => {
       const status = await imp.status()
       expect(Date.parse(status.lastRunAt)).toBeGreaterThanOrEqual(before)
       expect(Date.parse(status.lastRunAt)).toBeLessThanOrEqual(after)
-      expect(status.lastError).toBe('Discord is down.')
+      expect(status.lastError).toBe('Error: Discord is down.')
     } finally {
       spy.mockRestore()
     }
@@ -725,7 +739,7 @@ describe('failures', () => {
       importDone: false,
       lastRunAt: iso(T0),
       lastOkAt: null,
-      lastError: 'Discord answered 500 for a page of messages.',
+      lastError: 'Error: Discord answered 500 for a page of messages.',
     })
   })
 
@@ -749,7 +763,7 @@ describe('failures', () => {
     await w.imp.run()
     expect(w.store.posts.get(postId(1)).cursor).toBe(mid(1, 100))
     expect(idsOf(w, 1)).toHaveLength(100)
-    expect(await w.imp.status()).toMatchObject({ importDone: false, lastError: 'The Librarius import failed (Error).' })
+    expect(await w.imp.status()).toMatchObject({ importDone: false, lastError: 'Error: connection lost' })
   })
 
   it('deletes no posts when the archived list fails, on any page, or when the active list fails', async () => {
@@ -761,7 +775,7 @@ describe('failures', () => {
     await first.imp.run()
     expect(first.store.posts.has(postId(77))).toBe(true)
     expect(idsOf(first, 77)).toHaveLength(2)
-    expect((await first.imp.status()).lastError).toBe('Discord answered 500 for the archived threads.')
+    expect((await first.imp.status()).lastError).toBe('Error: Discord answered 500 for the archived threads.')
 
     const later = setup({
       archived: [archivedThread(2, arch(1)), archivedThread(3, arch(2)), archivedThread(4, arch(3))],
@@ -784,7 +798,7 @@ describe('failures', () => {
     w.discord.failWhen('newest', () => true, new Upstream('Discord answered 503 for a page of messages.'))
     await w.imp.run()
     expect(w.store.posts.get(postId(1)).cursor).toBe(mid(1, 3))
-    expect(await w.imp.status()).toMatchObject({ importDone: false, lastOkAt: null, lastError: 'Discord answered 503 for a page of messages.' })
+    expect(await w.imp.status()).toMatchObject({ importDone: false, lastOkAt: null, lastError: 'Error: Discord answered 503 for a page of messages.' })
   })
 
   it('stops at the first failure, in whichever post it is', async () => {
@@ -808,7 +822,7 @@ describe('failures', () => {
     w.discord.failWhen('activeThreads', () => broken, new Upstream('Discord is unreachable.'))
     const start = w.clock.t
     await w.imp.run()
-    expect(await w.imp.status()).toEqual({ importDone: true, lastRunAt: iso(start), lastOkAt: ok.lastOkAt, lastError: 'Discord is unreachable.' })
+    expect(await w.imp.status()).toEqual({ importDone: true, lastRunAt: iso(start), lastOkAt: ok.lastOkAt, lastError: 'Error: Discord is unreachable.' })
 
     broken = false
     await w.imp.run()
@@ -824,21 +838,22 @@ describe('failures', () => {
     }
 
     const linked = await run(new Upstream('Discord answered 403 for https://cdn.test/attachments/1/2/a.png?ex=1&hm=secret and http://a.test/b today.'))
-    expect(linked.error).toBe('Discord answered 403 for [link] and [link] today.')
+    expect(linked.error).toBe('Error: Discord answered 403 for [link] and [link] today.')
     expect(linked.error).not.toMatch(LINK)
     expect(linked.logs.join('\n')).not.toMatch(LINK)
 
-    expect((await run(new Upstream('HTTPS://CDN.TEST/x?sig=secret'))).error).toBe('[link]')
+    expect((await run(new Upstream('HTTPS://CDN.TEST/x?sig=secret'))).error).toBe('Error: [link]')
     // A Discord CDN link with no scheme is a link too.
     const bare = await run(new Upstream('Discord answered 403 for cdn.discordapp.com/attachments/1/2/a.png?ex=1&hm=secret and MEDIA.discordapp.net/a?hm=secret today.'))
-    expect(bare.error).toBe('Discord answered 403 for [link] and [link] today.')
+    expect(bare.error).toBe('Error: Discord answered 403 for [link] and [link] today.')
     expect(bare.logs.join('\n')).not.toMatch(/discordapp|secret/i)
-    expect((await run(new Upstream('wss://gateway.test/?v=10'))).error).toBe('[link]')
-    expect((await run(new Upstream('a'.repeat(200)))).error).toBe('a'.repeat(200))
-    expect((await run(new Upstream('a'.repeat(201)))).error).toBe('a'.repeat(200))
-    expect((await run(new Upstream('b'.repeat(5000)))).error).toBe('b'.repeat(200))
-    expect((await run(new Upstream())).error).toBe('Discord is unavailable.')
-    expect((await run(new Upstream(''))).error).toBe('Discord is unavailable.')
+    expect((await run(new Upstream('wss://gateway.test/?v=10'))).error).toBe('Error: [link]')
+    // The name and its colon take 7 of the 200 characters.
+    expect((await run(new Upstream('a'.repeat(192)))).error).toBe(`Error: ${'a'.repeat(192)}`)
+    expect((await run(new Upstream('a'.repeat(193)))).error).toBe(`Error: ${'a'.repeat(193)}`)
+    expect((await run(new Upstream('a'.repeat(194)))).error).toBe(`Error: ${'a'.repeat(193)}`)
+    expect((await run(new Upstream('b'.repeat(5000)))).error).toBe(`Error: ${'b'.repeat(193)}`)
+    expect((await run(new Upstream())).error).toBe('Error: ')
   })
 
   it('never records a link or more than 200 characters, whatever Discord says', async () => {
@@ -858,30 +873,32 @@ describe('failures', () => {
   })
 
   it.each([
-    ['an Error', new Error('connect ECONNREFUSED 10.0.0.5:5432 https://x.test/secret'), 'The Librarius import failed (Error).'],
-    ['a RangeError', new RangeError('limit'), 'The Librarius import failed (RangeError).'],
-    ['a TypeError from Discord', new TypeError('afterId must be a message id, or 0.'), 'The Librarius import failed (TypeError).'],
-    ['something that is no error', 'a plain string https://x.test/secret', 'The Librarius import failed (Error).'],
-    ['nothing', undefined, 'The Librarius import failed (Error).'],
-    ['a link in the name', Object.assign(new Error('x'), { name: 'Bad https://x.test/secret' }), 'The Librarius import failed (Bad [link]'],
-  ])('records only the name of %s, never its message', async (_, thrown, note) => {
+    ['an Error', new Error('connect ECONNREFUSED 10.0.0.5:5432 https://x.test/secret'), 'Error: connect ECONNREFUSED 10.0.0.5:5432 [link]'],
+    ['a RangeError', new RangeError('limit'), 'RangeError: limit'],
+    ['a TypeError from Discord', new TypeError('afterId must be a message id, or 0.'), 'TypeError: afterId must be a message id, or 0.'],
+    ['something that is no error', 'a plain string https://x.test/secret', 'Error: '],
+    ['nothing', undefined, 'Error: '],
+    ['a link in the name', Object.assign(new Error('x'), { name: 'Bad https://x.test/secret' }), 'Bad [link] x'],
+    ['a name that is a Symbol', Object.assign(new Error('x'), { name: Symbol('name'), message: 'it broke' }), 'Symbol(name): it broke'],
+    ['a message that is a Symbol', Object.assign(new Error('x'), { message: Symbol('message') }), 'Error: Symbol(message)'],
+    ['a name that cannot be read', Object.defineProperty(new Error('it broke'), 'name', { get: () => { throw new Error('no name') } }), 'Error: it broke'],
+    ['a message that cannot be read', Object.defineProperty(new RangeError('x'), 'message', { get: () => { throw new Error('no message') } }), 'RangeError: '],
+    ['neither name nor message readable', Object.defineProperties(new Error('x'), { name: { get: () => { throw new Error('no name') } }, message: { get: () => { throw new Error('no message') } } }), 'Error: '],
+    ['an object that cannot be read at all', new Proxy({}, { get: () => { throw new Error('trap') } }), 'Error: '],
+    ['an object with no prototype', Object.create(null), 'Error: '],
+  ])('records what describe() says of %s, and never loses the record', async (_, thrown, said) => {
     const w = setup({ active: [thread(1)] })
     w.discord.failWhen('activeThreads', () => true, thrown)
     await expect(w.imp.run()).resolves.toBeUndefined()
-    expect((await w.imp.status()).lastError).toBe(note)
+    expect(await w.imp.status()).toMatchObject({ importDone: false, lastOkAt: null, lastError: said })
     expect(w.logs.join('\n')).not.toMatch(LINK)
   })
 
-  it('still resolves, and stays unfinished, when what went wrong cannot be read or printed', async () => {
-    const unreadable = Object.defineProperties(new Error('x'), { name: { get: () => { throw new Error('no name') } }, message: { get: () => { throw new Error('no message') } } })
-    const symbolic = Object.assign(new Error('x'), { name: Symbol('name'), message: Symbol('message') })
-    const hidden = new Proxy({}, { get: () => { throw new Error('trap') } })
-    for (const thrown of [unreadable, symbolic, hidden, Object.create(null), new Upstream('Discord is down.')]) {
-      const w = setup({ active: [thread(1)] })
-      w.discord.failWhen('activeThreads', () => true, thrown)
-      await expect(w.imp.run()).resolves.toBeUndefined()
-      expect(await w.imp.status()).toMatchObject({ importDone: false, lastOkAt: null })
-    }
+  it('records an Upstream the same way: describe() names an Upstream an Error, as it is one', async () => {
+    const w = setup({ active: [thread(1)] })
+    w.discord.failWhen('activeThreads', () => true, new Upstream('Discord is down.'))
+    await w.imp.run()
+    expect((await w.imp.status()).lastError).toBe('Error: Discord is down.')
   })
 
   it('ends the run for a TypeError that comes from Discord, not from a row', async () => {
@@ -910,7 +927,7 @@ describe('failures', () => {
     })
     w.store.failWhen(method, when, new TypeError('refused'))
     await expect(w.imp.run()).resolves.toBeUndefined()
-    expect(await w.imp.status()).toMatchObject({ importDone: false, lastError: 'The Librarius import failed (TypeError).' })
+    expect(await w.imp.status()).toMatchObject({ importDone: false, lastError: 'TypeError: refused' })
   })
 
   it('still resolves when the sync row cannot be written, at the start or to record a failure', async () => {
@@ -1059,7 +1076,7 @@ describe('rows the store refuses', () => {
     const w = setup({ active: [thread(1), thread(2)], channels: { [postId(2)]: channel(2, 1, 2) } })
     w.store.failWhen('upsertPost', (post) => post.id === postId(2), Object.assign(new Error('deadlock'), { code: '40P01' }))
     await w.imp.run()
-    expect(await w.imp.status()).toMatchObject({ importDone: false, lastError: 'The Librarius import failed (Error).' })
+    expect(await w.imp.status()).toMatchObject({ importDone: false, lastError: 'Error: deadlock' })
     expect(reads(w)).toEqual([])
   })
 
@@ -1171,54 +1188,131 @@ describe('hostile answers from Discord', () => {
   })
 })
 
+/** Make every call to Discord's active threads wait until the test lets that one go. → the list of waiting calls. */
+function gateActive(w) {
+  const gates = []
+  const activeThreads = w.discord.activeThreads
+  w.discord.activeThreads = async () => {
+    const gate = Promise.withResolvers()
+    gates.push(gate)
+    // Letting a call go with `false` makes it fail.
+    if ((await gate.promise) === false) throw new Upstream('Discord is unreachable.')
+    return activeThreads()
+  }
+  return gates
+}
+const settle = () => new Promise((r) => setTimeout(r, 0))
+const passes = (w) => w.discord.calls.filter((c) => c[0] === 'activeThreads').length
+
 describe('overlap', () => {
-  it('makes one pass for overlapping calls, and a fresh one for a call after it', async () => {
+  it('queues exactly one follow-up for the calls made during a run, and starts it after that run', async () => {
     const w = setup({ active: [thread(1)], channels: { [postId(1)]: channel(1, 1, 3) } })
-    let release
-    const gate = new Promise((r) => {
-      release = r
-    })
-    const activeThreads = w.discord.activeThreads
-    w.discord.activeThreads = async () => {
-      await gate
-      return activeThreads()
-    }
-    const calls = () => w.discord.calls.filter((c) => c[0] === 'activeThreads').length
-
-    const a = w.imp.run()
-    const b = w.imp.run()
+    const gates = gateActive(w)
+    const done = []
+    const a = w.imp.run().then(() => done.push('a'))
+    const b = w.imp.run().then(() => done.push('b'))
     await Promise.resolve()
-    const c = w.imp.run()
-    release()
-    await expect(Promise.all([a, b, c])).resolves.toEqual([undefined, undefined, undefined])
-    expect(calls()).toBe(1)
+    const c = w.imp.run().then(() => done.push('c'))
+    await settle()
+    // One pass is going, and the follow-up has not started.
+    expect(gates).toHaveLength(1)
+    expect(done).toEqual([])
 
-    await w.imp.run()
-    expect(calls()).toBe(2)
+    gates[0].resolve()
+    await settle()
+    // The first pass is over, and its caller is told; the follow-up is going, and its callers wait for it.
+    expect(done).toEqual(['a'])
+    expect(gates).toHaveLength(2)
+
+    gates[1].resolve()
+    await Promise.all([a, b, c])
+    expect(done).toEqual(['a', 'b', 'c'])
+    expect(passes(w)).toBe(2)
+    expect(await w.imp.status()).toMatchObject({ importDone: true })
   })
 
-  it('shares a failed pass too, resolves every caller, and lets the next call try again', async () => {
+  it('makes one pass, and queues nothing, for a call made when none is going', async () => {
+    const w = setup({ active: [thread(1)], channels: { [postId(1)]: channel(1, 1, 3) } })
+    await w.imp.run()
+    await settle()
+    expect(passes(w)).toBe(1)
+  })
+
+  it('queues another follow-up for a call made during the follow-up, and never runs two passes at once', async () => {
+    const w = setup({ active: [thread(1)], channels: { [postId(1)]: channel(1, 1, 3) } })
+    const gates = gateActive(w)
+    const first = w.imp.run()
+    const second = w.imp.run()
+    await settle()
+    gates[0].resolve()
+    await settle()
+    expect(gates).toHaveLength(2)
+    const third = w.imp.run()
+    const fourth = w.imp.run()
+    await settle()
+    expect(gates).toHaveLength(2)
+    gates[1].resolve()
+    await settle()
+    expect(gates).toHaveLength(3)
+    gates[2].resolve()
+    await expect(Promise.all([first, second, third, fourth])).resolves.toEqual([undefined, undefined, undefined, undefined])
+    expect(passes(w)).toBe(3)
+  })
+
+  it('makes a fresh pass for a call made after everything has ended', async () => {
+    const w = setup({ active: [thread(1)], channels: { [postId(1)]: channel(1, 1, 3) } })
+    await w.imp.run()
+    await w.imp.run()
+    expect(passes(w)).toBe(2)
+  })
+
+  it('runs the follow-up after a pass that failed, resolves every caller, and goes on to the next call', async () => {
     const w = setup({ active: [thread(1)] })
-    let release
-    const gate = new Promise((r) => {
-      release = r
-    })
+    const gates = gateActive(w)
     let broken = true
-    const activeThreads = w.discord.activeThreads
+    const original = w.discord.activeThreads
     w.discord.activeThreads = async () => {
-      await gate
+      const found = await original()
       if (broken) throw new Upstream('Discord is unreachable.')
-      return activeThreads()
+      return found
     }
     const a = w.imp.run()
     const b = w.imp.run()
-    release()
-    await expect(Promise.all([a, b])).resolves.toEqual([undefined, undefined])
-    expect((await w.imp.status()).lastError).toBe('Discord is unreachable.')
-
+    await settle()
+    gates[0].resolve()
+    await settle()
+    expect((await w.imp.status()).lastError).toBe('Error: Discord is unreachable.')
     broken = false
-    await w.imp.run()
+    gates[1].resolve()
+    await expect(Promise.all([a, b])).resolves.toEqual([undefined, undefined])
     expect(await w.imp.status()).toMatchObject({ importDone: true, lastError: null })
+    expect(passes(w)).toBe(2)
+  })
+
+  it('still resolves every caller, and can run again, when the log itself throws', async () => {
+    const w = setup({
+      active: [thread(1)],
+      channels: { [postId(1)]: channel(1, 1, 2) },
+      log: () => {
+        throw new Error('the log is closed')
+      },
+    })
+    let broken = true
+    w.discord.failWhen('activeThreads', () => broken, new Upstream('Discord is unreachable.'))
+    const gates = gateActive(w)
+    const a = w.imp.run()
+    const b = w.imp.run()
+    await settle()
+    gates[0].resolve()
+    await settle()
+    broken = false
+    gates[1].resolve()
+    await expect(Promise.all([a, b])).resolves.toEqual([undefined, undefined])
+    expect(passes(w)).toBe(2)
+
+    w.discord.activeThreads = async () => []
+    await expect(w.imp.run()).resolves.toBeUndefined()
+    expect(await w.imp.status()).toMatchObject({ importDone: true })
   })
 
   it('is idempotent: a second pass over the same Discord changes nothing', async () => {
@@ -1235,6 +1329,477 @@ describe('overlap', () => {
     expect(JSON.stringify([...w.store.messages.entries()])).toBe(before)
     expect(JSON.stringify([...w.store.posts.entries()])).toBe(posts)
   })
+})
+
+describe('onPostsListed', () => {
+  const FIVE = { active: [thread(1), thread(2)], channels: { [postId(1)]: channel(1, 1, 3), [postId(2)]: channel(2, 1, 2) } }
+
+  it('is called once after the posts are stored and the stale ones deleted, and before any message is read', async () => {
+    const seen = []
+    let w
+    w = setup({
+      ...FIVE,
+      store: { posts: [known(77)], messages: stored(77, 1, 2) },
+      onPostsListed: () => seen.push({ posts: [...w.store.posts.keys()].sort(), reads: reads(w).length, messages: w.store.messages.size }),
+    })
+    await w.imp.run()
+    expect(seen).toEqual([{ posts: [postId(1), postId(2)], reads: 0, messages: 0 }])
+    expect(w.store.messages.size).toBe(5)
+  })
+
+  it('is called once for each run', async () => {
+    let calls = 0
+    const w = setup({ ...FIVE, onPostsListed: () => calls++ })
+    await w.imp.run()
+    await w.imp.run()
+    expect(calls).toBe(2)
+  })
+
+  it('is waited for before the first message is read', async () => {
+    const gate = Promise.withResolvers()
+    const w = setup({ ...FIVE, onPostsListed: () => gate.promise })
+    const run = w.imp.run()
+    await settle()
+    expect(reads(w)).toEqual([])
+    expect(w.store.posts.size).toBe(2)
+    gate.resolve()
+    await run
+    expect(reads(w)).toHaveLength(2)
+    expect(await w.imp.status()).toMatchObject({ importDone: true })
+  })
+
+  it('is not called when the posts could not be listed or stored', async () => {
+    for (const [method, error] of [
+      ['activeThreads', new Upstream('Discord is down.')],
+      ['archivedThreads', new Upstream('Discord is down.')],
+      ['deletePostsNotIn', new Error('database is down')],
+    ]) {
+      let calls = 0
+      const w = setup({ ...FIVE, onPostsListed: () => calls++ })
+      if (method === 'deletePostsNotIn') w.store.failWhen(method, () => true, error)
+      else w.discord.failWhen(method, () => true, error)
+      await w.imp.run()
+      expect(calls).toBe(0)
+      expect(await w.imp.status()).toMatchObject({ importDone: false })
+    }
+  })
+
+  it('ends the run when it throws or rejects, so the next run calls it again', async () => {
+    for (const hook of [
+      () => {
+        throw new Error('the known set could not be loaded')
+      },
+      () => Promise.reject(new Error('the known set could not be loaded')),
+    ]) {
+      const w = setup({ ...FIVE, onPostsListed: hook })
+      await expect(w.imp.run()).resolves.toBeUndefined()
+      expect(reads(w)).toEqual([])
+      expect(await w.imp.status()).toMatchObject({ importDone: false, lastError: 'Error: the known set could not be loaded' })
+    }
+  })
+
+  it.each(['x', null, 1, {}])('must be a function: %s', (onPostsListed) => {
+    expect(() => createImport({ discord: fakeDiscord(), store: fakeStore(), forumId: FORUM, onPostsListed })).toThrow(new TypeError('onPostsListed must be a function.'))
+  })
+})
+
+describe('the timer chain', () => {
+  const EVERY = 21_600_000
+  const RETRY = [300_000, 600_000, 1_200_000, 1_800_000]
+  /** Fire the one live timer and let the run it starts finish. */
+  async function fire(w) {
+    const [job] = w.timers.live()
+    job.over = true
+    job.fn()
+    await settle()
+  }
+  const delays = (w) => w.timers.live().map((j) => j.ms)
+  /** A world whose active list fails while `state.broken` is true. */
+  const flaky = (options) => {
+    const state = { broken: true }
+    const w = setup({ active: [thread(1)], channels: { [postId(1)]: channel(1, 1, 2) }, ...options })
+    w.discord.failWhen('activeThreads', () => state.broken, new Upstream('Discord is unreachable.'))
+    return { w, state }
+  }
+
+  it('starts one timer, six hours out by default, and runs nothing yet', () => {
+    const w = setup({ active: [thread(1)] })
+    w.imp.start()
+    expect(delays(w)).toEqual([EVERY])
+    expect(w.discord.calls).toEqual([])
+  })
+
+  it('runs the import when the timer fires, and sets the next one the same distance after the run', async () => {
+    const w = setup({ active: [thread(1)], channels: { [postId(1)]: channel(1, 1, 3) } })
+    w.imp.start()
+    await fire(w)
+    expect(await w.imp.status()).toMatchObject({ importDone: true })
+    expect(idsOf(w, 1)).toHaveLength(3)
+    expect(delays(w)).toEqual([EVERY])
+    await fire(w)
+    expect(passes(w)).toBe(2)
+    expect(delays(w)).toEqual([EVERY])
+  })
+
+  it('uses the interval it is given', async () => {
+    const w = setup({ active: [thread(1)], everyMs: 1234 })
+    w.imp.start()
+    expect(delays(w)).toEqual([1234])
+    await fire(w)
+    expect(delays(w)).toEqual([1234])
+  })
+
+  it('is one timer however many times it is started', async () => {
+    const w = setup({ active: [thread(1)] })
+    w.imp.start()
+    w.imp.start()
+    w.imp.start()
+    expect(delays(w)).toEqual([EVERY])
+    expect(w.timers.jobs).toHaveLength(1)
+    await fire(w)
+    w.imp.start()
+    expect(delays(w)).toEqual([EVERY])
+  })
+
+  it('retries a failed run after 5, 10, 20 and then 30 minutes each time, and goes back to the catch-up after a success', async () => {
+    const { w, state } = flaky()
+    w.imp.start()
+    await fire(w)
+    expect(delays(w)).toEqual([300_000])
+    await fire(w)
+    expect(delays(w)).toEqual([600_000])
+    await fire(w)
+    expect(delays(w)).toEqual([1_200_000])
+    await fire(w)
+    expect(delays(w)).toEqual([1_800_000])
+    await fire(w)
+    expect(delays(w)).toEqual([1_800_000])
+    await fire(w)
+    expect(delays(w)).toEqual([1_800_000])
+    state.broken = false
+    await fire(w)
+    expect(await w.imp.status()).toMatchObject({ importDone: true, lastError: null })
+    expect(delays(w)).toEqual([EVERY])
+    // The backoff starts again from the first step.
+    state.broken = true
+    await fire(w)
+    expect(delays(w)).toEqual([300_000])
+  })
+
+  it('takes the retry steps it is given, and keeps the last one', async () => {
+    const { w } = flaky({ retryMs: [10, 20, 40] })
+    w.imp.start()
+    const steps = []
+    for (let i = 0; i < 5; i++) {
+      await fire(w)
+      steps.push(...delays(w))
+    }
+    expect(steps).toEqual([10, 20, 40, 40, 40])
+  })
+
+  it('takes one retry step as every step', async () => {
+    const { w } = flaky({ retryMs: [7] })
+    w.imp.start()
+    await fire(w)
+    await fire(w)
+    expect(delays(w)).toEqual([7])
+  })
+
+  it('retries a run asked for with run() that fails, and the catch-up it replaces is cleared', async () => {
+    const { w, state } = flaky()
+    w.imp.start()
+    await w.imp.run()
+    expect(delays(w)).toEqual([300_000])
+    expect(w.timers.live()).toHaveLength(1)
+    state.broken = false
+    await fire(w)
+    expect(await w.imp.status()).toMatchObject({ importDone: true })
+  })
+
+  it('counts the catch-up from the end of a run asked for with run(), and leaves one timer', async () => {
+    const w = setup({ active: [thread(1)] })
+    w.imp.start()
+    const first = w.timers.jobs[0]
+    await w.imp.run()
+    expect(first.over).toBe(true)
+    expect(delays(w)).toEqual([EVERY])
+    expect(w.timers.jobs).toHaveLength(2)
+  })
+
+  it('sets no timer at all for a run when it was never started, whether it succeeded or failed', async () => {
+    const { w, state } = flaky()
+    await w.imp.run()
+    state.broken = false
+    await w.imp.run()
+    expect(w.timers.jobs).toEqual([])
+  })
+
+  it('sets no timer for a run while it is going, and one when it ends, if it is started during it', async () => {
+    const w = setup({ active: [thread(1)] })
+    const gates = gateActive(w)
+    const run = w.imp.run()
+    w.imp.start()
+    expect(w.timers.jobs).toEqual([])
+    await settle()
+    gates[0].resolve()
+    await run
+    expect(delays(w)).toEqual([EVERY])
+  })
+
+  it('waits the retry step, not the catch-up, when it is started after a run that failed', async () => {
+    const { w } = flaky()
+    await w.imp.run()
+    w.imp.start()
+    expect(delays(w)).toEqual([300_000])
+  })
+
+  it('waits the catch-up when it is started after a run that succeeded', async () => {
+    const w = setup({ active: [thread(1)] })
+    await w.imp.run()
+    w.imp.start()
+    expect(delays(w)).toEqual([EVERY])
+  })
+
+  it('resets the backoff when a follow-up succeeds after a run that failed, and sets one timer', async () => {
+    const w = setup({ active: [thread(1)], channels: { [postId(1)]: channel(1, 1, 2) } })
+    const gates = gateActive(w)
+    let broken = true
+    const original = w.discord.activeThreads
+    w.discord.activeThreads = async () => {
+      const found = await original()
+      if (broken) throw new Upstream('Discord is unreachable.')
+      return found
+    }
+    w.imp.start()
+    const a = w.imp.run()
+    const b = w.imp.run()
+    await settle()
+    gates[0].resolve()
+    await settle()
+    broken = false
+    gates[1].resolve()
+    await Promise.all([a, b])
+    expect(await w.imp.status()).toMatchObject({ importDone: true })
+    expect(delays(w)).toEqual([EVERY])
+  })
+
+  it('stops: the pending timer is cleared and nothing is scheduled', async () => {
+    const w = setup({ active: [thread(1)] })
+    w.imp.start()
+    w.imp.stop()
+    expect(w.timers.live()).toEqual([])
+    await settle()
+    expect(w.timers.live()).toEqual([])
+    expect(w.discord.calls).toEqual([])
+  })
+
+  it('does nothing if a timer it cleared fires anyway', async () => {
+    const w = setup({ active: [thread(1)] })
+    w.imp.start()
+    w.imp.stop()
+    w.timers.jobs[0].fn()
+    await settle()
+    expect(w.discord.calls).toEqual([])
+    expect(w.timers.live()).toEqual([])
+  })
+
+  it('does not schedule another run when it is stopped during one', async () => {
+    const w = setup({ active: [thread(1)] })
+    const gates = gateActive(w)
+    w.imp.start()
+    w.timers.live()[0].fn()
+    await settle()
+    w.imp.stop()
+    gates[0].resolve()
+    await settle()
+    expect(w.timers.live()).toEqual([])
+    expect(await w.imp.status()).toMatchObject({ importDone: true })
+  })
+
+  it('does not retry a failed run when it is stopped during it', async () => {
+    const { w } = flaky()
+    w.imp.start()
+    const gates = gateActive(w)
+    w.timers.live()[0].fn()
+    await settle()
+    w.imp.stop()
+    gates[0].resolve()
+    await settle()
+    expect(w.timers.live()).toEqual([])
+  })
+
+  it('may be stopped when it was never started, and twice, and still runs when asked', async () => {
+    const w = setup({ active: [thread(1)] })
+    expect(() => w.imp.stop()).not.toThrow()
+    w.imp.start()
+    w.imp.stop()
+    expect(() => w.imp.stop()).not.toThrow()
+    await w.imp.run()
+    expect(await w.imp.status()).toMatchObject({ importDone: true })
+    expect(w.timers.live()).toEqual([])
+  })
+
+  it('may be started again after it was stopped', () => {
+    const w = setup({ active: [thread(1)] })
+    w.imp.start()
+    w.imp.stop()
+    w.imp.start()
+    expect(delays(w)).toEqual([EVERY])
+  })
+
+  it('is one chain when it is stopped and started during a run', async () => {
+    const w = setup({ active: [thread(1)] })
+    const gates = gateActive(w)
+    w.imp.start()
+    const old = w.timers.live()[0]
+    old.fn()
+    await settle()
+    w.imp.stop()
+    w.imp.start()
+    expect(w.timers.live()).toEqual([])
+    gates[0].resolve()
+    await settle()
+    expect(delays(w)).toEqual([EVERY])
+    expect(passes(w)).toBe(1)
+  })
+
+  it('ignores a timer of a chain that was stopped, even after a new one was started', async () => {
+    const w = setup({ active: [thread(1)] })
+    w.imp.start()
+    const stale = w.timers.jobs[0]
+    w.imp.stop()
+    w.imp.start()
+    stale.fn()
+    await settle()
+    expect(passes(w)).toBe(0)
+    expect(delays(w)).toEqual([EVERY])
+  })
+
+  it('keeps one pass at a time and one timer, whatever order calls, timers and the end of runs come in', async () => {
+    const ops = fc.array(fc.constantFrom('run', 'start', 'stop', 'fire', 'finish', 'fail'), { maxLength: 30 })
+    await fc.assert(
+      fc.asyncProperty(ops, async (sequence) => {
+        const w = setup({ active: [thread(1)], channels: { [postId(1)]: channel(1, 1, 2) } })
+        const gates = gateActive(w)
+        const asked = []
+        // What the importer should be doing, worked out from the calls alone.
+        const model = { passes: 0, going: false, queued: false, started: false, timer: false, failures: 0 }
+        const delay = () => (model.failures === 0 ? EVERY : RETRY[Math.min(model.failures, RETRY.length) - 1])
+        const begin = () => {
+          model.passes++
+          model.going = true
+          model.timer = false
+        }
+        const run = () => {
+          if (model.going) model.queued = true
+          else begin()
+        }
+        for (const op of sequence) {
+          if (op === 'run') {
+            asked.push(w.imp.run())
+            run()
+          } else if (op === 'start') {
+            w.imp.start()
+            if (!model.started) {
+              model.started = true
+              if (!model.going) model.timer = true
+            }
+          } else if (op === 'stop') {
+            w.imp.stop()
+            model.started = false
+            model.timer = false
+          } else if (op === 'fire') {
+            const [job] = w.timers.live()
+            if (job) {
+              job.over = true
+              job.fn()
+              model.timer = false
+              run()
+            }
+          } else if (model.going) {
+            gates[model.passes - 1].resolve(op === 'finish')
+            model.failures = op === 'finish' ? 0 : model.failures + 1
+            model.going = false
+            if (model.started) model.timer = true
+            if (model.queued) {
+              model.queued = false
+              begin()
+            }
+          }
+          await settle()
+          // A pass is counted by the call it makes to Discord, which waits at its gate until the test lets it go.
+          expect(gates.length).toBe(model.passes)
+          const live = w.timers.live()
+          expect(live.map((j) => j.ms)).toEqual(model.timer ? [delay()] : [])
+        }
+        // Whatever is left finishes, and every call that was made is answered.
+        while (model.going) {
+          gates[model.passes - 1].resolve(true)
+          model.going = false
+          if (model.queued) {
+            model.queued = false
+            model.passes++
+            model.going = true
+          }
+          await settle()
+        }
+        await expect(Promise.all(asked)).resolves.toEqual(asked.map(() => undefined))
+        expect(gates.length).toBe(model.passes)
+      }),
+      { numRuns: 150 },
+    )
+  })
+
+  it('uses the global timers when it is given none', async () => {
+    vi.useFakeTimers()
+    try {
+      const discord = fakeDiscord({ active: [thread(1)] })
+      const imp = createImport({ discord, store: fakeStore(), forumId: FORUM, log: () => {} })
+      imp.start()
+      await vi.advanceTimersByTimeAsync(EVERY - 1)
+      expect(passes({ discord })).toBe(0)
+      await vi.advanceTimersByTimeAsync(1)
+      expect(passes({ discord })).toBe(1)
+      imp.stop()
+      await vi.advanceTimersByTimeAsync(EVERY * 2)
+      expect(passes({ discord })).toBe(1)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it.each([0, -1, 1.5, NaN, Infinity, '5', null, 2_147_483_648])('refuses an everyMs of %s', (everyMs) => {
+    expect(() => createImport({ discord: fakeDiscord(), store: fakeStore(), forumId: FORUM, everyMs })).toThrow(
+      new RangeError('everyMs must be a whole number of milliseconds from 1 to 2147483647.'),
+    )
+  })
+
+  it('takes an everyMs of 1 and of the longest a timer holds', () => {
+    for (const everyMs of [1, 2_147_483_647]) {
+      expect(() => createImport({ discord: fakeDiscord(), store: fakeStore(), forumId: FORUM, everyMs })).not.toThrow()
+    }
+  })
+
+  it.each([[], 'x', 300_000, null, {}, [0], [-1], [1.5], [NaN], ['5'], [300_000, 2_147_483_648], [300_000, null]])('refuses a retryMs of %j', (retryMs) => {
+    expect(() => createImport({ discord: fakeDiscord(), store: fakeStore(), forumId: FORUM, retryMs })).toThrow(
+      new RangeError('retryMs must be a non-empty list of whole numbers of milliseconds from 1 to 2147483647.'),
+    )
+  })
+
+  it('takes a retryMs of 1 and of the longest a timer holds, in any number of steps', () => {
+    for (const retryMs of [[1], [2_147_483_647], [1, 2, 3, 4, 5, 6]]) {
+      expect(() => createImport({ discord: fakeDiscord(), store: fakeStore(), forumId: FORUM, retryMs })).not.toThrow()
+    }
+  })
+
+  it.each([null, {}, { setTimeout() {} }, { clearTimeout() {} }, { setTimeout: 'x', clearTimeout() {} }, { setTimeout() {}, clearTimeout: 5 }])(
+    'refuses timers of %j',
+    (timers) => {
+      expect(() => createImport({ discord: fakeDiscord(), store: fakeStore(), forumId: FORUM, timers })).toThrow(
+        new TypeError('timers must have a setTimeout and a clearTimeout function.'),
+      )
+    },
+  )
 })
 
 describe('status', () => {

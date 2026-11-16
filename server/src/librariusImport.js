@@ -1,17 +1,25 @@
 /**
- * The Librarius's import of the forum's whole history, and the catch-up that follows every gateway READY. Both are one
- * run, and it only reads Discord and writes the store: the Librarius never writes to Discord.
+ * The Librarius's import of the forum's whole history, and the catch-up that follows every gateway READY and comes round
+ * on a timer. Both are one run, and it only reads Discord and writes the store: the Librarius never writes to Discord.
  *
- * createImport({ discord, store, forumId, windowSize = 100, log = console.error, now = Date.now })
- *   → { run() → Promise<void>, status() → what store.syncStatus() says }
+ * createImport({ discord, store, forumId, windowSize = 100, log = console.error, now = Date.now,
+ *   timers = { setTimeout, clearTimeout }, everyMs = 21_600_000, retryMs = [300_000, 600_000, 1_200_000, 1_800_000],
+ *   onPostsListed = () => {} })
+ *   → { run() → Promise<void>, start(), stop(), status() → what store.syncStatus() says }
  *
- * run() never rejects, and calls made while a run is going share it: the gateway may ask for a catch-up while an earlier
- * run, or an event handler, is still working. Everything a run writes is an upsert, a delete of what Discord no longer
- * holds, or a cursor that only moves forward, so one that repeats, overlaps or is cut short does no harm. In order, a run:
+ * run() never rejects. Everything a run writes is an upsert, a delete of what Discord no longer holds, or a cursor that
+ * only moves forward, so one that repeats or is cut short does no harm. Only one run goes at a time: a run asked for while
+ * one is going waits for it, and every call made during it shares ONE follow-up run, which starts as soon as the current
+ * one ends. The gateway may ask for a catch-up while an earlier run is still working, and what that run has already read
+ * may predate the gap, so the follow-up is a whole new pass and not a share of the old one. A call made during the
+ * follow-up queues one more. In order, a run:
  *
  * 1. stamps last_run_at; then collects the forum's threads (the active ones of the guild whose parent is the forum, and
  *    every page of the archived ones) and upserts each as it comes; then deletes the stored posts Discord no longer lists.
  *    That delete happens only once every list call has succeeded, so a failed list can never empty the Librarius.
+ *    Then onPostsListed() is called, and waited for, before a single message is read: the live feed reloads the posts it
+ *    knows there, so it takes in the live events of a post this run found before the long import of messages. When it
+ *    throws, the run ends like any other that fails, and the retry calls it again.
  * 2. for each post, reads the messages after its import cursor (0 before the first read), a page of 100 at a time until a
  *    short page, storing a page's rows and then moving the cursor to the page's last id. A cut-short import resumes from
  *    the cursor it kept.
@@ -24,23 +32,34 @@
  * 4. sets import_done, last_ok_at and a clear last_error.
  *
  * Any failure ends the run where it stands, with the cursors it has already set: last_error says why, and the next run
- * resumes. It is the Upstream message when Discord was the trouble (with every link cut out, and at most 200
- * characters), and otherwise only the name of the error, since a database error can carry what must not be shown.
- * import_done and last_ok_at are only ever set by a run that finished.
+ * resumes. It is what describe() of librariusText says of the error (its name and message, every link cut out, at most
+ * 200 characters; it never throws, so a thrown value that cannot be read still leaves a record). import_done and
+ * last_ok_at are only ever set by a run that finished.
  *
- * One exception: the store refusing one row with a TypeError (an id that does not fit its bigint, say) skips that row and
- * goes on. A message the store refuses sends its page again row by row, so only the bad row is lost. A post the store
- * refuses is not read; it is still kept when Discord lists it, so a refused update never deletes a stored post.
+ * start() makes one chain of timers, and stop() ends it. While it is on, one timer is always waiting or a run is going:
+ * the catch-up comes round `everyMs` (6 hours) after the last run ended, whoever started that run, and a run that failed
+ * is tried again after the next of the `retryMs` steps (5, 10, 20, then every 30 minutes), counting the runs that failed
+ * one after another; a run that finishes resets the steps. start() does not run anything itself, since the first run is
+ * the caller's to ask for. Starting twice is one chain, and a run that is going when stop() is called finishes and sets
+ * no timer. Without start() no timer is set at all, and run() is all there is. stop() does not cancel a follow-up that a
+ * call to run() has already queued.
+ *
+ * One exception to a failure ending the run: the store refusing one row with a TypeError (an id that does not fit its
+ * bigint, say) skips that row and goes on. A message the store refuses sends its page again row by row, so only the bad
+ * row is lost. A post the store refuses is not read; it is still kept when Discord lists it, so a refused update never
+ * deletes a stored post.
  *
  * Discord answering oddly is Upstream: a page of messages that does not move past the cursor, or an archived list that
  * says there is more but gives no earlier time to ask from. Without that check the loops would never end.
  */
 import { Upstream } from './discordRoles.js'
 import { parseMessage, parseThread } from './librariusParse.js'
-import { attempt as attemptWrite, describe, isId, isStoreId, scrub } from './librariusText.js'
+import { attempt as attemptWrite, describe, isId, isStoreId } from './librariusText.js'
 
 // Discord's most for a page of messages, and so for a window.
 const PAGE = 100
+// The longest a timer can hold: a longer delay makes it fire at once.
+const MAX_TIMER_MS = 2_147_483_647
 const DISCORD_METHODS = ['activeThreads', 'archivedThreads', 'messagesAfter', 'newest']
 const STORE_METHODS = [
   'upsertPost',
@@ -54,8 +73,6 @@ const STORE_METHODS = [
   'setSync',
 ]
 
-// For last_error, which a page of the site may show: Discord's own trouble, and nothing else.
-const note = (err) => scrub(err instanceof Upstream ? err.message || 'Discord is unavailable.' : `The Librarius import failed (${err?.name ?? 'Error'}).`)
 const instant = (time) => (time == null ? null : new Date(time).toISOString())
 
 /** → the archive time to ask the next page of archived threads from: the oldest one of this page, as Discord wrote it. */
@@ -71,16 +88,45 @@ function olderThan(threads, before) {
   return oldest
 }
 
-export function createImport({ discord, store, forumId, windowSize = PAGE, log = console.error, now = Date.now }) {
+const needMs = (value) => Number.isSafeInteger(value) && value >= 1 && value <= MAX_TIMER_MS
+
+export function createImport({
+  discord,
+  store,
+  forumId,
+  windowSize = PAGE,
+  log = console.error,
+  now = Date.now,
+  timers = { setTimeout, clearTimeout },
+  everyMs = 21_600_000,
+  retryMs = [300_000, 600_000, 1_200_000, 1_800_000],
+  onPostsListed = () => {},
+}) {
   for (const name of DISCORD_METHODS) if (typeof discord?.[name] !== 'function') throw new TypeError(`discord.${name} must be a function.`)
   for (const name of STORE_METHODS) if (typeof store?.[name] !== 'function') throw new TypeError(`store.${name} must be a function.`)
   if (!isId(forumId)) throw new TypeError('forumId must be a Discord id.')
   if (!Number.isInteger(windowSize) || windowSize < 1 || windowSize > PAGE) throw new RangeError(`windowSize must be a whole number from 1 to ${PAGE}.`)
+  if (typeof timers?.setTimeout !== 'function' || typeof timers.clearTimeout !== 'function') {
+    throw new TypeError('timers must have a setTimeout and a clearTimeout function.')
+  }
+  if (!needMs(everyMs)) throw new RangeError(`everyMs must be a whole number of milliseconds from 1 to ${MAX_TIMER_MS}.`)
+  if (!Array.isArray(retryMs) || retryMs.length === 0 || !retryMs.every(needMs)) {
+    throw new RangeError(`retryMs must be a non-empty list of whole numbers of milliseconds from 1 to ${MAX_TIMER_MS}.`)
+  }
+  if (typeof onPostsListed !== 'function') throw new TypeError('onPostsListed must be a function.')
 
   const stamp = () => new Date(now()).toISOString()
   // Stryker disable next-line ArrowFunction,StringLiteral: what is logged is for the owner to read, and no test asserts it
   const report = (text) => log(`Librarius import: ${text}`)
-  let current = null
+  // Whether a run is going, the follow-up that calls made during it share (null when none was asked for), and how many runs
+  // in a row have failed.
+  let running = false
+  let followUp = null
+  let failures = 0
+  // The chain of timers start() made, or null when there is none. A timer answers only for the chain that set it, so a
+  // run that outlives a stop() and a start() does not leave two chains.
+  let chain = null
+  let timer
 
   /** Do one write of one row. The store refusing it with a TypeError skips the row → false; any other error goes on up. */
   const attempt = (write, what) =>
@@ -159,31 +205,79 @@ export function createImport({ discord, store, forumId, windowSize = PAGE, log =
   async function pass() {
     await store.setSync({ last_run_at: stamp() })
     const posts = await importPosts()
+    await onPostsListed()
     for (const id of posts) await importMessages(id)
     for (const id of posts) await catchUp(id)
     await store.setSync({ import_done: true, last_ok_at: stamp(), last_error: null })
   }
 
+  /** The wait before the next run: the catch-up, or after a run that failed the next retry step. */
+  const nextDelay = () => (failures === 0 ? everyMs : retryMs[Math.min(failures, retryMs.length) - 1])
+
+  function schedule() {
+    timers.clearTimeout(timer)
+    const mine = chain
+    timer = timers.setTimeout(() => {
+      if (chain === mine) run()
+    }, nextDelay())
+  }
+
+  /** One run, and what follows it: the count of failures, the follow-up that was asked for, or else the next timer. */
   async function execute() {
+    let failed = false
     try {
       await pass()
     } catch (err) {
+      failed = true
+      const said = describe(err)
       // Stryker disable next-line StringLiteral: what is logged is for the owner to read, and no test asserts it
-      report(`the run stopped: ${describe(err)}`)
+      report(`the run stopped: ${said}`)
       // Writing the failure down may fail too, with the database down; that is only logged, since the run is over.
-      const recorded = Promise.resolve().then(() => store.setSync({ last_error: note(err) }))
+      const recorded = Promise.resolve().then(() => store.setSync({ last_error: said }))
       // Stryker disable next-line ArrowFunction,StringLiteral: the handler only words a log line, and no test asserts the log
       await recorded.catch((inner) => report(`the failure could not be recorded: ${describe(inner)}`))
     }
+    failures = failed ? failures + 1 : 0
+    if (chain !== null) schedule()
+  }
+
+  /** The run is over: the next one starts if a call asked for it during this one. */
+  function finish() {
+    running = false
+    const waiting = followUp
+    followUp = null
+    // The follow-up starts in the same breath as the run ends, so no other call can get in between.
+    if (waiting !== null) waiting.resolve(launch())
+  }
+
+  function launch() {
+    timers.clearTimeout(timer)
+    running = true
+    // Nothing in execute() is meant to throw. If it does anyway (a log that throws, say), the run still ends, and run()
+    // still never rejects.
+    return execute().then(finish, finish)
+  }
+
+  function run() {
+    if (!running) return launch()
+    followUp ??= Promise.withResolvers()
+    return followUp.promise
   }
 
   return {
-    run() {
-      current ??= execute().finally(() => {
-        current = null
-      })
-      return current
-    },
+    run,
     status: () => store.syncStatus(),
+
+    start() {
+      if (chain !== null) return
+      chain = {}
+      // A run that is going sets the timer when it ends.
+      if (!running) schedule()
+    },
+
+    stop() {
+      chain = null
+      timers.clearTimeout(timer)
+    },
   }
 }
