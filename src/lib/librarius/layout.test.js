@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest'
 import fc from 'fast-check'
 import { parse, plainText, walk } from '../archive/markdown'
-import { isArticle, groupMessages, excerpt, firstUnread, railMonths, isImage, isSpoilerFile, ago, sortPosts, repliesText, sizeText } from './layout'
+import { isArticle, groupMessages, articleMemo, samePeople, isRead, excerpt, firstUnread, railMonths, isImage, isSpoilerFile, ago, sortPosts, repliesText, sizeText } from './layout'
 
 // Invented ids only (the 200000000000000400 range), and invented names.
 const ID = (n) => `2000000000000004${String(n).padStart(2, '0')}`
@@ -1058,6 +1058,295 @@ describe('sizeText', () => {
         else if (bytes < 1024 ** 2) expect(text).toBe(`${(bytes / 1024).toFixed(1)} KB`)
         else if (bytes < 1024 ** 3) expect(text).toBe(`${(bytes / 1024 ** 2).toFixed(1)} MB`)
         else expect(text).toBe(`${(bytes / 1024 ** 3).toFixed(1)} GB`)
+      }),
+    )
+  })
+})
+
+describe('groupMessages with its own way to tell an article', () => {
+  it('asks it once for each message, in order, with that message alone, and uses its answers', () => {
+    const input = [message(1), message(2, { createdAt: at(MIN) }), message(3, { createdAt: at(2 * MIN) })]
+    const asked = []
+    const out = groupMessages(input, (...args) => {
+      asked.push(args)
+      return args[0].id === ID(2)
+    })
+    expect(asked).toEqual(input.map((m) => [m]))
+    // The second is an article, so the third does not sit under it, and it does not sit under the first.
+    expect(out.map((x) => x.grouped)).toEqual([false, false, false])
+  })
+
+  it('takes the article\'s answer as the one that counts, not the message\'s own words', () => {
+    const input = [message(1, { content: '# Heading' }), message(2, { createdAt: at(MIN) })]
+    expect(groupMessages(input, () => false).map((x) => x.grouped)).toEqual([false, true])
+    expect(groupMessages([message(1), message(2, { createdAt: at(MIN) })], () => true).map((x) => x.grouped)).toEqual([false, false])
+  })
+
+  it('asks nothing for no messages, and refuses a list that is no list or a way that is no function', () => {
+    let asked = 0
+    expect(groupMessages([], () => asked++)).toEqual([])
+    expect(asked).toBe(0)
+    expect(() => groupMessages('abc', () => false)).toThrow(/takes a list of messages/)
+    for (const bad of [null, 'yes', 7, {}]) expect(() => groupMessages([message(1)], bad), String(bad)).toThrow(TypeError)
+  })
+
+  it('works as it did when no way is given', () => {
+    const input = [message(1, { content: '# H' }), message(2, { createdAt: at(MIN) }), message(3, { createdAt: at(2 * MIN) })]
+    expect(groupMessages(input).map((x) => x.grouped)).toEqual(groupMessages(input, article).map((x) => x.grouped))
+  })
+})
+
+describe('articleMemo', () => {
+  /** A message that counts how many times its content is read, which is how many times someone looks at its words. */
+  const counted = (n, content, over = {}) => {
+    const reads = { n: 0 }
+    const m = message(n, over)
+    Object.defineProperty(m, 'content', {
+      get() {
+        reads.n++
+        return content
+      },
+    })
+    return { m, reads }
+  }
+
+  it('answers as isArticle does, for every kind of message', () => {
+    const answer = articleMemo()
+    const cases = [
+      message(1),
+      message(2, { content: '## Heading' }),
+      message(3, { content: 'x'.repeat(600) }),
+      message(4, { content: 'x'.repeat(599) }),
+      message(5, { attachments: [image(1), image(2)] }),
+      message(6, { attachments: [image(1), video(2)] }),
+    ]
+    expect(cases.map((m) => answer(m))).toEqual(cases.map(article))
+  })
+
+  it('looks at a message\'s words once, however many times it is asked', () => {
+    const answer = articleMemo()
+    const { m, reads } = counted(1, '## A heading')
+    expect(answer(m)).toBe(true)
+    const after = reads.n
+    expect(after).toBeGreaterThan(0)
+    expect(answer(m)).toBe(true)
+    expect(answer(m)).toBe(true)
+    expect(reads.n).toBe(after)
+  })
+
+  it('keeps the answer false too: a plain message is not looked at twice', () => {
+    const answer = articleMemo()
+    const { m, reads } = counted(1, 'plain words')
+    expect(answer(m)).toBe(false)
+    const after = reads.n
+    expect(answer(m)).toBe(false)
+    expect(reads.n).toBe(after)
+  })
+
+  it('tells one message from another by the object, not by its id: an edit is a new object', () => {
+    const answer = articleMemo()
+    expect(answer(message(1, { content: 'plain' }))).toBe(false)
+    expect(answer(message(1, { content: '# now a heading' }))).toBe(true)
+  })
+
+  it('keeps nothing between two memos', () => {
+    const m = message(1)
+    const first = articleMemo()
+    const second = articleMemo()
+    first(m)
+    const { m: other, reads } = counted(2, 'plain')
+    second(other)
+    expect(reads.n).toBeGreaterThan(0)
+    const seen = reads.n
+    first(other)
+    expect(reads.n).toBeGreaterThan(seen)
+  })
+
+  it('refuses what is no message, as isArticle does, and keeps no answer for it', () => {
+    const answer = articleMemo()
+    for (const bad of [null, undefined, 'abc', 7, {}, { content: 5, attachments: [] }, { content: 'x', attachments: null }]) {
+      expect(() => answer(bad), String(bad)).toThrow(TypeError)
+    }
+    const m = { content: 5, attachments: [] }
+    expect(() => answer(m)).toThrow(TypeError)
+    m.content = '# fixed'
+    expect(answer(m)).toBe(true)
+  })
+
+  it('groups a list through it the same as without, and parses a list that comes again only for what is new', () => {
+    const answer = articleMemo()
+    const held = Array.from({ length: 8 }, (_, i) => counted(i + 1, i % 3 === 0 ? '# heading' : 'plain', { createdAt: at(i * MIN) }))
+    const first = groupMessages(held.map((h) => h.m), answer)
+    const reads = held.map((h) => h.reads.n)
+    const fresh = counted(9, 'new words', { createdAt: at(9 * MIN) })
+    const second = groupMessages([...held.map((h) => h.m), fresh.m], answer)
+    expect(held.map((h) => h.reads.n)).toEqual(reads)
+    expect(second.slice(0, 8).map((x) => x.grouped)).toEqual(first.map((x) => x.grouped))
+    expect(fresh.reads.n).toBeGreaterThan(0)
+    expect(groupMessages(held.map((h) => h.m)).map((x) => x.grouped)).toEqual(first.map((x) => x.grouped))
+  })
+})
+
+describe('samePeople', () => {
+  const person = (name, avatar = null) => ({ name, avatar })
+
+  it('is true for a table and itself, and for two with the same people', () => {
+    const a = { [ID(1)]: person('Tor', 'https://cdn.discordapp.com/avatars/1/a.png'), [ID(2)]: person('Ixen') }
+    expect(samePeople(a, a)).toBe(true)
+    expect(samePeople(a, { [ID(2)]: person('Ixen'), [ID(1)]: person('Tor', 'https://cdn.discordapp.com/avatars/1/a.png') })).toBe(true)
+    expect(samePeople({}, {})).toBe(true)
+  })
+
+  it('is false when a name, an avatar or a person differs, or one has a person the other has not', () => {
+    const a = { [ID(1)]: person('Tor') }
+    expect(samePeople(a, { [ID(1)]: person('Tor B') })).toBe(false)
+    expect(samePeople(a, { [ID(1)]: person('Tor', 'https://cdn.discordapp.com/avatars/1/a.png') })).toBe(false)
+    expect(samePeople(a, { [ID(2)]: person('Tor') })).toBe(false)
+    expect(samePeople(a, { ...a, [ID(2)]: person('Ixen') })).toBe(false)
+    expect(samePeople({ ...a, [ID(2)]: person('Ixen') }, a)).toBe(false)
+    expect(samePeople(a, {})).toBe(false)
+    expect(samePeople({}, a)).toBe(false)
+  })
+
+  it('compares each person\'s name and avatar as written, so a name that only looks alike is another', () => {
+    expect(samePeople({ [ID(1)]: person('1') }, { [ID(1)]: person(1) })).toBe(false)
+    expect(samePeople({ [ID(1)]: person('Tor', null) }, { [ID(1)]: { name: 'Tor', avatar: undefined } })).toBe(false)
+    expect(samePeople({ [ID(1)]: person('Tor', null) }, { [ID(1)]: { name: 'Tor' } })).toBe(false)
+  })
+
+  it('treats a key that is a name on Object.prototype as any other, and __proto__ as a key', () => {
+    const a = JSON.parse('{"__proto__":{"name":"A","avatar":null},"constructor":{"name":"B","avatar":null}}')
+    const b = JSON.parse('{"constructor":{"name":"B","avatar":null},"__proto__":{"name":"A","avatar":null}}')
+    expect(samePeople(a, b)).toBe(true)
+    expect(samePeople(a, JSON.parse('{"__proto__":{"name":"X","avatar":null},"constructor":{"name":"B","avatar":null}}'))).toBe(false)
+    expect(samePeople({ toString: person('T') }, {})).toBe(false)
+    expect(samePeople({}, { toString: person('T') })).toBe(false)
+    // An answer that has no person of that name does not borrow one from the prototype.
+    expect(samePeople({ a: person('A') }, { b: person('A') })).toBe(false)
+  })
+
+  it('is false for what is no table, unless it is the very same thing', () => {
+    expect(samePeople(null, null)).toBe(true)
+    expect(samePeople(undefined, undefined)).toBe(true)
+    for (const bad of [null, undefined, 'abc', 7, [], [person('x')]]) {
+      expect(samePeople(bad, {}), String(bad)).toBe(false)
+      expect(samePeople({}, bad), String(bad)).toBe(false)
+    }
+    const list = []
+    expect(samePeople(list, list)).toBe(true)
+  })
+
+  it('is false for a person that is no table, and true for the very same thing in both', () => {
+    const odd = 'x'
+    expect(samePeople({ [ID(1)]: odd }, { [ID(1)]: odd })).toBe(true)
+    expect(samePeople({ [ID(1)]: 'x' }, { [ID(1)]: 'y' })).toBe(false)
+    expect(samePeople({ [ID(1)]: null }, { [ID(1)]: person('Tor') })).toBe(false)
+    expect(samePeople({ [ID(1)]: person('Tor') }, { [ID(1)]: null })).toBe(false)
+    expect(samePeople({ [ID(1)]: null }, { [ID(1)]: null })).toBe(true)
+  })
+
+  it('agrees with a deep comparison of the two, for any two tables (property)', () => {
+    const entry = fc.record({ name: fc.constantFrom('Tor', 'Ixen', 'Mara'), avatar: fc.constantFrom(null, 'a', 'b') })
+    const table = fc.dictionary(fc.constantFrom('1', '2', '3', 'a', 'b'), entry)
+    fc.assert(
+      fc.property(table, table, (a, b) => {
+        const sorted = (t) => JSON.stringify(Object.entries(t).sort(([x], [y]) => (x < y ? -1 : 1)))
+        expect(samePeople(a, b)).toBe(sorted(a) === sorted(b))
+        expect(samePeople(a, { ...a })).toBe(true)
+        expect(samePeople(a, b)).toBe(samePeople(b, a))
+      }),
+    )
+  })
+})
+
+describe('isRead', () => {
+  const viewport = { top: 72, bottom: 872 }
+  /** What an IntersectionObserver says: a message at [top, bottom] on a viewport that begins under the site's header. */
+  const seen = (top, bottom, over = {}) => {
+    const visible = Math.max(0, Math.min(bottom, viewport.bottom) - Math.max(top, viewport.top))
+    return {
+      isIntersecting: visible > 0 || (bottom >= viewport.top && top <= viewport.bottom),
+      intersectionRatio: bottom === top ? 0 : visible / (bottom - top),
+      boundingClientRect: { top, bottom },
+      rootBounds: viewport,
+      ...over,
+    }
+  }
+
+  it('counts a message that is wholly in view', () => {
+    expect(isRead(seen(200, 400))).toBe(true)
+  })
+
+  it('counts a message at least 60% of which is in view, at 60% exactly and not at less', () => {
+    // 100 high, 60 of it in view at the bottom of the viewport, and 59 of it.
+    expect(isRead(seen(812, 912))).toBe(true)
+    expect(isRead(seen(813, 913))).toBe(false)
+    expect(isRead({ isIntersecting: true, intersectionRatio: 0.6, boundingClientRect: { top: 0, bottom: 5000 }, rootBounds: viewport })).toBe(true)
+    expect(isRead({ isIntersecting: true, intersectionRatio: 0.5999, boundingClientRect: { top: 0, bottom: 5000 }, rootBounds: viewport })).toBe(false)
+    expect(isRead({ isIntersecting: true, intersectionRatio: 0.7, boundingClientRect: { top: 800, bottom: 5000 }, rootBounds: viewport })).toBe(true)
+  })
+
+  it('counts a message whose bottom edge is in view though less than 60% of it is: a long one read to its end', () => {
+    // 3000 high, the last 800 of it in view.
+    const e = seen(-2128, 872)
+    expect(e.intersectionRatio).toBeLessThan(0.6)
+    expect(isRead(e)).toBe(true)
+    expect(isRead(seen(-2128, 500))).toBe(true)
+    expect(isRead(seen(-2128, 73))).toBe(true)
+  })
+
+  it('does not count a long message that has only just come into view at the top of it', () => {
+    const e = seen(700, 3700)
+    expect(e.intersectionRatio).toBeLessThan(0.6)
+    expect(isRead(e)).toBe(false)
+  })
+
+  it('counts a bottom edge exactly at the foot of the viewport, and not one exactly at its top (or above)', () => {
+    expect(isRead({ isIntersecting: true, intersectionRatio: 0.1, boundingClientRect: { top: -3000, bottom: 872 }, rootBounds: viewport })).toBe(true)
+    expect(isRead({ isIntersecting: true, intersectionRatio: 0.1, boundingClientRect: { top: -3000, bottom: 873 }, rootBounds: viewport })).toBe(false)
+    expect(isRead({ isIntersecting: true, intersectionRatio: 0, boundingClientRect: { top: -3000, bottom: 72 }, rootBounds: viewport })).toBe(false)
+    expect(isRead({ isIntersecting: true, intersectionRatio: 0, boundingClientRect: { top: -3000, bottom: 73 }, rootBounds: viewport })).toBe(true)
+    expect(isRead({ isIntersecting: true, intersectionRatio: 0, boundingClientRect: { top: -3000, bottom: 10 }, rootBounds: viewport })).toBe(false)
+  })
+
+  it('counts nothing that is not intersecting, however its numbers read', () => {
+    expect(isRead({ ...seen(200, 400), isIntersecting: false })).toBe(false)
+    expect(isRead({ ...seen(200, 400), isIntersecting: undefined })).toBe(false)
+    expect(isRead({ ...seen(200, 400), isIntersecting: 'true' })).toBe(false)
+    expect(isRead({ ...seen(200, 400), isIntersecting: 1 })).toBe(false)
+  })
+
+  it('judges by the ratio alone when the viewport is not known (no root bounds)', () => {
+    expect(isRead({ isIntersecting: true, intersectionRatio: 0.9, boundingClientRect: { top: 0, bottom: 10 }, rootBounds: null })).toBe(true)
+    expect(isRead({ isIntersecting: true, intersectionRatio: 0.2, boundingClientRect: { top: 0, bottom: 10 }, rootBounds: null })).toBe(false)
+    expect(isRead({ isIntersecting: true, intersectionRatio: 0.2, boundingClientRect: { top: 0, bottom: 10 } })).toBe(false)
+  })
+
+  it('counts nothing for numbers that are no numbers, and does not fall over for entries that are not entries', () => {
+    const base = { isIntersecting: true, intersectionRatio: 0.1, boundingClientRect: { top: 0, bottom: 500 }, rootBounds: viewport }
+    for (const bad of [NaN, Infinity, -Infinity, '500', null, undefined, {}, [500]]) {
+      expect(isRead({ ...base, boundingClientRect: { top: 0, bottom: bad } }), String(bad)).toBe(false)
+      expect(isRead({ ...base, rootBounds: { top: bad, bottom: 872 } }), String(bad)).toBe(false)
+      expect(isRead({ ...base, rootBounds: { top: 72, bottom: bad } }), String(bad)).toBe(false)
+    }
+    for (const bad of ['0.9', null, undefined, NaN, {}, [0.9], true]) {
+      expect(isRead({ isIntersecting: true, intersectionRatio: bad, boundingClientRect: { top: 0, bottom: 5000 }, rootBounds: viewport }), String(bad)).toBe(false)
+    }
+    for (const bad of [null, undefined, 'abc', 7, [], {}, () => {}]) expect(isRead(bad), String(bad)).toBe(false)
+    expect(isRead({ isIntersecting: true, intersectionRatio: 0.1 })).toBe(false)
+    expect(isRead({ isIntersecting: true, intersectionRatio: 0.1, boundingClientRect: null, rootBounds: viewport })).toBe(false)
+  })
+
+  it('agrees with the rule, for any message and viewport (property)', () => {
+    fc.assert(
+      fc.property(fc.integer({ min: -5000, max: 5000 }), fc.integer({ min: 1, max: 6000 }), fc.integer({ min: 0, max: 400 }), fc.integer({ min: 100, max: 2000 }), (top, height, rootTop, rootHeight) => {
+        const bottom = top + height
+        const root = { top: rootTop, bottom: rootTop + rootHeight }
+        const visible = Math.max(0, Math.min(bottom, root.bottom) - Math.max(top, root.top))
+        const intersecting = bottom >= root.top && top <= root.bottom
+        const entry = { isIntersecting: intersecting, intersectionRatio: visible / height, boundingClientRect: { top, bottom }, rootBounds: root }
+        const expected = intersecting && (visible / height >= 0.6 || (bottom > root.top && bottom <= root.bottom))
+        expect(isRead(entry)).toBe(expected)
       }),
     )
   })

@@ -14,21 +14,28 @@
 //     Back to a post it opens around the message that was topmost when the reader left (kept in sessionStorage), and scrolls
 //     to that, in place of the rest. It scrolls once for each opening, never for what a poll or an older page brings. Loading
 //     older messages keeps the reader's place.
-//   - A message is reported read (the newest in view, two seconds after what is in view last changed) through the store, which
+//   - A message counts as read when at least 60% of it is in view, or its bottom edge is, below the site's fixed header (see
+//     isRead). The newest that counts is reported, two seconds after what is in view last changed, through the store, which
 //     never lowers the mark. A failed report, poll or page is dropped quietly or noted: none of them takes the page away.
-import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
+//   - A poll draws only what changed: the layout of a message is worked out once for each message object, and people are replaced
+//     only when they are named differently. Messages that leave the page (a jump, a deletion) are no longer watched. The rail of
+//     months comes before the messages in the page, so a keyboard meets it first, and the focus moves to the first message
+//     that came when the button that loaded it goes.
+import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, shallowRef, watch } from 'vue'
 import { useRoute } from 'vue-router'
 import { useAuth } from '../../stores/auth'
-import { useLibrarius } from '../../stores/librarius'
-import { parse } from '../../lib/archive/markdown'
-import { firstUnread, groupMessages, isArticle, railMonths } from '../../lib/librarius/layout'
+import { POLL_MS, useLibrarius } from '../../stores/librarius'
+import { articleMemo, firstUnread, groupMessages, isRead, railMonths, samePeople } from '../../lib/librarius/layout'
 import { createRenderCtx } from '../../lib/librarius/render'
 import { snowflakeAt } from '../../lib/librarius/snowflake'
 import LibMessage from './LibMessage.vue'
 import './librarius.css'
 
-const POLL_MS = 10_000
 const READ_AFTER_MS = 2_000
+// The observer tells the page at each tenth of a message that comes into view or goes out of it (a message is read from 60%,
+// and a long one by its bottom edge: see isRead), and measures from under the site's fixed header.
+const READ_THRESHOLDS = [0, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1]
+const SITE_HEADER = 'header.nav'
 const SNOWFLAKE = /^\d{17,20}$/
 const MESSAGE_ELEMENT = /^m-(\d{17,20})$/
 const MESSAGE_ANCHOR = /^#m-(\d{17,20})$/
@@ -63,9 +70,19 @@ const messages = computed(() => post.value?.messages ?? [])
 // The post's own first message, pinned on top as an article whatever its length. The store keeps it out of the run.
 const opening = computed(() => post.value?.opening ?? null)
 
-// The replies, grouped, each with its own layout.
-const entries = computed(() =>
-  groupMessages(messages.value).map(({ message, grouped }) => ({ message, grouped, article: isArticle(message, parse(message.content)) })),
+// The replies, grouped, each with its own layout. Whether a message is an article is worked out once for each message object, so
+// a poll that brings a message reads that one, not all that are held.
+const articleOf = articleMemo()
+const entries = computed(() => groupMessages(messages.value, articleOf).map(({ message, grouped }) => ({ message, grouped, article: articleOf(message) })))
+
+// Who people are: the store's table, but replaced only when it names someone differently. The store replaces it with every
+// answer, and a table that is new but says the same would otherwise draw every message again.
+const people = shallowRef(store.people)
+watch(
+  () => store.people,
+  (next) => {
+    if (!samePeople(people.value, next)) people.value = next
+  },
 )
 const isHeld = (id) => opening.value?.id === id || messages.value.some((message) => message.id === id)
 
@@ -101,7 +118,7 @@ const discord = computed(() => {
 })
 
 // What the markdown renders its links, mentions and emoji with. The titles are those of the topic list the store holds, and of
-// this post, so that a channel mention or a link to a post names it. A change in the list makes a new context.
+// this post, so that a channel mention or a link to a post names it. A change in the list, or in who people are, makes a new context.
 const ctx = computed(() => {
   const me = store.me ?? {}
   const titles = new Map(store.posts.map((p) => [p.id, p.title]))
@@ -109,7 +126,7 @@ const ctx = computed(() => {
   return createRenderCtx({
     guildId: typeof me.guildId === 'string' && SNOWFLAKE.test(me.guildId) ? me.guildId : NO_GUILD,
     postTitles: titles,
-    people: store.people,
+    people: people.value,
     roles: Array.isArray(me.roles) ? me.roles : [],
   })
 })
@@ -127,7 +144,8 @@ const months = computed(() => {
   }
 })
 
-const messageElement = (id) => root.value.querySelector(`#m-${id}`)
+// The element of a message on the page, or null (a page that has gone has none).
+const messageElement = (id) => root.value?.querySelector(`#m-${id}`) ?? null
 // The first message of the run on the page: the opening message is above it, and does not move when older ones are added.
 const firstOfRun = () => [...root.value.querySelectorAll('.lb-msg')].find((node) => node.id !== `m-${props.postId}`)
 const scrollTo = (target, options) => {
@@ -179,39 +197,61 @@ function rememberPlace(postId) {
   }
 }
 
-// Marking read. The messages in view are what the browser last said was in view; two seconds after that last changed, the
-// newest of them is reported. One observer for each opening of a post.
+// Marking read. Two sets are kept of the messages on the page: those in view at all (the place to go Back to is the topmost of
+// them) and those that count as read (see isRead). Two seconds after what the browser last said changed, the newest that count
+// is reported. One observer for each opening of a post.
 let observer = null
-const watched = new WeakSet()
+// The message elements the observer watches: those on the page, so that one that leaves is let go.
+const watched = new Set()
 let readTimer = null
 const inView = new Set()
+const counted = new Set()
 
 function sendRead() {
   let newest = null
-  for (const id of inView) {
+  for (const id of counted) {
     if (newest === null || BigInt(id) > BigInt(newest)) newest = id
   }
   if (newest !== null) store.markRead(auth.token, newest).catch(() => {})
 }
 
+const idOfNode = (node) => MESSAGE_ELEMENT.exec(node.id)?.[1]
+
 function seen(entries) {
-  for (const { target, isIntersecting } of entries) {
-    const id = MESSAGE_ELEMENT.exec(target.id)?.[1]
+  for (const entry of entries) {
+    const id = watched.has(entry.target) ? idOfNode(entry.target) : undefined
     if (id === undefined) continue
-    if (isIntersecting) inView.add(id)
+    if (entry.isIntersecting) inView.add(id)
     else inView.delete(id)
+    if (isRead(entry)) counted.add(id)
+    else counted.delete(id)
   }
   clearTimeout(readTimer)
   readTimer = setTimeout(sendRead, READ_AFTER_MS)
 }
 
-// Watches the messages on the page that are not watched yet. A browser with no IntersectionObserver marks nothing.
+// The height of the site's fixed header, which hides the top of the page: nothing under it is in view.
+function siteHeaderHeight() {
+  const height = document.querySelector(SITE_HEADER)?.getBoundingClientRect().height
+  return Number.isFinite(height) && height > 0 ? Math.ceil(height) : 0
+}
+
+// Watches the messages on the page that are not watched yet, and lets go of those that have left it (a jump, a deletion), so
+// that none is kept in memory, or counted, after it is gone. A browser with no IntersectionObserver marks nothing.
 function watchMessages() {
   if (observer === null) {
     if (typeof IntersectionObserver !== 'function') return
-    observer = new IntersectionObserver(seen)
+    observer = new IntersectionObserver(seen, { rootMargin: `${-siteHeaderHeight()}px 0px 0px 0px`, threshold: READ_THRESHOLDS })
   }
-  for (const node of root.value.querySelectorAll('.lb-msg')) {
+  const present = new Set(root.value.querySelectorAll('.lb-msg'))
+  for (const node of watched) {
+    if (present.has(node)) continue
+    watched.delete(node)
+    observer.unobserve(node)
+    inView.delete(idOfNode(node))
+    counted.delete(idOfNode(node))
+  }
+  for (const node of present) {
     if (!watched.has(node)) {
       watched.add(node)
       observer.observe(node)
@@ -222,6 +262,8 @@ function watchMessages() {
 function stopReading() {
   clearTimeout(readTimer)
   inView.clear()
+  counted.clear()
+  watched.clear()
   observer?.disconnect()
   observer = null
 }
@@ -301,25 +343,33 @@ onBeforeUnmount(() => {
 })
 
 // A link in this post to one of its messages changes the address while the page is open. A change of post comes with its own
-// opening (which sets the phase), so it is left to that.
+// opening (which sets the phase), so it is left to that. Each step after a wait is for this opening only: a page that was left,
+// or a post that was changed, since the link was followed is not scrolled.
 watch(
   () => route.hash,
   async () => {
     const id = anchorId()
     if (id === null) return
+    const mine = session
     await nextTick()
-    if (phase.value !== 'ready') return
+    if (mine !== session || phase.value !== 'ready') return
     if (!isHeld(id)) {
       await reach(id)
       await nextTick()
+      if (mine !== session) return
     }
     scrollTo(messageElement(id), TO_TOP)
   },
 )
 
 // Loads the page beyond one end of what is held. Older messages go above what the reader is looking at, so the first message
-// of the run is kept where it is on the screen (a browser may have done so already, and then there is nothing to move).
-async function more(side) {
+// of the run is kept where it is on the screen (a browser may have done so already, and then there is nothing to move). When
+// the button that was used goes, with the page that it brought, the focus it had would be lost: it moves to the first message
+// that came, without moving the page.
+async function more(side, event) {
+  const mine = session
+  const hadFocus = document.activeElement === event?.currentTarget
+  const held = new Set(messages.value.map((message) => message.id))
   busy[side] = true
   notice.value = ''
   const anchor = firstOfRun()
@@ -332,15 +382,25 @@ async function more(side) {
   } finally {
     busy[side] = false
   }
-  if (!anchor?.isConnected) return
   await nextTick()
-  const shift = anchor.getBoundingClientRect().top - from
-  if (shift !== 0) window.scrollBy({ top: shift, behavior: 'instant' })
+  if (mine !== session) return
+  if (anchor?.isConnected) {
+    const shift = anchor.getBoundingClientRect().top - from
+    if (shift !== 0) window.scrollBy({ top: shift, behavior: 'instant' })
+  }
+  const gone = side === 'older' ? !post.value?.hasOlder : !post.value?.hasNewer
+  const first = messages.value.find((message) => !held.has(message.id))
+  const target = hadFocus && gone && first ? messageElement(first.id) : null
+  if (target) {
+    target.tabIndex = -1
+    target.focus({ preventScroll: true })
+  }
 }
 
 // Opens the post around the first instant of a month, never before the post began nor after now: the server answers 400 to
 // a date it cannot use. The reader's mark and the divider stay as they were.
 async function jump(month) {
+  const mine = session
   busy.jump = true
   notice.value = ''
   try {
@@ -348,6 +408,7 @@ async function jump(month) {
     const around = snowflakeAt(new Date(Math.min(Math.max(month.at.getTime(), began), Date.now())))
     await store.openPost(auth.token, props.postId, { around })
     await nextTick()
+    if (mine !== session) return
     const held = messages.value
     const target = held.find((message) => BigInt(message.id) >= BigInt(around)) ?? held[held.length - 1]
     if (target) scrollTo(messageElement(target.id), TO_TOP)
@@ -395,22 +456,22 @@ async function jump(month) {
       </header>
 
       <div class="lb-post-body">
-        <div class="lb-thread">
-          <LibMessage v-if="opening" :message="opening" :grouped="false" article :people="store.people" :ctx="ctx" />
-          <button v-if="post.hasOlder" type="button" class="btn-ghost btn-sm lb-more" :disabled="busy.older" @click="more('older')">Load older</button>
-
-          <template v-for="e in entries" :key="e.message.id">
-            <div v-if="divider && divider.id === e.message.id" class="lb-divider"><span class="lb-divider-text">{{ divider.text }}</span></div>
-            <LibMessage :message="e.message" :grouped="e.grouped" :article="e.article" :people="store.people" :ctx="ctx" />
-          </template>
-
-          <button v-if="post.hasNewer" type="button" class="btn-ghost btn-sm lb-more" :disabled="busy.newer" @click="more('newer')">Load newer</button>
-          <p v-if="notice" class="lb-notice" role="alert">{{ notice }}</p>
-        </div>
-
         <nav v-if="months.length" class="lb-rail" aria-label="Jump to a month">
           <button v-for="month in months" :key="month.label" type="button" class="lb-month" :disabled="busy.jump" @click="jump(month)">{{ month.label }}</button>
         </nav>
+
+        <div class="lb-thread">
+          <LibMessage v-if="opening" :message="opening" :grouped="false" article :people="people" :ctx="ctx" />
+          <button v-if="post.hasOlder" type="button" class="btn-ghost btn-sm lb-more" :disabled="busy.older" @click="more('older', $event)">Load older</button>
+
+          <template v-for="e in entries" :key="e.message.id">
+            <div v-if="divider && divider.id === e.message.id" class="lb-divider"><span class="lb-divider-text">{{ divider.text }}</span></div>
+            <LibMessage :message="e.message" :grouped="e.grouped" :article="e.article" :people="people" :ctx="ctx" />
+          </template>
+
+          <button v-if="post.hasNewer" type="button" class="btn-ghost btn-sm lb-more" :disabled="busy.newer" @click="more('newer', $event)">Load newer</button>
+          <p v-if="notice" class="lb-notice" role="alert">{{ notice }}</p>
+        </div>
       </div>
     </template>
   </section>

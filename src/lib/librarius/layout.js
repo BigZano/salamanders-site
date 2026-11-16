@@ -31,6 +31,11 @@
  * repliesText(n) → "1 reply", "7,931 replies"; "" when `n` is no whole number from 0.
  * sizeText(bytes) → "812 B", "1.5 KB", "5.0 MB", "1.1 GB" (1024s, one decimal above bytes); "" when it is no whole
  *   number of bytes from 0.
+ * articleMemo() → a function (message) → boolean that answers as isArticle does from the message's own words, once for each
+ *   message object. groupMessages(messages, articleOf) takes it (or any such function) in place of reading each message again.
+ * samePeople(a, b) → whether two tables { member id: { name, avatar } } name the same people with the same name and avatar.
+ * isRead(entry) → whether an IntersectionObserver entry says a message was read: it is in view and at least 60% of it is, or
+ *   its bottom edge lies in the viewport (the entry's root bounds), so that a long message counts once it is read to its end.
  * railMonths(createdAt, lastAt) → [{ label: 'Nov 2026', at: Date }], one for each UTC month from the one of `createdAt`
  *   to the one of `lastAt`, oldest first; `at` is the first instant of the month. Each is a Date or an ISO string, on
  *   or after the Discord epoch (a RangeError before it, and for a string that is no date). A `lastAt` before `createdAt`
@@ -131,10 +136,26 @@ export function sizeText(bytes) {
   return `${unit === 0 ? value : value.toFixed(1)} ${SIZE_UNITS[unit]}`
 }
 
-/** → [{ message, grouped }] for the messages, oldest first. */
-export function groupMessages(messages) {
+const articleOfMessage = (message) => isArticle(message, parse(message.content))
+
+/**
+ * → a function that tells whether a message is an article, as isArticle does from its words, but once for each message
+ * object: it keeps its answers, so a list that comes again with most of its messages unchanged is read only for the new
+ * ones. A message is never changed in place (an edit is a new object), so an answer for an object stays true. A message that
+ * is no message is a TypeError, and no answer is kept for it.
+ */
+export function articleMemo() {
+  const answers = new WeakMap()
+  return (message) => {
+    if (!answers.has(message)) answers.set(message, articleOfMessage(message))
+    return answers.get(message)
+  }
+}
+
+/** → [{ message, grouped }] for the messages, oldest first. `articleOf` tells whether a message is an article. */
+export function groupMessages(messages, articleOf = articleOfMessage) {
   if (!Array.isArray(messages)) throw new TypeError('groupMessages takes a list of messages.')
-  const articles = messages.map((message) => isArticle(message, parse(message.content)))
+  const articles = messages.map((message) => articleOf(message))
   return messages.map((message, i) => {
     if (i === 0) return { message, grouped: false }
     const before = messages[i - 1]
@@ -224,4 +245,30 @@ export function railMonths(createdAt, lastAt) {
     months.push({ label: `${MONTHS[month]} ${year}`, at: new Date(Date.UTC(year, month, 1)) })
   }
   return months
+}
+
+const isTable = (value) => typeof value === 'object' && value !== null && !Array.isArray(value)
+const samePerson = (a, b) => a === b || (isTable(a) && isTable(b) && a.name === b.name && a.avatar === b.avatar)
+
+/** → whether two tables of people, { member id: { name, avatar } }, name the same people the same way. */
+export function samePeople(a, b) {
+  if (a === b) return true
+  if (!isTable(a) || !isTable(b)) return false
+  const ids = Object.keys(a)
+  return ids.length === Object.keys(b).length && ids.every((id) => Object.hasOwn(b, id) && samePerson(a[id], b[id]))
+}
+
+const READ_RATIO = 0.6
+
+/**
+ * → whether an entry of an IntersectionObserver says the reader has read the message: it is in view, and at least 60% of it
+ * is, or its bottom edge is in the viewport (so a message too long to show 60% of itself counts once it is read to its end).
+ * The viewport is the observer's root bounds, which the site's header is cut from. Without them only the share counts.
+ */
+export function isRead(entry) {
+  if (entry?.isIntersecting !== true) return false
+  if (Number.isFinite(entry.intersectionRatio) && entry.intersectionRatio >= READ_RATIO) return true
+  const bottom = entry.boundingClientRect?.bottom
+  const root = entry.rootBounds
+  return Number.isFinite(bottom) && Number.isFinite(root?.top) && Number.isFinite(root.bottom) && bottom > root.top && bottom <= root.bottom
 }

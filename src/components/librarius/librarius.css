@@ -704,11 +704,11 @@ a.lb-file {
   max-width: 100%;
 }
 
-/* The date rail: a button for each month. */
+/* The date rail: a button for each month. It comes before the thread in the page, so that a keyboard meets it first; on a phone
+ * that is above the thread, and from 900px the grid puts it in the column at the right. */
 .lb-rail {
   display: flex;
   gap: 0.4rem;
-  order: -1;
   padding-bottom: 0.2rem;
   overflow-x: auto;
 }
@@ -733,10 +733,15 @@ a.lb-file {
   .lb-post-body {
     grid-template-columns: minmax(0, 1fr) 7.5rem;
   }
+  .lb-thread {
+    grid-column: 1;
+    grid-row: 1;
+  }
   .lb-rail {
+    grid-column: 2;
+    grid-row: 1;
     flex-direction: column;
     gap: 0.2rem;
-    order: 0;
     align-self: start;
     position: sticky;
     top: 5rem;

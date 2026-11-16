@@ -9,6 +9,12 @@ import { createRouter, createMemoryHistory, useRoute } from 'vue-router'
 const state = vi.hoisted(() => ({ auth: null }))
 vi.mock('../../stores/auth', () => ({ useAuth: () => state.auth }))
 vi.mock('../../lib/librarius/api')
+// The page's parsing of what Discord sent is counted, to see that a poll that changes nothing parses nothing again.
+vi.mock('../../lib/archive/markdown', async (original) => {
+  const real = await original()
+  return { ...real, parse: vi.fn((...args) => real.parse(...args)) }
+})
+import { parse } from '../../lib/archive/markdown'
 import { getPost, listMessages, listPosts, getChanges, markRead } from '../../lib/librarius/api'
 import { useLibrarius } from '../../stores/librarius'
 import { snowflakeAt } from '../../lib/librarius/snowflake'
@@ -84,9 +90,11 @@ const settle = async (ms = 0) => {
 /** A browser's IntersectionObserver that does what it is told: the page's callback gets the entries a test reports. */
 class FakeObserver {
   static instances = []
-  constructor(callback) {
+  constructor(callback, options) {
     this.callback = callback
+    this.options = options
     this.targets = new Set()
+    this.unobserved = []
     this.disconnected = false
     FakeObserver.instances.push(this)
   }
@@ -94,6 +102,7 @@ class FakeObserver {
     this.targets.add(el)
   }
   unobserve(el) {
+    this.unobserved.push(el)
     this.targets.delete(el)
   }
   disconnect() {
@@ -102,8 +111,32 @@ class FakeObserver {
   }
 }
 const live = () => FakeObserver.instances.filter((o) => !o.disconnected).at(-1)
+// The viewport an observer measures against: the page under the site's header.
+const VIEWPORT = { top: 72, bottom: 872 }
+/** One entry of an observer, for a message: by default wholly in view (or wholly out of it). */
+const entryFor = (id, isIntersecting, over = {}) => ({
+  target: document.getElementById(`m-${id}`),
+  isIntersecting,
+  intersectionRatio: isIntersecting ? 1 : 0,
+  boundingClientRect: { top: 200, bottom: 300 },
+  rootBounds: VIEWPORT,
+  ...over,
+})
 /** Says that the messages are now in view (or out of it). */
-const report = (ids, isIntersecting = true) => live().callback(ids.map((id) => ({ target: document.getElementById(`m-${id}`), isIntersecting })))
+const report = (ids, isIntersecting = true) => live().callback(ids.map((id) => entryFor(id, isIntersecting)))
+/** Says how a message lies, as an observer does: how much of it shows, and where its top and bottom edges are. */
+const reportRect = (id, { ratio, top, bottom }) => live().callback([entryFor(id, true, { intersectionRatio: ratio, boundingClientRect: { top, bottom } })])
+
+// What re-rendered: the id of each message that a LibMessage drew again after it was first drawn.
+const redrawn = []
+// What went wrong inside the page where nothing waits for it (a watcher, an event handler): Vue hands it here.
+const errors = []
+const config = { errorHandler: (err) => errors.push(err) }
+const countRedraws = {
+  updated() {
+    if (this.$options.__name === 'LibMessage') redrawn.push(this.$props.message.id)
+  },
+}
 
 // What the page scrolled to, as the element's id or its class, with the options it was given.
 let scrolled
@@ -156,6 +189,8 @@ async function show({
   hash = '',
   held = null,
   host = false,
+  // What the store knew of people before the page was shown (the topic list may have told it).
+  known = {},
   // The post's own message, as the server answers the question about it; by default the one among `messages`, if any.
   opening = messages.find((message) => message.id === postId) ?? null,
   arrange = () => {},
@@ -185,11 +220,12 @@ async function show({
     s.status = 'allowed'
     s.me = me
     s.posts = posts
+    s.people = known
     s.post = held
   })
   const w = host
-    ? mount(Host, { global: { plugins: [pinia, router] }, attachTo: document.body })
-    : mount(PostPage, { props: { postId }, global: { plugins: [pinia, router] }, attachTo: document.body })
+    ? mount(Host, { global: { plugins: [pinia, router], mixins: [countRedraws], config }, attachTo: document.body })
+    : mount(PostPage, { props: { postId }, global: { plugins: [pinia, router], mixins: [countRedraws], config }, attachTo: document.body })
   mounted.push(w)
   if (flush) await settle()
   return w
@@ -214,6 +250,8 @@ beforeEach(() => {
   vi.stubGlobal('IntersectionObserver', FakeObserver)
   scrolled = []
   tops = new Map()
+  redrawn.length = 0
+  errors.length = 0
   Element.prototype.scrollIntoView = function (options) {
     scrolled.push({ at: this.id || this.className, options })
   }
@@ -231,6 +269,7 @@ afterEach(() => {
   window.history.replaceState(null, '')
   sessionStorage.clear()
   vi.restoreAllMocks()
+  document.querySelectorAll('header.nav').forEach((node) => node.remove())
   delete Element.prototype.scrollIntoView
   delete Element.prototype.getBoundingClientRect
 })
@@ -981,6 +1020,7 @@ describe('PostPage: where it opens', () => {
     await router.push(`/reliquarium/librarius/${POST}#m-${m(2)}`)
     await settle()
     expect(scrolled).toEqual([])
+    expect(getPost).toHaveBeenCalledTimes(1)
     leave(w)
   })
 })
@@ -1749,6 +1789,521 @@ describe('PostPage: Back', () => {
       await settle()
       expect(lastPageAsk()).toEqual(['tok', OTHER, { around: m(7) }])
       expect(scrolled.map((s) => s.at)).toEqual([`m-${m(7)}`])
+    })
+  })
+})
+
+describe('PostPage: a poll that changes little draws little (G17)', () => {
+  const six = () => [msg(1), msg(2), msg(3), msg(4), msg(5), msg(6)]
+  const poll = (over = {}) => getChanges.mockResolvedValue({ messages: [], deleted: [], rev: '42', people: {}, ...over })
+
+  it('draws no message again for a poll that brings nothing, though it names the same people again', async () => {
+    await show({ messages: six(), opening: opener() })
+    redrawn.length = 0
+    poll({ people: { ...PEOPLE } })
+    await settle(10_000)
+    expect(getChanges).toHaveBeenCalledTimes(1)
+    expect(redrawn).toEqual([])
+  })
+
+  it('draws no message again for people replaced by copies of themselves, however often', async () => {
+    await show({ messages: six() })
+    redrawn.length = 0
+    for (let i = 0; i < 3; i++) poll({ people: { [TOR]: { name: 'Tor Mardan', avatar: null }, [IXEN]: { name: 'Ixen Calloway', avatar: null } } }), await settle(10_000)
+    expect(getChanges).toHaveBeenCalledTimes(3)
+    expect(redrawn).toEqual([])
+  })
+
+  it('parses no message again for a poll that brings nothing', async () => {
+    await show({ messages: six(), opening: opener() })
+    const before = parse.mock.calls.length
+    poll({ people: { ...PEOPLE } })
+    await settle(10_000)
+    expect(getChanges).toHaveBeenCalledTimes(1)
+    expect(parse.mock.calls.length).toBe(before)
+  })
+
+  it('parses only the new message when a poll brings one, and draws only it (and the one it joins) fresh', async () => {
+    await show({ messages: six(), opening: opener() })
+    const before = parse.mock.calls.length
+    redrawn.length = 0
+    poll({ messages: [msg(7)] })
+    await settle(10_000)
+    // Once by the page for its layout, once by the message that is drawn: not once for each of the seven.
+    expect(parse.mock.calls.length - before).toBeLessThanOrEqual(3)
+    expect(redrawn).toEqual([])
+  })
+
+  it('draws again only the message that was edited', async () => {
+    const w = await show({ messages: six() })
+    redrawn.length = 0
+    poll({ messages: [msg(3, { content: 'Edited words' })] })
+    await settle(10_000)
+    expect(redrawn).toEqual([m(3)])
+    expect(el(w, m(3)).text()).toContain('Edited words')
+  })
+
+  it('shows a member the poll names at last in a mention that named nobody before', async () => {
+    const w = await show({ messages: [opener({ content: `hello <@${mid(412)}>` })], people: PEOPLE })
+    expect(w.find('.lb-body').text()).toContain('@unknown-member')
+    poll({ people: { [mid(412)]: { name: 'Mara Venn', avatar: null } } })
+    await settle(10_000)
+    expect(w.find('.lb-body').text()).toContain('@Mara Venn')
+    expect(w.find('.lb-body').text()).not.toContain('@unknown-member')
+  })
+
+  it('shows a name that changed, in the header of a message and in a mention', async () => {
+    const w = await show({ messages: [opener({ content: `hello <@${IXEN}>` }), msg(1)] })
+    expect(w.find('.lb-body').text()).toContain('@Ixen Calloway')
+    poll({ people: { [IXEN]: { name: 'Ixen Renamed', avatar: null }, [TOR]: { name: 'Tor Renamed', avatar: null } } })
+    await settle(10_000)
+    expect(w.find('.lb-body').text()).toContain('@Ixen Renamed')
+    expect(el(w, m(1)).find('.lb-name').text()).toBe('Tor Renamed')
+  })
+
+  it('names people the store already knew when the page was shown, though the answers name nobody', async () => {
+    const w = await show({ messages: [opener(), msg(1)], people: 'nobody', posts: [{ id: OTHER, title: 'Another Road' }], known: { [TOR]: { name: 'Known Tor', avatar: null } } })
+    expect(el(w, m(1)).find('.lb-name').text()).toBe('Known Tor')
+  })
+
+  it('follows people the store replaced while the page waits (a name that changed back too)', async () => {
+    const w = await show({ messages: [opener({ content: `hello <@${IXEN}>` })] })
+    store.people = { ...store.people, [IXEN]: { name: 'Ixen Two', avatar: null } }
+    await settle()
+    expect(w.find('.lb-body').text()).toContain('@Ixen Two')
+    store.people = { ...store.people, [IXEN]: { name: 'Ixen Calloway', avatar: null } }
+    await settle()
+    expect(w.find('.lb-body').text()).toContain('@Ixen Calloway')
+  })
+})
+
+describe('PostPage: what counts as read (G18)', () => {
+  const six = () => [msg(1), msg(2), msg(3), msg(4), msg(5), msg(6)]
+  const header = (height) => {
+    const node = document.createElement('header')
+    node.className = 'nav'
+    node.getBoundingClientRect = () => ({ top: 0, bottom: height, height })
+    document.body.append(node)
+  }
+
+  it('measures from under the site\'s header: its height is cut from the top of what the observer sees', async () => {
+    header(72)
+    await show({ messages: six() })
+    expect(live().options.rootMargin).toBe('-72px 0px 0px 0px')
+  })
+
+  it('cuts nothing when there is no header, and rounds a height that is not whole up', async () => {
+    await show({ messages: six() })
+    expect(live().options.rootMargin).toBe('0px 0px 0px 0px')
+    document.querySelectorAll('header.nav').forEach((node) => node.remove())
+    header(71.2)
+    await show({ messages: six() })
+    expect(live().options.rootMargin).toBe('-72px 0px 0px 0px')
+  })
+
+  it('cuts nothing for a header whose height is not a height above nothing', async () => {
+    for (const height of [0, -5, NaN, Infinity, undefined, null, '72']) {
+      header(height)
+      await show({ messages: six() })
+      expect(live().options.rootMargin, String(height)).toBe('0px 0px 0px 0px')
+      document.querySelectorAll('header.nav').forEach((node) => node.remove())
+    }
+  })
+
+  it('does not take for the header a header of a message or of the post', async () => {
+    const w = await show({ messages: six() })
+    expect(w.find('header').exists()).toBe(true)
+    expect(live().options.rootMargin).toBe('0px 0px 0px 0px')
+  })
+
+  it('asks to be told at each tenth of a message that comes into view or leaves, 60% among them', async () => {
+    await show({ messages: six() })
+    const { threshold } = live().options
+    expect(threshold).toContain(0)
+    expect(threshold).toContain(0.6)
+    expect(threshold).toContain(1)
+    expect([...threshold].sort((a, b) => a - b)).toEqual(threshold)
+    expect(Math.max(...threshold.slice(1).map((t, i) => t - threshold[i]))).toBeLessThanOrEqual(0.1000001)
+  })
+
+  it('reports a message that is 60% in view, and not one that is 59% in view', async () => {
+    await show({ messages: six() })
+    reportRect(m(3), { ratio: 0.59, top: 813, bottom: 913 })
+    await settle(2000)
+    expect(markRead).not.toHaveBeenCalled()
+    reportRect(m(3), { ratio: 0.6, top: 812, bottom: 912 })
+    await settle(2000)
+    expect(markRead).toHaveBeenCalledTimes(1)
+    expect(markRead).toHaveBeenCalledWith('tok', POST, m(3))
+  })
+
+  it('reports a long message once its bottom edge is in view, though far less than 60% of it is', async () => {
+    await show({ messages: six() })
+    reportRect(m(3), { ratio: 0.2, top: 700, bottom: 3700 })
+    await settle(2000)
+    expect(markRead).not.toHaveBeenCalled()
+    reportRect(m(3), { ratio: 0.25, top: -2128, bottom: 872 })
+    await settle(2000)
+    expect(markRead).toHaveBeenCalledWith('tok', POST, m(3))
+  })
+
+  it('does not report a message that only just shows at the top, under where the header was cut', async () => {
+    await show({ messages: six() })
+    reportRect(m(3), { ratio: 0.05, top: 860, bottom: 4000 })
+    await settle(2000)
+    expect(markRead).not.toHaveBeenCalled()
+  })
+
+  it('reports the newest of the messages that count, not the newest that only shows', async () => {
+    await show({ messages: six() })
+    reportRect(m(2), { ratio: 1, top: 100, bottom: 200 })
+    reportRect(m(3), { ratio: 1, top: 300, bottom: 400 })
+    reportRect(m(4), { ratio: 0.1, top: 850, bottom: 1850 })
+    await settle(2000)
+    expect(markRead).toHaveBeenCalledTimes(1)
+    expect(markRead).toHaveBeenCalledWith('tok', POST, m(3))
+  })
+
+  it('stops counting a message that has slipped to show less than that', async () => {
+    await show({ messages: six() })
+    report([m(2), m(3)])
+    reportRect(m(3), { ratio: 0.3, top: 850, bottom: 1850 })
+    await settle(2000)
+    expect(markRead).toHaveBeenCalledWith('tok', POST, m(2))
+  })
+
+  it('keeps the place to go Back to the topmost message that shows at all, counted as read or not', async () => {
+    const w = await show({ messages: six() })
+    reportRect(m(3), { ratio: 0.05, top: 70, bottom: 5000 })
+    reportRect(m(4), { ratio: 1, top: 300, bottom: 400 })
+    leave(w)
+    expect(sessionStorage.getItem(`lb-anchor:${POST}`)).toBe(m(3))
+  })
+})
+
+describe('PostPage: messages that have left are no longer watched (G19)', () => {
+  const six = () => [msg(1), msg(2), msg(3), msg(4), msg(5), msg(6)]
+  const watched = () => [...live().targets].map((e) => e.id).sort()
+
+  it('stops watching a message a poll deleted, and the others stay', async () => {
+    await show({ messages: six() })
+    const gone = document.getElementById(`m-${m(3)}`)
+    getChanges.mockResolvedValue({ messages: [], deleted: [m(3)], rev: '42', people: {} })
+    await settle(10_000)
+    expect(watched()).toEqual([m(1), m(2), m(4), m(5), m(6)].map((id) => `m-${id}`))
+    expect(live().targets.has(gone)).toBe(false)
+  })
+
+  it('stops watching the messages a jump replaced', async () => {
+    const created = '2026-09-20T12:00:00.000Z'
+    const w = await show({ post: info({ createdAt: created }), messages: six() })
+    serve(run([msg(8), msg(9)]), opener())
+    await w.findAll('.lb-rail .lb-month')[1].trigger('click')
+    await settle()
+    expect(watched()).toEqual([POST, m(8), m(9)].map((id) => `m-${id}`).sort())
+  })
+
+  it('stops watching the opening message when it is deleted', async () => {
+    await show({ messages: [msg(1)], opening: opener() })
+    expect(watched()).toContain(`m-${POST}`)
+    getChanges.mockResolvedValue({ messages: [], deleted: [POST], rev: '42', people: {} })
+    await settle(10_000)
+    expect(watched()).toEqual([`m-${m(1)}`])
+  })
+
+  it('does not count a message that has left among those in view', async () => {
+    await show({ messages: six() })
+    getChanges.mockResolvedValue({ messages: [], deleted: [m(5)], rev: '42', people: {} })
+    await settle(9000)
+    report([m(2), m(5)])
+    await settle(1000)
+    await settle(2000)
+    expect(markRead).toHaveBeenCalledTimes(1)
+    expect(markRead).toHaveBeenCalledWith('tok', POST, m(2))
+  })
+
+  it('does not count what the browser says late of a message that has left', async () => {
+    await show({ messages: six() })
+    const gone = document.getElementById(`m-${m(5)}`)
+    getChanges.mockResolvedValue({ messages: [], deleted: [m(5)], rev: '42', people: {} })
+    await settle(10_000)
+    live().callback([{ target: gone, isIntersecting: true, intersectionRatio: 1, boundingClientRect: { top: 200, bottom: 300 }, rootBounds: VIEWPORT }])
+    await settle(2000)
+    expect(markRead).not.toHaveBeenCalled()
+  })
+
+  it('does not tell the new observer to let go of messages it never watched, when the post changes', async () => {
+    const w = await show({ messages: six() })
+    getPost.mockResolvedValue({ post: info({ id: OTHER }), lastRead: null, rev: '40' })
+    serve(run([msg(8)]))
+    await w.setProps({ postId: OTHER })
+    await settle()
+    expect(live().unobserved).toEqual([])
+    expect(watched()).toEqual([`m-${m(8)}`])
+  })
+
+  it('does not keep a message that has left as the place to go Back to', async () => {
+    const w = await show({ messages: six() })
+    report([m(2), m(5)])
+    getChanges.mockResolvedValue({ messages: [], deleted: [m(2)], rev: '42', people: {} })
+    await settle(10_000)
+    leave(w)
+    expect(sessionStorage.getItem(`lb-anchor:${POST}`)).toBe(m(5))
+  })
+
+  it('keeps watching a message once, when a poll brings it back among the others', async () => {
+    await show({ messages: six() })
+    const observe = vi.spyOn(live(), 'observe')
+    getChanges.mockResolvedValue({ messages: [msg(3, { content: 'Edited' })], deleted: [], rev: '42', people: {} })
+    await settle(10_000)
+    expect(observe).not.toHaveBeenCalled()
+    expect(watched()).toHaveLength(6)
+  })
+})
+
+describe('PostPage: nothing is done for a page that has gone (G20)', () => {
+  const four = () => [msg(4), msg(5), msg(6), msg(7)]
+  const around = (slow) => (opts) => (opts.around === m(2) ? slow : run(four(), { hasOlder: true }))
+
+  it('does not scroll, nor fall over, when a link followed meanwhile is overtaken by the page being left', async () => {
+    const w = await show({ messages: four(), hasOlder: true })
+    scrolled.length = 0
+    const slow = deferred()
+    serve(around(slow.promise), opener())
+    await router.push(`/reliquarium/librarius/${POST}#m-${m(2)}`)
+    await settle()
+    leave(w)
+    slow.resolve(run([msg(1), msg(2), msg(3)]))
+    await settle(60_000)
+    expect(scrolled).toEqual([])
+    expect(errors).toEqual([])
+  })
+
+  it('does not scroll to the old post\'s message when the reader has gone to another post meanwhile', async () => {
+    const w = await show({ messages: four(), hasOlder: true })
+    const slow = deferred()
+    serve(around(slow.promise), opener())
+    await router.push(`/reliquarium/librarius/${POST}#m-${m(2)}`)
+    await settle()
+    getPost.mockResolvedValue({ post: info({ id: OTHER }), lastRead: null, rev: '40' })
+    serve(run([msg(8)]))
+    await w.setProps({ postId: OTHER })
+    await settle()
+    scrolled.length = 0
+    slow.resolve(run([msg(1), msg(2), msg(3)]))
+    await settle(60_000)
+    expect(scrolled).toEqual([])
+    expect(shownIds(w)).toEqual([m(8)])
+    expect(errors).toEqual([])
+  })
+
+  it('does not scroll, nor fall over, when the address changes in the instant before the page is left', async () => {
+    const w = await show({ messages: four() })
+    scrolled.length = 0
+    const pushed = router.push(`/reliquarium/librarius/${POST}#m-${m(5)}`)
+    leave(w)
+    await pushed
+    await settle()
+    expect(scrolled).toEqual([])
+    expect(errors).toEqual([])
+  })
+
+  it('asks for nothing for a link followed in the instant before the page is left', async () => {
+    const w = await show({ messages: four(), hasOlder: true })
+    const asked = listMessages.mock.calls.length
+    await router.push(`/reliquarium/librarius/${POST}#m-${m(2)}`)
+    leave(w)
+    await settle()
+    expect(listMessages.mock.calls).toHaveLength(asked)
+    expect(errors).toEqual([])
+  })
+
+  it('does not scroll, nor fall over, when an address changes after the page has been left', async () => {
+    const w = await show({ messages: four() })
+    leave(w)
+    scrolled.length = 0
+    await router.push(`/reliquarium/librarius/${POST}#m-${m(5)}`)
+    await settle()
+    expect(scrolled).toEqual([])
+    expect(errors).toEqual([])
+  })
+
+  it('does not scroll, nor say anything, when the page is left in the middle of a jump', async () => {
+    const created = '2026-09-20T12:00:00.000Z'
+    const w = await show({ post: info({ createdAt: created }), messages: four() })
+    const slow = deferred()
+    serve(() => slow.promise, opener())
+    await w.findAll('.lb-rail .lb-month')[1].trigger('click')
+    await settle()
+    scrolled.length = 0
+    leave(w)
+    slow.resolve(run([msg(8)]))
+    await settle(60_000)
+    expect(scrolled).toEqual([])
+    expect(errors).toEqual([])
+  })
+
+  it('does not scroll the new post to a month the old one was jumping to', async () => {
+    const created = '2026-09-20T12:00:00.000Z'
+    const w = await show({ post: info({ createdAt: created }), messages: four() })
+    const slow = deferred()
+    serve(() => slow.promise, opener())
+    await w.findAll('.lb-rail .lb-month')[1].trigger('click')
+    await settle()
+    getPost.mockResolvedValue({ post: info({ id: OTHER }), lastRead: null, rev: '40' })
+    serve(run([msg(8), msg(9)]))
+    await w.setProps({ postId: OTHER })
+    await settle()
+    scrolled.length = 0
+    slow.resolve(run([msg(1)]))
+    await settle(60_000)
+    expect(scrolled).toEqual([])
+    expect(shownIds(w)).toEqual([m(8), m(9)])
+  })
+
+  it('does not scroll, nor fall over, when the page is left while it was loading older messages', async () => {
+    const w = await show({ messages: four(), hasOlder: true })
+    const slow = deferred()
+    listMessages.mockReturnValue(slow.promise)
+    await button(w, 'Load older').trigger('click')
+    await settle()
+    leave(w)
+    slow.resolve(run([msg(1), msg(2), msg(3)]))
+    await settle(60_000)
+    expect(window.scrollBy).not.toHaveBeenCalled()
+    expect(errors).toEqual([])
+  })
+
+  it('does not put the focus into another post, when the reader goes there while older messages of this one are on their way', async () => {
+    const w = await show({ messages: four(), hasOlder: true })
+    const slow = deferred()
+    listMessages.mockReturnValue(slow.promise)
+    button(w, 'Load older').element.focus()
+    await button(w, 'Load older').trigger('click')
+    await settle()
+    getPost.mockResolvedValue({ post: info({ id: OTHER }), lastRead: null, rev: '40' })
+    serve(run([msg(8), msg(9)]))
+    await w.setProps({ postId: OTHER })
+    await settle()
+    slow.resolve(run([msg(1), msg(2), msg(3)]))
+    await settle()
+    expect(document.activeElement.classList.contains('lb-msg')).toBe(false)
+    expect(shownIds(w)).toEqual([m(8), m(9)])
+    expect(errors).toEqual([])
+  })
+
+  it('does not scroll, nor fall over, when the page is left before the post has come, whatever the address says', async () => {
+    const slow = deferred()
+    const w = await show({ messages: four(), hasOlder: true, hash: `#m-${m(2)}`, arrange: () => serve(around(slow.promise), opener()) })
+    expect(scrolled).toEqual([])
+    leave(w)
+    slow.resolve(run([msg(1), msg(2), msg(3)]))
+    await settle(60_000)
+    expect(scrolled).toEqual([])
+    expect(errors).toEqual([])
+  })
+})
+
+describe('PostPage: for a keyboard (G21)', () => {
+  const four = () => [msg(4), msg(5), msg(6), msg(7)]
+
+  it('has the rail of months before the messages in the order a keyboard goes, and no way to be after them', async () => {
+    const w = await show({ post: info({ createdAt: '2026-09-20T12:00:00.000Z' }), messages: four() })
+    const kids = [...w.find('.lb-post-body').element.children]
+    expect(kids[0]).toBe(w.find('nav.lb-rail').element)
+    expect(kids[1]).toBe(w.find('.lb-thread').element)
+  })
+
+  it('has no rail to put first when there are no months', async () => {
+    const w = await show({ messages: four() })
+    expect([...w.find('.lb-post-body').element.children]).toEqual([w.find('.lb-thread').element])
+  })
+
+  describe('when "Load older" goes', () => {
+    const older = () => run([msg(1), msg(2), msg(3)])
+
+    it('puts the focus on the first message that came, and does not move the page for it', async () => {
+      const w = await show({ messages: four(), hasOlder: true })
+      const focus = vi.spyOn(HTMLElement.prototype, 'focus')
+      button(w, 'Load older').element.focus()
+      listMessages.mockResolvedValue(older())
+      await button(w, 'Load older').trigger('click')
+      await settle()
+      expect(button(w, 'Load older')).toBeUndefined()
+      expect(document.activeElement).toBe(el(w, m(1)).element)
+      expect(focus).toHaveBeenLastCalledWith({ preventScroll: true })
+      expect(el(w, m(1)).attributes('tabindex')).toBe('-1')
+    })
+
+    it('puts it on the first of the new messages when the older page overlaps the ones held', async () => {
+      const w = await show({ messages: four(), hasOlder: true })
+      button(w, 'Load older').element.focus()
+      listMessages.mockResolvedValue(run([msg(2), msg(3), msg(4)]))
+      await button(w, 'Load older').trigger('click')
+      await settle()
+      expect(document.activeElement).toBe(el(w, m(2)).element)
+    })
+
+    it('leaves the focus alone when the reader had put it elsewhere', async () => {
+      const w = await show({ messages: four(), hasOlder: true })
+      const other = document.createElement('input')
+      document.body.append(other)
+      other.focus()
+      listMessages.mockResolvedValue(older())
+      await button(w, 'Load older').trigger('click')
+      await settle()
+      expect(document.activeElement).toBe(other)
+      other.remove()
+    })
+
+    it('leaves the focus alone when the button was not the focused thing at all (a click)', async () => {
+      const w = await show({ messages: four(), hasOlder: true })
+      listMessages.mockResolvedValue(older())
+      await button(w, 'Load older').trigger('click')
+      await settle()
+      expect(document.activeElement).toBe(document.body)
+    })
+
+    it('leaves the focus on the button while there is more to load, as it does not go', async () => {
+      const w = await show({ messages: four(), hasOlder: true })
+      button(w, 'Load older').element.focus()
+      listMessages.mockResolvedValue(run([msg(2), msg(3)], { hasOlder: true }))
+      await button(w, 'Load older').trigger('click')
+      await settle()
+      expect(button(w, 'Load older')).toBeDefined()
+      expect(document.activeElement).not.toBe(el(w, m(2)).element)
+      expect(el(w, m(2)).attributes('tabindex')).toBeUndefined()
+    })
+
+    it('moves nothing when the page could not be had', async () => {
+      const w = await show({ messages: four(), hasOlder: true })
+      button(w, 'Load older').element.focus()
+      listMessages.mockRejectedValue(apiError(503))
+      await button(w, 'Load older').trigger('click')
+      await settle()
+      expect(w.find('[role="alert"]').exists()).toBe(true)
+      expect(el(w, m(4)).attributes('tabindex')).toBeUndefined()
+    })
+
+    it('moves nothing when the older page held no message that was new', async () => {
+      const w = await show({ messages: four(), hasOlder: true })
+      button(w, 'Load older').element.focus()
+      listMessages.mockResolvedValue(run([msg(4), msg(5)]))
+      await button(w, 'Load older').trigger('click')
+      await settle()
+      expect(button(w, 'Load older')).toBeUndefined()
+      expect(shownIds(w)).toEqual([m(4), m(5), m(6), m(7)])
+      expect(document.querySelector('[tabindex="-1"].lb-msg')).toBeNull()
+    })
+
+    it('does the same when "Load newer" goes', async () => {
+      const w = await show({ messages: [msg(1), msg(2)], hasNewer: true })
+      button(w, 'Load newer').element.focus()
+      listMessages.mockResolvedValue(run([msg(3), msg(4)]))
+      await button(w, 'Load newer').trigger('click')
+      await settle()
+      expect(button(w, 'Load newer')).toBeUndefined()
+      expect(document.activeElement).toBe(el(w, m(3)).element)
     })
   })
 })

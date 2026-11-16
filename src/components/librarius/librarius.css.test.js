@@ -101,8 +101,16 @@ describe('librarius.css', () => {
 
   it('keeps the date rail inside its own box on a phone, scrolling sideways, and sticks it at the side from 900px', () => {
     expect(rule('.lb-rail')).toMatch(/overflow-x:\s*auto/)
-    expect(rule('.lb-rail')).toMatch(/order:\s*-1/)
     expect(css).toMatch(/@media \(min-width: 900px\) \{[^@]*\.lb-rail \{[^}]*position:\s*sticky/)
+  })
+
+  it('leaves the rail where the page puts it on a phone (before the thread), and moves it to the right column from 900px with the grid, not with order', () => {
+    // The rail comes first in the page, so a keyboard meets it first: nothing here reorders it.
+    expect(rule('.lb-rail')).not.toMatch(/\border\s*:/)
+    const wide = /@media \(min-width: 900px\) \{([^@]*)\}\s*(?:@media|$)/.exec(withoutComments)?.[1] ?? ''
+    expect(wide).not.toMatch(/\border\s*:/)
+    expect(wide).toMatch(/\.lb-thread \{[^}]*grid-column:\s*1[^}]*grid-row:\s*1/)
+    expect(wide).toMatch(/\.lb-rail \{[^}]*grid-column:\s*2[^}]*grid-row:\s*1/)
   })
 
   it('has no hover rule outside the real-pointer media query: nothing depends on hover', () => {
