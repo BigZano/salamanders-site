@@ -14,7 +14,8 @@
  *   and a message dated before it does not), neither an article, and not itself a reply.
  * excerpt(content, max = 120) → the plain text of the content with every run of white space made one space, and cut
  *   with "…" so that it is no more than `max` characters (code points: no pair is cut in two). `max` is a whole number
- *   from 1; anything else is a RangeError.
+ *   from 1; anything else is a RangeError. An excerpt is a preview, and a preview never shows a spoiler: each spoiler,
+ *   wherever it sits (in bold, a quote, a list, a link's label), is "▒▒▒" whatever it hides, and the cut is made after.
  * firstUnread(messages, lastRead) → the id of the first message in the list that is newer than `lastRead`, or null.
  *   `lastRead` null or undefined means the reader has read nothing: null, and there is no divider.
  * railMonths(createdAt, lastAt) → [{ label: 'Nov 2026', at: Date }], one for each UTC month from the one of `createdAt`
@@ -33,6 +34,7 @@ const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', '
 const ID = /^\d{1,20}$/
 const IMAGE = /^image\//i
 const WHITE_SPACE = /\s+/g
+const SPOILER_MASK = '▒▒▒'
 
 /** Whether an attachment is a picture, by its content type. */
 export const isImage = (attachment) => typeof attachment.contentType === 'string' && IMAGE.test(attachment.contentType)
@@ -79,10 +81,20 @@ export function groupMessages(messages) {
   })
 }
 
-/** → the first line of a message as plain text, white space collapsed, at most `max` characters. */
+/** → a copy of the nodes with each spoiler, nested ones included, made a text node of the mask. */
+function maskSpoilers(nodes) {
+  return nodes.map((node) => {
+    if (node.type === 'spoiler') return { type: 'text', value: SPOILER_MASK }
+    if (node.children) return { ...node, children: maskSpoilers(node.children) }
+    if (node.items) return { ...node, items: node.items.map((item) => ({ ...item, children: maskSpoilers(item.children) })) }
+    return node
+  })
+}
+
+/** → the first line of a message as plain text, spoilers masked, white space collapsed, at most `max` characters. */
 export function excerpt(content, max = 120) {
   if (!Number.isSafeInteger(max) || max < 1) throw new RangeError('The length of an excerpt is a whole number from 1.')
-  const text = plainText(parse(content)).replace(WHITE_SPACE, ' ').trim()
+  const text = plainText(maskSpoilers(parse(content))).replace(WHITE_SPACE, ' ').trim()
   const characters = Array.from(text)
   if (characters.length <= max) return text
   return characters.slice(0, max - 1).join('').trimEnd() + '…'

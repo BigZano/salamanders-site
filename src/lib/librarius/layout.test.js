@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest'
 import fc from 'fast-check'
-import { parse, plainText } from '../archive/markdown'
+import { parse, plainText, walk } from '../archive/markdown'
 import { isArticle, groupMessages, excerpt, firstUnread, railMonths, isImage } from './layout'
 
 // Invented ids only (the 200000000000000400 range), and invented names.
@@ -362,10 +362,18 @@ describe('excerpt', () => {
     expect(Array.from(out).length).toBeLessThanOrEqual(120)
   })
 
-  it('is the plain text of the parse, collapsed and cut, whatever the content', () => {
+  it('is the plain text of the parse, spoilers masked, collapsed and cut, whatever the content', () => {
+    // The model: the same parse with each spoiler turned into the mask in place, read by the archive's plainText.
+    const maskedText = (content) => {
+      const nodes = parse(content)
+      walk(nodes, (node) => {
+        if (node.type === 'spoiler') Object.assign(node, { type: 'text', value: '▒▒▒', children: undefined })
+      })
+      return plainText(nodes).replace(/\s+/g, ' ').trim()
+    }
     fc.assert(
       fc.property(fc.string({ maxLength: 400 }), fc.integer({ min: 1, max: 150 }), (content, max) => {
-        const full = plainText(parse(content)).replace(/\s+/g, ' ').trim()
+        const full = maskedText(content)
         const chars = Array.from(full)
         const out = excerpt(content, max)
         expect(Array.from(out).length).toBeLessThanOrEqual(max)
@@ -374,6 +382,117 @@ describe('excerpt', () => {
         expect(out).not.toMatch(/\s{2}|^\s|\s$/)
       }),
     )
+    // The same over text that has spoilers in it, which a random string rarely does.
+    const piece = fc.constantFrom('||a b||', 'x', '**||c||**', '~~d~~', '||', '`||e||`', '\\||f||', '> ||g||', '- ||h||', '# ||i||', ' ', '\n')
+    fc.assert(
+      fc.property(fc.array(piece, { maxLength: 30 }), fc.integer({ min: 1, max: 40 }), (pieces, max) => {
+        const content = pieces.join('')
+        const chars = Array.from(maskedText(content))
+        const expected = chars.length <= max ? chars.join('') : chars.slice(0, max - 1).join('').trimEnd() + '…'
+        expect(excerpt(content, max)).toBe(expected)
+      }),
+    )
+  })
+
+  describe('with a spoiler in the text', () => {
+    const MASK = '▒▒▒'
+
+    it('shows the mask in its place, and never what it hides', () => {
+      expect(excerpt('||secret||')).toBe(MASK)
+      expect(excerpt('before ||secret|| after')).toBe(`before ${MASK} after`)
+      expect(excerpt('||one|| and ||two||')).toBe(`${MASK} and ${MASK}`)
+    })
+
+    it('is the same mask whatever the length of the secret', () => {
+      expect(excerpt('||a||')).toBe(MASK)
+      expect(excerpt(`||${'long secret '.repeat(30)}||`)).toBe(MASK)
+    })
+
+    it('masks a spoiler with markup, a link, a mention, an emoji or code inside', () => {
+      for (const inner of ['**secret**', '__secret__', '~~secret~~', '*secret*', '`secret`', 'https://secret.example/x', '[secret](https://secret.example/x)', '<@200000000000000410> secret', '<:secret:200000000000000430>', '<#200000000000000401>', '***secret***']) {
+        expect(excerpt(`a ||${inner}|| b`), inner).toBe(`a ${MASK} b`)
+      }
+    })
+
+    it('masks a spoiler inside bold, italics, underline and strikethrough', () => {
+      expect(excerpt('**bold ||secret|| more**')).toBe(`bold ${MASK} more`)
+      expect(excerpt('*it ||secret|| ic*')).toBe(`it ${MASK} ic`)
+      expect(excerpt('__under ||secret|| line__')).toBe(`under ${MASK} line`)
+      expect(excerpt('~~strike ||secret|| out~~')).toBe(`strike ${MASK} out`)
+      expect(excerpt('***both ||secret|| styles***')).toBe(`both ${MASK} styles`)
+      expect(excerpt('**bold __under ~~strike ||secret|| x~~ x__ x**')).toBe(`bold under strike ${MASK} x x x`)
+    })
+
+    it('masks a spoiler in the label of a link', () => {
+      expect(excerpt('[go ||secret|| now](https://example.org/a)')).toBe(`go ${MASK} now`)
+    })
+
+    it('masks a spoiler inside a quote, a heading, a subtext and a list, nested ones too', () => {
+      expect(excerpt('> quoted ||secret||')).toBe(`quoted ${MASK}`)
+      expect(excerpt('>>> quoted\n||secret|| here')).toBe(`quoted ${MASK} here`)
+      expect(excerpt('# Title ||secret||')).toBe(`Title ${MASK}`)
+      expect(excerpt('-# small ||secret||')).toBe(`small ${MASK}`)
+      expect(excerpt('- one ||secret||\n- two')).toBe(`one ${MASK} two`)
+      expect(excerpt('- one\n  - deeper ||secret||\n    - deepest ||secret||')).toBe(`one deeper ${MASK} deepest ${MASK}`)
+      expect(excerpt('1. first ||secret||\n2. second')).toBe(`first ${MASK} second`)
+      expect(excerpt('> - in a quote ||secret|| list')).toBe(`in a quote ${MASK} list`)
+      expect(excerpt('- # heading ||secret|| in a list')).toBe(`heading ${MASK} in a list`)
+    })
+
+    it('does not mask what is not a spoiler', () => {
+      expect(excerpt('only one || bar')).toBe('only one || bar')
+      expect(excerpt('escaped \\||not a spoiler\\||')).toBe('escaped ||not a spoiler||')
+      expect(excerpt('`||in code||`')).toBe('||in code||')
+      expect(excerpt('```\n||in a block||\n```')).toBe('||in a block||')
+    })
+
+    it('does not show the secret when the cut falls in front of, in, or behind the mask', () => {
+      const lead = 'a'.repeat(117)
+      // 117 + a space + the mask is 121 characters: the cut lands inside the mask.
+      expect(excerpt(`${lead} ||secret||`)).toBe(`${lead} ▒…`)
+      expect(excerpt(`${lead} ||secret|| and more`)).toBe(`${lead} ▒…`)
+      // The cut lands in front of the mask.
+      expect(excerpt(`${'a'.repeat(130)} ||secret||`)).toBe(`${'a'.repeat(119)}…`)
+      // The mask fits, and the text behind it is cut.
+      expect(excerpt(`${'a'.repeat(100)} ||secret|| ${'b'.repeat(100)}`)).toBe(`${'a'.repeat(100)} ${MASK} ${'b'.repeat(14)}…`)
+      expect(excerpt('||secret||', 2)).toBe('▒…')
+      expect(excerpt('||secret||', 3)).toBe(MASK)
+      expect(excerpt('||secret||', 1)).toBe('…')
+    })
+
+    it('never lets what a spoiler hides reach the excerpt, for any text around it and any length', () => {
+      // A secret begins with ZQ and plain text is digits, so no word of the plain text can be mistaken for one.
+      const secret = fc.stringMatching(/^[a-z]{4,10}$/).map((word) => `ZQ${word}`)
+      const plain = fc.stringMatching(/^[0-9]{1,8}$/)
+      const spoiler = secret.map((word) => ({ text: `||${word}||`, spoilers: 1 }))
+      const wrapped = fc.tuple(secret, fc.constantFrom('**', '__', '~~', '*', '_')).map(([word, mark]) => ({ text: `${mark}7 ||${word}|| x${mark}`, spoilers: 1 }))
+      const linked = secret.map((word) => ({ text: `[a ||${word}|| b](https://example.org/${'q'.repeat(3)})`, spoilers: 1 }))
+      const rich = secret.map((word) => ({ text: `||**${word}** https://${word.toLowerCase()}.example <@200000000000000410> \`${word}\`||`, spoilers: 1 }))
+      const words = plain.map((text) => ({ text, spoilers: 0 }))
+      const piece = fc.oneof(spoiler, wrapped, linked, rich, words)
+      const prefix = fc.constantFrom('', '', '> ', '- ', '1. ', '# ', '-# ')
+      const line = fc.tuple(prefix, fc.array(piece, { minLength: 1, maxLength: 5 })).map(([lead, pieces]) => ({
+        text: lead + pieces.map((p) => p.text).join(' '),
+        spoilers: pieces.reduce((n, p) => n + p.spoilers, 0),
+      }))
+      fc.assert(
+        fc.property(fc.array(line, { minLength: 1, maxLength: 6 }), fc.integer({ min: 1, max: 200 }), (lines, max) => {
+          const content = lines.map((l) => l.text).join('\n')
+          expect(excerpt(content, max)).not.toMatch(/ZQ|zq/)
+          const all = excerpt(content, 100_000)
+          expect(all).not.toMatch(/ZQ|zq|secret/i)
+          expect(all.split(MASK).length - 1).toBe(lines.reduce((n, l) => n + l.spoilers, 0))
+        }),
+        { numRuns: 300 },
+      )
+    })
+
+    it('is quick on a hostile run of spoilers', () => {
+      const start = performance.now()
+      const out = excerpt('||x||'.repeat(800))
+      expect(performance.now() - start).toBeLessThan(200)
+      expect(out).toBe('▒'.repeat(119) + '…')
+    })
   })
 })
 

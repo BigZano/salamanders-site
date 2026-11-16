@@ -207,6 +207,12 @@ describe('LibMessage: the reply line', () => {
     expect(w.find('.lb-reply strong').exists()).toBe(false)
   })
 
+  it('masks a spoiler in the quote, so the line never shows what it hides', () => {
+    const w = mountMsg(message({ replyTo: replyTo({ content: 'the answer is ||the secret|| and **||more secret||**' }) }))
+    expect(w.find('.lb-reply').text()).toBe('↪ replying to Ixen Calloway: the answer is ▒▒▒ and ▒▒▒')
+    expect(w.find('.lb-reply').text()).not.toContain('secret')
+  })
+
   it('names the author the page knows now, else the one stored with the quote', () => {
     expect(mountMsg(message({ replyTo: replyTo({ authorId: TOR, authorName: 'Old Name' }) })).find('.lb-reply-name').text()).toBe('Tor Mardan')
     expect(mountMsg(message({ replyTo: replyTo({ authorId: '200000000000000499', authorName: 'Ghost' }) })).find('.lb-reply-name').text()).toBe('Ghost')
