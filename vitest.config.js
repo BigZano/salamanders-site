@@ -74,6 +74,7 @@ const GATED = [
   'src/stores/asking.js',
   'src/lib/librarius/places.js',
   'src/stores/librarius.js',
+  'scripts/csp.mjs',
 ]
 
 export default defineConfig({

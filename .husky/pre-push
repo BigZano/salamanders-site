@@ -5,6 +5,8 @@ export PATH="$PWD/node_modules/.bin:$PATH"
 bun run test || exit 1
 bun run test:coverage || exit 1
 bun run test:mutation || exit 1
+# The Content-Security-Policy the build puts in index.html: present, listing every inline script, no unsafe-eval or wildcard host.
+bun run build >/dev/null && node scripts/check-csp.mjs dist || exit 1
 if [ -d archive-export ]; then
   bun run build >/dev/null && node scripts/scan-dist.mjs dist --sentinels-from archive-export || exit 1
 fi

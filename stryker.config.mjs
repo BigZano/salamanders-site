@@ -75,6 +75,7 @@ export default {
     'src/stores/asking.js',
     'src/lib/librarius/places.js',
     'src/stores/librarius.js',
+    'scripts/csp.mjs',
   ],
   coverageAnalysis: 'perTest',
   thresholds: { high: 100, low: 100, break: 100 },

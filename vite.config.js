@@ -1,7 +1,8 @@
-import { defineConfig } from 'vite'
+import { defineConfig, loadEnv } from 'vite'
 import vue from '@vitejs/plugin-vue'
 import tailwindcss from '@tailwindcss/vite'
 import { existsSync, readFileSync } from 'node:fs'
+import { cspMetaPlugin } from './scripts/csp.mjs'
 
 // Legion Archive: only the key id travels in the bundle (to detect a
 // stale page), never the key. ARCHIVE_LOCK / VITE_ARCHIVE_BASE let the
@@ -10,13 +11,15 @@ const lockPath = process.env.ARCHIVE_LOCK || 'archive.lock.json'
 const archiveLock = existsSync(lockPath) ? JSON.parse(readFileSync(lockPath, 'utf8')) : null
 
 // https://vite.dev/config/
-export default defineConfig({
+export default defineConfig(({ mode }) => ({
   // Root-absolute: the site now lives at sm2salamanders.site's root,
   // not a GitHub-Pages-project subpath, and history-mode routing (see
   // router.js) needs an absolute base to match against location.pathname.
   // Override with SITE_BASE if that ever changes.
   base: process.env.SITE_BASE || '/',
-  plugins: [vue(), tailwindcss()],
+  // The Content-Security-Policy (scripts/csp.mjs), added to the built index.html only. The builds API is the one origin
+  // the policy takes from the environment: it is a deploy setting (see buildsApi.js).
+  plugins: [vue(), tailwindcss(), cspMetaPlugin({ apiUrl: loadEnv(mode, process.cwd(), 'VITE_').VITE_BUILDS_API_URL })],
   define: {
     __ARCHIVE_KID__: JSON.stringify(archiveLock?.kid ?? null),
     __ARCHIVE_BASE__: JSON.stringify(process.env.VITE_ARCHIVE_BASE || '/archive/'),
@@ -34,4 +37,4 @@ export default defineConfig({
       ? process.env.VITE_ALLOWED_HOSTS.split(',')
       : undefined,
   },
-})
+}))
