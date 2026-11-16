@@ -42,6 +42,10 @@ const HEAD_ELEMENTS = new Set(['meta', 'noscript', 'style', 'template', 'title']
 const ACTS_BEFORE_THE_POLICY = new Set(['script', 'link', 'base'])
 // All a browser reads of the start of a page to find its character encoding.
 const CHARSET_WINDOW = 1024
+// A character that is not white space to HTML (which has only tab, line feed, form feed, carriage return and space: not the
+// no-break space or a vertical tab, which JavaScript's trim() and \s take for white space), and a doctype, which is ignored.
+const NOT_HTML_SPACE = /[^\t\n\f\r ]/
+const DOCTYPE = /<!doctype[^>]*>/gi
 
 /** → [[directive name, [source, …]], …] for a policy, names in lower case. (An empty directive is a name of '' and no sources.) */
 const directivesOf = (policy) =>
@@ -72,12 +76,16 @@ function policyFaults(policy, hashes) {
   return faults
 }
 
-/** → what is wrong with the nodes of the head that come before a policy meta. */
+/**
+ * → what is wrong with some nodes that come before a policy meta (in the head, or before the head, in <html> or ahead of it):
+ * text that is not white space and an element a head cannot hold start the body, and a <script>, <link> or <base> acts before
+ * the policy does. (A browser starts a head of its own for what comes ahead of <head>.)
+ */
 function placementFaults(before) {
   const faults = []
   for (const node of before) {
     if (node.nodeType === NodeType.TEXT_NODE) {
-      if (node.rawText.trim() !== '') faults.push('text comes before the policy meta, which ends the head: a browser puts the meta in the body, and ignores it')
+      if (NOT_HTML_SPACE.test(node.rawText.replace(DOCTYPE, ''))) faults.push('text comes before the policy meta, which ends the head: a browser puts the meta in the body, and ignores it')
     } else {
       // (The parser leaves comments out, so what is not text is an element.)
       const tag = node.tagName.toLowerCase()
@@ -89,6 +97,19 @@ function placementFaults(before) {
 }
 
 // (A text node has no tag name.)
+/** → what is wrong with where a head sits: what comes before it, at each level up to the page, and any element it is inside. */
+function headFaults(head) {
+  const faults = []
+  for (let node = head; node.parentNode !== null; node = node.parentNode) {
+    const parent = node.parentNode
+    if (parent.tagName && parent.tagName !== 'HTML') {
+      faults.push(`the <head> is inside <${parent.tagName.toLowerCase()}>, where a browser ignores the tag: the policy meta is then in the body, and ignored`)
+    }
+    faults.push(...placementFaults(parent.childNodes.slice(0, parent.childNodes.indexOf(node))))
+  }
+  return faults
+}
+
 const isPolicyMeta = (node) => node.tagName === 'META' && node.getAttribute('http-equiv')?.toLowerCase() === 'content-security-policy'
 
 /** → what is wrong with one page's policy, as sentences. */
@@ -102,6 +123,7 @@ function pageFaults(html) {
   if (charset !== undefined && Buffer.byteLength(html.slice(0, charset.range[1])) > CHARSET_WINDOW) {
     faults.push(`the <meta charset> declaration ends past byte ${CHARSET_WINDOW}, which is all a browser reads for it`)
   }
+  faults.push(...headFaults(head))
   const hashes = inlineScriptHashes(html)
   for (const meta of policies) {
     // Stryker disable next-line StringLiteral: a meta with no content is read as a policy with no directives, and any text with none reads the same

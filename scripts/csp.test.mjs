@@ -215,11 +215,28 @@ describe('inlineScriptHashes, where the scanner and a browser part', () => {
     expect(inlineScriptHashes(`${page}<script>other()</script>`)).toEqual([])
   })
 
+  it('reads a tag whose attribute value is unquoted but holds a quote as opening a quoted value, so what is in between is read as part of the tag: the scripts there are blocked', async () => {
+    // A browser ends <meta a=b"c> at its ">", and runs the script after it. The scanner's quote runs to the next one, past it.
+    expect(inlineScriptHashes(`<head><meta a=b"c><script>${RAN}</script><p title=q" x></head>`)).toEqual([])
+    expect(inlineScriptHashes(`<head><meta a=b'c><script>${RAN}</script><p title=q' x></head>`)).toEqual([])
+    // With no later quote to close it, the tag is not read as a tag at all, and a script that is that tag is not read.
+    expect(inlineScriptHashes(`<head><script a=b"c>${RAN}</script></head>`)).toEqual([])
+    // And the tags after it are read again as soon as the quote is closed.
+    expect(inlineScriptHashes(`<head><meta a=b"c><script>${RAN}</script><p title=q" x><script></script></head>`)).toEqual([await sha256('')])
+  })
+
   it('takes the text of a script in double-escaped script data only up to the first end tag, so the browser hashes more and blocks it', async () => {
     const page = '<script><!-- <script>a</script> b</script> -->c</script>'
     const browserText = '<!-- <script>a</script> b'
     expect(inlineScriptHashes(page)).toEqual([await sha256('<!-- <script>a')])
     expect(inlineScriptHashes(page)).not.toContain(await sha256(browserText))
+  })
+
+  it('can read a script in double-escaped data as two, hashing the second, which only allows text the author wrote', async () => {
+    // To a browser this is one script, <!--<script>X</script><script>Y</script>-->Z; the scanner ends the first at the first end tag.
+    const page = '<script><!--<script>X</script><script>Y</script>-->Z</script>'
+    expect(inlineScriptHashes(page)).toEqual([await sha256('<!--<script>X'), await sha256('Y')])
+    expect(inlineScriptHashes(page)).not.toContain(await sha256('<!--<script>X</script><script>Y</script>-->Z'))
   })
 
   it('hashes a NUL as it is, where a browser reads U+FFFD, so the browser hashes another text and blocks it', async () => {
