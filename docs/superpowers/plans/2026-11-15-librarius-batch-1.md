@@ -1057,8 +1057,9 @@ object-src 'none'; base-uri 'none'; form-action 'self'; manifest-src 'self'
 
 - [ ] **Step 1:** `bun run test && bun run test:coverage && bun run test:mutation`. Expect 100% on every gated
   file, the new ones included.
-- [ ] **Step 2: Scrub.** `git diff origin/main --stat` and `git grep -n -E
-  '<the owner-held patterns>'` give no hits. Check every name in tests and fixtures
+- [ ] **Step 2: Scrub.** `git diff origin/main --stat` and `git grep -n -E` for the real
+  Discord channel id, the real verifier bot name and the real forum names (the owner holds the list; none of them
+  may be written into this repo, this plan included) give no hits. Check every name in tests and fixtures
   against the memory rule `no-real-member-names-in-repo`.
 - [ ] **Step 3:** Run `superpowers:requesting-code-review` on the branch, and fix what holds up.
 - [ ] **Step 4:** Report to the owner:
