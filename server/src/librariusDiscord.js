@@ -13,32 +13,52 @@
  * message(channelId, id) → the raw message, or null (404 Unknown Message, code 10008; any other 404 is Upstream).
  * emojis() → the guild's raw emoji.
  * refreshUrls(urls) → Map of each link Discord refreshed to its new one. At most 50 links, or RangeError. A link
- *   Discord did not refresh is not in the Map.
+ *   Discord did not refresh is not in the Map, and neither is one it answered with that is not on Discord's CDN
+ *   attachments path: a refreshed link is stored and handed to a browser, so it has to pass the check an attachment's
+ *   url passes when a message is parsed (attachmentUrl, in librariusParse), and it comes back as that check
+ *   normalises it. The caller's old link stays for any that is left out.
+ * withMaxWait(ms) → the same client, for a caller that will wait that long for its turn (see below). It has every call
+ *   above and shares everything with this client: the calls a second, what it knows of the buckets and a pause for a
+ *   global 429. It is the only difference.
  *
  * Ids are strings of 17 to 20 digits, a limit is a whole number from 1 to 100, and anything else is a TypeError or
  * RangeError before a request: an id goes into the url, so it must be nothing but digits.
  *
  * Rate limits, so the Librarius never crowds the other features off Discord's 50 calls a second:
  * - At most `perSecond` calls in any second across the whole client, counting retries and calls that fail. A call
- *   that would be one too many waits for the oldest of the last `perSecond` to be a second old.
+ *   that would be one too many waits for the oldest of the last `perSecond` to be a second old, unless that is more than
+ *   `maxWaitMs` (5 seconds unless the options say otherwise) away: then it is an Upstream at once, which sends nothing
+ *   and takes no place in the queue. Without that, calls made faster than they can go would queue for ever. A caller
+ *   that can wait longer, such as the import, asks for `withMaxWait(ms)`. A wait for a bucket or for a 429 is not
+ *   counted against `maxWaitMs`: each has its own cap of 30 seconds.
  * - Discord says which bucket an answer counted against (X-RateLimit-Bucket). The client remembers the bucket of each
  *   route; when an answer says none are left (X-RateLimit-Remaining 0), the next call to that bucket waits
  *   X-RateLimit-Reset-After seconds. A bucket is the name Discord gives plus the channel or guild in the path, which
  *   Discord counts apart. A route is the method and path with the message id left out of it, so every message of a
  *   channel is one route; the query is not part of it.
  * - A 429 waits Retry-After seconds and retries once; a second 429 is Upstream. No wait is longer than 30 seconds, so
- *   a header that says an hour cannot park the Librarius. A missing or odd header waits a second.
+ *   a header that says an hour cannot park the Librarius. A missing or odd header waits a second. A 429 that says it is
+ *   global (X-RateLimit-Global: true) is Discord's limit for the whole bot, not for one route, so every call made
+ *   in that time waits for it too, not only the one that was refused.
+ *
+ * gatewayBot() takes the address only as one the gateway client can connect to: wss://, or ws:// as well when apiBase
+ * is http:// (the e2e mock), and a session start limit that resets in more than a day (the longest window Discord
+ * uses) is not Discord talking.
  *
  * Every failure is Upstream, whose message names a status at most: never the token, a url or anything Discord said.
  * That covers a network error or a timeout, a status other than 200, a reply that is not the JSON it should be, and a
  * client that is not configured (an empty apiBase or botToken, or a guildId that is not an id).
  */
 import { Upstream } from './discordRoles.js'
+import { attachmentUrl } from './librariusParse.js'
+import { isId } from './librariusText.js'
 
-const SNOWFLAKE = /^\d{17,20}$/
 // An after cursor is a message id, or '0' for before the first message.
 const CURSOR = /^\d{1,20}$/
-const GATEWAY_URL = /^wss?:\/\//
+const WSS_ONLY = /^wss:\/\//
+const WS_OR_WSS = /^wss?:\/\//
+// The longest window Discord resets a session start limit in.
+const MAX_SESSION_RESET_MS = 86_400_000
 const MAX_WAIT_S = 30
 const WINDOW_MS = 1000
 const MAX_PAGE = 100
@@ -52,7 +72,12 @@ const refused = (status, what) => new Upstream(`Discord answered ${status} for $
 const unusable = (what) => new Upstream(`Discord answered 200 for ${what}, but not with what the Librarius expected.`)
 
 function needId(value, name) {
-  if (typeof value !== 'string' || !SNOWFLAKE.test(value)) throw new TypeError(`${name} must be a Discord id.`)
+  if (!isId(value)) throw new TypeError(`${name} must be a Discord id.`)
+}
+
+function needMaxWait(ms) {
+  if (!Number.isFinite(ms) || ms < 0) throw new RangeError('maxWaitMs must be a number of at least 0.')
+  return ms
 }
 
 function needLimit(limit) {
@@ -74,9 +99,11 @@ export function createLibrariusDiscord({
   sleep = (ms) => new Promise((r) => setTimeout(r, ms)),
   now = Date.now,
   perSecond = 5,
+  maxWaitMs = 5_000,
 }) {
   if (!Number.isSafeInteger(perSecond) || perSecond < 1) throw new RangeError('perSecond must be a whole number of at least 1.')
-  const configured = [apiBase, botToken].every((v) => typeof v === 'string' && v !== '') && typeof guildId === 'string' && SNOWFLAKE.test(guildId)
+  needMaxWait(maxWaitMs)
+  const configured = [apiBase, botToken].every((v) => typeof v === 'string' && v !== '') && isId(guildId)
 
   // When each of the last perSecond calls goes (or went) out, oldest first. A call takes its place here before it waits
   // for it, so calls made together are spaced out and do not all see the same free second.
@@ -84,6 +111,8 @@ export function createLibrariusDiscord({
   // The bucket each route was last counted against, and when each bucket that had none left opens again.
   const bucketOf = new Map()
   const opensAt = new Map()
+  // When a global 429 lets every call go again, on the clock `now` reads.
+  let pausedUntil = 0
 
   async function request(url, init) {
     try {
@@ -94,14 +123,18 @@ export function createLibrariusDiscord({
     }
   }
 
-  async function waitForBucket(routeKey) {
-    const wait = (opensAt.get(bucketOf.get(routeKey)) ?? 0) - now()
+  // Waits for the global pause and for the route's bucket, whichever opens later.
+  async function waitForOpening(routeKey) {
+    const opens = Math.max(pausedUntil, opensAt.get(bucketOf.get(routeKey)) ?? 0)
+    const wait = opens - now()
     if (wait > 0) await sleep(wait)
   }
 
-  async function waitForTurn() {
+  async function waitForTurn(maxWait) {
     const t = now()
     const due = sends.length < perSecond ? t : Math.max(t, sends[0] + WINDOW_MS)
+    // Before the place is taken, so that a call turned away leaves the queue as it was.
+    if (due - t > maxWait) throw new Upstream('Too many Librarius calls are waiting to reach Discord.')
     sends.push(due)
     if (sends.length > perSecond) sends.shift()
     if (due > t) await sleep(due - t)
@@ -117,13 +150,13 @@ export function createLibrariusDiscord({
     if (Number.parseFloat(res.headers.get('X-RateLimit-Remaining')) === 0) opensAt.set(key, now() + waitMs(res, 'X-RateLimit-Reset-After'))
   }
 
-  /** One call, within the limits. → { status, json }, json null when the body is not JSON. Never a 429. */
-  async function send(method, path, { route = path.split('?')[0], headers, body } = {}) {
+  /** One call, within the limits and willing to wait `maxWait` ms for its turn. → { status, json }, json null when the body is not JSON. Never a 429. */
+  async function sendWithin(maxWait, method, path, { route = path.split('?')[0], headers, body } = {}) {
     if (!configured) throw new Upstream('Librarius reads are not configured.')
     const routeKey = `${method} ${route}`
     for (let attempt = 1; ; attempt++) {
-      await waitForBucket(routeKey)
-      await waitForTurn()
+      await waitForOpening(routeKey)
+      await waitForTurn(maxWait)
       // The timeout starts here, so neither a wait for a turn nor an earlier try uses any of it up.
       const res = await request(`${apiBase}${path}`, {
         method,
@@ -134,113 +167,130 @@ export function createLibrariusDiscord({
       learn(routeKey, route, res)
       // Stryker disable next-line ArrowFunction: a body that is not JSON reads as null or as undefined; every reader treats the two alike
       if (res.status !== 429) return { status: res.status, json: await res.json().catch(() => null) }
+      const retryAfter = waitMs(res, 'Retry-After')
+      // A global limit is Discord's for the whole bot, so every call waits it out, not only this one.
+      if (res.headers.get('X-RateLimit-Global') === 'true') pausedUntil = Math.max(pausedUntil, now() + retryAfter)
       await res.body?.cancel()
       if (attempt === 2) throw new Upstream('Discord is rate limiting the Librarius.')
-      await sleep(waitMs(res, 'Retry-After'))
+      await sleep(retryAfter)
     }
   }
 
-  async function getOk(path, what) {
-    const { status, json } = await send('GET', path)
-    if (status !== 200) throw refused(status, what)
-    return json
-  }
+  /** The calls, for a caller that will wait `maxWait` ms for its turn. They all share the state above. */
+  function reader(maxWait) {
+    const send = (method, path, options) => sendWithin(maxWait, method, path, options)
 
-  async function getObject(path, what) {
-    const json = await getOk(path, what)
-    if (!isObject(json)) throw unusable(what)
-    return json
-  }
-
-  async function getList(path, what) {
-    const json = await getOk(path, what)
-    if (!isList(json)) throw unusable(what)
-    return json
-  }
-
-  const guildPath = `/v10/guilds/${guildId}`
-  const messagesPath = (channelId) => `/v10/channels/${channelId}/messages`
-
-  return {
-    async gatewayBot() {
-      const body = await getObject('/v10/gateway/bot', 'the gateway')
-      const limit = body.session_start_limit
-      if (
-        typeof body.url !== 'string' ||
-        !GATEWAY_URL.test(body.url) ||
-        !isObject(limit) ||
-        !Number.isSafeInteger(limit.remaining) ||
-        limit.remaining < 0 ||
-        !Number.isFinite(limit.reset_after) ||
-        limit.reset_after < 0
-      ) {
-        throw unusable('the gateway')
-      }
-      return { url: body.url, remaining: limit.remaining, resetAfterMs: limit.reset_after }
-    },
-
-    guild: () => getObject(guildPath, 'the guild'),
-
-    async channel(id) {
-      needId(id, 'channelId')
-      return getObject(`/v10/channels/${id}`, 'a channel')
-    },
-
-    async activeThreads() {
-      const body = await getObject(`${guildPath}/threads/active`, 'the active threads')
-      if (!isList(body.threads)) throw unusable('the active threads')
-      return body.threads
-    },
-
-    async archivedThreads(forumId, before) {
-      needId(forumId, 'forumId')
-      if (before !== null && (typeof before !== 'string' || Number.isNaN(Date.parse(before)))) throw new TypeError('before must be a time, or null.')
-      const after = before === null ? '' : `&before=${encodeURIComponent(before)}`
-      const body = await getObject(`/v10/channels/${forumId}/threads/archived/public?limit=${MAX_PAGE}${after}`, 'the archived threads')
-      if (!isList(body.threads) || typeof body.has_more !== 'boolean') throw unusable('the archived threads')
-      return { threads: body.threads, hasMore: body.has_more }
-    },
-
-    async messagesAfter(channelId, afterId, limit = MAX_PAGE) {
-      needId(channelId, 'channelId')
-      if (typeof afterId !== 'string' || !CURSOR.test(afterId)) throw new TypeError('afterId must be a message id, or 0.')
-      needLimit(limit)
-      const page = await getList(`${messagesPath(channelId)}?limit=${limit}&after=${afterId}`, 'a page of messages')
-      return page.reverse()
-    },
-
-    async newest(channelId, limit = MAX_PAGE) {
-      needId(channelId, 'channelId')
-      needLimit(limit)
-      return getList(`${messagesPath(channelId)}?limit=${limit}`, 'a page of messages')
-    },
-
-    async message(channelId, id) {
-      needId(channelId, 'channelId')
-      needId(id, 'messageId')
-      const { status, json } = await send('GET', `${messagesPath(channelId)}/${id}`, { route: `${messagesPath(channelId)}/:id` })
-      // Only Unknown Message means the message is gone; any other 404 (Unknown Channel, say) would
-      // otherwise read as every message deleted.
-      if (status === 404 && json?.code === UNKNOWN_MESSAGE) return null
-      if (status !== 200) throw refused(status, 'a message')
-      if (!isObject(json)) throw unusable('a message')
+    async function getOk(path, what) {
+      const { status, json } = await send('GET', path)
+      if (status !== 200) throw refused(status, what)
       return json
-    },
+    }
 
-    emojis: () => getList(`${guildPath}/emojis`, 'the emoji'),
+    async function getObject(path, what) {
+      const json = await getOk(path, what)
+      if (!isObject(json)) throw unusable(what)
+      return json
+    }
 
-    async refreshUrls(urls) {
-      if (!Array.isArray(urls) || !urls.every((u) => typeof u === 'string')) throw new TypeError('urls must be a list of strings.')
-      if (urls.length > MAX_REFRESH) throw new RangeError(`At most ${MAX_REFRESH} links can be refreshed at once.`)
-      if (urls.length === 0) return new Map()
-      const { status, json } = await send('POST', '/v10/attachments/refresh-urls', {
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ attachment_urls: urls }),
-      })
-      if (status !== 200) throw refused(status, 'an attachment refresh')
-      const list = json?.refreshed_urls
-      if (!Array.isArray(list) || !list.every((e) => isObject(e) && typeof e.original === 'string' && typeof e.refreshed === 'string')) throw unusable('an attachment refresh')
-      return new Map(list.map((e) => [e.original, e.refreshed]))
-    },
+    async function getList(path, what) {
+      const json = await getOk(path, what)
+      if (!isList(json)) throw unusable(what)
+      return json
+    }
+
+    const guildPath = `/v10/guilds/${guildId}`
+    const messagesPath = (channelId) => `/v10/channels/${channelId}/messages`
+
+    return {
+      async gatewayBot() {
+        const body = await getObject('/v10/gateway/bot', 'the gateway')
+        const limit = body.session_start_limit
+        // Only wss:// is a gateway Discord runs. The e2e mock is plain http and so is its gateway, so ws:// is allowed there.
+        const schemes = apiBase.startsWith('http://') ? WS_OR_WSS : WSS_ONLY
+        if (
+          typeof body.url !== 'string' ||
+          !schemes.test(body.url) ||
+          !isObject(limit) ||
+          !Number.isSafeInteger(limit.remaining) ||
+          limit.remaining < 0 ||
+          !Number.isFinite(limit.reset_after) ||
+          limit.reset_after < 0 ||
+          limit.reset_after > MAX_SESSION_RESET_MS
+        ) {
+          throw unusable('the gateway')
+        }
+        return { url: body.url, remaining: limit.remaining, resetAfterMs: limit.reset_after }
+      },
+
+      guild: () => getObject(guildPath, 'the guild'),
+
+      async channel(id) {
+        needId(id, 'channelId')
+        return getObject(`/v10/channels/${id}`, 'a channel')
+      },
+
+      async activeThreads() {
+        const body = await getObject(`${guildPath}/threads/active`, 'the active threads')
+        if (!isList(body.threads)) throw unusable('the active threads')
+        return body.threads
+      },
+
+      async archivedThreads(forumId, before) {
+        needId(forumId, 'forumId')
+        if (before !== null && (typeof before !== 'string' || Number.isNaN(Date.parse(before)))) throw new TypeError('before must be a time, or null.')
+        const after = before === null ? '' : `&before=${encodeURIComponent(before)}`
+        const body = await getObject(`/v10/channels/${forumId}/threads/archived/public?limit=${MAX_PAGE}${after}`, 'the archived threads')
+        if (!isList(body.threads) || typeof body.has_more !== 'boolean') throw unusable('the archived threads')
+        return { threads: body.threads, hasMore: body.has_more }
+      },
+
+      async messagesAfter(channelId, afterId, limit = MAX_PAGE) {
+        needId(channelId, 'channelId')
+        if (typeof afterId !== 'string' || !CURSOR.test(afterId)) throw new TypeError('afterId must be a message id, or 0.')
+        needLimit(limit)
+        const page = await getList(`${messagesPath(channelId)}?limit=${limit}&after=${afterId}`, 'a page of messages')
+        return page.reverse()
+      },
+
+      async newest(channelId, limit = MAX_PAGE) {
+        needId(channelId, 'channelId')
+        needLimit(limit)
+        return getList(`${messagesPath(channelId)}?limit=${limit}`, 'a page of messages')
+      },
+
+      async message(channelId, id) {
+        needId(channelId, 'channelId')
+        needId(id, 'messageId')
+        const { status, json } = await send('GET', `${messagesPath(channelId)}/${id}`, { route: `${messagesPath(channelId)}/:id` })
+        // Only Unknown Message means the message is gone; any other 404 (Unknown Channel, say) would
+        // otherwise read as every message deleted.
+        if (status === 404 && json?.code === UNKNOWN_MESSAGE) return null
+        if (status !== 200) throw refused(status, 'a message')
+        if (!isObject(json)) throw unusable('a message')
+        return json
+      },
+
+      emojis: () => getList(`${guildPath}/emojis`, 'the emoji'),
+
+      async refreshUrls(urls) {
+        if (!Array.isArray(urls) || !urls.every((u) => typeof u === 'string')) throw new TypeError('urls must be a list of strings.')
+        if (urls.length > MAX_REFRESH) throw new RangeError(`At most ${MAX_REFRESH} links can be refreshed at once.`)
+        if (urls.length === 0) return new Map()
+        const { status, json } = await send('POST', '/v10/attachments/refresh-urls', {
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ attachment_urls: urls }),
+        })
+        if (status !== 200) throw refused(status, 'an attachment refresh')
+        const list = json?.refreshed_urls
+        if (!Array.isArray(list) || !list.every((e) => isObject(e) && typeof e.original === 'string' && typeof e.refreshed === 'string')) throw unusable('an attachment refresh')
+        // A link that is not on the CDN attachments path is left out, as the parser leaves out an attachment with one.
+        const kept = list.map((e) => [e.original, attachmentUrl(e.refreshed)]).filter(([, link]) => link !== null)
+        return new Map(kept)
+      },
+
+      withMaxWait: (ms) => reader(needMaxWait(ms)),
+    }
   }
+
+  return reader(maxWaitMs)
 }

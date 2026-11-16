@@ -79,6 +79,13 @@ function under(v, prefix) {
 }
 
 /**
+ * The link, normalised, when it is on Discord's CDN attachments path, else null. This is the check the url of an attachment
+ * passes when a message is parsed, and a caller that holds a link of its own, a refreshed one say, must pass the same
+ * one before it keeps it.
+ */
+export const attachmentUrl = (v) => under(v, CDN_ATTACHMENTS)
+
+/**
  * The text when it is an ISO time Postgres will take, a real day and not before Discord began, else null. The text
  * itself comes back, not a rewrite of it.
  */
@@ -193,7 +200,7 @@ export function applyReaction(reactions, emoji, delta) {
 /** → the row for one attachment, without its position, or null for one that is not safe or whole. */
 function attachmentRow(a) {
   if (!isObj(a) || !isId(a.id)) return null
-  const url = under(a.url, CDN_ATTACHMENTS)
+  const url = attachmentUrl(a.url)
   const hasProxy = a.proxy_url !== null && a.proxy_url !== undefined
   const proxyUrl = hasProxy ? under(a.proxy_url, MEDIA_ATTACHMENTS) : null
   if (url === null || (hasProxy && proxyUrl === null)) return null

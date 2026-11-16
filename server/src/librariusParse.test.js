@@ -3,6 +3,7 @@ import * as fc from 'fast-check'
 import {
   MESSAGE_KINDS,
   applyReaction,
+  attachmentUrl,
   emojiKey,
   linkExpiry,
   parseEmoji,
@@ -245,6 +246,77 @@ describe('linkExpiry', () => {
       fc.property(fc.integer({ min: 0, max: 253402300799 }), (sec) => {
         const out = linkExpiry(`https://cdn.discordapp.com/a.png?is=1&ex=${sec.toString(16)}`)
         expect(Date.parse(out)).toBe(sec * 1000)
+      }),
+    )
+  })
+})
+
+describe('attachmentUrl', () => {
+  // The check parseMessage makes of an attachment's url, for a caller that holds a link of its own: the refreshed
+  // links Discord hands back must pass the very same test before the store keeps them.
+  it('answers the link, normalised, when it is on the Discord CDN attachments path', () => {
+    expect(attachmentUrl(ATT_URL)).toBe(ATT_URL)
+    const signed = 'https://cdn.discordapp.com/attachments/1/2/a%20b.png?ex=6540a0b3&is=653e2bb3&hm=0a1b2c-D_e&'
+    expect(attachmentUrl(signed)).toBe(signed)
+    expect(attachmentUrl('https://cdn.discordapp.com/attachments/1/2/a..b.png')).toBe('https://cdn.discordapp.com/attachments/1/2/a..b.png')
+  })
+
+  it('normalises what the parser would, so what is checked is what is kept', () => {
+    // A tab inside a link is dropped by the URL parser, and the link that comes back has none.
+    expect(attachmentUrl('https://cdn.discordapp.com/attachments/1/2/a\t.png')).toBe('https://cdn.discordapp.com/attachments/1/2/a.png')
+  })
+
+  it.each([
+    'https://evil.test/attachments/1/2/a.png',
+    'https://cdn.discordapp.com.evil.test/attachments/1/2/a.png',
+    'https://xcdn.discordapp.com/attachments/1/2/a.png',
+    'https://cdn.discordapp.com@evil.test/attachments/1/2/a.png',
+    'https://cdn.discordapp.com:8443/attachments/1/2/a.png',
+    'https://user:pw@cdn.discordapp.com/attachments/1/2/a.png',
+    'http://cdn.discordapp.com/attachments/1/2/a.png',
+    'https://media.discordapp.net/attachments/1/2/a.png',
+    'https://cdn.discordapp.com/avatars/1/2.png',
+    'https://cdn.discordapp.com/attachments',
+    'https://cdn.discordapp.com/attachments?x=/attachments/',
+    'https://cdn.discordapp.com/ephemeral-attachments/1/2/a.png',
+    'HTTPS://CDN.DISCORDAPP.COM/attachments/1/2/a.png',
+    ' https://cdn.discordapp.com/attachments/1/2/a.png',
+    '//cdn.discordapp.com/attachments/1/2/a.png',
+    'https://cdn.discordapp.com/attachments/../avatars/1/2.png',
+    'https://cdn.discordapp.com/attachments/%2e%2e/avatars/1/2.png',
+    'https://cdn.discordapp.com/attachments/..\\x',
+    'javascript:alert(1)//https://cdn.discordapp.com/attachments/',
+    '',
+    'not a url',
+    5,
+    null,
+    undefined,
+    {},
+    ['https://cdn.discordapp.com/attachments/1/2/a.png'],
+    { toString: () => 'https://cdn.discordapp.com/attachments/1/2/a.png' },
+  ])('answers null for %j', (link) => {
+    expect(attachmentUrl(link)).toBeNull()
+  })
+
+  it('agrees with parseMessage about every link: kept as the same text, or dropped', () => {
+    const links = fc.oneof(
+      fc.string(),
+      fc.string().map((tail) => `https://cdn.discordapp.com/attachments/${tail}`),
+      fc.string().map((tail) => `https://cdn.discordapp.com/${tail}`),
+      fc.constantFrom('https://cdn.discordapp.com/attachments/', ATT_URL, 'https://cdn.discordapp.com/attachments/../x'),
+    )
+    fc.assert(
+      fc.property(links, (link) => {
+        const kept = parseMessage(message({ attachments: [attachment({ url: link, proxy_url: null })] })).attachments[0]
+        expect(attachmentUrl(link)).toBe(kept === undefined ? null : kept.url)
+      }),
+    )
+  })
+
+  it('never throws, whatever it is given', () => {
+    fc.assert(
+      fc.property(fc.anything(), (v) => {
+        expect(() => attachmentUrl(v)).not.toThrow()
       }),
     )
   })

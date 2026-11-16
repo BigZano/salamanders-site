@@ -2,6 +2,7 @@ import { describe, it, expect } from 'vitest'
 import * as fc from 'fast-check'
 import { createLibrariusDiscord } from './librariusDiscord.js'
 import { Upstream } from './discordRoles.js'
+import { attachmentUrl } from './librariusParse.js'
 
 // Invented ids, all in the 400-499 range. None of them is a real guild, channel or message.
 const API = 'https://d.test/api'
@@ -16,8 +17,8 @@ const MSG_3 = '200000000000000432'
 const AFTER = '200000000000000429'
 const EMOJI = '200000000000000460'
 
-const CDN = 'https://cdn.test/attachments/200000000000000410/200000000000000440/map.png?ex=6540a0b3&is=653e2bb3&hm=0a1b2c'
-const CDN_2 = 'https://cdn.test/attachments/200000000000000410/200000000000000441/key.png?ex=6540a0b3&is=653e2bb3&hm=3d4e5f'
+const CDN = 'https://cdn.discordapp.com/attachments/200000000000000410/200000000000000440/map.png?ex=6540a0b3&is=653e2bb3&hm=0a1b2c'
+const CDN_2 = 'https://cdn.discordapp.com/attachments/200000000000000410/200000000000000441/key.png?ex=6540a0b3&is=653e2bb3&hm=3d4e5f'
 const CDN_NEW = `${CDN}&refreshed=1`
 const ARCHIVED_AT = '2026-11-02T18:30:00.123000+00:00'
 
@@ -119,6 +120,8 @@ const ROWS = [
       { ...GATEWAY, session_start_limit: { ...GATEWAY.session_start_limit, reset_after: null } },
       { ...GATEWAY, session_start_limit: { ...GATEWAY.session_start_limit, reset_after: '5' } },
       { ...GATEWAY, session_start_limit: { ...GATEWAY.session_start_limit, reset_after: -1 } },
+      { ...GATEWAY, session_start_limit: { ...GATEWAY.session_start_limit, reset_after: 86_400_001 } },
+      { ...GATEWAY, url: 'ws://gateway.test' },
     ],
   },
   {
@@ -285,14 +288,71 @@ describe('each call', () => {
 })
 
 describe('gatewayBot', () => {
+  const MOCK = 'http://mock.test/api'
+  const reply = (url, limit = { remaining: 3, reset_after: 1000 }) => ok({ url, session_start_limit: limit })
+  const unexpected = 'Discord answered 200 for the gateway, but not with what the Librarius expected.'
+
   it('passes the session start limit through as it is', async () => {
-    const r = rig([ok({ url: 'ws://localhost:9', session_start_limit: { remaining: 0, reset_after: 0 } })])
+    const r = rig([reply('ws://localhost:9', { remaining: 0, reset_after: 0 })], { apiBase: MOCK })
     expect(await r.discord.gatewayBot()).toEqual({ url: 'ws://localhost:9', remaining: 0, resetAfterMs: 0 })
   })
 
   it('takes a reset time that is not a whole number of milliseconds', async () => {
-    const r = rig([ok({ url: 'wss://g.test', session_start_limit: { remaining: 3, reset_after: 1234.5 } })])
+    const r = rig([reply('wss://g.test', { remaining: 3, reset_after: 1234.5 })])
     expect((await r.discord.gatewayBot()).resetAfterMs).toBe(1234.5)
+  })
+
+  // The window the limit resets in is a day, so a reset further off than that is not Discord talking.
+  it('takes a reset of exactly a day', async () => {
+    const r = rig([reply('wss://g.test', { remaining: 0, reset_after: 86_400_000 })])
+    expect(await r.discord.gatewayBot()).toEqual({ url: 'wss://g.test', remaining: 0, resetAfterMs: 86_400_000 })
+  })
+
+  it.each([86_400_001, 86_400_000.5, 604_800_000, 1e12, 1e300, Number.MAX_VALUE])('throws Upstream for a reset of %s ms, which is more than a day', async (resetAfter) => {
+    const r = rig([reply('wss://g.test', { remaining: 3, reset_after: resetAfter })])
+    const err = await r.discord.gatewayBot().catch((e) => e)
+    expect(err).toBeInstanceOf(Upstream)
+    expect(err.message).toBe(unexpected)
+  })
+
+  describe('the address', () => {
+    it.each(['https://discord.com/api', 'https://d.test/api', 'https://d.test', 'http', 'ftp://d.test/api'])('is wss:// only, for an apiBase of %s', async (apiBase) => {
+      const r = rig([reply('wss://gateway.test'), reply('ws://gateway.test'), reply('ws://localhost:9')], { apiBase })
+      expect((await r.discord.gatewayBot()).url).toBe('wss://gateway.test')
+      for (let i = 0; i < 2; i++) {
+        const err = await r.discord.gatewayBot().catch((e) => e)
+        expect(err).toBeInstanceOf(Upstream)
+        expect(err.message).toBe(unexpected)
+      }
+    })
+
+    it.each(['http://mock.test/api', 'http://localhost:3000', 'http://d.test'])('is ws:// or wss://, for an apiBase of %s, which is the e2e mock', async (apiBase) => {
+      const r = rig([reply('ws://localhost:9'), reply('wss://gateway.test')], { apiBase })
+      expect((await r.discord.gatewayBot()).url).toBe('ws://localhost:9')
+      expect((await r.discord.gatewayBot()).url).toBe('wss://gateway.test')
+    })
+
+    it.each([
+      ['an https address', 'https://gateway.test'],
+      ['an http address', 'http://gateway.test'],
+      ['a ws address with one slash', 'ws:/gateway.test'],
+      ['a wss address with one slash', 'wss:/gateway.test'],
+      ['a wss in capitals', 'WSS://gateway.test'],
+      ['a scheme that only ends in wss', 'xwss://gateway.test'],
+      ['a scheme that only ends in ws', 'xws://gateway.test'],
+      ['a leading space', ' wss://gateway.test'],
+      ['no scheme', 'gateway.test'],
+      ['nothing', ''],
+      ['a list holding a good address', ['wss://gateway.test']],
+      ['a number', 7],
+    ])('is neither, for %s, whichever the apiBase is', async (_, url) => {
+      for (const apiBase of ['https://d.test/api', MOCK]) {
+        const r = rig([reply(url)], { apiBase })
+        const err = await r.discord.gatewayBot().catch((e) => e)
+        expect(err, apiBase).toBeInstanceOf(Upstream)
+        expect(err.message, apiBase).toBe(unexpected)
+      }
+    })
   })
 })
 
@@ -450,8 +510,8 @@ describe('refreshUrls', () => {
   })
 
   it('takes exactly 50 links at once', async () => {
-    const urls = Array.from({ length: 50 }, (_, i) => `https://cdn.test/a/${i}`)
-    const r = rig([ok({ refreshed_urls: urls.map((u) => ({ original: u, refreshed: `${u}?new` })) })])
+    const urls = Array.from({ length: 50 }, (_, i) => `https://cdn.discordapp.com/attachments/1/2/${i}.png`)
+    const r = rig([ok({ refreshed_urls: urls.map((u) => ({ original: u, refreshed: `${u}?ex=6540a0b3&hm=new` })) })])
     const out = await r.discord.refreshUrls(urls)
     expect(out.size).toBe(50)
     expect(JSON.parse(r.seen[0].body).attachment_urls).toEqual(urls)
@@ -461,7 +521,7 @@ describe('refreshUrls', () => {
     await fc.assert(
       fc.asyncProperty(fc.integer({ min: 51, max: 200 }), async (n) => {
         const r = rig()
-        const err = await r.discord.refreshUrls(Array.from({ length: n }, (_, i) => `https://cdn.test/secret/${i}`)).catch((e) => e)
+        const err = await r.discord.refreshUrls(Array.from({ length: n }, (_, i) => `https://cdn.discordapp.com/attachments/1/2/secret${i}.png`)).catch((e) => e)
         expect(err).toBeInstanceOf(RangeError)
         expect(err.message).toBe('At most 50 links can be refreshed at once.')
         expect(r.seen).toEqual([])
@@ -489,15 +549,81 @@ describe('refreshUrls', () => {
   })
 
   it('maps any answer Discord can give: the same links, in the same order', async () => {
+    const cdn = fc.tuple(fc.nat(), fc.nat(), fc.stringMatching(/^[0-9a-f]{1,16}$/)).map(([a, b, hm]) => `https://cdn.discordapp.com/attachments/${a}/${b}/f.png?ex=${hm}&hm=${hm}`)
     await fc.assert(
-      fc.asyncProperty(
-        fc.uniqueArray(fc.tuple(fc.webUrl(), fc.webUrl()), { selector: ([original]) => original, maxLength: 50 }),
-        async (pairs) => {
-          const r = rig([ok({ refreshed_urls: pairs.map(([original, refreshed]) => ({ original, refreshed })) })])
-          const out = await r.discord.refreshUrls(pairs.map(([original]) => original).concat(['https://cdn.test/asked-but-not-answered']).slice(0, 50))
-          expect([...out]).toEqual(pairs)
-        },
-      ),
+      fc.asyncProperty(fc.uniqueArray(fc.tuple(fc.webUrl(), cdn), { selector: ([original]) => original, maxLength: 50 }), async (pairs) => {
+        const r = rig([ok({ refreshed_urls: pairs.map(([original, refreshed]) => ({ original, refreshed })) })])
+        const out = await r.discord.refreshUrls(pairs.map(([original]) => original).concat(['https://cdn.test/asked-but-not-answered']).slice(0, 50))
+        expect([...out]).toEqual(pairs)
+      }),
+    )
+  })
+
+  // A refreshed link is stored and handed to a browser, so it has to pass the check an attachment link passes when
+  // a message is parsed. One that does not is left out, and the link the caller holds stays.
+  describe('a refreshed link that is not on the Discord CDN attachments path', () => {
+    const OFF = [
+      'https://evil.test/attachments/1/2/a.png',
+      'https://cdn.discordapp.com.evil.test/attachments/1/2/a.png',
+      'https://xcdn.discordapp.com/attachments/1/2/a.png',
+      'https://cdn.discordapp.com@evil.test/attachments/1/2/a.png',
+      'https://cdn.discordapp.com:8443/attachments/1/2/a.png',
+      'https://user:pw@cdn.discordapp.com/attachments/1/2/a.png',
+      'http://cdn.discordapp.com/attachments/1/2/a.png',
+      'https://media.discordapp.net/attachments/1/2/a.png',
+      'https://cdn.discordapp.com/avatars/1/2.png',
+      'https://cdn.discordapp.com/attachments',
+      'https://cdn.discordapp.com/ephemeral-attachments/1/2/a.png',
+      'https://cdn.discordapp.com/attachments/../avatars/1/2.png',
+      'https://cdn.discordapp.com/attachments/%2e%2e/avatars/1/2.png',
+      'HTTPS://CDN.DISCORDAPP.COM/attachments/1/2/a.png',
+      ' https://cdn.discordapp.com/attachments/1/2/a.png',
+      '//cdn.discordapp.com/attachments/1/2/a.png',
+      'javascript:alert(1)//https://cdn.discordapp.com/attachments/',
+      '',
+      'not a url',
+    ]
+
+    it.each(OFF)('is absent from the Map, with the link next to it kept: %j', async (off) => {
+      const r = rig([ok({ refreshed_urls: [{ original: CDN, refreshed: off }, { original: CDN_2, refreshed: CDN_NEW }] })])
+      const out = await r.discord.refreshUrls([CDN, CDN_2])
+      expect(out.has(CDN)).toBe(false)
+      expect([...out]).toEqual([[CDN_2, CDN_NEW]])
+    })
+
+    it('leaves an empty Map, and no error, when none of them is on it', async () => {
+      const r = rig([ok({ refreshed_urls: OFF.map((refreshed, i) => ({ original: `${CDN}&n=${i}`, refreshed })) })])
+      const out = await r.discord.refreshUrls([CDN])
+      expect(out).toBeInstanceOf(Map)
+      expect(out.size).toBe(0)
+    })
+
+    it('does not look at the original: only the link that would be stored', async () => {
+      const r = rig([ok({ refreshed_urls: [{ original: 'https://evil.test/anything', refreshed: CDN_NEW }] })])
+      expect([...(await r.discord.refreshUrls([CDN]))]).toEqual([['https://evil.test/anything', CDN_NEW]])
+    })
+  })
+
+  it('answers the link as the parser would normalise it, so that what is checked is what is stored', async () => {
+    const r = rig([ok({ refreshed_urls: [{ original: CDN, refreshed: 'https://cdn.discordapp.com/attachments/1/2/a\t.png?ex=6540a0b3' }] })])
+    expect([...(await r.discord.refreshUrls([CDN]))]).toEqual([[CDN, 'https://cdn.discordapp.com/attachments/1/2/a.png?ex=6540a0b3']])
+  })
+
+  it('keeps exactly the links the attachment check accepts, as it normalises them', async () => {
+    const links = fc.oneof(
+      fc.string(),
+      fc.string().map((tail) => `https://cdn.discordapp.com/attachments/${tail}`),
+      fc.string().map((tail) => `https://cdn.discordapp.com/${tail}`),
+      fc.constantFrom(CDN_NEW, 'https://cdn.discordapp.com/attachments/', 'https://cdn.discordapp.com/attachments/../x'),
+    )
+    await fc.assert(
+      fc.asyncProperty(fc.array(links, { maxLength: 20 }), async (refreshed) => {
+        const entries = refreshed.map((link, i) => ({ original: `${CDN}&n=${i}`, refreshed: link }))
+        const r = rig([ok({ refreshed_urls: entries })])
+        const out = await r.discord.refreshUrls([CDN])
+        const expected = entries.flatMap((e) => (attachmentUrl(e.refreshed) === null ? [] : [[e.original, attachmentUrl(e.refreshed)]]))
+        expect([...out]).toEqual(expected)
+      }),
     )
   })
 })
@@ -694,7 +820,7 @@ describe('a reply that is not what Discord sends', () => {
   })
 
   it.each(ROWS)('$name throws Upstream when a 200 is not JSON at all', async (row) => {
-    for (const raw of ['not json', '', '{"threads":', '<html>https://cdn.test/x</html>', null]) {
+    for (const raw of ['not json', '', '{"threads":', '<html>https://cdn.discordapp.com/x</html>', null]) {
       const r = rig([{ status: 200, raw }])
       const err = await row.call(r.discord).catch((e) => e)
       expect(err, String(raw)).toBeInstanceOf(Upstream)
@@ -709,7 +835,7 @@ describe('a reply that is not what Discord sends', () => {
       const err = await row.call(r.discord).catch((e) => e)
       expect(err).toBeInstanceOf(Upstream)
       expect(err.message).not.toContain('hm=0a1b2c')
-      expect(err.message).not.toContain('cdn.test')
+      expect(err.message).not.toContain('cdn.discordapp.com')
       expect(leaks(err.message)).toBe(false)
     }
   })
@@ -1321,7 +1447,7 @@ describe('calls a second', () => {
   it('keeps to perSecond when calls are made together, too', async () => {
     await fc.assert(
       fc.asyncProperty(fc.integer({ min: 1, max: 6 }), fc.integer({ min: 1, max: 25 }), async (perSecond, n) => {
-        const r = rig(goods(n), { perSecond }, true)
+        const r = rig(goods(n), { perSecond, maxWaitMs: 100_000 }, true)
         await r.drive(Promise.all(Array.from({ length: n }, () => guild(r))))
         const at = r.seen.map((s) => s.at)
         expect(at).toHaveLength(n)
@@ -1359,6 +1485,302 @@ describe('calls a second', () => {
       err = e
     }
     expect(err.message).toBe('perSecond must be a whole number of at least 1.')
+  })
+})
+
+/** Lets everything that can run without a timer run: the calls in flight get as far as sleeping or finishing. */
+const settle = () => new Promise((resolve) => setImmediate(resolve))
+
+describe('a queue of calls that is too long', () => {
+  const goods = (n) => Array.from({ length: n }, () => ok({ id: GUILD }))
+  const TOO_MANY = 'Too many Librarius calls are waiting to reach Discord.'
+
+  it('turns away the calls that would wait more than 5 seconds, by default, and sends only the rest', async () => {
+    const r = rig(goods(50), {}, true)
+    const results = await r.drive(Promise.allSettled(Array.from({ length: 50 }, () => r.discord.guild())))
+    // Five calls a second, from 0 to 5000 inclusive: 30 turns. The calls after those are turned away.
+    expect(results.slice(0, 30).map((x) => x.status)).toEqual(Array(30).fill('fulfilled'))
+    for (const turnedAway of results.slice(30)) {
+      expect(turnedAway.status).toBe('rejected')
+      expect(turnedAway.reason).toBeInstanceOf(Upstream)
+      expect(turnedAway.reason.message).toBe(TOO_MANY)
+    }
+    expect(r.seen.map((x) => x.at)).toEqual([0, 1000, 2000, 3000, 4000, 5000].flatMap((t) => Array(5).fill(t)))
+    expect(r.slept).toEqual([1000, 2000, 3000, 4000, 5000].flatMap((t) => Array(5).fill(t)))
+  })
+
+  it('does not hold a place in the queue for a call it turned away', async () => {
+    const r = rig(goods(51), {}, true)
+    await r.drive(Promise.allSettled(Array.from({ length: 50 }, () => r.discord.guild())))
+    expect(r.clock.t).toBe(5000)
+    // The next turn is the one after the last call that was sent, at 6000, not after the 20 that were turned away.
+    await r.drive(r.discord.guild())
+    expect(r.seen.at(-1).at).toBe(6000)
+    expect(r.seen).toHaveLength(31)
+  })
+
+  it('lets a call wait exactly maxWaitMs, and turns away one that would wait a millisecond more', async () => {
+    const r = rig(goods(4), { perSecond: 1, maxWaitMs: 999 })
+    await r.discord.guild()
+    const err = await r.discord.guild().catch((e) => e)
+    expect(err).toBeInstanceOf(Upstream)
+    expect(err.message).toBe(TOO_MANY)
+    expect(r.slept).toEqual([])
+    expect(r.seen).toHaveLength(1)
+    // A millisecond later its turn is 999 ms away, which is allowed, and no place was held for the call before it.
+    r.clock.t = 1
+    await r.discord.guild()
+    expect(r.slept).toEqual([999])
+    expect(r.seen.map((x) => x.at)).toEqual([0, 1000])
+  })
+
+  it('takes a maxWaitMs of 0, which turns away any call that would have to wait', async () => {
+    const r = rig(goods(4), { perSecond: 2, maxWaitMs: 0 })
+    await r.discord.guild()
+    await r.discord.guild()
+    const err = await r.discord.guild().catch((e) => e)
+    expect(err).toBeInstanceOf(Upstream)
+    expect(err.message).toBe(TOO_MANY)
+    r.clock.t = 1000
+    await r.discord.guild()
+    expect(r.slept).toEqual([])
+    expect(r.seen.map((x) => x.at)).toEqual([0, 0, 1000])
+  })
+
+  it('takes maxWaitMs from the option', async () => {
+    const r = rig(goods(50), { maxWaitMs: 60_000 }, true)
+    const results = await r.drive(Promise.allSettled(Array.from({ length: 50 }, () => r.discord.guild())))
+    expect(results.every((x) => x.status === 'fulfilled')).toBe(true)
+    expect(r.seen.at(-1).at).toBe(9000)
+  })
+
+  it('applies to the retry of a 429 too', async () => {
+    const r = rig([{ status: 429, headers: { 'Retry-After': '0.01' } }, ok({ id: GUILD })], { perSecond: 1, maxWaitMs: 100 })
+    const err = await r.discord.guild().catch((e) => e)
+    expect(err).toBeInstanceOf(Upstream)
+    expect(err.message).toBe(TOO_MANY)
+    expect(r.seen).toHaveLength(1)
+  })
+
+  it('does not count a wait for a bucket or a 429 against it: those have caps of their own', async () => {
+    const r = rig([ok([], bucket('b1', 0, 20)), ok([]), { status: 429, headers: { 'Retry-After': '20' } }, ok([])], { maxWaitMs: 100 })
+    await r.discord.newest(THREAD, 1)
+    await r.discord.newest(THREAD, 1)
+    await r.discord.guild().catch(() => {})
+    expect(r.slept).toEqual([20_000, 20_000])
+  })
+
+  it('sends no more than perSecond calls in any second, and turns away exactly what does not fit in maxWaitMs, whatever the load', async () => {
+    await fc.assert(
+      fc.asyncProperty(fc.integer({ min: 1, max: 6 }), fc.integer({ min: 0, max: 8000 }), fc.integer({ min: 1, max: 60 }), async (perSecond, maxWaitMs, n) => {
+        const r = rig(goods(n), { perSecond, maxWaitMs }, true)
+        const results = await r.drive(Promise.allSettled(Array.from({ length: n }, () => r.discord.guild())))
+        const room = perSecond * (Math.floor(maxWaitMs / 1000) + 1)
+        const sent = Math.min(n, room)
+        expect(results.map((x) => x.status)).toEqual([...Array(sent).fill('fulfilled'), ...Array(n - sent).fill('rejected')])
+        expect(r.seen).toHaveLength(sent)
+        const at = r.seen.map((x) => x.at)
+        for (let i = perSecond; i < at.length; i++) expect(at[i] - at[i - perSecond]).toBeGreaterThanOrEqual(1000)
+        expect(Math.max(0, ...at)).toBeLessThanOrEqual(maxWaitMs)
+      }),
+    )
+  })
+
+  it.each([
+    ['negative', -1],
+    ['NaN', NaN],
+    ['infinite', Infinity],
+    ['negative infinite', -Infinity],
+    ['text', '5000'],
+    ['null', null],
+    ['a list', [5000]],
+    ['a bigint', 5n],
+  ])('throws RangeError when maxWaitMs is %s', (_, maxWaitMs) => {
+    expect(() => rig([], { maxWaitMs })).toThrow(new RangeError('maxWaitMs must be a number of at least 0.'))
+  })
+
+  describe('withMaxWait: the same client, for a caller that will wait longer', () => {
+    it('has every call of the client, and itself', () => {
+      const r = rig()
+      const view = r.discord.withMaxWait(60_000)
+      expect(Object.keys(view).sort()).toEqual(Object.keys(r.discord).sort())
+      expect(Object.keys(view)).toContain('withMaxWait')
+    })
+
+    it('waits for a turn the client itself would turn away, and the client still turns it away', async () => {
+      const r = rig(goods(31), {}, true)
+      const queued = Array.from({ length: 30 }, () => r.discord.guild())
+      const turnedAway = r.discord.guild().catch((e) => e)
+      const patient = r.discord.withMaxWait(60_000).guild()
+      const turnedAwayAgain = r.discord.guild().catch((e) => e)
+      await r.drive(Promise.all([...queued, patient]))
+      expect((await turnedAway).message).toBe(TOO_MANY)
+      expect((await turnedAwayAgain).message).toBe(TOO_MANY)
+      expect(r.seen).toHaveLength(31)
+      expect(r.seen.at(-1).at).toBe(6000)
+    })
+
+    it('shares the calls a second with the client, not a second allowance', async () => {
+      const r = rig(goods(6))
+      const view = r.discord.withMaxWait(1000)
+      for (let i = 0; i < 3; i++) await r.discord.guild()
+      for (let i = 0; i < 3; i++) await view.guild()
+      expect(r.seen.map((x) => x.at)).toEqual([0, 0, 0, 0, 0, 1000])
+    })
+
+    it('shares what it learns about the buckets', async () => {
+      const r = rig([ok([], bucket('b1', 0, 2)), ok([]), ok([])])
+      await r.discord.newest(THREAD, 1)
+      await r.discord.withMaxWait(60_000).newest(THREAD, 1)
+      expect(r.slept).toEqual([2000])
+    })
+
+    it('shares a pause for a global 429', async () => {
+      const r = rig([{ status: 429, headers: { 'Retry-After': '3', 'X-RateLimit-Global': 'true' } }, ok({ id: GUILD }), ok([])], {}, true)
+      const first = r.discord.guild()
+      await settle()
+      const second = r.discord.withMaxWait(60_000).emojis()
+      await r.drive(Promise.all([first, second]))
+      expect(r.seen.at(-1).at).toBe(3000)
+    })
+
+    it('can be narrowed as well as widened', async () => {
+      const r = rig(goods(8), { perSecond: 1 }, true)
+      const strict = r.discord.withMaxWait(60_000).withMaxWait(0)
+      await r.drive(strict.guild())
+      const err = await r.drive(strict.guild().catch((e) => e))
+      expect(err.message).toBe(TOO_MANY)
+    })
+
+    it('uses the same token, address and guild as the client', async () => {
+      const r = rig([ok({ id: GUILD })])
+      await r.discord.withMaxWait(1).guild()
+      expect(r.seen[0].url).toBe(`${API}/v10/guilds/${GUILD}`)
+      expect(r.seen[0].headers.Authorization).toBe('Bot secret-bot-token')
+    })
+
+    it.each([
+      ['negative', -1],
+      ['NaN', NaN],
+      ['infinite', Infinity],
+      ['text', '5000'],
+      ['null', null],
+      ['undefined', undefined],
+    ])('throws RangeError when the wait is %s, and does not change the client', async (_, ms) => {
+      const r = rig(goods(1))
+      expect(() => r.discord.withMaxWait(ms)).toThrow(new RangeError('maxWaitMs must be a number of at least 0.'))
+      await r.discord.guild()
+      expect(r.seen).toHaveLength(1)
+    })
+  })
+})
+
+describe('a global 429', () => {
+  const global = (retryAfter) => ({ status: 429, headers: { ...(retryAfter === undefined ? {} : { 'Retry-After': String(retryAfter) }), 'X-RateLimit-Global': 'true' } })
+  const atOf = (r, path) => r.seen.filter((x) => x.url === `${API}${path}`).map((x) => x.at)
+
+  it('holds back a call to another route, made after it, until Retry-After is over', async () => {
+    const r = rig([global(3), ok({ id: GUILD }), ok([])], {}, true)
+    const first = r.discord.guild()
+    await settle()
+    const second = r.discord.emojis()
+    await r.drive(Promise.all([first, second]))
+    expect(atOf(r, `/v10/guilds/${GUILD}`)).toEqual([0, 3000])
+    expect(atOf(r, `/v10/guilds/${GUILD}/emojis`)).toEqual([3000])
+    expect(r.slept.sort((a, b) => a - b)).toEqual([3000, 3000])
+  })
+
+  it('holds back a call to a channel, to a guild and to the gateway alike', async () => {
+    const r = rig([global(2), ok({ id: GUILD }), ok([]), ok([]), ok(GATEWAY)], {}, true)
+    const first = r.discord.guild()
+    await settle()
+    const others = [r.discord.newest(THREAD, 1), r.discord.emojis(), r.discord.gatewayBot()]
+    await r.drive(Promise.all([first, ...others]))
+    expect(r.seen.slice(1).map((x) => x.at)).toEqual([2000, 2000, 2000, 2000])
+  })
+
+  it('does not hold back a call to another route when the 429 is not global', async () => {
+    // The emoji call goes out at once, ahead of the retry of the guild call, so it takes the next reply.
+    const r = rig([{ status: 429, headers: { 'Retry-After': '3' } }, ok([]), ok({ id: GUILD })], {}, true)
+    const first = r.discord.guild()
+    await settle()
+    const second = r.discord.emojis()
+    await r.drive(Promise.all([first, second]))
+    expect(atOf(r, `/v10/guilds/${GUILD}/emojis`)).toEqual([0])
+    expect(r.slept).toEqual([3000])
+  })
+
+  it.each([['false'], ['False'], ['True'], ['TRUE'], ['1'], ['yes'], ['']])('does not take X-RateLimit-Global: %j for global', async (value) => {
+    const r = rig([{ status: 429, headers: { 'Retry-After': '3', 'X-RateLimit-Global': value } }, ok([]), ok({ id: GUILD })], {}, true)
+    const first = r.discord.guild()
+    await settle()
+    const second = r.discord.emojis()
+    await r.drive(Promise.all([first, second]))
+    expect(atOf(r, `/v10/guilds/${GUILD}/emojis`)).toEqual([0])
+  })
+
+  it('does not take the header on an answer that is not a 429', async () => {
+    const r = rig([ok({ id: GUILD }, { 'Retry-After': '3', 'X-RateLimit-Global': 'true' }), ok([])])
+    await r.discord.guild()
+    await r.discord.emojis()
+    expect(r.slept).toEqual([])
+  })
+
+  it('does not make the call that was refused wait twice', async () => {
+    const r = rig([global(3), ok({ id: GUILD })])
+    await r.discord.guild()
+    expect(r.slept).toEqual([3000])
+    expect(r.seen.map((x) => x.at)).toEqual([0, 3000])
+  })
+
+  it('lets calls through again once it is over, with nothing left to wait for', async () => {
+    const r = rig([global(3), ok({ id: GUILD }), ok([])], {}, true)
+    await r.drive(r.discord.guild())
+    await r.drive(r.discord.emojis())
+    expect(r.slept).toEqual([3000])
+    expect(atOf(r, `/v10/guilds/${GUILD}/emojis`)).toEqual([3000])
+  })
+
+  it('waits Retry-After, at most 30 seconds, and a second when it is missing or odd', async () => {
+    for (const [header, ms] of [['3600', 30_000], ['30', 30_000], ['0.5', 500], [undefined, 1000], ['soon', 1000], ['-2', 1000]]) {
+      const r = rig([{ status: 429, headers: { ...(header === undefined ? {} : { 'Retry-After': header }), 'X-RateLimit-Global': 'true' } }, ok({ id: GUILD }), ok([])], {}, true)
+      const first = r.discord.guild()
+      await settle()
+      const second = r.discord.emojis()
+      await r.drive(Promise.all([first, second]))
+      expect(atOf(r, `/v10/guilds/${GUILD}/emojis`), String(header)).toEqual([ms])
+    }
+  })
+
+  it('does not wait when Retry-After is 0', async () => {
+    const r = rig([global(0), ok([]), ok({ id: GUILD })], {}, true)
+    const first = r.discord.guild()
+    await settle()
+    const second = r.discord.emojis()
+    await r.drive(Promise.all([first, second]))
+    expect(r.seen.map((x) => x.at)).toEqual([0, 0, 0])
+  })
+
+  it('keeps the longest pause when a shorter one arrives after it', async () => {
+    const r = rig([global(10), global(1), ok({ id: GUILD }), ok([]), ok({ id: GUILD })], {}, true)
+    const a = r.discord.guild()
+    const b = r.discord.guild()
+    await settle()
+    const c = r.discord.emojis()
+    await r.drive(Promise.all([a, b, c]))
+    // Both were answered with a 429 at 0. The pause is the 10 seconds of the first, and the retry of the second, which
+    // waited its own second, then waits the rest of it.
+    expect(r.seen.map((x) => x.at)).toEqual([0, 0, 10_000, 10_000, 10_000])
+  })
+
+  it('holds back a call to another route even after the call that was refused has retried and finished', async () => {
+    const r = rig([global(5), global(5), ok([])])
+    const err = await r.discord.guild().catch((e) => e)
+    expect(err.message).toBe('Discord is rate limiting the Librarius.')
+    // The second 429 was global too: the client is paused to 10 seconds, and the next call, at 5 seconds, waits for it.
+    await r.discord.emojis()
+    expect(r.slept).toEqual([5000, 5000])
+    expect(r.seen.at(-1).at).toBe(10_000)
   })
 })
 
