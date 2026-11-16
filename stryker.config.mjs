@@ -66,6 +66,7 @@ export default {
     'server/src/librariusIngest.js',
     'server/src/librariusConfig.js',
     'server/src/librariusLinks.js',
+    'server/src/librariusText.js',
     'server/src/librariusHandler.js',
   ],
   coverageAnalysis: 'perTest',

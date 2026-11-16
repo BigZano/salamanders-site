@@ -42,6 +42,7 @@ import { createImport } from './librariusImport.js'
 import { createIngest } from './librariusIngest.js'
 import { createLinkRefresh } from './librariusLinks.js'
 import { createLibrariusStore } from './librariusStore.js'
+import { describe as describeFailure } from './librariusText.js'
 import { createMembership } from './membership.js'
 import { createMembershipHandler } from './membershipHandler.js'
 import { createPerksHandler } from './perks.js'
@@ -205,11 +206,7 @@ else if (librarius.configured && !librariusConfigured) {
 }
 
 /** What the log may say of a failure: its name and message, with the bot token and every link cut out, in 200 characters. */
-function librariusDescribe(err) {
-  let text = `${err?.name ?? 'Error'}: ${String(err?.message ?? '')}`
-  if (BOT_TOKEN) text = text.replaceAll(BOT_TOKEN, '[token]')
-  return text.replace(/(?:https?|wss?):\/\/\S*/g, '[link]').slice(0, 200)
-}
+const librariusDescribe = (err) => describeFailure(err, { secret: BOT_TOKEN })
 
 /** Do one startup step, and log it when it fails: nothing a step throws may reach the server. */
 async function librariusStep(what, run) {

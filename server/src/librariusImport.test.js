@@ -829,6 +829,11 @@ describe('failures', () => {
     expect(linked.logs.join('\n')).not.toMatch(LINK)
 
     expect((await run(new Upstream('HTTPS://CDN.TEST/x?sig=secret'))).error).toBe('[link]')
+    // A Discord CDN link with no scheme is a link too.
+    const bare = await run(new Upstream('Discord answered 403 for cdn.discordapp.com/attachments/1/2/a.png?ex=1&hm=secret and MEDIA.discordapp.net/a?hm=secret today.'))
+    expect(bare.error).toBe('Discord answered 403 for [link] and [link] today.')
+    expect(bare.logs.join('\n')).not.toMatch(/discordapp|secret/i)
+    expect((await run(new Upstream('wss://gateway.test/?v=10'))).error).toBe('[link]')
     expect((await run(new Upstream('a'.repeat(200)))).error).toBe('a'.repeat(200))
     expect((await run(new Upstream('a'.repeat(201)))).error).toBe('a'.repeat(200))
     expect((await run(new Upstream('b'.repeat(5000)))).error).toBe('b'.repeat(200))
@@ -865,6 +870,18 @@ describe('failures', () => {
     await expect(w.imp.run()).resolves.toBeUndefined()
     expect((await w.imp.status()).lastError).toBe(note)
     expect(w.logs.join('\n')).not.toMatch(LINK)
+  })
+
+  it('still resolves, and stays unfinished, when what went wrong cannot be read or printed', async () => {
+    const unreadable = Object.defineProperties(new Error('x'), { name: { get: () => { throw new Error('no name') } }, message: { get: () => { throw new Error('no message') } } })
+    const symbolic = Object.assign(new Error('x'), { name: Symbol('name'), message: Symbol('message') })
+    const hidden = new Proxy({}, { get: () => { throw new Error('trap') } })
+    for (const thrown of [unreadable, symbolic, hidden, Object.create(null), new Upstream('Discord is down.')]) {
+      const w = setup({ active: [thread(1)] })
+      w.discord.failWhen('activeThreads', () => true, thrown)
+      await expect(w.imp.run()).resolves.toBeUndefined()
+      expect(await w.imp.status()).toMatchObject({ importDone: false, lastOkAt: null })
+    }
   })
 
   it('ends the run for a TypeError that comes from Discord, not from a row', async () => {
@@ -1024,6 +1041,18 @@ describe('rows the store refuses', () => {
     expect(w.logs.join('\n')).not.toMatch(LINK)
     expect(await w.imp.status()).toMatchObject({ importDone: true })
     expect([...w.store.posts.keys()]).toEqual([postId(1)])
+  })
+
+  it('logs what the store refused without any link, a Discord CDN one with no scheme too, and without being stopped by an unreadable message', async () => {
+    const unreadable = Object.defineProperty(new TypeError('x'), 'message', { get: () => { throw new Error('no message') } })
+    for (const refusal of [new TypeError('refused cdn.discordapp.com/attachments/1/2/a.png?sig=secret'), new TypeError('refused HTTPS://MEDIA.test/x?sig=secret'), unreadable]) {
+      const w = setup({ active: [thread(1), thread(2)], channels: { [postId(1)]: channel(1, 1, 2) } })
+      w.store.failWhen('upsertPost', (post) => post.id === postId(2), refusal)
+      await w.imp.run()
+      expect(w.logs.join('\n')).not.toMatch(/discordapp|secret|HTTPS/i)
+      expect(await w.imp.status()).toMatchObject({ importDone: true })
+      expect([...w.store.posts.keys()]).toEqual([postId(1)])
+    }
   })
 
   it('ends the run for a refusal that is not a TypeError', async () => {

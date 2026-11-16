@@ -756,6 +756,22 @@ describe('MESSAGE_CREATE', () => {
     expect([...w.store.messages.keys()]).toEqual([MSG_2])
   })
 
+  it('logs what the store refused without any link, a Discord CDN one with no scheme too, and goes on whatever the refusal can say', async () => {
+    const unreadable = Object.defineProperties(new TypeError('x'), { name: { get: () => { throw new Error('no name') } }, message: { get: () => { throw new Error('no message') } } })
+    const symbolic = Object.assign(new TypeError('x'), { message: Symbol('message') })
+    const refusals = [new TypeError('refused cdn.discordapp.com/attachments/1/2/a.png?sig=secret'), new TypeError('refused WSS://MEDIA.test/x?sig=secret'), unreadable, symbolic]
+    for (const refusal of refusals) {
+      const logs = []
+      const w = await rig({ log: (...line) => logs.push(line.join(' ')) })
+      w.store.failWhen('upsertMessages', (rows) => rows.some((r) => r.id === MSG), refusal)
+      await expect(w.send('MESSAGE_CREATE', gw())).resolves.toBeUndefined()
+      expect(logs.join('\n')).not.toMatch(/discordapp|secret|WSS/i)
+      expect(w.store.messages.size).toBe(0)
+      await w.send('MESSAGE_CREATE', gw({ id: MSG_2 }))
+      expect([...w.store.messages.keys()]).toEqual([MSG_2])
+    }
+  })
+
   it('gives the error of a failing store to the caller', async () => {
     const w = await rig()
     const err = new Error('connection lost')

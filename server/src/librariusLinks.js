@@ -29,6 +29,7 @@
  */
 import { Upstream } from './discordRoles.js'
 import { linkExpiry } from './librariusParse.js'
+import { describe } from './librariusText.js'
 
 // Discord's most links for one refresh call.
 const CHUNK = 50
@@ -38,14 +39,7 @@ const TOMBSTONE_KEEP_MS = 86_400_000
 const MAX_TIMER_MS = 2_147_483_647
 // The longest a window may be: a year, far past anything Discord's links last.
 const MAX_SPAN_MS = 31_536_000_000
-const MAX_ERROR = 200
 const STORE_METHODS = ['attachmentsToRefresh', 'updateAttachmentUrls', 'pruneTombstones']
-
-// For the log: the name and what the error says, with any link (a signed CDN one, say) cut out.
-// Stryker disable next-line StringLiteral: the stand-in for a link only words a log line, and no test asserts the log
-const withoutLinks = (text) => text.replace(/https?:\/\/\S*/gi, '[link]')
-// Stryker disable next-line StringLiteral,LogicalOperator: this only words a log line, and no test asserts the log; the link cut and the length are asserted
-const describe = (err) => withoutLinks(`${err?.name ?? 'Error'}: ${err?.message ?? ''}`).slice(0, MAX_ERROR)
 
 function needMs(value, name, max) {
   if (!Number.isSafeInteger(value) || value < 1 || value > max) throw new RangeError(`${name} must be a whole number of milliseconds from 1 to ${max}.`)

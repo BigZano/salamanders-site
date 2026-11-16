@@ -54,19 +54,11 @@
  * catch-up does not find it either.
  */
 import { emojiKey, parseMessage, parseThread } from './librariusParse.js'
+import { attempt as attemptWrite, describe, isId, isStoreId } from './librariusText.js'
 
-const SNOWFLAKE = /^\d{17,20}$/
-const BIGINT_MAX = 9223372036854775807n
-const MAX_ERROR = 200
 const STORE_METHODS = ['knownPostIds', 'upsertPost', 'deletePost', 'upsertMessages', 'deleteMessages', 'adjustReaction', 'clearReactions']
 
-const isId = (v) => typeof v === 'string' && SNOWFLAKE.test(v)
-// An id the store can take: a snowflake that fits its bigint, so that no id of an event makes a batch fail whole.
-const fitsStore = (v) => isId(v) && BigInt(v) <= BIGINT_MAX
 const isObj = (v) => typeof v === 'object' && v !== null && !Array.isArray(v)
-// For the log: the name and what the error says, with any link cut out.
-// Stryker disable next-line StringLiteral,LogicalOperator,MethodExpression,Regex,OptionalChaining: this only words a log line, and no test asserts the log; a value thrown that is no error is caught by the tests that reject with one, which an unguarded describe would turn into an unhandled rejection
-const describe = (err) => `${err?.name ?? 'Error'}: ${err?.message ?? ''}`.replace(/https?:\/\/\S*/gi, '[link]').slice(0, MAX_ERROR)
 
 export function createIngest({ store, guild, access, forumId, fetchMessage, onReady, log = console.error }) {
   for (const name of STORE_METHODS) if (typeof store?.[name] !== 'function') throw new TypeError(`store.${name} must be a function.`)
@@ -83,17 +75,9 @@ export function createIngest({ store, guild, access, forumId, fetchMessage, onRe
   const report = (text) => log(`Librarius ingest: ${text}`)
 
   /** Do one write of one row. The store refusing it with a TypeError skips the row → false; any other error goes on up. */
-  async function attempt(write, what) {
-    try {
-      await write()
-      return true
-    } catch (err) {
-      if (!(err instanceof TypeError)) throw err
-      // Stryker disable next-line StringLiteral: what is logged is for the owner to read, and no test asserts it
-      report(`the store refused ${what}: ${describe(err)}`)
-      return false
-    }
-  }
+  const attempt = (write, what) =>
+    // Stryker disable next-line ArrowFunction,StringLiteral: what is logged is for the owner to read, and no test asserts it
+    attemptWrite(write, (err) => report(`the store refused ${what}: ${describe(err)}`))
 
   async function load() {
     for (const id of await store.knownPostIds()) known.add(id)
@@ -130,7 +114,7 @@ export function createIngest({ store, guild, access, forumId, fetchMessage, onRe
   }
 
   async function threadDelete(d) {
-    if (d.parent_id !== forumId || !fitsStore(d.id)) return
+    if (d.parent_id !== forumId || !isStoreId(d.id)) return
     await store.deletePost(d.id)
     known.delete(d.id)
   }
@@ -150,7 +134,7 @@ export function createIngest({ store, guild, access, forumId, fetchMessage, onRe
   async function messageUpdate(d) {
     if (!known.has(d.channel_id)) return
     if (isObj(d.author)) return keepMessage(d)
-    if (!fitsStore(d.id)) return
+    if (!isStoreId(d.id)) return
     const whole = await fetchMessage(d.channel_id, d.id)
     // Only null means Discord no longer has it.
     if (whole === null) await store.deleteMessages([d.id])
@@ -158,16 +142,16 @@ export function createIngest({ store, guild, access, forumId, fetchMessage, onRe
   }
 
   async function messageDelete(d) {
-    if (known.has(d.channel_id) && fitsStore(d.id)) await store.deleteMessages([d.id])
+    if (known.has(d.channel_id) && isStoreId(d.id)) await store.deleteMessages([d.id])
   }
 
   async function messageDeleteBulk(d) {
     if (!known.has(d.channel_id) || !Array.isArray(d.ids)) return
-    await store.deleteMessages(d.ids.filter(fitsStore))
+    await store.deleteMessages(d.ids.filter(isStoreId))
   }
 
   /** Whether a reaction event is about a message of a post it listens to, with an id the store can take. */
-  const aboutKnown = (d) => known.has(d.channel_id) && fitsStore(d.message_id)
+  const aboutKnown = (d) => known.has(d.channel_id) && isStoreId(d.message_id)
 
   const reactionChange = (delta) => async (d) => {
     if (!aboutKnown(d) || d.user_id === botId || emojiKey(d.emoji) === null) return

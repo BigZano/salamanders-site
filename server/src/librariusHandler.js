@@ -26,14 +26,13 @@
  */
 import { Upstream } from './discordRoles.js'
 import { readJson as readJsonWithin, reply, send } from './httpReply.js'
+import { BIGINT_MAX, isStoreId } from './librariusText.js'
 
-const SNOWFLAKE = /^\d{17,20}$/
 const REV = /^\d{1,19}$/
 // A page's limit: 1 to 100, written without leading zeros.
 const LIMIT = /^([1-9]\d?|100)$/
 const MENTION = /<@!?(\d{17,20})>/g
 const POST_ROUTE = /^\/librarius\/posts\/([^/]+)(?:\/(messages|changes|read))?$/
-const BIGINT_MAX = 9223372036854775807n
 
 const DEFAULT_LIMIT = 50
 const CHANGES_LIMIT = 200
@@ -46,9 +45,6 @@ const JSON_MAX_BYTES = 1024
 const NO_SUCH_POST = 'No such post.'
 const BAD_CURSOR = 'That page cursor is not valid.'
 const BAD_MESSAGE = 'That message id is not valid.'
-
-/** Whether `value` is a snowflake that fits a bigint, the only kind the store takes. */
-const isId = (value) => typeof value === 'string' && SNOWFLAKE.test(value) && BigInt(value) <= BIGINT_MAX
 
 /** The first 200 characters of a message, counted as characters so that no pair is cut in two. */
 const quote = (text) => Array.from(text).slice(0, QUOTE_LENGTH).join('')
@@ -213,7 +209,7 @@ export function createLibrariusHandler({ access, store, guild, links, importer, 
     const page = { limit: limits.length === 1 ? Number(limits[0]) : DEFAULT_LIMIT }
     if (cursors.length === 1) {
       const given = params.getAll(cursors[0])
-      if (given.length !== 1 || !isId(given[0])) return null
+      if (given.length !== 1 || !isStoreId(given[0])) return null
       page[cursors[0]] = given[0]
     }
     return page
@@ -251,13 +247,13 @@ export function createLibrariusHandler({ access, store, guild, links, importer, 
     const read = await readJson(request)
     if (read.error) return reply(read.status, { error: read.error })
     const messageId = read.body?.messageId
-    if (!isId(messageId)) return reply(400, { error: BAD_MESSAGE })
+    if (!isStoreId(messageId)) return reply(400, { error: BAD_MESSAGE })
     await store.setRead(verdict.user.id, postId, messageId)
     return send(204, null)
   }
 
   /** A route on a post: a post id that is no id is 404 before anything else is looked at. */
-  const onPost = (id, run) => (request, verdict, url) => (isId(id) ? run(request, verdict, url) : reply(404, { error: NO_SUCH_POST }))
+  const onPost = (id, run) => (request, verdict, url) => (isStoreId(id) ? run(request, verdict, url) : reply(404, { error: NO_SUCH_POST }))
 
   /** → { me, run } for a known route, else null. `me` true: any signed-in user, a reader or not. */
   function find(method, pathname) {

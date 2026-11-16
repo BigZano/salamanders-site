@@ -37,12 +37,10 @@
  */
 import { Upstream } from './discordRoles.js'
 import { parseMessage, parseThread } from './librariusParse.js'
+import { attempt as attemptWrite, describe, isId, isStoreId, scrub } from './librariusText.js'
 
-const SNOWFLAKE = /^\d{17,20}$/
-const BIGINT_MAX = 9223372036854775807n
 // Discord's most for a page of messages, and so for a window.
 const PAGE = 100
-const MAX_ERROR = 200
 const DISCORD_METHODS = ['activeThreads', 'archivedThreads', 'messagesAfter', 'newest']
 const STORE_METHODS = [
   'upsertPost',
@@ -56,15 +54,8 @@ const STORE_METHODS = [
   'setSync',
 ]
 
-const isId = (v) => typeof v === 'string' && SNOWFLAKE.test(v)
-const fitsStore = (id) => BigInt(id) <= BIGINT_MAX
-const withoutLinks = (text) => text.replace(/https?:\/\/\S*/gi, '[link]')
-// For the log: the name and what the error says, with any link (a signed CDN one, say) cut out.
-// Stryker disable next-line StringLiteral,LogicalOperator,MethodExpression: this only words a log line, and no test asserts the log; the link cut is asserted
-const describe = (err) => withoutLinks(`${err?.name ?? 'Error'}: ${err?.message ?? ''}`).slice(0, MAX_ERROR)
 // For last_error, which a page of the site may show: Discord's own trouble, and nothing else.
-const note = (err) =>
-  withoutLinks(err instanceof Upstream ? err.message || 'Discord is unavailable.' : `The Librarius import failed (${err?.name ?? 'Error'}).`).slice(0, MAX_ERROR)
+const note = (err) => scrub(err instanceof Upstream ? err.message || 'Discord is unavailable.' : `The Librarius import failed (${err?.name ?? 'Error'}).`)
 const instant = (time) => (time == null ? null : new Date(time).toISOString())
 
 /** → the archive time to ask the next page of archived threads from: the oldest one of this page, as Discord wrote it. */
@@ -92,17 +83,9 @@ export function createImport({ discord, store, forumId, windowSize = PAGE, log =
   let current = null
 
   /** Do one write of one row. The store refusing it with a TypeError skips the row → false; any other error goes on up. */
-  async function attempt(write, what) {
-    try {
-      await write()
-      return true
-    } catch (err) {
-      if (!(err instanceof TypeError)) throw err
-      // Stryker disable next-line StringLiteral: what is logged is for the owner to read, and no test asserts it
-      report(`the store refused ${what}: ${describe(err)}`)
-      return false
-    }
-  }
+  const attempt = (write, what) =>
+    // Stryker disable next-line ArrowFunction,StringLiteral: what is logged is for the owner to read, and no test asserts it
+    attemptWrite(write, (err) => report(`the store refused ${what}: ${describe(err)}`))
 
   /** Store the rows of a page. One the store refuses fails the whole batch, so the rows then go one at a time. */
   async function write(rows) {
@@ -119,7 +102,7 @@ export function createImport({ discord, store, forumId, windowSize = PAGE, log =
       for (const raw of threads) {
         const post = parseThread(raw, forumId)
         if (post === null) continue
-        if (fitsStore(post.id)) listed.add(post.id)
+        if (isStoreId(post.id)) listed.add(post.id)
         // Stryker disable next-line StringLiteral: what is logged is for the owner to read, and no test asserts it
         if (await attempt(() => store.upsertPost(post), `post ${post.id}`)) imported.add(post.id)
       }

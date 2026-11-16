@@ -418,6 +418,37 @@ describe('runOnce', () => {
       )
     })
 
+    it('logs no link of a Discord CDN host either, with or without its scheme, in any case', async () => {
+      const links = [
+        'cdn.discordapp.com/attachments/200000000000000410/300000000000000001/a.png?ex=1&is=2&hm=secret',
+        'MEDIA.DISCORDAPP.NET/attachments/200000000000000410/300000000000000001/a.png?hm=secret',
+        'https://cdn.discordapp.com/attachments/200000000000000410/300000000000000001/a.png?hm=secret',
+        'WSS://gateway.test/?v=10&hm=secret',
+      ]
+      for (const url of links) {
+        for (const error of [new Error(`refused ${url} today`), new Upstream(`refused ${url} today`), Object.assign(new Error('x'), { name: `Odd ${url}` })]) {
+          const w = setup({ rows: rows(), tombstones: stale() })
+          w.store.failures.attachmentsToRefresh = error
+          await w.links.runOnce()
+          expect(w.logs.join('\n')).not.toMatch(/discordapp|wss:|secret/i)
+        }
+      }
+    })
+
+    it('resolves and goes on to the delete notes when what went wrong cannot be read or printed', async () => {
+      const unreadable = Object.defineProperties(new Error('x'), { name: { get: () => { throw new Error('no name') } }, message: { get: () => { throw new Error('no message') } } })
+      const symbolic = Object.assign(new Error('x'), { name: Symbol('name'), message: Symbol('message') })
+      const hidden = new Proxy({}, { get: () => { throw new Error('trap') } })
+      for (const error of [unreadable, symbolic, hidden, Object.create(null)]) {
+        for (const where of ['attachmentsToRefresh', 'pruneTombstones']) {
+          const w = setup({ rows: rows(), tombstones: stale() })
+          w.store.failures[where] = error
+          await expect(w.links.runOnce()).resolves.toBeUndefined()
+          if (where === 'attachmentsToRefresh') expect(w.store.tombstones).toEqual([])
+        }
+      }
+    })
+
     it('logs at most 200 characters of what went wrong', async () => {
       for (const error of [new Error('a'.repeat(5000)), new Upstream('b'.repeat(201)), Object.assign(new Error('x'), { name: 'N'.repeat(5000) })]) {
         const w = setup({ rows: rows(), tombstones: stale() })
