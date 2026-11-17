@@ -1506,6 +1506,145 @@ describe('PostPage: polling', () => {
   })
 })
 
+// A post deleted in Discord while it is open: the server answers its next poll 404, and the store lets the post go.
+describe('PostPage: a post removed in Discord while it is open', () => {
+  const removedNote = 'This post was removed in Discord.'
+  const gone = () => apiError(404, 'No such post.')
+
+  it('says so, with a way back to the topic list, at the next poll, and shows none of the post', async () => {
+    const w = await show()
+    getChanges.mockRejectedValue(gone())
+    await settle(10_000)
+    expect(w.find('[role="alert"]').text()).toBe(removedNote)
+    expect(w.find('a[href="/reliquarium/librarius"]').text()).toBe('Back to the Librarius')
+    expect(w.findAll('.lb-msg')).toHaveLength(0)
+    expect(w.find('h2').exists()).toBe(false)
+    expect(w.text()).not.toContain('Loading…')
+    expect(w.text()).not.toContain('couldn\'t be found')
+    expect(store.post).toBeNull()
+    expect(errors).toEqual([])
+  })
+
+  it('shows nothing of it before the poll, and the post as it was until then', async () => {
+    const w = await show()
+    expect(w.text()).not.toContain(removedNote)
+    await settle(9999)
+    expect(w.text()).not.toContain(removedNote)
+    expect(shownIds(w)).toEqual([POST, m(1), m(2)])
+  })
+
+  it('asks no more about the post, and leaves no timer behind', async () => {
+    await show()
+    getChanges.mockRejectedValue(gone())
+    await settle(10_000)
+    expect(getChanges).toHaveBeenCalledTimes(1)
+    expect(vi.getTimerCount()).toBe(0)
+    await settle(120_000)
+    expect(getChanges).toHaveBeenCalledTimes(1)
+  })
+
+  it('leaves no place for the post behind when the page is left', async () => {
+    const w = await show({ messages: [msg(1), msg(2), msg(3)] })
+    report([m(2), m(3)])
+    getChanges.mockRejectedValue(gone())
+    await settle(10_000)
+    leave(w)
+    expect(sessionStorage.getItem(`lb-anchor:${POST}`)).toBeNull()
+  })
+
+  it('counts nothing as read after the post is gone, and sends no report', async () => {
+    await show()
+    report([m(1), m(2)])
+    getChanges.mockRejectedValue(gone())
+    await settle(10_000)
+    markRead.mockClear()
+    await settle(60_000)
+    expect(markRead).not.toHaveBeenCalled()
+  })
+
+  it('keeps the page and goes on polling when the poll fails for any other reason', async () => {
+    const w = await show()
+    for (const status of [400, 410, 429, 500, 503]) {
+      getChanges.mockRejectedValueOnce(apiError(status))
+      await settle(10_000)
+      expect(w.text()).not.toContain(removedNote)
+      expect(shownIds(w)).toEqual([POST, m(1), m(2)])
+    }
+    expect(getChanges).toHaveBeenCalledTimes(5)
+    getChanges.mockResolvedValue({ messages: [msg(3)], deleted: [], rev: '42', people: {} })
+    await settle(10_000)
+    expect(shownIds(w)).toEqual([POST, m(1), m(2), m(3)])
+  })
+
+  it('does not say the post was removed for a poll that comes back after the reader went to another post', async () => {
+    const w = await show()
+    const late = deferred()
+    getChanges.mockReturnValue(late.promise)
+    await settle(10_000)
+    getPost.mockResolvedValue({ post: info({ id: OTHER }), lastRead: null, rev: '90' })
+    serve(run([msg(8)], { rev: '90' }))
+    await w.setProps({ postId: OTHER })
+    await settle()
+    late.reject(gone())
+    await settle()
+    expect(w.text()).not.toContain(removedNote)
+    expect(shownIds(w)).toEqual([m(8)])
+    expect(store.post.id).toBe(OTHER)
+    expect(errors).toEqual([])
+  })
+
+  it('does not fall over when the poll comes back after the page was left', async () => {
+    const w = await show()
+    const late = deferred()
+    getChanges.mockReturnValue(late.promise)
+    await settle(10_000)
+    leave(w)
+    late.reject(gone())
+    await settle(60_000)
+    expect(getChanges).toHaveBeenCalledTimes(1)
+    expect(vi.getTimerCount()).toBe(0)
+    expect(errors).toEqual([])
+  })
+
+  it('opens another post afterwards in the ordinary way, and polls that one', async () => {
+    const w = await show({ host: true })
+    getChanges.mockRejectedValue(gone())
+    await settle(10_000)
+    expect(w.text()).toContain(removedNote)
+    getChanges.mockResolvedValue({ messages: [], deleted: [], rev: '91', people: {} })
+    getPost.mockResolvedValue({ post: info({ id: OTHER, title: 'Another Road' }), lastRead: null, rev: '90' })
+    serve(run([msg(8)], { rev: '90' }))
+    await router.push(`/reliquarium/librarius/${OTHER}`)
+    await settle()
+    expect(w.text()).not.toContain(removedNote)
+    expect(shownIds(w)).toEqual([m(8)])
+    await settle(10_000)
+    expect(getChanges.mock.calls.at(-1).slice(0, 2)).toEqual(['tok', OTHER])
+    expect(w.text()).not.toContain(removedNote)
+  })
+
+  it('offers the post again when the reader comes back to it, if it is there', async () => {
+    const w = await show({ host: true })
+    getChanges.mockRejectedValue(gone())
+    await settle(10_000)
+    expect(w.text()).toContain(removedNote)
+    getChanges.mockResolvedValue({ messages: [], deleted: [], rev: '41', people: {} })
+    getPost.mockResolvedValue({ post: info(), lastRead: null, rev: '40' })
+    serve({ messages: [opener(), msg(1)], hasOlder: false, hasNewer: false, people: PEOPLE, rev: '40' }, opener())
+    await router.push(`/reliquarium/librarius/${OTHER}`)
+    await router.push(`/reliquarium/librarius/${POST}`)
+    await settle()
+    expect(w.text()).not.toContain(removedNote)
+    expect(shownIds(w)).toEqual([POST, m(1)])
+  })
+
+  it('takes a post that is gone when it is opened for "missing", as before, and not for removed', async () => {
+    const w = await show({ arrange: () => getPost.mockRejectedValue(apiError(404)) })
+    expect(w.find('[role="alert"]').text()).toBe('That post couldn\'t be found.')
+    expect(w.text()).not.toContain(removedNote)
+  })
+})
+
 describe('PostPage: the opening message', () => {
   const page = (messages, over = {}) => run(messages, { hasOlder: true, ...over })
 

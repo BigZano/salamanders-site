@@ -16,7 +16,9 @@
 //     older messages keeps the reader's place.
 //   - A message counts as read when at least 60% of it is in view, or its bottom edge is, below the site's fixed header (see
 //     isRead). The newest that counts is reported, two seconds after what is in view last changed, through the store, which
-//     never lowers the mark. A failed report, poll or page is dropped quietly or noted: none of them takes the page away.
+//     never lowers the mark. A failed report, poll or page is dropped quietly or noted: none of them takes the page away. A
+//     poll that finds the post gone (deleted in Discord: the server answers 404) does: the page says so, with a way back to the
+//     topic list, and asks no more.
 //   - A poll draws only what changed: the layout of a message is worked out once for each message object, and people are replaced
 //     only when they are named differently. Messages that leave the page (a jump, a deletion) are no longer watched. The rail of
 //     months comes before the messages in the page, so a keyboard meets it first, and the focus moves to the first message
@@ -57,7 +59,7 @@ const auth = useAuth()
 const route = useRoute()
 
 const root = ref(null)
-// loading, ready, missing (no such post) or failed.
+// loading, ready, missing (no such post), removed (it was there, and Discord has deleted it since) or failed.
 const phase = ref('loading')
 // `lastRead` as it was when the post opened: where the divider goes, however far the reader has read since.
 const snapshot = ref(null)
@@ -281,8 +283,15 @@ let pollTimer = null
 
 function poll(mine) {
   pollTimer = setTimeout(async () => {
-    if (document.visibilityState === 'visible') await store.poll(auth.token).catch(() => {})
-    if (mine === session) poll(mine)
+    // The store answers true for a post that Discord has deleted: the page says so, and asks no more about it.
+    const removed = document.visibilityState === 'visible' && (await store.poll(auth.token).catch(() => false)) === true
+    if (mine !== session) return
+    if (removed) {
+      stopReading()
+      phase.value = 'removed'
+      return
+    }
+    poll(mine)
   }, POLL_MS)
 }
 
@@ -429,6 +438,11 @@ async function jump(month) {
 
     <div v-else-if="phase === 'missing'" class="lb-empty panel-forge">
       <p role="alert">That post couldn't be found.</p>
+      <RouterLink class="btn-ghost btn-sm" to="/reliquarium/librarius">Back to the Librarius</RouterLink>
+    </div>
+
+    <div v-else-if="phase === 'removed'" class="lb-empty panel-forge">
+      <p role="alert">This post was removed in Discord.</p>
       <RouterLink class="btn-ghost btn-sm" to="/reliquarium/librarius">Back to the Librarius</RouterLink>
     </div>
 

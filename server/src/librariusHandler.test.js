@@ -112,13 +112,16 @@ const view = (id, over = {}) => ({
 
 const member = (id, name, over = {}) => ({ id, name, avatar: avatar(`now-${id}`), joinedAt: '2024-01-01T00:00:00.000Z', ...over })
 
+// The post of the routes under test, as the store holds it.
+const foundPost = () => ({ post: { id: POST, ownerId: ALICE, title: 'A test post', tagIds: [], pinned: false, locked: false, archived: false, createdAt: '2026-11-01T10:00:00.000Z', replies: 7 }, lastRead: M2 })
+
 /** A store that notes each call (its name and a copy of the arguments), then answers from `over` or with nothing. */
 function fakeStore(over = {}) {
   const log = []
   const base = {
     currentRev: () => '500',
     listPosts: () => [],
-    getPost: () => null,
+    getPost: () => foundPost(),
     markViewed: () => undefined,
     listMessages: () => ({ rows: [], hasOlder: false, hasNewer: false }),
     changes: () => ({ rows: [], deleted: [], rev: '0' }),
@@ -665,8 +668,6 @@ describe('GET /librarius/posts', () => {
 })
 
 describe('GET /librarius/posts/:id', () => {
-  const foundPost = () => ({ post: { id: POST, ownerId: ALICE, title: 'A test post', tagIds: [], pinned: false, locked: false, archived: false, createdAt: '2026-11-01T10:00:00.000Z', replies: 7 }, lastRead: M2 })
-
   it('answers the post, where the member has read to, and the number to poll from; and notes that it was opened', async () => {
     const found = foundPost()
     const { get, calls, names } = setup({ store: { getPost: () => found, currentRev: () => '812' } })
@@ -693,7 +694,7 @@ describe('GET /librarius/posts/:id', () => {
   })
 
   it('answers 404 for a post that is not stored, and does not note a view of it', async () => {
-    const { get, calls } = setup()
+    const { get, calls } = setup({ store: { getPost: () => null } })
     const res = await get(`/librarius/posts/${POST}`)
     expect(res.status).toBe(404)
     expect(await body(res)).toEqual(NO_SUCH_POST)
@@ -1477,6 +1478,50 @@ describe('GET /librarius/posts/:id/changes', () => {
     expect(res.status).toBe(400)
     expect(await body(res)).toEqual(BAD_CURSOR)
     expect(log).toEqual([])
+  })
+
+  // A post deleted in Discord is gone from the store, and an open page learns it from its next poll.
+  it('answers 404 for a post that is no longer stored, and reads no changes of it', async () => {
+    const { get, calls } = setup({ store: { getPost: () => null } })
+    const res = await get(changesPath('?since=42'))
+    expect(res.status).toBe(404)
+    expect(await body(res)).toEqual(NO_SUCH_POST)
+    expect(calls('changes')).toEqual([])
+    expect(calls('markViewed')).toEqual([])
+  })
+
+  it('asks whether the post is stored for the post of the route and the member who polls', async () => {
+    const { get, calls } = setup({ store: { currentRev: () => '42' } })
+    expect((await get(changesPath('?since=42'))).status).toBe(200)
+    expect(calls('getPost')).toEqual([[POST, READER.id]])
+    const other = setup({ store: { currentRev: () => '42' } })
+    expect((await other.get(`/librarius/posts/${POST_2}/changes?since=42`)).status).toBe(200)
+    expect(other.calls('getPost')).toEqual([[POST_2, READER.id]])
+  })
+
+  it('answers the changes while the post is stored, then 404 once it is not', async () => {
+    let stored = true
+    const { get } = setup({ store: { getPost: () => (stored ? foundPost() : null), currentRev: () => '42' } })
+    expect((await get(changesPath('?since=42'))).status).toBe(200)
+    stored = false
+    const res = await get(changesPath('?since=42'))
+    expect(res.status).toBe(404)
+    expect(await body(res)).toEqual(NO_SUCH_POST)
+  })
+
+  it('answers 400 for a bad since before it asks whether the post is stored', async () => {
+    const { get, log } = setup({ store: { getPost: () => null } })
+    const res = await get(changesPath('?since=nope'))
+    expect(res.status).toBe(400)
+    expect(await body(res)).toEqual(BAD_CURSOR)
+    expect(log).toEqual([])
+  })
+
+  it('answers 503 and nothing else when Discord being down is why the store cannot say', async () => {
+    const { get } = setup({ store: { getPost: () => Promise.reject(new Upstream('Discord is unreachable.')) } })
+    const res = await get(changesPath('?since=42'))
+    expect(res.status).toBe(503)
+    expect(await body(res)).toEqual(UNREACHABLE)
   })
 
   it('answers 404 for a post id that is no id, before it looks at since', async () => {

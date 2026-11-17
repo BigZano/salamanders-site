@@ -91,6 +91,18 @@ function takePeople(store, answer) {
   if (isTable(answer.people)) store.people = { ...store.people, ...answer.people }
 }
 
+// A poll that was answered 404 found its post gone: it was deleted in Discord, and the server no longer holds it. The post is
+// let go of, and nothing of it that is still on its way may land. → true. Any other failure is the caller's, and goes on up.
+function removed(store, err) {
+  if (err?.status !== 404) throw err
+  // Stryker disable next-line UpdateOperator: only that the counter moves tells an older answer from a current one, as in restart()
+  gen.post++
+  // Stryker disable next-line UpdateOperator: as above
+  gen.poll++
+  store.post = null
+  return true
+}
+
 // Message ids are compared as BigInts: they are wider than a Number holds, and as text they would sort "9" after "10".
 const idOf = (message) => BigInt(message.id)
 
@@ -305,7 +317,12 @@ export const useLibrarius = defineStore('librarius', {
         const waiting = kept?.id === held.id && kept.rev === held.rev ? kept : undefined
         if (waiting !== undefined && Date.now() < waiting.until) return
         gen.poll++
-        const got = await readOrRefuse(this, () => gen.poll, () => api.getChanges(token, held.id, held.rev))
+        let got
+        try {
+          got = await readOrRefuse(this, () => gen.poll, () => api.getChanges(token, held.id, held.rev))
+        } catch (err) {
+          return removed(this, err)
+        }
         if (got === STALE) return
         if (got.reset === true) {
           // The server was asked from the rev the last start-over opened the post at, and says to start over again: opening it
@@ -318,7 +335,12 @@ export const useLibrarius = defineStore('librarius', {
           // Too much changed to be sent: the run is no use, so the post is opened again around the middle of the run held,
           // so that the reader's window survives, and the rev it was opened at is kept.
           const middle = held.messages[Math.floor(held.messages.length / 2)]
-          const landed = await open(this, token, held.id, middle?.id)
+          let landed
+          try {
+            landed = await open(this, token, held.id, middle?.id)
+          } catch (err) {
+            return removed(this, err)
+          }
           if (landed) quiet.set(this, { id: held.id, rev: this.post.rev, wait: POLL_MS, until: 0 })
           return
         }

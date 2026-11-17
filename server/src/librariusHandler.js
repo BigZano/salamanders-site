@@ -8,7 +8,9 @@
  * needs a reader (403). Every route uses the short-lived cached verdict, the PUT too: it writes only the caller's own read
  * mark. No route reads its body before those checks, and no error message echoes what was sent. Responses are never cached.
  *
- * A post or message id that is no snowflake that fits a bigint never reaches the store: a post is 404, a cursor 400.
+ * A post or message id that is no snowflake that fits a bigint never reaches the store: a post is 404, a cursor 400. A post
+ * the store no longer holds is 404 too, for a poll for its changes as for the post itself: a post deleted in Discord is
+ * gone from the store, and a page left open learns that from its next poll.
  *
  * Reading messages. A page, or a poll for changes, answers `rev`, the number a poll asks from next: the highest of this
  * post's own. It is read from the store BEFORE the messages are, so a write that lands while they are read is sent again
@@ -245,9 +247,11 @@ export function createLibrariusHandler({ access, store, guild, links, importer, 
     return BigInt(given[0])
   }
 
-  async function changes(postId, url) {
+  async function changes(postId, url, verdict) {
     const since = parseSince(url.searchParams)
     if (since === null) return reply(400, { error: BAD_CURSOR })
+    // A post deleted in Discord is gone from the store, with its messages, and an open page learns that here.
+    if ((await store.getPost(postId, verdict.user.id)) === null) return reply(404, { error: NO_SUCH_POST })
     const rev = await store.currentRev(postId)
     const found = await store.changes(postId, String(since), { limit: CHANGES_LIMIT, slack: CHANGES_SLACK })
     if (found.full) return reply(200, { reset: true })
@@ -277,7 +281,7 @@ export function createLibrariusHandler({ access, store, guild, links, importer, 
     const [, id, part] = match
     if (method === 'GET' && part === undefined) return { run: onPost(id, (_request, verdict) => openPost(id, verdict)) }
     if (method === 'GET' && part === 'messages') return { run: onPost(id, (_request, _verdict, url) => messages(id, url)) }
-    if (method === 'GET' && part === 'changes') return { run: onPost(id, (_request, _verdict, url) => changes(id, url)) }
+    if (method === 'GET' && part === 'changes') return { run: onPost(id, (_request, verdict, url) => changes(id, url, verdict)) }
     if (method === 'PUT' && part === 'read') return { run: onPost(id, (request, verdict) => markRead(id, request, verdict)) }
     return null
   }

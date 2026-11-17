@@ -1378,6 +1378,164 @@ describe('librarius store: polling for changes', () => {
     expect({ ...snapshot(), error: '' }).toEqual(before)
   })
 
+  // A post deleted in Discord is gone from the server, which then answers 404 to a poll for its changes.
+  describe('when the post was deleted in Discord', () => {
+    const gone = () => apiError(404, 'No such post.')
+
+    it('lets go of the post, says so by answering true, and shows no error', async () => {
+      seed([401, 402], { rev: '40' })
+      getChanges.mockRejectedValue(gone())
+      await expect(s.poll('tok')).resolves.toBe(true)
+      expect(s.post).toBeNull()
+      expect(s.error).toBe('')
+    })
+
+    it('keeps everything else the reader has: the status, the list, the people and who they are', async () => {
+      fill()
+      getChanges.mockRejectedValue(gone())
+      await expect(s.poll('tok')).resolves.toBe(true)
+      expect(s.$state).toEqual({ ...INITIAL, status: 'allowed', me: ME, posts: [{ id: POST, title: 'Invented post' }], people: { [SELF]: person('Invented Author') } })
+    })
+
+    it('is not asked about again: a poll with the post gone asks nothing and answers nothing', async () => {
+      seed([401])
+      getChanges.mockRejectedValue(gone())
+      await s.poll('tok')
+      await expect(s.poll('tok')).resolves.toBeUndefined()
+      expect(getChanges).toHaveBeenCalledTimes(1)
+    })
+
+    it('answers nothing for a poll that found the post there, with or without changes', async () => {
+      seed([401], { rev: '40' })
+      getChanges.mockResolvedValue(changesOf())
+      await expect(s.poll('tok')).resolves.toBeUndefined()
+      getChanges.mockResolvedValue(changesOf({ messages: [msg(402)], deleted: [mid(401)], rev: '70' }))
+      await expect(s.poll('tok')).resolves.toBeUndefined()
+    })
+
+    // Anything but a plain 404 is no word that the post is gone: it stays, and the failure is the caller's, as before.
+    it.each([
+      ['a 400', apiError(400)],
+      ['a 410', apiError(410)],
+      ['a 429', apiError(429)],
+      ['a 500', apiError(500)],
+      ['a 503', apiError(503)],
+      ['a 404 whose status is text', apiError('404')],
+      ['a 404 whose status is a float', apiError(404.5)],
+      ['a failure with no status', new TypeError('Failed to fetch')],
+      ['a thrown text', 'No such post.'],
+      ['nothing thrown', undefined],
+      ['null thrown', null],
+    ])('keeps the post, and rethrows, for %s', async (_, failure) => {
+      seed([401, 402], { rev: '40' })
+      const before = snapshot()
+      getChanges.mockRejectedValue(failure)
+      await expect(s.poll('tok')).rejects.toBe(failure)
+      expect({ ...snapshot(), error: '' }).toEqual(before)
+    })
+
+    it('does not take the post for gone on the word of a 404 for the call before it', async () => {
+      seed([401], { rev: '40' })
+      getChanges.mockRejectedValueOnce(apiError(503)).mockResolvedValueOnce(changesOf({ rev: '50' }))
+      await expect(s.poll('tok')).rejects.toMatchObject({ status: 503 })
+      await expect(s.poll('tok')).resolves.toBeUndefined()
+      expect(s.post.rev).toBe('50')
+    })
+
+    it('lets go of the post when opening it again after a start-over finds it gone', async () => {
+      seed([401, 402], { rev: '40' })
+      getChanges.mockResolvedValue({ reset: true })
+      getPost.mockRejectedValue(gone())
+      await expect(s.poll('tok')).resolves.toBe(true)
+      expect(s.post).toBeNull()
+      expect(s.error).toBe('')
+    })
+
+    it('lets go of the post when its messages, read again after a start-over, are found gone', async () => {
+      seed([401, 402], { rev: '40' })
+      getChanges.mockResolvedValue({ reset: true })
+      getPost.mockResolvedValue(found())
+      listMessages.mockRejectedValue(gone())
+      await expect(s.poll('tok')).resolves.toBe(true)
+      expect(s.post).toBeNull()
+    })
+
+    it('keeps the post when opening it again after a start-over fails for another reason', async () => {
+      seed([401, 402], { rev: '40' })
+      getChanges.mockResolvedValue({ reset: true })
+      getPost.mockRejectedValue(apiError(500))
+      await expect(s.poll('tok')).rejects.toMatchObject({ status: 500 })
+      expect(ids(s.post.messages)).toEqual([mid(401), mid(402)])
+    })
+
+    it('does not let an older or newer page, still on its way, land on the post that is gone', async () => {
+      seed([401, 402], { hasOlder: true })
+      const older = deferred()
+      listMessages.mockReturnValue(older.promise)
+      const loading = s.loadOlder('tok')
+      await tick()
+      getChanges.mockRejectedValue(gone())
+      await expect(s.poll('tok')).resolves.toBe(true)
+      older.resolve(pageOf([399, 400], { hasOlder: false }))
+      await expect(loading).resolves.toBeUndefined()
+      expect(s.post).toBeNull()
+      expect(s.error).toBe('')
+    })
+
+    it('does not let a read mark that is on its way bring the post back, or fail when it does', async () => {
+      seed([401, 402], { lastRead: mid(401) })
+      const report = deferred()
+      markRead.mockReturnValue(report.promise)
+      const marking = s.markRead('tok', mid(402))
+      await tick()
+      getChanges.mockRejectedValue(gone())
+      await s.poll('tok')
+      report.reject(apiError(503))
+      await expect(marking).resolves.toBeUndefined()
+      expect(s.post).toBeNull()
+    })
+
+    it('does not let an answer that comes after another post was opened take that post away', async () => {
+      seed([401, 402])
+      const late = deferred()
+      getChanges.mockReturnValue(late.promise)
+      const polling = s.poll('tok')
+      await tick()
+      const OTHER = mid(600)
+      getPost.mockResolvedValue({ post: { ...info(), id: OTHER }, lastRead: null, rev: '9' })
+      servePage(pageOf([601], { rev: '9' }))
+      await s.openPost('tok', OTHER)
+      late.reject(gone())
+      await expect(polling).resolves.toBeUndefined()
+      expect(s.post.id).toBe(OTHER)
+    })
+
+    it('is a late 404 from a sign-out dropped, as any other late answer is', async () => {
+      seed([401])
+      const late = deferred()
+      getChanges.mockReturnValue(late.promise)
+      const polling = s.poll('tok')
+      await tick()
+      s.reset()
+      late.reject(gone())
+      await expect(polling).resolves.toBeUndefined()
+      expect(s.$state).toEqual(INITIAL)
+    })
+
+    it('lets the post be opened again afterwards, and polled from the new rev', async () => {
+      seed([401], { rev: '40' })
+      getChanges.mockRejectedValueOnce(gone())
+      await s.poll('tok')
+      getPost.mockResolvedValue(found({ rev: '80' }))
+      servePage(pageOf([401, 402], { rev: '80' }))
+      await s.openPost('tok', POST)
+      getChanges.mockResolvedValue(changesOf({ rev: '90' }))
+      await expect(s.poll('tok')).resolves.toBeUndefined()
+      expect(getChanges).toHaveBeenLastCalledWith('tok', POST, '80')
+      expect(s.post.rev).toBe('90')
+    })
+  })
+
   describe('when the server says to start over', () => {
     it('opens the same post again around the middle of the run held: the post, then the page, and rev afresh', async () => {
       seed([401, 402, 403, 404], { rev: '40', lastRead: mid(402) })
@@ -1558,6 +1716,15 @@ describe('librarius store: polling for changes', () => {
         now += wait
       }
       expect(getPost).not.toHaveBeenCalled()
+    })
+
+    it('lets go of the post that is gone when the wait is over and the server says so', async () => {
+      await afterFirst()
+      await s.poll('tok')
+      at(20_000)
+      getChanges.mockRejectedValue(apiError(404, 'No such post.'))
+      await expect(s.poll('tok')).resolves.toBe(true)
+      expect(s.post).toBeNull()
     })
 
     it('asks again the very moment the wait is over', async () => {
