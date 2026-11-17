@@ -250,8 +250,10 @@ then the gateway's live events), and the site reads that copy. Nothing here writ
 here exactly when Discord would let them open it, worked out from the guild's roles and the forum's permission
 overwrites (View Channel and Read Message History, `librariusPerms.js`). The guild owner and Administrators read it
 too, as in Discord, and a role the forum shuts out does not. Every route reuses a verdict for 30 seconds, marking a post
-read included: it writes only the caller's own read mark. Any Discord failure answers 503, and responses are never
-cached.
+read included: it writes only the caller's own read mark. The guild and the forum that a verdict is drawn from are kept for
+5 minutes, and the gateway's role and channel events drop them at once; if such an event is lost, a change to a role or to
+the forum's overwrites takes effect within about 5.5 minutes (the 5 minutes of the cache and the 30 seconds of the verdict).
+Any Discord failure answers 503, and responses are never cached.
 
 | Endpoint | Who | Notes |
 |---|---|---|
@@ -260,7 +262,7 @@ cached.
 | `GET /librarius/posts` | reader | `{ posts, people }`: every post with its tag ids, its latest message, its posters and the caller's unread count |
 | `GET /librarius/posts/:id` | reader | `{ post, lastRead, rev }`; opening a post marks it viewed, which keeps its attachment links fresh |
 | `GET /librarius/posts/:id/messages` | reader | one page: `?limit=` (1 to 100, default 50) and at most one of `before`, `after` or `around` (a message id); `{ messages, hasOlder, hasNewer, people, rev }` |
-| `GET /librarius/posts/:id/changes?since=<rev>` | reader | what changed after `rev`: `{ messages, deleted, rev, people }`, or `{ reset: true }` when too much did and the page must be read again |
+| `GET /librarius/posts/:id/changes?since=<rev>` | reader | what changed after `rev`: `{ messages, deleted, rev, people }`, or `{ reset: true }` when too much did and the page must be read again; 404 once the post is gone (deleted in Discord), which is how a page left open learns it |
 | `PUT /librarius/posts/:id/read` | reader | JSON `{ messageId }` (at most 1 KB): how far the caller has read; 204 |
 
 A route that is not listed answers 404, an unconfigured Librarius 503, no identity 401 and no read permission 403
@@ -292,7 +294,17 @@ intent toggle on the bot's page in the Discord Developer Portal, already on for 
 is refused).
 
 **The port.** `docker-compose.yml` publishes the API as `127.0.0.1:8787:8787`: on the host's loopback only. The Cloudflare
-tunnel runs on the host and reaches it there; nothing else on the LAN can. `src/composePorts.test.js` pins this.
+tunnel runs on the host and reaches it there; nothing else on the LAN can. `src/composePorts.test.js` pins this. The
+tunnel's ingress may still say `localhost`, which can resolve to `::1`, where a bind to `127.0.0.1` does not answer: set
+`http://127.0.0.1:8787` in the cloudflared config. The public `/health` check below proves that the tunnel reaches the API
+either way. Beware of any other checkout of this repository on the host that has an older `server/` compose file (the same
+compose project name, publishing `'8787:8787'`): running `docker compose up` there would replace the live API and open the
+LAN port again. Do not run it from anywhere but the checkout the API is deployed from.
+
+**Rollout order: the API first, the merge to `main` after.** Rebuild and configure the API from the `feat/librarius` branch
+(steps 1 to 4 below), and wait for `import_done`, **before** merging the branch to `main`: the site deploys the moment it
+merges. The new API is additive and safe for the old site, which never asks for it. The new site against the old API is not:
+it shows every Legion member "The Librarius couldn't be reached." until the API is rebuilt.
 
 Rollout:
 
@@ -301,12 +313,18 @@ Rollout:
 2. Set `LIBRARIUS_CHANNEL_ID` in `server/.env`.
 3. Rebuild the API, keeping the rollback tag: `docker tag server-api:latest server-api:pre-librarius` first, then
    `docker compose up -d --build api`. To go back: `docker tag server-api:pre-librarius server-api:latest && docker
-   compose up -d --no-build --force-recreate api`.
+   compose up -d --no-build --force-recreate api`. Once the site has been merged, going back is not so simple: see
+   "Rolling back" below.
 4. Check:
    - `curl -s -o /dev/null -w '%{http_code}' localhost:8787/librarius/me` answers 401;
    - `curl -s <the API's public address>/health` (the address `VITE_BUILDS_API_URL` names) answers `{"ok":true}`: the tunnel
      still reaches the API now that the port is bound to the loopback;
    - `docker compose logs api` shows no "Librarius is not configured";
+   - `docker compose logs api` shows no `gateway closed with code 40xx` (the line reads "The Librarius gateway closed with
+     code 4014.", say). 4014 means the Message Content intent is off for the bot, and 4004 and 4010 to 4013 are as bad: the
+     gateway stops for good, and the forum then goes stale until the cause is fixed and the API is restarted;
+   - the live feed works. In a post of the forum, in Discord, post a message, edit it, react to it and delete it. Each shows
+     on the site within about 10 seconds (the page asks for changes every 10);
    - the import finishes: `docker compose exec -T db psql -U salamanders salamanders_builds -c 'select import_done,
      last_error from librarius_sync;'` shows `import_done` true and an empty `last_error` (and `/librarius/me` says
      `ready: true` for a reader);
@@ -322,6 +340,14 @@ Rollout:
      docker compose exec -T db psql -U salamanders salamanders_builds -c "select a.id, a.expires_at from librarius_attachments a join librarius_messages m on m.id = a.message_id where m.post_id = <post id> order by a.expires_at limit 5;"
      ```
 
+5. Merge the branch to `main`. The site deploys, and the Librarius appears in the Reliquarium. Tell the owner to share
+   `/reliquarium/librarius` with readers who are not in the Legion but may read the forum: their nav link appears only
+   after they sign in again or visit that page once.
+
 If the import never finishes (`import_done` stays false), read `last_error` in the same table: the import retries by itself
 (after 5, 10 and 20 minutes, then every 30), and `docker compose restart api` forces a run at once. A run that stopped
 resumes from the cursor each post kept, so a long import is not started over.
+
+**Rolling back.** Before the merge, the rollback tag above is the whole of it. After the merge, rolling back the API alone
+leaves the new site against the old API, and every Legion member sees "The Librarius couldn't be reached." A full rollback
+also needs a revert of the merge on `main`, so that the site goes back too.
