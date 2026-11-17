@@ -35,8 +35,11 @@
  *    was down (the page cannot show that), or may have come in after the page was read, so Discord is asked for that
  *    message itself (discord.message): a message it no longer has is deleted here, one it still has is kept and is
  *    written again if its edit time differs. That is at most `windowSize` questions for a post. A stored message older
- *    than the whole page is out of view and is left alone. That is the limit of the catch-up: a message deleted while
- *    the gateway was down and older than the window stays until the post is reimported.
+ *    than the whole page is out of view and is left alone, unless the page holds fewer messages than `windowSize`: that
+ *    page is the whole post, so anything stored that is not on it is gone, and is deleted here (older ones with no
+ *    question: only a newer one may have come in after the page was read). That is the limit of the catch-up for a post
+ *    of more than `windowSize` messages: one deleted while the gateway was down and older than the window stays until the
+ *    post is reimported.
  * 4. sets import_done, last_ok_at and a clear last_error.
  *
  * Any failure ends the run where it stands, with the cursors it has already set: last_error says why, and the next run
@@ -209,8 +212,13 @@ export function createImport({
 
   async function catchUp(postId) {
     const fetched = new Map()
-    for (const message of await discord.newest(postId, windowSize)) if (isId(message.id)) fetched.set(message.id, message)
+    const page = await discord.newest(postId, windowSize)
+    for (const message of page) if (isId(message.id)) fetched.set(message.id, message)
     const onPage = [...fetched.keys()].map(BigInt)
+    // A page of fewer messages than were asked for is the whole post: Discord has nothing beyond it. Entries are counted as
+    // Discord sent them, one with an id that cannot be used included, so that a page is never taken for the whole post on
+    // the strength of entries that were dropped.
+    const whole = page.length < windowSize
     const gone = []
     const edited = []
     for (const { id, editedAt } of await store.windowIds(postId, windowSize)) {
@@ -222,10 +230,10 @@ export function createImport({
         // is asked for that message itself, which is at most one question for each message of the window.
         // Stryker disable next-line EqualityOperator: this message is not on the page, so no id of the page equals it
         const newer = onPage.every((p) => p < at)
-        // Older than the whole page: out of view, not gone.
+        // Older than the whole page: out of view, not gone, unless the page is the whole post, which has nothing older.
         // Stryker disable next-line EqualityOperator: as above
-        if (!newer && onPage.every((p) => p > at)) continue
-        // Inside the range of the page, and not on it: deleted.
+        if (!whole && !newer && onPage.every((p) => p > at)) continue
+        // Inside the range of the page, or older than a page that is the whole post, and not on it: deleted.
         message = newer ? await discord.message(postId, id) : null
         if (message === null) {
           gone.push(id)

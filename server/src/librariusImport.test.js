@@ -839,11 +839,72 @@ describe('the catch-up window', () => {
     expect(idsOf(w, 1)).toEqual([7].map((n) => mid(1, n)))
   })
 
-  it('asks about nothing in a post whose stored messages are all on the page, or older than it', async () => {
-    const w = world({ discordIds: [6, 7, 8, 9, 10], storedIds: [2, 3, 6, 7, 8, 9, 10], windowSize: 7 })
+  it('asks about nothing in a post whose stored messages are all on the page, or older than a full page', async () => {
+    const w = world({ discordIds: [6, 7, 8, 9, 10], storedIds: [2, 3, 6, 7, 8, 9, 10], windowSize: 5 })
     await w.imp.run()
     expect(rereads(w)).toEqual([])
     expect(idsOf(w, 1)).toEqual([2, 3, 6, 7, 8, 9, 10].map((n) => mid(1, n)))
+  })
+
+  // A page of fewer messages than the window asked for IS the whole post: nothing lies beyond it for Discord to have.
+  describe('a post whose page is short, which is the whole post', () => {
+    it('deletes a stored message older than the page that was deleted while the API was down, with no question', async () => {
+      const w = world({ discordIds: [3, 4, 5], storedIds: [1, 2, 3, 4, 5] })
+      await w.imp.run()
+      expect(idsOf(w, 1)).toEqual([3, 4, 5].map((n) => mid(1, n)))
+      expect(rereads(w)).toEqual([])
+      expect(await w.imp.status()).toMatchObject({ importDone: true, lastError: null })
+    })
+
+    it('deletes nothing and writes nothing when nothing changed', async () => {
+      const w = world({ discordIds: [1, 2, 3, 4], storedIds: [1, 2, 3, 4] })
+      await w.imp.run()
+      expect(idsOf(w, 1)).toEqual([1, 2, 3, 4].map((n) => mid(1, n)))
+      expect(rereads(w)).toEqual([])
+      expect(w.store.writes).toEqual([])
+    })
+
+    it('deletes what is missing from the page wherever it lies: older, inside it or (once asked) newer', async () => {
+      const w = world({ discordIds: [3, 5, 7], storedIds: [1, 3, 4, 5, 7, 8], windowSize: 6 })
+      await w.imp.run()
+      expect(idsOf(w, 1)).toEqual([3, 5, 7].map((n) => mid(1, n)))
+      // Only the newer one is asked about: it may have come in after the page was read.
+      expect(rereads(w)).toEqual([['message', postId(1), mid(1, 8)]])
+    })
+
+    it('still keeps a message newer than the page that Discord has, as one that came in after the page was read', async () => {
+      const w = world({ discordIds: [6, 7, 8, 9], storedIds: [6, 7, 8, 9] })
+      w.discord.newest = async () => [8, 7, 6].map((n) => raw(1, n, { content: `discord ${n}` }))
+      await w.imp.run()
+      expect(idsOf(w, 1)).toEqual([6, 7, 8, 9].map((n) => mid(1, n)))
+      expect(rereads(w)).toEqual([['message', postId(1), mid(1, 9)]])
+    })
+
+    it('still writes an edited message of the page again, and only that', async () => {
+      const w = world({ discordIds: [3, 4, 5], storedIds: [2, 3, 4, 5], edits: { 3: EDITED } })
+      await w.imp.run()
+      expect(idsOf(w, 1)).toEqual([3, 4, 5].map((n) => mid(1, n)))
+      expect(w.store.writes).toEqual([[mid(1, 3)]])
+    })
+
+    it('takes a page one short of the window for the whole post, and a page of exactly the window for a full one', async () => {
+      const short = world({ discordIds: [4, 5, 6, 7], storedIds: [2, 5, 6, 7] })
+      await short.imp.run()
+      expect(idsOf(short, 1)).toEqual([5, 6, 7].map((n) => mid(1, n)))
+
+      const full = world({ discordIds: [3, 4, 5, 6, 7], storedIds: [2, 5, 6, 7] })
+      await full.imp.run()
+      expect(idsOf(full, 1)).toEqual([2, 5, 6, 7].map((n) => mid(1, n)))
+    })
+
+    it('counts the entries Discord sent, usable or not, so one with an id it cannot use keeps a page full', async () => {
+      const w = world({ discordIds: [6, 7, 8, 9], storedIds: [2, 6, 7, 8, 9] })
+      const newest = w.discord.newest
+      w.discord.newest = async (...args) => [...(await newest(...args)), { id: 'abc' }]
+      await w.imp.run()
+      // Five entries is a full page of 5: what is older than it is out of view, not gone.
+      expect(idsOf(w, 1)).toEqual([2, 6, 7, 8, 9].map((n) => mid(1, n)))
+    })
   })
 
   it('reads again at most one window of messages of a post, the newest, however many are stored past the page', async () => {
@@ -997,15 +1058,17 @@ describe('the catch-up window', () => {
     expect((await w.imp.status()).importDone).toBe(true)
   })
 
-  it('matches a model of Discord: the stored window agrees with it wherever the page reaches, or lies beyond it', async () => {
+  it('matches a model of Discord, for a short post and a full one: the stored window agrees with it wherever the page reaches', async () => {
     const EDIT_POOL = [null, EDITED, '2026-11-01T10:00:00.123999+00:00', '2026-11-01T11:00:00.123+01:00', '2026-11-01T10:05:00.000000+00:00']
     // Messages 1 to 25 are what Discord holds when the page is read; 26 to 30 come in after it, before a message is asked about.
     const ids = (from, to, maxLength) => fc.uniqueArray(fc.integer({ min: from, max: to }), { maxLength })
     const edit = fc.integer({ min: 0, max: EDIT_POOL.length - 1 })
     const edits = fc.array(edit, { minLength: 30, maxLength: 30 })
+    // Posts of up to 8 messages against windows of 1 to 6 come out short about as often as full, and more than that, full.
+    const seen = { short: 0, full: 0 }
     await fc.assert(
       fc.asyncProperty(
-        ids(1, 25, 14),
+        fc.oneof(ids(1, 25, 8), ids(1, 25, 14)),
         ids(26, 30, 5),
         ids(1, 30, 16),
         edits,
@@ -1025,12 +1088,15 @@ describe('the catch-up window', () => {
           w.discord.newest = async () => page.map((n) => w.discord.channels[postId(1)].find((m) => m.id === mid(1, n)))
           await w.imp.run()
 
+          // Fewer messages than the window asked for: the page is the whole post.
+          const whole = page.length < size
+          seen[whole ? 'short' : 'full']++
           const instant = (v) => (v === null ? null : Date.parse(v))
           const window = [...storedIds].sort((a, b) => b - a).slice(0, size)
           const expected = Object.fromEntries(storedIds.map((n) => [mid(1, n), `stored ${n}`]))
           for (const n of window) {
-            // Out of view: the page reaches down to its oldest message and no further.
-            if (page.length > 0 && n < Math.min(...page)) continue
+            // Out of view: a full page reaches down to its oldest message and no further.
+            if (!whole && page.length > 0 && n < Math.min(...page)) continue
             if (!truth.has(n)) delete expected[mid(1, n)]
             else if (instant(EDIT_POOL[discordEdits[n - 1]]) !== instant(EDIT_POOL[storedEdits[n - 1]])) expected[mid(1, n)] = `discord ${n}`
           }
@@ -1041,8 +1107,11 @@ describe('the catch-up window', () => {
           expect(rereads(w).map((c) => c[2])).toEqual(past.map((n) => mid(1, n)))
         },
       ),
-      { numRuns: 200 },
+      { numRuns: 300 },
     )
+    // The property is only worth anything if it saw both kinds of post.
+    expect(seen.short).toBeGreaterThan(20)
+    expect(seen.full).toBeGreaterThan(20)
   })
 })
 
