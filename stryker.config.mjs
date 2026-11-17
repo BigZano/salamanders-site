@@ -83,6 +83,9 @@ export default {
   // of public/404.html and so its Content-Security-Policy hash (scripts/csp.test.mjs reads that file). Nothing here is type-checked.
   disableTypeChecks: false,
   thresholds: { high: 100, low: 100, break: 100 },
+  // Two test runners, not one per core: with Stryker's default the runners' memory grows past what the dev host has
+  // (7.7 GB) and the full run is killed part way. Two finish the whole gate in about 45 minutes.
+  concurrency: 2,
   reporters: ['clear-text', 'progress'],
   ignoreStatic: true,
 }
