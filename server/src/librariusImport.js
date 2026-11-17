@@ -61,7 +61,9 @@
  * deletes a stored post.
  *
  * Discord answering oddly is Upstream: a page of messages that does not move past the cursor, or an archived list that
- * says there is more but gives no earlier time to ask from. Without that check the loops would never end.
+ * says there is more but gives no earlier time to ask from (without those checks the loops would never end), or a page of
+ * the newest messages with an entry that has no usable id (a page is judged by what is not on it, so one that may be
+ * missing an entry is not judged at all, and nothing is deleted).
  */
 import { Upstream } from './discordRoles.js'
 import { parseMessage, parseThread } from './librariusParse.js'
@@ -213,11 +215,13 @@ export function createImport({
   async function catchUp(postId) {
     const fetched = new Map()
     const page = await discord.newest(postId, windowSize)
-    for (const message of page) if (isId(message.id)) fetched.set(message.id, message)
+    for (const message of page) {
+      // What is not on the page is judged gone, so a page with an entry that cannot be read is not one to judge by.
+      if (!isId(message.id)) throw new Upstream('Discord sent a page of messages with an entry that has no usable id.')
+      fetched.set(message.id, message)
+    }
     const onPage = [...fetched.keys()].map(BigInt)
-    // A page of fewer messages than were asked for is the whole post: Discord has nothing beyond it. Entries are counted as
-    // Discord sent them, one with an id that cannot be used included, so that a page is never taken for the whole post on
-    // the strength of entries that were dropped.
+    // A page of fewer messages than were asked for is the whole post: Discord has nothing beyond it.
     const whole = page.length < windowSize
     const gone = []
     const edited = []

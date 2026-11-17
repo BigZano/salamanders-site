@@ -896,15 +896,6 @@ describe('the catch-up window', () => {
       await full.imp.run()
       expect(idsOf(full, 1)).toEqual([2, 5, 6, 7].map((n) => mid(1, n)))
     })
-
-    it('counts the entries Discord sent, usable or not, so one with an id it cannot use keeps a page full', async () => {
-      const w = world({ discordIds: [6, 7, 8, 9], storedIds: [2, 6, 7, 8, 9] })
-      const newest = w.discord.newest
-      w.discord.newest = async (...args) => [...(await newest(...args)), { id: 'abc' }]
-      await w.imp.run()
-      // Five entries is a full page of 5: what is older than it is out of view, not gone.
-      expect(idsOf(w, 1)).toEqual([2, 6, 7, 8, 9].map((n) => mid(1, n)))
-    })
   })
 
   it('reads again at most one window of messages of a post, the newest, however many are stored past the page', async () => {
@@ -1034,19 +1025,96 @@ describe('the catch-up window', () => {
     expect(await w.imp.status()).toMatchObject({ importDone: true, lastError: null })
   })
 
-  it('ignores an entry of the window that has no usable id', async () => {
-    const w = world({ discordIds: [6, 7, 9, 10], storedIds: [6, 7, 8, 9, 10] })
-    const newest = w.discord.newest
-    w.discord.newest = async (...args) => [
-      ...(await newest(...args)),
-      { id: 99999999999999999n, type: 0 },
-      { id: 'abc' },
-      { id: 123 },
-      { id: 99999999999999999 },
-      {},
+  // A page with an entry that has no usable id is not a page Discord's messages can be told from: the catch-up deletes
+  // what it does not find on the page, so such a page ends the run, wherever the entry lies and whether the page is short
+  // (the whole post) or full, and nothing is deleted.
+  describe('a page with an entry that has no usable id', () => {
+    const ODD = [
+      ['no id', {}],
+      ['a number for an id', { id: 123 }],
+      ['a number as large as an id', { id: 99999999999999999 }],
+      ['a bigint for an id', { id: 99999999999999999n, type: 0 }],
+      ['null for an id', { id: null }],
+      ['text that is no id', { id: 'abc' }],
+      ['an id of 16 digits', { id: '2000000000000004' }],
+      ['an id of 21 digits', { id: '200000000000000430000' }],
+      ['an empty id', { id: '' }],
+      ['a list for an id', { id: ['200000010001000003'] }],
     ]
-    await w.imp.run()
-    expect(idsOf(w, 1)).toEqual([6, 7, 9, 10].map((n) => mid(1, n)))
+    const withOdd = (w, odd, place) => {
+      const newest = w.discord.newest
+      w.discord.newest = async (...args) => {
+        const page = await newest(...args)
+        if (place === 'first') return [odd, ...page]
+        if (place === 'middle') return [...page.slice(0, 1), odd, ...page.slice(1)]
+        return [...page, odd]
+      }
+    }
+    const SAYS = 'Error: Discord sent a page of messages with an entry that has no usable id.'
+
+    it.each(ODD.flatMap(([how, odd]) => ['first', 'middle', 'last'].map((place) => [how, place, odd])))(
+      'ends the run, deleting nothing, for a short page with %s %s',
+      async (_, place, odd) => {
+        // The reviewer's case: a page [m3, m2, odd] of a window of 5, over a store that holds m1 to m3.
+        const w = world({ discordIds: [2, 3], storedIds: [1, 2, 3] })
+        withOdd(w, odd, place)
+        await w.imp.run()
+        expect(idsOf(w, 1)).toEqual([1, 2, 3].map((n) => mid(1, n)))
+        expect(rereads(w)).toEqual([])
+        expect(await w.imp.status()).toMatchObject({ importDone: false, lastOkAt: null, lastError: SAYS })
+      },
+    )
+
+    it.each(['first', 'middle', 'last'])('ends the run, deleting nothing, for a full page with one %s, though a message lies inside its range', async (place) => {
+      // Stored 8 lies inside the range of the page and is not on it, so a page taken as it stands would delete it.
+      const w = world({ discordIds: [6, 7, 9, 10], storedIds: [6, 7, 8, 9, 10], windowSize: 4 })
+      withOdd(w, { id: 'abc' }, place)
+      await w.imp.run()
+      expect(idsOf(w, 1)).toEqual([6, 7, 8, 9, 10].map((n) => mid(1, n)))
+      expect(await w.imp.status()).toMatchObject({ importDone: false, lastError: SAYS })
+    })
+
+    it('ends the run, deleting nothing, for a page that is only entries with no id, whatever stored', async () => {
+      const w = world({ discordIds: [], storedIds: [6, 7, 8] })
+      w.discord.newest = async () => [{ id: 'abc' }, {}]
+      await w.imp.run()
+      expect(idsOf(w, 1)).toHaveLength(3)
+      expect(rereads(w)).toEqual([])
+      expect((await w.imp.status()).lastError).toBe(SAYS)
+    })
+
+    it('goes no further than the first post that has one, and settles when Discord sends a good page again', async () => {
+      const w = setup({
+        active: [thread(1), thread(2)],
+        channels: { [postId(1)]: channel(1, 2, 3), [postId(2)]: channel(2, 1, 2) },
+        windowSize: 5,
+        store: {
+          posts: [known(1), known(2)],
+          messages: [...stored(1, 1, 3), ...stored(2, 1, 3)],
+          cursors: { [postId(1)]: mid(1, 9), [postId(2)]: mid(2, 9) },
+        },
+      })
+      const newest = w.discord.newest
+      let bad = true
+      w.discord.newest = async (...args) => (bad ? [...(await newest(...args)), { id: 'abc' }] : newest(...args))
+      await w.imp.run()
+      expect(idsOf(w, 1)).toHaveLength(3)
+      expect(idsOf(w, 2)).toHaveLength(3)
+      expect(w.discord.calls.filter((c) => c[0] === 'newest').map((c) => c[1])).toEqual([postId(1)])
+      bad = false
+      await w.imp.run()
+      expect(idsOf(w, 1)).toEqual([2, 3].map((n) => mid(1, n)))
+      expect(idsOf(w, 2)).toEqual([1, 2].map((n) => mid(2, n)))
+      expect(await w.imp.status()).toMatchObject({ importDone: true, lastError: null })
+    })
+
+    it('is not mistaken for a page that is short: one entry short of the window, with one that has no id, still ends the run', async () => {
+      const w = world({ discordIds: [7, 8, 9, 10], storedIds: [2, 7, 8, 9, 10] })
+      withOdd(w, { id: 'abc' }, 'last')
+      await w.imp.run()
+      expect(idsOf(w, 1)).toEqual([2, 7, 8, 9, 10].map((n) => mid(1, n)))
+      expect((await w.imp.status()).lastError).toBe(SAYS)
+    })
   })
 
   it('survives an old list of the window that holds a message the live feed has already deleted', async () => {

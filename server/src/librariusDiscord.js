@@ -8,9 +8,10 @@
  * archivedThreads(forumId, before | null) → { threads, hasMore }: one page of up to 100 archived public threads of a
  *   forum, newest first. `before` is the archive time of the oldest thread of the page before; null starts at the newest.
  * messagesAfter(channelId, afterId, limit = 100) → raw messages, oldest first: sorted by id here, whatever order Discord
- *   answered in (it answers newest first). A message whose id is not a Discord id makes the page Upstream, as one that
- *   cannot be put in order. afterId is a message id, or '0' for the start of the channel.
+ *   answered in (it answers newest first). afterId is a message id, or '0' for the start of the channel.
  * newest(channelId, limit = 100) → raw messages as Discord gives them, newest first.
+ *   Both make the page Upstream when a message of it has an id that is not a Discord id: it cannot be put in order, and a
+ *   page that may be missing an entry is not one the catch-up can tell what Discord holds from.
  * thread(id) → the raw thread, or null (404 Unknown Channel, code 10003; any other 404 is Upstream).
  *   channel(id) is Upstream for a deleted thread, as for any other failure; the import has to tell the two apart before it
  *   deletes a post.
@@ -203,6 +204,14 @@ export function createLibrariusDiscord({
       return json
     }
 
+    // A page of messages, every one with an id. An entry that has none cannot be put in order, and a page with one is not
+    // whole: the catch-up deletes what it does not find on a page, so a page that may be missing an entry is not read at all.
+    async function getMessages(path) {
+      const page = await getList(path, 'a page of messages')
+      if (!page.every((m) => isId(m.id))) throw unusable('a page of messages')
+      return page
+    }
+
     const guildPath = `/v10/guilds/${guildId}`
     const messagesPath = (channelId) => `/v10/channels/${channelId}/messages`
 
@@ -264,17 +273,16 @@ export function createLibrariusDiscord({
         needId(channelId, 'channelId')
         if (typeof afterId !== 'string' || !CURSOR.test(afterId)) throw new TypeError('afterId must be a message id, or 0.')
         needLimit(limit)
-        const page = await getList(`${messagesPath(channelId)}?limit=${limit}&after=${afterId}`, 'a page of messages')
+        const page = await getMessages(`${messagesPath(channelId)}?limit=${limit}&after=${afterId}`)
         // Discord answers newest first, but the import's cursor moves to the last message of the page, so the order is the
-        // client's to guarantee and not Discord's to promise. A message with no id cannot be put in order.
-        if (!page.every((m) => isId(m.id))) throw unusable('a page of messages')
+        // client's to guarantee and not Discord's to promise.
         return page.sort((a, b) => Number(BigInt(a.id) - BigInt(b.id)))
       },
 
       async newest(channelId, limit = MAX_PAGE) {
         needId(channelId, 'channelId')
         needLimit(limit)
-        return getList(`${messagesPath(channelId)}?limit=${limit}`, 'a page of messages')
+        return getMessages(`${messagesPath(channelId)}?limit=${limit}`)
       },
 
       async message(channelId, id) {

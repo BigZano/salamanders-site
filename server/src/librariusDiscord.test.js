@@ -423,24 +423,32 @@ describe('messagesAfter and newest', () => {
     )
   })
 
-  // A message with no id Discord would send cannot be put in order, and a page that might be out of order is not read.
-  it.each([
-    ['no id', {}],
-    ['a number for an id', { id: 200000000000000430 }],
-    ['null for an id', { id: null }],
-    ['an id of 16 digits', { id: '2000000000000004' }],
-    ['an id of 21 digits', { id: '200000000000000430000' }],
-    ['an id with a letter', { id: '20000000000000043a' }],
-    ['an id with a sign', { id: '-200000000000000430' }],
-    ['an empty id', { id: '' }],
-    ['a list for an id', { id: [MSG] }],
-  ])('messagesAfter throws Upstream for a page that holds a message with %s', async (_, odd) => {
-    for (const page of [[odd], [message(MSG), odd], [odd, message(MSG)]]) {
-      const r = rig([ok(page)])
-      const err = await r.discord.messagesAfter(THREAD, AFTER, 100).catch((e) => e)
-      expect(err).toBeInstanceOf(Upstream)
-      expect(err.message).toBe('Discord answered 200 for a page of messages, but not with what the Librarius expected.')
-    }
+  // A message with no id Discord would send cannot be put in order, and a page that might be out of order is not read. Nor
+  // can a page be taken for what Discord holds when an entry of it is missing: the catch-up would delete what it did not
+  // find on the page, so a page that is not whole in this way is not read either, wherever the entry lies.
+  describe.each([
+    ['messagesAfter', (d) => d.messagesAfter(THREAD, AFTER, 100)],
+    ['newest', (d) => d.newest(THREAD, 100)],
+  ])('%s', (name, call) => {
+    it.each([
+      ['no id', {}],
+      ['a number for an id', { id: 200000000000000430 }],
+      ['null for an id', { id: null }],
+      ['an id of 16 digits', { id: '2000000000000004' }],
+      ['an id of 21 digits', { id: '200000000000000430000' }],
+      ['an id with a letter', { id: '20000000000000043a' }],
+      ['an id with a sign', { id: '-200000000000000430' }],
+      ['an empty id', { id: '' }],
+      ['a list for an id', { id: [MSG] }],
+      ['text that only looks like an id', { id: 'abc' }],
+    ])('throws Upstream for a page that holds a message with %s, first, in the middle or last', async (_, odd) => {
+      for (const page of [[odd], [message(MSG_2), message(MSG), odd], [odd, message(MSG)], [message(MSG_3), odd, message(MSG)], [message(MSG), odd, message(MSG_2), message(MSG_3)]]) {
+        const r = rig([ok(page)])
+        const err = await call(r.discord).catch((e) => e)
+        expect(err, `${name} ${JSON.stringify(page)}`).toBeInstanceOf(Upstream)
+        expect(err.message).toBe('Discord answered 200 for a page of messages, but not with what the Librarius expected.')
+      }
+    })
   })
 
   it('newest hands back any list of messages in the order it came', async () => {
