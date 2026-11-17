@@ -59,12 +59,14 @@ const archivedThread = (p, at, over = {}) =>
   })
 
 /** A Discord client in memory: the argument checks of the real one, failures on request, and the calls it was given. */
-function fakeDiscord({ active = [], archived = [], channels = {}, pageSize = 100, archivedAnswer, clock } = {}) {
+function fakeDiscord({ active = [], archived = [], channels = {}, threads = {}, pageSize = 100, archivedAnswer, clock } = {}) {
   const plans = []
   const d = {
     active,
     archived,
     channels,
+    // The threads Discord still has that neither list shows (a thread unarchived between the two lists, say), by id.
+    threads,
     calls: [],
     failWhen: (method, when, error) => plans.push({ method, when, error }),
   }
@@ -98,6 +100,18 @@ function fakeDiscord({ active = [], archived = [], channels = {}, pageSize = 100
     if (!SNOWFLAKE.test(ch)) throw new TypeError('channelId must be a Discord id.')
     if (!Number.isInteger(limit) || limit < 1 || limit > 100) throw new RangeError('limit must be a whole number from 1 to 100.')
     return [...(d.channels[ch] ?? [])].reverse().slice(0, limit)
+  }
+  // The real client's answer for a message that is gone is null, and so is its answer for a thread that is gone.
+  d.message = async (ch, id) => {
+    enter('message', [ch, id])
+    if (!SNOWFLAKE.test(ch)) throw new TypeError('channelId must be a Discord id.')
+    if (!SNOWFLAKE.test(id)) throw new TypeError('messageId must be a Discord id.')
+    return (d.channels[ch] ?? []).find((m) => m.id === id) ?? null
+  }
+  d.thread = async (id) => {
+    enter('thread', [id])
+    if (!SNOWFLAKE.test(id)) throw new TypeError('threadId must be a Discord id.')
+    return d.threads[id] ?? null
   }
   return d
 }
@@ -136,6 +150,10 @@ function fakeStore({ posts = [], messages = [], cursors = {}, sync } = {}) {
   for (const m of messages) s.messages.set(m.id, m)
 
   Object.assign(s, {
+    async knownPostIds() {
+      enter('knownPostIds')
+      return new Set(s.posts.keys())
+    },
     async upsertPost(post) {
       enter('upsertPost', post)
       needId(post.id, 'id')
@@ -228,9 +246,9 @@ function fakeTimers() {
 }
 
 /** A world: the fake Discord, the fake store, a clock that moves a second with every call to Discord, and the importer. */
-function setup({ active, archived, channels, pageSize, archivedAnswer, windowSize, store: storeOptions, ...over } = {}) {
+function setup({ active, archived, channels, threads, pageSize, archivedAnswer, windowSize, store: storeOptions, ...over } = {}) {
   const clock = { t: T0, now: () => clock.t }
-  const discord = fakeDiscord({ active, archived, channels, pageSize, archivedAnswer, clock })
+  const discord = fakeDiscord({ active, archived, channels, threads, pageSize, archivedAnswer, clock })
   const store = fakeStore(storeOptions)
   const logs = []
   const timers = fakeTimers()
@@ -248,8 +266,8 @@ const stored = (p, from, to) => channel(p, from, to).map(parseMessage)
 const known = (p) => parseThread(thread(p), FORUM)
 
 describe('createImport options', () => {
-  const DISCORD = ['activeThreads', 'archivedThreads', 'messagesAfter', 'newest']
-  const STORE = ['upsertPost', 'deletePostsNotIn', 'upsertMessages', 'deleteMessages', 'importCursor', 'setImportCursor', 'windowIds', 'syncStatus', 'setSync']
+  const DISCORD = ['activeThreads', 'archivedThreads', 'messagesAfter', 'newest', 'message', 'thread']
+  const STORE = ['knownPostIds', 'upsertPost', 'deletePostsNotIn', 'upsertMessages', 'deleteMessages', 'importCursor', 'setImportCursor', 'windowIds', 'syncStatus', 'setSync']
 
   it.each(DISCORD)('needs discord.%s to be a function', (name) => {
     const store = fakeStore()
@@ -266,8 +284,8 @@ describe('createImport options', () => {
   it('needs a discord and a store at all', () => {
     expect(() => createImport({ store: fakeStore(), forumId: FORUM })).toThrow(new TypeError('discord.activeThreads must be a function.'))
     expect(() => createImport({ discord: null, store: fakeStore(), forumId: FORUM })).toThrow(new TypeError('discord.activeThreads must be a function.'))
-    expect(() => createImport({ discord: fakeDiscord(), forumId: FORUM })).toThrow(new TypeError('store.upsertPost must be a function.'))
-    expect(() => createImport({ discord: fakeDiscord(), store: null, forumId: FORUM })).toThrow(new TypeError('store.upsertPost must be a function.'))
+    expect(() => createImport({ discord: fakeDiscord(), forumId: FORUM })).toThrow(new TypeError('store.knownPostIds must be a function.'))
+    expect(() => createImport({ discord: fakeDiscord(), store: null, forumId: FORUM })).toThrow(new TypeError('store.knownPostIds must be a function.'))
   })
 
   it.each([undefined, null, '', '1234567890123456', '123456789012345678901', '20000000000000040a', 200000000000000400, {}])(
@@ -516,6 +534,168 @@ describe('the import', () => {
     expect(idsOf(w, 2)).toHaveLength(2)
   })
 
+  describe('a stored post that neither list holds', () => {
+    // A thread unarchived between the active listing and the archived listing is in neither list, though it is there.
+    const absent = (extra = {}) => ({
+      active: [thread(1)],
+      channels: { [postId(1)]: channel(1, 1, 2), [postId(77)]: channel(77, 1, 3) },
+      store: {
+        posts: [known(1), known(77)],
+        messages: [...stored(1, 1, 2), ...stored(77, 1, 3)],
+        cursors: { [postId(1)]: mid(1, 2), [postId(77)]: mid(77, 3) },
+      },
+      ...extra,
+    })
+    const askedAboutThreads = (w) => w.discord.calls.filter((c) => c[0] === 'thread')
+
+    it('is kept, with its messages, when Discord still has the thread', async () => {
+      const w = setup(absent({ threads: { [postId(77)]: thread(77) } }))
+      await w.imp.run()
+      expect([...w.store.posts.keys()].sort()).toEqual([postId(1), postId(77)])
+      expect(idsOf(w, 77)).toEqual([1, 2, 3].map((n) => mid(77, n)))
+      expect(await w.imp.status()).toMatchObject({ importDone: true, lastError: null })
+    })
+
+    it('is stored as the thread is now, and its messages are read like those of a listed post', async () => {
+      const w = setup(absent({ threads: { [postId(77)]: thread(77, { name: 'Invented new name', applied_tags: [] }) } }))
+      w.discord.channels[postId(77)].push(raw(77, 4))
+      await w.imp.run()
+      expect(w.store.posts.get(postId(77)).title).toBe('Invented new name')
+      expect(idsOf(w, 77)).toContain(mid(77, 4))
+      expect(w.store.posts.get(postId(77)).cursor).toBe(mid(77, 4))
+    })
+
+    it('is deleted, with its messages and no one else, when Discord says the thread is gone', async () => {
+      const w = setup(absent())
+      await w.imp.run()
+      expect([...w.store.posts.keys()]).toEqual([postId(1)])
+      expect(idsOf(w, 77)).toEqual([])
+      expect(idsOf(w, 1)).toHaveLength(2)
+    })
+
+    it('is deleted when the thread has moved out of the forum', async () => {
+      const w = setup(absent({ threads: { [postId(77)]: thread(77, { parent_id: OTHER_FORUM }) } }))
+      await w.imp.run()
+      expect([...w.store.posts.keys()]).toEqual([postId(1)])
+      expect(idsOf(w, 77)).toEqual([])
+    })
+
+    it.each([
+      ['a thread with no parent', { parent_id: undefined }],
+      ['a thread whose parent is no id', { parent_id: 'abc' }],
+      ['a thread with a number for a parent', { parent_id: 200000000000000400 }],
+    ])('is deleted for %s', async (_, over) => {
+      const w = setup(absent({ threads: { [postId(77)]: thread(77, over) } }))
+      await w.imp.run()
+      expect([...w.store.posts.keys()]).toEqual([postId(1)])
+    })
+
+    it('asks about the posts that are missing, once each, and not about the ones listed', async () => {
+      const w = setup({
+        active: [thread(1)],
+        archived: [archivedThread(2, arch(5))],
+        channels: {},
+        store: { posts: [known(1), parseThread(archivedThread(2, arch(5)), FORUM), known(77), known(78), known(79)] },
+      })
+      await w.imp.run()
+      expect(askedAboutThreads(w).sort()).toEqual([['thread', postId(77)], ['thread', postId(78)], ['thread', postId(79)]])
+    })
+
+    it('asks about nothing when every stored post is listed, even in the archived list', async () => {
+      const w = setup({
+        active: [thread(1)],
+        archived: [archivedThread(2, arch(5))],
+        store: { posts: [known(1), parseThread(archivedThread(2, arch(5)), FORUM)] },
+      })
+      await w.imp.run()
+      expect(askedAboutThreads(w)).toEqual([])
+    })
+
+    it('asks about nothing when the store holds no post at all', async () => {
+      const w = setup({ active: [thread(1)], channels: { [postId(1)]: channel(1, 1, 2) } })
+      await w.imp.run()
+      expect(askedAboutThreads(w)).toEqual([])
+    })
+
+    it('ends the run with nothing deleted when Discord cannot say, though another missing post was found gone', async () => {
+      const w = setup(absent({ store: { ...absent().store, posts: [known(1), known(77), known(78)], messages: [...stored(1, 1, 2), ...stored(77, 1, 3), ...stored(78, 1, 2)] } }))
+      w.discord.failWhen('thread', (id) => id === postId(78), new Upstream('Discord answered 500 for a thread.'))
+      await w.imp.run()
+      expect([...w.store.posts.keys()].sort()).toEqual([postId(1), postId(77), postId(78)])
+      expect(idsOf(w, 77)).toHaveLength(3)
+      expect(idsOf(w, 78)).toHaveLength(2)
+      expect(await w.imp.status()).toMatchObject({ importDone: false, lastOkAt: null, lastError: 'Error: Discord answered 500 for a thread.' })
+    })
+
+    it('ends the run before any message is read or the live feed is told, when Discord cannot say', async () => {
+      const onPostsListed = vi.fn()
+      const w = setup(absent({ onPostsListed }))
+      w.discord.failWhen('thread', () => true, new Upstream('Discord answered 403 for a thread.'))
+      await w.imp.run()
+      expect(onPostsListed).not.toHaveBeenCalled()
+      expect(reads(w)).toEqual([])
+      expect(w.store.posts.has(postId(77))).toBe(true)
+    })
+
+    it('ends the run for any error the question raises, not only an Upstream, and deletes nothing', async () => {
+      const w = setup(absent())
+      w.discord.failWhen('thread', () => true, new TypeError('threadId must be a Discord id.'))
+      await w.imp.run()
+      expect(w.store.posts.has(postId(77))).toBe(true)
+      expect((await w.imp.status()).lastError).toBe('TypeError: threadId must be a Discord id.')
+    })
+
+    it('is asked about again by the next run, which then deletes it', async () => {
+      const w = setup(absent())
+      w.discord.failWhen('thread', () => true, new Upstream('Discord answered 500 for a thread.'))
+      await w.imp.run()
+      expect(w.store.posts.has(postId(77))).toBe(true)
+      // Discord answers this time: the thread is gone.
+      const asked = []
+      w.discord.thread = async (id) => {
+        asked.push(id)
+        return null
+      }
+      await w.imp.run()
+      expect(asked).toEqual([postId(77)])
+      expect(w.store.posts.has(postId(77))).toBe(false)
+    })
+
+    it('goes by what the model says: kept exactly when Discord still has the thread in the forum', async () => {
+      const fate = fc.constantFrom('listed', 'unlisted but there', 'gone', 'moved')
+      await fc.assert(
+        fc.asyncProperty(fc.array(fate, { minLength: 1, maxLength: 8 }), async (fates) => {
+          const ps = fates.map((_, i) => i + 1)
+          const threads = {}
+          const active = []
+          fates.forEach((f, i) => {
+            const p = ps[i]
+            if (f === 'listed') active.push(thread(p))
+            if (f === 'unlisted but there') threads[postId(p)] = thread(p)
+            if (f === 'moved') threads[postId(p)] = thread(p, { parent_id: OTHER_FORUM })
+          })
+          // One thread Discord always lists, so that the delete never meets an empty list.
+          active.push(thread(99))
+          const w = setup({
+            active,
+            threads,
+            // Every post still holds the two messages the store has of it.
+            channels: Object.fromEntries(ps.map((p) => [postId(p), channel(p, 1, 2)])),
+            store: { posts: [...ps.map(known), known(99)], messages: ps.flatMap((p) => stored(p, 1, 2)) },
+          })
+          await w.imp.run()
+          const expected = [...ps.filter((_, i) => fates[i] === 'listed' || fates[i] === 'unlisted but there').map(postId), postId(99)].sort()
+          expect([...w.store.posts.keys()].sort()).toEqual(expected)
+          // A post is deleted with its messages, and kept with them.
+          for (const p of ps) expect(idsOf(w, p)).toHaveLength(expected.includes(postId(p)) ? 2 : 0)
+          // It asked only about the posts that were in neither list.
+          expect(askedAboutThreads(w).map((c) => c[1]).sort()).toEqual(ps.filter((_, i) => fates[i] !== 'listed').map(postId).sort())
+        }),
+        { numRuns: 80 },
+      )
+    })
+  })
+
   it('imports nothing and deletes nothing from a forum Discord lists no thread of', async () => {
     const w = setup({ store: { posts: [known(77)], messages: stored(77, 1, 2) } })
     await w.imp.run()
@@ -585,24 +765,159 @@ describe('the catch-up window', () => {
     expect(idsOf(w, 1)).toEqual([2, 3, 4, 9, 10].map((n) => mid(1, n)))
   })
 
-  it('leaves a stored message newer than the whole window alone', async () => {
-    const w = world({ discordIds: [6, 7, 8, 9, 10], storedIds: [6, 7, 11] })
+  const rereads = (w) => w.discord.calls.filter((c) => c[0] === 'message')
+
+  // A message deleted while the API was down, and newer than everything Discord still has: the page does not show it,
+  // and nothing newer comes to push it into the page's range.
+  it('deletes a stored message newer than the whole window when Discord no longer has it', async () => {
+    const w = world({ discordIds: [1, 2], storedIds: [1, 2, 3] })
     await w.imp.run()
-    expect(idsOf(w, 1)).toEqual([6, 7, 11].map((n) => mid(1, n)))
+    expect(idsOf(w, 1)).toEqual([1, 2].map((n) => mid(1, n)))
+    expect(rereads(w)).toEqual([['message', postId(1), mid(1, 3)]])
+    expect(await w.imp.status()).toMatchObject({ importDone: true, lastError: null })
   })
 
-  it('leaves a message that arrived after the window was read alone, and a message that arrived but is not stored', async () => {
-    const w = world({ discordIds: [6, 7, 8, 9, 10], storedIds: [6, 7, 8, 9, 10] })
-    const newest = w.discord.newest
-    w.discord.newest = async (...args) => {
-      const page = await newest(...args)
-      // The live feed stores a message that came in just after Discord was asked.
-      await w.store.upsertMessages([parseMessage(raw(1, 11, { content: 'live' }))])
-      return page
-    }
+  it('deletes every stored message of the window that Discord no longer has, inside the page and past it', async () => {
+    const w = world({ discordIds: [6, 7, 8, 9, 10, 12], storedIds: [6, 7, 8, 9, 10, 11, 12, 13] })
+    // The stored window of 5 is [13, 12, 11, 10, 9] and the page is [12, 10, 9, 8, 7]: 13 and 11 are not on it.
     await w.imp.run()
-    expect(idsOf(w, 1)).toContain(mid(1, 11))
-    expect(w.store.messages.get(mid(1, 11)).content).toBe('live')
+    expect(idsOf(w, 1)).toEqual([6, 7, 8, 9, 10, 12].map((n) => mid(1, n)))
+    // 11 is inside the page's range and gone, so it is not asked about; 13 is past it, so it is.
+    expect(rereads(w)).toEqual([['message', postId(1), mid(1, 13)]])
+  })
+
+  it('keeps a stored message newer than the page when Discord has it, as one that arrived after the page was read', async () => {
+    const w = world({ discordIds: [6, 7, 8, 9, 10, 11], storedIds: [6, 7, 8, 9, 10, 11] })
+    // Discord's page was read before message 11 came in; the live feed has stored it since.
+    w.discord.newest = async () => [10, 9, 8, 7, 6].map((n) => raw(1, n, { content: `discord ${n}` }))
+    await w.imp.run()
+    expect(idsOf(w, 1)).toEqual([6, 7, 8, 9, 10, 11].map((n) => mid(1, n)))
+    expect(w.store.messages.get(mid(1, 11)).content).toBe('stored 11')
+    expect(rereads(w)).toEqual([['message', postId(1), mid(1, 11)]])
+    expect(w.store.writes).toEqual([])
+  })
+
+  it('writes a message that arrived after the page was read again when its edit time differs', async () => {
+    const w = world({ discordIds: [6, 7, 8, 9, 10, 11], storedIds: [6, 7, 8, 9, 10, 11], edits: { 11: EDITED } })
+    w.discord.newest = async () => [10, 9, 8, 7, 6].map((n) => raw(1, n, { content: `discord ${n}` }))
+    await w.imp.run()
+    expect(w.store.messages.get(mid(1, 11)).content).toBe('discord 11')
+    expect(w.store.messages.get(mid(1, 11)).editedAt).toBe(EDITED)
+    expect(w.store.writes).toEqual([[mid(1, 11)]])
+  })
+
+  it('does not write a message it read again when the edit time is the same instant in another form', async () => {
+    const w = world({ discordIds: [10, 11], storedIds: [10, 11], edits: { 11: EDITED }, storedEdits: { 11: '2026-11-01T11:00:00.123+01:00' } })
+    w.discord.newest = async () => [raw(1, 10)]
+    await w.imp.run()
+    expect(w.store.writes).toEqual([])
+    expect(w.store.messages.get(mid(1, 11)).content).toBe('stored 11')
+  })
+
+  it('leaves a message alone that Discord shows again as a kind it does not keep', async () => {
+    const w = world({ discordIds: [10], storedIds: [10, 11] })
+    w.discord.channels[postId(1)].push(raw(1, 11, { type: 7, edited_timestamp: EDITED }))
+    await w.imp.run()
+    expect(w.store.messages.get(mid(1, 11)).content).toBe('stored 11')
+    expect(w.store.received.flat()).toEqual([])
+    expect(await w.imp.status()).toMatchObject({ importDone: true, lastError: null })
+  })
+
+  it('reads again every stored message of an empty page, since a page that shows nothing shows no range to be inside', async () => {
+    const w = world({ discordIds: [], storedIds: [6, 7, 8] })
+    await w.imp.run()
+    expect(idsOf(w, 1)).toEqual([])
+    // Newest first, as the store gave them.
+    expect(rereads(w)).toEqual([8, 7, 6].map((n) => ['message', postId(1), mid(1, n)]))
+    expect((await w.imp.status()).importDone).toBe(true)
+  })
+
+  it('keeps what Discord still has when its page was empty, as messages that all came in after it was read', async () => {
+    const w = world({ discordIds: [7], storedIds: [6, 7, 8] })
+    w.discord.newest = async () => []
+    await w.imp.run()
+    expect(idsOf(w, 1)).toEqual([7].map((n) => mid(1, n)))
+  })
+
+  it('asks about nothing in a post whose stored messages are all on the page, or older than it', async () => {
+    const w = world({ discordIds: [6, 7, 8, 9, 10], storedIds: [2, 3, 6, 7, 8, 9, 10], windowSize: 7 })
+    await w.imp.run()
+    expect(rereads(w)).toEqual([])
+    expect(idsOf(w, 1)).toEqual([2, 3, 6, 7, 8, 9, 10].map((n) => mid(1, n)))
+  })
+
+  it('reads again at most one window of messages of a post, the newest, however many are stored past the page', async () => {
+    const stored = Array.from({ length: 12 }, (_, i) => i + 1)
+    const w = world({ discordIds: [], storedIds: stored })
+    await w.imp.run()
+    expect(rereads(w).map((c) => c[2])).toEqual([12, 11, 10, 9, 8].map((n) => mid(1, n)))
+    // What lies outside the window is not Discord's to answer for in this run.
+    expect(idsOf(w, 1)).toEqual([1, 2, 3, 4, 5, 6, 7].map((n) => mid(1, n)))
+  })
+
+  it('reads again at most 100 messages of a post by default', async () => {
+    const chan = channel(1, 1, 0)
+    const rows = Array.from({ length: 130 }, (_, i) => parseMessage(raw(1, i + 1)))
+    const w = setup({ active: [thread(1)], channels: { [postId(1)]: chan }, store: { posts: [known(1)], messages: rows, cursors: { [postId(1)]: mid(1, 500) } } })
+    await w.imp.run()
+    expect(rereads(w)).toHaveLength(100)
+    expect(rereads(w)[0]).toEqual(['message', postId(1), mid(1, 130)])
+    expect(rereads(w).at(-1)).toEqual(['message', postId(1), mid(1, 31)])
+    expect(idsOf(w, 1)).toEqual(Array.from({ length: 30 }, (_, i) => mid(1, i + 1)))
+  })
+
+  it('reads again a message of each post for itself', async () => {
+    const w = setup({
+      active: [thread(1), thread(2)],
+      channels: { [postId(1)]: [], [postId(2)]: channel(2, 1, 3) },
+      windowSize: 5,
+      store: {
+        posts: [known(1), known(2)],
+        messages: [...stored(1, 1, 2), ...stored(2, 1, 3)],
+        cursors: { [postId(1)]: mid(1, 9), [postId(2)]: mid(2, 3) },
+      },
+    })
+    await w.imp.run()
+    expect(idsOf(w, 1)).toEqual([])
+    expect(idsOf(w, 2)).toHaveLength(3)
+    expect(rereads(w).sort()).toEqual([['message', postId(1), mid(1, 1)], ['message', postId(1), mid(1, 2)]])
+  })
+
+  it('ends the run, with import_done unset and the message kept, when Discord cannot say whether a message is gone', async () => {
+    const w = world({ discordIds: [1, 2], storedIds: [1, 2, 3] })
+    w.discord.failWhen('message', () => true, new Upstream('Discord answered 500 for a message.'))
+    await w.imp.run()
+    expect(idsOf(w, 1)).toContain(mid(1, 3))
+    expect(await w.imp.status()).toMatchObject({ importDone: false, lastOkAt: null, lastError: 'Error: Discord answered 500 for a message.' })
+  })
+
+  it('ends the run for any error the re-read raises, and moves on to no other post', async () => {
+    const w = setup({
+      active: [thread(1), thread(2)],
+      channels: { [postId(1)]: channel(1, 1, 1), [postId(2)]: channel(2, 1, 1) },
+      windowSize: 5,
+      store: {
+        posts: [known(1), known(2)],
+        messages: [...stored(1, 1, 2), ...stored(2, 1, 2)],
+        cursors: { [postId(1)]: mid(1, 9), [postId(2)]: mid(2, 9) },
+      },
+    })
+    w.discord.failWhen('message', () => true, new TypeError('messageId must be a Discord id.'))
+    await w.imp.run()
+    expect((await w.imp.status()).lastError).toBe('TypeError: messageId must be a Discord id.')
+    expect(idsOf(w, 2)).toHaveLength(2)
+    expect(w.discord.calls.filter((c) => c[0] === 'newest').map((c) => c[1])).toEqual([postId(1)])
+  })
+
+  it('is settled by the next run when Discord answers again', async () => {
+    const w = world({ discordIds: [1, 2], storedIds: [1, 2, 3] })
+    let down = true
+    w.discord.failWhen('message', () => down, new Upstream('Discord answered 500 for a message.'))
+    await w.imp.run()
+    expect(idsOf(w, 1)).toContain(mid(1, 3))
+    down = false
+    await w.imp.run()
+    expect(idsOf(w, 1)).toEqual([1, 2].map((n) => mid(1, n)))
   })
 
   it('does not store a message of the window that is not stored: only the cursor reads bring in new ones', async () => {
@@ -673,13 +988,6 @@ describe('the catch-up window', () => {
     expect(idsOf(w, 1)).toEqual([6, 7, 9, 10].map((n) => mid(1, n)))
   })
 
-  it('does nothing in a post whose window Discord answers with nothing', async () => {
-    const w = world({ discordIds: [], storedIds: [6, 7, 8] })
-    await w.imp.run()
-    expect(idsOf(w, 1)).toHaveLength(3)
-    expect((await w.imp.status()).importDone).toBe(true)
-  })
-
   it('survives an old list of the window that holds a message the live feed has already deleted', async () => {
     const w = world({ discordIds: [6, 8, 9, 10], storedIds: [6, 8, 9, 10] })
     const windowIds = w.store.windowIds
@@ -689,34 +997,51 @@ describe('the catch-up window', () => {
     expect((await w.imp.status()).importDone).toBe(true)
   })
 
-  it('matches a model of the window: only stored messages inside the page change, only for a missing or a re-edited one', async () => {
+  it('matches a model of Discord: the stored window agrees with it wherever the page reaches, or lies beyond it', async () => {
     const EDIT_POOL = [null, EDITED, '2026-11-01T10:00:00.123999+00:00', '2026-11-01T11:00:00.123+01:00', '2026-11-01T10:05:00.000000+00:00']
-    const idSet = fc.uniqueArray(fc.integer({ min: 1, max: 25 }), { maxLength: 14 })
+    // Messages 1 to 25 are what Discord holds when the page is read; 26 to 30 come in after it, before a message is asked about.
+    const ids = (from, to, maxLength) => fc.uniqueArray(fc.integer({ min: from, max: to }), { maxLength })
     const edit = fc.integer({ min: 0, max: EDIT_POOL.length - 1 })
+    const edits = fc.array(edit, { minLength: 30, maxLength: 30 })
     await fc.assert(
-      fc.asyncProperty(idSet, idSet, fc.array(edit, { minLength: 25, maxLength: 25 }), fc.array(edit, { minLength: 25, maxLength: 25 }), fc.integer({ min: 1, max: 6 }), async (discordIds, storedIds, de, se, size) => {
-        const edits = Object.fromEntries(discordIds.map((n) => [n, EDIT_POOL[de[n - 1]]]))
-        const storedEdits = Object.fromEntries(storedIds.map((n) => [n, EDIT_POOL[se[n - 1]]]))
-        const w = world({ discordIds: [...discordIds].sort((a, b) => a - b), storedIds, edits, storedEdits, windowSize: size })
-        await w.imp.run()
+      fc.asyncProperty(
+        ids(1, 25, 14),
+        ids(26, 30, 5),
+        ids(1, 30, 16),
+        edits,
+        edits,
+        fc.integer({ min: 1, max: 6 }),
+        async (atRead, arrived, storedIds, discordEdits, storedEdits, size) => {
+          const truth = new Set([...atRead, ...arrived])
+          const w = world({
+            discordIds: [...truth].sort((a, b) => a - b),
+            storedIds,
+            edits: Object.fromEntries([...truth].map((n) => [n, EDIT_POOL[discordEdits[n - 1]]])),
+            storedEdits: Object.fromEntries(storedIds.map((n) => [n, EDIT_POOL[storedEdits[n - 1]]])),
+            windowSize: size,
+          })
+          // The page was read before the later messages came in.
+          const page = [...atRead].sort((a, b) => b - a).slice(0, size)
+          w.discord.newest = async () => page.map((n) => w.discord.channels[postId(1)].find((m) => m.id === mid(1, n)))
+          await w.imp.run()
 
-        const page = [...discordIds].sort((a, b) => b - a).slice(0, size)
-        const seen = [...storedIds].sort((a, b) => b - a).slice(0, size)
-        const instant = (v) => (v === null ? null : Date.parse(v))
-        const expected = Object.fromEntries(storedIds.map((n) => [mid(1, n), `stored ${n}`]))
-        for (const n of seen) {
-          const inside = page.some((p) => p < n) && page.some((p) => p > n)
-          const edge = page.includes(n)
-          if (edge) {
-            if (instant(edits[n]) !== instant(storedEdits[n])) expected[mid(1, n)] = `discord ${n}`
-          } else if (inside) {
-            delete expected[mid(1, n)]
+          const instant = (v) => (v === null ? null : Date.parse(v))
+          const window = [...storedIds].sort((a, b) => b - a).slice(0, size)
+          const expected = Object.fromEntries(storedIds.map((n) => [mid(1, n), `stored ${n}`]))
+          for (const n of window) {
+            // Out of view: the page reaches down to its oldest message and no further.
+            if (page.length > 0 && n < Math.min(...page)) continue
+            if (!truth.has(n)) delete expected[mid(1, n)]
+            else if (instant(EDIT_POOL[discordEdits[n - 1]]) !== instant(EDIT_POOL[storedEdits[n - 1]])) expected[mid(1, n)] = `discord ${n}`
           }
-        }
-        // `page.includes(n)` also covers the oldest and newest of the page, which count as inside for an edit.
-        expect(contents(w)).toEqual(expected)
-      }),
-      { numRuns: 150 },
+          expect(contents(w)).toEqual(expected)
+          // Discord was asked about exactly the stored messages of the window that lie past the page (all of them for an
+          // empty page), newest first: so never more than the window, and never one that the page itself answers.
+          const past = window.filter((n) => page.length === 0 || n > Math.max(...page))
+          expect(rereads(w).map((c) => c[2])).toEqual(past.map((n) => mid(1, n)))
+        },
+      ),
+      { numRuns: 200 },
     )
   })
 })
@@ -1194,7 +1519,8 @@ describe('hostile answers from Discord', () => {
   })
 
   it('does not take a message of a page that cannot be parsed, but moves past it', async () => {
-    const w = setup({ active: [thread(1)] })
+    // The page of the import holds two messages that cannot be parsed; the window then finds the one that can.
+    const w = setup({ active: [thread(1)], channels: { [postId(1)]: [raw(1, 3)] } })
     let asked = 0
     w.discord.messagesAfter = async () => (asked++ === 0 ? [raw(1, 1, { author: null }), raw(1, 2, { id: 'abc' }), raw(1, 3)] : [])
     await w.imp.run()

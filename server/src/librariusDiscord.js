@@ -7,9 +7,13 @@
  * activeThreads() → the raw threads of the guild that are not archived.
  * archivedThreads(forumId, before | null) → { threads, hasMore }: one page of up to 100 archived public threads of a
  *   forum, newest first. `before` is the archive time of the oldest thread of the page before; null starts at the newest.
- * messagesAfter(channelId, afterId, limit = 100) → raw messages, oldest first (Discord answers newest first). afterId is
- *   a message id, or '0' for the start of the channel.
+ * messagesAfter(channelId, afterId, limit = 100) → raw messages, oldest first: sorted by id here, whatever order Discord
+ *   answered in (it answers newest first). A message whose id is not a Discord id makes the page Upstream, as one that
+ *   cannot be put in order. afterId is a message id, or '0' for the start of the channel.
  * newest(channelId, limit = 100) → raw messages as Discord gives them, newest first.
+ * thread(id) → the raw thread, or null (404 Unknown Channel, code 10003; any other 404 is Upstream).
+ *   channel(id) is Upstream for a deleted thread, as for any other failure; the import has to tell the two apart before it
+ *   deletes a post.
  * message(channelId, id) → the raw message, or null (404 Unknown Message, code 10008; any other 404 is Upstream).
  * emojis() → the guild's raw emoji.
  * refreshUrls(urls) → Map of each link Discord refreshed to its new one. At most 50 links, or RangeError. A link
@@ -64,6 +68,7 @@ const WINDOW_MS = 1000
 const MAX_PAGE = 100
 const MAX_REFRESH = 50
 const UNKNOWN_MESSAGE = 10008 // Discord's JSON error code for a message that does not exist
+const UNKNOWN_CHANNEL = 10003 // and for a channel, a thread included
 
 const isObject = (v) => typeof v === 'object' && v !== null && !Array.isArray(v)
 const isList = (v) => Array.isArray(v) && v.every(isObject)
@@ -229,6 +234,17 @@ export function createLibrariusDiscord({
         return getObject(`/v10/channels/${id}`, 'a channel')
       },
 
+      async thread(id) {
+        needId(id, 'threadId')
+        const { status, json } = await send('GET', `/v10/channels/${id}`)
+        // Only Unknown Channel means the thread is gone; a thread the bot cannot see (403) or any failure of Discord's
+        // would otherwise read as a thread deleted, and a deleted thread takes its messages and read marks with it.
+        if (status === 404 && json?.code === UNKNOWN_CHANNEL) return null
+        if (status !== 200) throw refused(status, 'a thread')
+        if (!isObject(json)) throw unusable('a thread')
+        return json
+      },
+
       async activeThreads() {
         const body = await getObject(`${guildPath}/threads/active`, 'the active threads')
         if (!isList(body.threads)) throw unusable('the active threads')
@@ -249,7 +265,10 @@ export function createLibrariusDiscord({
         if (typeof afterId !== 'string' || !CURSOR.test(afterId)) throw new TypeError('afterId must be a message id, or 0.')
         needLimit(limit)
         const page = await getList(`${messagesPath(channelId)}?limit=${limit}&after=${afterId}`, 'a page of messages')
-        return page.reverse()
+        // Discord answers newest first, but the import's cursor moves to the last message of the page, so the order is the
+        // client's to guarantee and not Discord's to promise. A message with no id cannot be put in order.
+        if (!page.every((m) => isId(m.id))) throw unusable('a page of messages')
+        return page.sort((a, b) => Number(BigInt(a.id) - BigInt(b.id)))
       },
 
       async newest(channelId, limit = MAX_PAGE) {

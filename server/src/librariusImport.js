@@ -17,6 +17,11 @@
  * 1. stamps last_run_at; then collects the forum's threads (the active ones of the guild whose parent is the forum, and
  *    every page of the archived ones) and upserts each as it comes; then deletes the stored posts Discord no longer lists.
  *    That delete happens only once every list call has succeeded, so a failed list can never empty the Librarius.
+ *    A thread unarchived between the active listing and the archived one is in neither list, so Discord is asked about each
+ *    stored post that neither holds before the delete (discord.thread, one question for each such post): one it still
+ *    has, in the forum, is kept and taken in as if it had been listed; one it answers is gone (404 Unknown Channel), or
+ *    has moved out of the forum, is deleted with its messages and read marks. A question Discord cannot answer ends the
+ *    run with nothing deleted.
  *    Then onPostsListed() is called, and waited for, before a single message is read: the live feed reloads the posts it
  *    knows there, so it takes in the live events of a post this run found before the long import of messages. When it
  *    throws, the run ends like any other that fails, and the retry calls it again.
@@ -26,9 +31,12 @@
  * 3. for each post, compares Discord's newest `windowSize` messages with the newest `windowSize` stored. A stored message
  *    that lies between the oldest and the newest of Discord's page but is not in it was deleted: it is deleted here. One
  *    whose edit time (as an instant, whatever its format) differs from Discord's is written again. A stored message
- *    older than the whole page is out of view and is left alone, and so is one newer than the page, which may have come
- *    in after the page was read. That is the limit of the catch-up: a message deleted while the gateway was down and
- *    older than the window stays until the post is reimported.
+ *    newer than the whole page, or any stored message when the page is empty, may have been deleted while the gateway
+ *    was down (the page cannot show that), or may have come in after the page was read, so Discord is asked for that
+ *    message itself (discord.message): a message it no longer has is deleted here, one it still has is kept and is
+ *    written again if its edit time differs. That is at most `windowSize` questions for a post. A stored message older
+ *    than the whole page is out of view and is left alone. That is the limit of the catch-up: a message deleted while
+ *    the gateway was down and older than the window stays until the post is reimported.
  * 4. sets import_done, last_ok_at and a clear last_error.
  *
  * Any failure ends the run where it stands, with the cursors it has already set: last_error says why, and the next run
@@ -60,8 +68,9 @@ import { attempt as attemptWrite, describe, isId, isStoreId } from './librariusT
 const PAGE = 100
 // The longest a timer can hold: a longer delay makes it fire at once.
 const MAX_TIMER_MS = 2_147_483_647
-const DISCORD_METHODS = ['activeThreads', 'archivedThreads', 'messagesAfter', 'newest']
+const DISCORD_METHODS = ['activeThreads', 'archivedThreads', 'messagesAfter', 'newest', 'message', 'thread']
 const STORE_METHODS = [
+  'knownPostIds',
   'upsertPost',
   'deletePostsNotIn',
   'upsertMessages',
@@ -171,6 +180,14 @@ export function createImport({
       if (!hasMore) break
       before = olderThan(threads, before)
     }
+    // A thread unarchived between the active listing and the archived one is in neither list, though it is there, and the
+    // delete below would take its messages and everyone's read marks with it. So Discord is asked about each stored post
+    // that neither list holds: one it still has in the forum is taken in as if it had been listed.
+    for (const id of await store.knownPostIds()) {
+      // A thread Discord no longer has is null, which take() passes over as it does a thread of another forum: the post is
+      // then not listed, and so deleted below.
+      if (!listed.has(id)) await take([await discord.thread(id)])
+    }
     await store.deletePostsNotIn([...listed])
     return [...imported]
   }
@@ -197,13 +214,23 @@ export function createImport({
     const gone = []
     const edited = []
     for (const { id, editedAt } of await store.windowIds(postId, windowSize)) {
-      const at = BigInt(id)
-      // Older or newer than the whole page: out of view, not gone.
-      if (onPage.every((p) => p > at) || onPage.every((p) => p < at)) continue
-      const message = fetched.get(id)
+      let message = fetched.get(id)
       if (message === undefined) {
-        gone.push(id)
-        continue
+        const at = BigInt(id)
+        // Newer than the whole page, or the page is empty (which every message is newer than). The page cannot say what
+        // became of it: it may have been deleted while the gateway was down, or come in after the page was read. So Discord
+        // is asked for that message itself, which is at most one question for each message of the window.
+        // Stryker disable next-line EqualityOperator: this message is not on the page, so no id of the page equals it
+        const newer = onPage.every((p) => p < at)
+        // Older than the whole page: out of view, not gone.
+        // Stryker disable next-line EqualityOperator: as above
+        if (!newer && onPage.every((p) => p > at)) continue
+        // Inside the range of the page, and not on it: deleted.
+        message = newer ? await discord.message(postId, id) : null
+        if (message === null) {
+          gone.push(id)
+          continue
+        }
       }
       const row = parseMessage(message)
       if (row !== null && instant(row.editedAt) !== instant(editedAt)) edited.push(row)

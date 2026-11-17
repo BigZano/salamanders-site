@@ -211,6 +211,16 @@ const ROWS = [
     bad: OBJECT_BAD,
   },
   {
+    name: 'thread',
+    what: 'a thread',
+    call: (d) => d.thread(THREAD),
+    method: 'GET',
+    path: `/v10/channels/${THREAD}`,
+    reply: thread(THREAD),
+    result: thread(THREAD),
+    bad: OBJECT_BAD,
+  },
+  {
     name: 'emojis',
     what: 'the emoji',
     call: (d) => d.emojis(),
@@ -380,13 +390,57 @@ describe('messagesAfter and newest', () => {
     expect(r.seen.map((s) => s.url)).toEqual([`${API}/v10/channels/${THREAD}/messages?limit=100&after=0`, `${API}/v10/channels/${THREAD}/messages?limit=100`])
   })
 
-  it('messagesAfter puts any list of messages in exactly reverse order', async () => {
+  it('messagesAfter sorts a shuffled page by id, and does not trust the order Discord used', async () => {
+    const r = rig([ok([message(MSG_2), message(MSG_3), message(MSG)])])
+    expect((await r.discord.messagesAfter(THREAD, AFTER, 3)).map((m) => m.id)).toEqual([MSG, MSG_2, MSG_3])
+  })
+
+  it('messagesAfter compares ids as numbers, so an id of more digits is newer whatever it spells', async () => {
+    const wide = '1000000000000000000'
+    const r = rig([ok([message(wide), message('999999999999999999'), message('99999999999999999')])])
+    expect((await r.discord.messagesAfter(THREAD, AFTER, 3)).map((m) => m.id)).toEqual(['99999999999999999', '999999999999999999', wide])
+  })
+
+  it('messagesAfter keeps messages of one id in the order Discord gave them', async () => {
+    const r = rig([ok([{ ...message(MSG_2), content: 'first' }, { ...message(MSG), content: 'only' }, { ...message(MSG_2), content: 'second' }])])
+    expect((await r.discord.messagesAfter(THREAD, AFTER, 3)).map((m) => m.content)).toEqual(['only', 'first', 'second'])
+  })
+
+  it('messagesAfter answers any page sorted by id, with nothing lost and nothing added', async () => {
     await fc.assert(
-      fc.asyncProperty(fc.array(fc.record({ id: fc.stringMatching(/^[0-9]{18}$/), content: fc.string() }), { maxLength: 100 }), async (page) => {
+      fc.asyncProperty(fc.array(fc.record({ id: fc.stringMatching(/^[0-9]{17,20}$/), content: fc.string() }), { maxLength: 100 }), async (page) => {
         const r = rig([ok(page)])
-        expect(await r.discord.messagesAfter(THREAD, AFTER, 100)).toEqual([...page].reverse())
+        const sorted = await r.discord.messagesAfter(THREAD, AFTER, 100)
+        expect(sorted).toHaveLength(page.length)
+        for (let i = 1; i < sorted.length; i++) expect(BigInt(sorted[i - 1].id) <= BigInt(sorted[i].id)).toBe(true)
+        // The same messages, whole: sorting moves them and changes none.
+        const key = (m) => `${m.id} ${m.content}`
+        expect(sorted.map(key).sort()).toEqual(page.map(key).sort())
+        // Equal ids keep the order they came in.
+        const byId = (list) => Object.groupBy(list, (m) => BigInt(m.id).toString())
+        for (const [id, group] of Object.entries(byId(page))) expect(byId(sorted)[id]).toEqual(group)
       }),
     )
+  })
+
+  // A message with no id Discord would send cannot be put in order, and a page that might be out of order is not read.
+  it.each([
+    ['no id', {}],
+    ['a number for an id', { id: 200000000000000430 }],
+    ['null for an id', { id: null }],
+    ['an id of 16 digits', { id: '2000000000000004' }],
+    ['an id of 21 digits', { id: '200000000000000430000' }],
+    ['an id with a letter', { id: '20000000000000043a' }],
+    ['an id with a sign', { id: '-200000000000000430' }],
+    ['an empty id', { id: '' }],
+    ['a list for an id', { id: [MSG] }],
+  ])('messagesAfter throws Upstream for a page that holds a message with %s', async (_, odd) => {
+    for (const page of [[odd], [message(MSG), odd], [odd, message(MSG)]]) {
+      const r = rig([ok(page)])
+      const err = await r.discord.messagesAfter(THREAD, AFTER, 100).catch((e) => e)
+      expect(err).toBeInstanceOf(Upstream)
+      expect(err.message).toBe('Discord answered 200 for a page of messages, but not with what the Librarius expected.')
+    }
   })
 
   it('newest hands back any list of messages in the order it came', async () => {
@@ -480,6 +534,46 @@ describe('message', () => {
   it('answers a 200 as the message, whatever code its body carries', async () => {
     const r = rig([ok({ id: MSG, code: 10008 })])
     expect(await r.discord.message(THREAD, MSG)).toEqual({ id: MSG, code: 10008 })
+  })
+})
+
+describe('thread', () => {
+  it('answers null for a 404 whose code is 10003 (Unknown Channel)', async () => {
+    const r = rig([{ status: 404, body: { code: 10003, message: 'Unknown Channel' } }])
+    expect(await r.discord.thread(THREAD)).toBeNull()
+    expect(r.seen[0].url).toBe(`${API}/v10/channels/${THREAD}`)
+  })
+
+  // Only a gone thread is "gone": one the bot cannot see, or a failure of Discord's, must not read as a thread deleted.
+  it.each([
+    ['a 404 Unknown Message (10008)', { status: 404, body: { code: 10008, message: 'Unknown Message' } }],
+    ['a 404 whose code is the text 10003', { status: 404, body: { code: '10003' } }],
+    ['a 404 with a nested 10003', { status: 404, body: { error: { code: 10003 } } }],
+    ['a 404 with no code', { status: 404, body: {} }],
+    ['a 404 with a null body', { status: 404, body: null }],
+    ['a 404 with a list body', { status: 404, body: [10003] }],
+    ['a 404 with no JSON', { status: 404, raw: 'Not Found' }],
+    ['a 404 with an empty body', { status: 404, raw: '' }],
+    ['a 403 Missing Access (50001)', { status: 403, body: { code: 50001 } }],
+    ['a 403 whose body carries the code 10003', { status: 403, body: { code: 10003 } }],
+    ['a 500 whose body carries the code 10003', { status: 500, body: { code: 10003 } }],
+    ['a 410 whose body carries the code 10003', { status: 410, body: { code: 10003 } }],
+  ])('throws Upstream, not null, on %s', async (_, reply) => {
+    const r = rig([reply])
+    const err = await r.discord.thread(THREAD).catch((e) => e)
+    expect(err).toBeInstanceOf(Upstream)
+    expect(err.message).toBe(`Discord answered ${reply.status} for a thread.`)
+  })
+
+  it('answers a 200 as the thread, whatever code its body carries', async () => {
+    const r = rig([ok({ id: THREAD, code: 10003 })])
+    expect(await r.discord.thread(THREAD)).toEqual({ id: THREAD, code: 10003 })
+  })
+
+  it('treats a 429 as a retry, whose 404 is an answer', async () => {
+    const r = rig([{ status: 429, headers: { 'Retry-After': '1' } }, { status: 404, body: { code: 10003 } }])
+    expect(await r.discord.thread(THREAD)).toBeNull()
+    expect(r.slept).toEqual([1000])
   })
 })
 
@@ -660,6 +754,7 @@ describe('arguments', () => {
     ['messagesAfter', (d, id) => d.messagesAfter(id, AFTER, 100), [], 'channelId must be a Discord id.'],
     ['newest', (d, id) => d.newest(id, 100), [], 'channelId must be a Discord id.'],
     ['archivedThreads', (d, id) => d.archivedThreads(id, null), { threads: [], has_more: false }, 'forumId must be a Discord id.'],
+    ['thread', (d, id) => d.thread(id), { id: 'x' }, 'threadId must be a Discord id.'],
     ['message (channel)', (d, id) => d.message(id, MSG), { id: 'x' }, 'channelId must be a Discord id.'],
     ['message (id)', (d, id) => d.message(THREAD, id), { id: 'x' }, 'messageId must be a Discord id.'],
   ]
@@ -697,7 +792,7 @@ describe('arguments', () => {
       fc.asyncProperty(fc.oneof(fc.string(), fc.stringMatching(/^[0-9]{0,16}$/), fc.stringMatching(/^[0-9]{21,30}$/), fc.anything()), async (id) => {
         fc.pre(!(typeof id === 'string' && /^\d{17,20}$/.test(id)))
         const r = rig()
-        const errs = await Promise.all([r.discord.channel(id), r.discord.newest(id, 1), r.discord.message(id, MSG), r.discord.message(THREAD, id)].map((p) => p.catch((e) => e)))
+        const errs = await Promise.all([r.discord.channel(id), r.discord.thread(id), r.discord.newest(id, 1), r.discord.message(id, MSG), r.discord.message(THREAD, id)].map((p) => p.catch((e) => e)))
         for (const err of errs) expect(err).toBeInstanceOf(TypeError)
         expect(r.seen).toEqual([])
       }),
