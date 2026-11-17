@@ -327,9 +327,13 @@ Rollout:
      gateway for good, and the forum then goes stale until the cause is fixed and the API is restarted: 4014 means the
      Message Content intent is off for the bot. The other codes (4000 and 4007 to 4009 among them) are reconnects that the
      client makes by itself, and are normal;
-   - the import finishes: `docker compose exec -T db psql -U salamanders salamanders_builds -c 'select import_done,
-     last_error from librarius_sync;'` shows `import_done` true and an empty `last_error`, and `curl -s -H "Authorization:
-     Bearer $TOKEN" localhost:8787/librarius/me` says `"ready":true`;
+   - the import finishes: the first command shows `import_done` true and an empty `last_error`, and the second says
+     `"ready":true`:
+
+     ```sh
+     docker compose exec -T db psql -U salamanders salamanders_builds -c 'select import_done, last_error from librarius_sync;'
+     curl -s -H "Authorization: Bearer $TOKEN" localhost:8787/librarius/me
+     ```
    - the live feed works. In a post of the forum, in Discord, post a message, edit it, react to it, and delete a message
      (one you posted for this). Then run the query below, with the post's id in place of `<post id>`: within about 10
      seconds the new message is there, the edit shows in `edited_at` and `content`, the reaction in `reactions`, and the
@@ -363,7 +367,7 @@ Rollout:
 
 If the import never finishes (`import_done` stays false), read `last_error` in the same table: the import retries by itself
 (after 5, 10 and 20 minutes, then every 30), and `docker compose restart api` forces a run at once. A run that stopped
-resumes from the cursor each post kept, so a long import is not started over. A `last_error` of "Discord answered 403 for
+resumes from the cursor each post kept, so a long import is not started over. A `last_error` of "Error: Discord answered 403 for
 a thread." means the bot cannot see a post that the Librarius holds and Discord no longer lists: before it deletes
 anything, the import asks Discord about each such post, and that answer ends every run, with nothing deleted, until the
 bot's permissions on that thread (or on the forum) let it see the thread again.
