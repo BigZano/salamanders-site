@@ -64,7 +64,7 @@ function setup(options = {}) {
     memberOf: vi.fn(async (id) => {
       if (fail.memberOf) throw new Upstream()
       const user = Object.values(world.users).find((u) => u?.id === id)
-      return user.roles === null ? null : { roles: user.roles, joinedAt: '2024-01-01T00:00:00.000000+00:00', timeoutUntil: user.timeoutUntil ?? null }
+      return user.roles === null ? null : { roles: user.roles, joinedAt: '2024-01-01T00:00:00.000000+00:00', timeoutUntil: user.timeoutUntil ?? null, pending: user.pending ?? false }
     }),
   }
   const guild = {
@@ -291,6 +291,7 @@ describe('the verdict: what a member may do', () => {
       world.users.reader.timeoutUntil = iso(clock.t + 1)
       expect((await access.resolve(req('reader'), { fresh: true })).timedOut).toBe(true)
       world.users.reader.timeoutUntil = iso(clock.t)
+      access.forget() // a write verdict is kept for 3 seconds (below), and the clock here must not move
       const over = await access.resolve(req('reader'), { fresh: true })
       expect(over.timedOut).toBe(false)
       expect(over.reply).toBe(true)
@@ -301,6 +302,7 @@ describe('the verdict: what a member may do', () => {
       const { access, world, clock } = setup()
       for (const timeoutUntil of [iso(clock.t - 86_400_000), null, undefined, 'soon', '', iso(0)]) {
         world.users.reader.timeoutUntil = timeoutUntil
+        access.forget()
         const verdict = await access.resolve(req('reader'), { fresh: true })
         expect(abilities(verdict), String(timeoutUntil)).toStrictEqual({ ...NONE, reply: true })
         expect(verdict.timeoutUntil, String(timeoutUntil)).toBeNull()
@@ -323,10 +325,63 @@ describe('the verdict: what a member may do', () => {
       expect(verdict.timeoutUntil).toBeNull()
     })
 
-    it('leaves a timed-out owner timed out, as Discord reports it', async () => {
+    it('does not time out the guild owner, whom Discord exempts: they keep every right, and are told of no timeout', async () => {
       const { access, world, clock } = setup()
       world.users.owner.timeoutUntil = iso(clock.t + 60_000)
-      expect(abilities(await access.resolve(req('owner')))).toStrictEqual({ ...NONE, timedOut: true, admin: true })
+      const verdict = await access.resolve(req('owner'))
+      expect(abilities(verdict)).toStrictEqual(EVERYTHING)
+      expect(verdict.timeoutUntil).toBeNull()
+    })
+
+    it('does not time out an Administrator, whatever role grants it, and keeps no one else from being timed out', async () => {
+      const { access, world, clock } = setup()
+      world.users.admin.timeoutUntil = iso(clock.t + 60_000)
+      const admin = await access.resolve(req('admin'))
+      expect(abilities(admin)).toStrictEqual(EVERYTHING)
+      expect(admin.timeoutUntil).toBeNull()
+      // Manage Server, which is not Administrator, is no exemption: the member is timed out like any other.
+      world.facts.roles.find((r) => r.id === READER).permissions = String(P.MANAGE_GUILD | P.MANAGE_MESSAGES | P.MANAGE_THREADS | P.ATTACH_FILES)
+      world.users.reader.timeoutUntil = iso(clock.t + 60_000)
+      const manager = await access.resolve(req('reader'))
+      expect(abilities(manager)).toStrictEqual({ ...NONE, timedOut: true, admin: true })
+      expect(manager.timeoutUntil).toBe(iso(clock.t + 60_000))
+    })
+
+    it('exempts the owner and an Administrator whatever else the forum says of them', async () => {
+      const { access, world, clock } = setup()
+      world.facts.overwrites.push({ id: OWNER, type: 1, allow: '0', deny: String(P.SEND_MESSAGES_IN_THREADS) })
+      for (const who of ['owner', 'admin']) world.users[who].timeoutUntil = iso(clock.t + 1)
+      for (const who of ['owner', 'admin']) expect((await access.resolve(req(who))).timedOut, who).toBe(false)
+    })
+  })
+
+  describe('Membership Screening', () => {
+    it('keeps a member who has not passed it from replying, attaching, or managing anything, and leaves them able to read', async () => {
+      const { access, world } = setup()
+      give(world, P.ATTACH_FILES | P.MANAGE_MESSAGES | P.MANAGE_THREADS)
+      world.users.reader.pending = true
+      const verdict = await access.resolve(req('reader'))
+      expect(verdict.read).toBe(true)
+      expect(abilities(verdict)).toStrictEqual(NONE)
+    })
+
+    it('lets them write the moment they have passed it, for a fresh verdict', async () => {
+      const { access, world, clock } = setup()
+      give(world, P.ATTACH_FILES)
+      world.users.reader.pending = true
+      expect((await access.resolve(req('reader'), { fresh: true })).reply).toBe(false)
+      world.users.reader.pending = false
+      clock.t += 3_000
+      expect(abilities(await access.resolve(req('reader'), { fresh: true }))).toStrictEqual({ ...NONE, reply: true, attach: true })
+    })
+
+    it('takes only a pending that is true for pending: a lookup that says nothing of it, or something else, is one who has passed', async () => {
+      const { access, roles } = setup()
+      for (const pending of [true, undefined, null, false, 0, '', 'true', 1, 'yes', [], {}]) {
+        roles.memberOf.mockImplementation(async () => ({ roles: [READER], joinedAt: null, timeoutUntil: null, pending }))
+        expect((await access.resolve(req('reader'), { fresh: true })).reply, String(pending)).toBe(pending !== true)
+        access.forget()
+      }
     })
   })
 
@@ -340,8 +395,10 @@ describe('the verdict: what a member may do', () => {
         const verdict = await access.resolve(req('reader'))
         const all = EVERYONE | bits
         const has = (bit) => (all & bit) === bit
+        // Discord exempts an Administrator from a timeout: whatever the timeout, they keep every right.
         if (has(P.ADMINISTRATOR)) {
-          expect(abilities(verdict)).toStrictEqual({ ...EVERYTHING, ...(timedOut ? { reply: false, attach: false, manageMessages: false, manageThreads: false, timedOut: true } : {}) })
+          expect(abilities(verdict)).toStrictEqual(EVERYTHING)
+          expect(verdict.timeoutUntil).toBeNull()
           return
         }
         const reply = has(P.SEND_MESSAGES_IN_THREADS) && !timedOut
@@ -494,6 +551,148 @@ describe('the cache', () => {
     world.users.late = { id: '300000000000000160', username: 'late', roles: [READER] }
     expect((await access.resolve(req('late'))).read).toBe(true)
     expect(roles.identify).toHaveBeenCalledTimes(2)
+  })
+})
+
+describe('the verdict for a write (fresh)', () => {
+  const ticks = () => new Promise((resolve) => setImmediate(resolve))
+  const burst = (access, token, n = 20) => Promise.all(Array.from({ length: n }, () => access.resolve(req(token), { fresh: true })))
+
+  it('is looked up once for a burst of 20 parallel writes of one header: one identity call and one member call', async () => {
+    const { access, roles, guild } = setup()
+    const verdicts = await burst(access, 'reader')
+    expect(roles.identify).toHaveBeenCalledTimes(1)
+    expect(roles.memberOf).toHaveBeenCalledTimes(1)
+    expect(guild.facts).toHaveBeenCalledTimes(1)
+    expect(verdicts.every((v) => v === verdicts[0])).toBe(true)
+    expect(verdicts[0]).toMatchObject({ user: asked('reader'), read: true, reply: true })
+  })
+
+  it('is one lookup for each header: a header of its own, even for the same member, is looked up of its own', async () => {
+    const { access, roles } = setup()
+    await Promise.all([burst(access, 'tok-a', 5), burst(access, 'tok-b', 5), burst(access, 'legion', 5)])
+    expect(roles.identify).toHaveBeenCalledTimes(3)
+    expect(roles.memberOf).toHaveBeenCalledTimes(3)
+  })
+
+  it('keeps the verdict for 3 seconds, and asks again at 3 seconds', async () => {
+    const { access, roles, clock, world } = setup()
+    const first = await access.resolve(req('reader'), { fresh: true })
+    world.users.reader = { ...USERS.reader, roles: [] }
+    clock.t += 2_999
+    expect(await access.resolve(req('reader'), { fresh: true })).toBe(first)
+    expect(roles.memberOf).toHaveBeenCalledTimes(1)
+    clock.t += 1
+    expect((await access.resolve(req('reader'), { fresh: true })).read).toBe(false)
+    expect(roles.memberOf).toHaveBeenCalledTimes(2)
+  })
+
+  it('keeps it 3 seconds whatever the read verdicts are kept for', async () => {
+    const { access, clock, world } = setup({ ttlMs: 60_000 })
+    await access.resolve(req('reader'), { fresh: true })
+    world.users.reader = { ...USERS.reader, roles: [] }
+    clock.t += 3_000
+    expect((await access.resolve(req('reader'), { fresh: true })).read).toBe(false)
+  })
+
+  it('is not the verdict of a read: a read is not answered with a write verdict, and a write is not with a read verdict', async () => {
+    const { access, roles, world } = setup()
+    expect((await access.resolve(req('reader'))).read).toBe(true)
+    world.users.reader = { ...USERS.reader, roles: [] }
+    expect((await access.resolve(req('reader'), { fresh: true })).read).toBe(false)
+    world.users.reader = { ...USERS.reader, roles: [READER] }
+    expect((await access.resolve(req('reader'))).read).toBe(true) // still the read one, stored before
+    expect(roles.memberOf).toHaveBeenCalledTimes(2)
+  })
+
+  it('does not share a failure beyond the lookup it happened in: every caller that waited for it fails, and the next asks again', async () => {
+    const { access, roles, fail } = setup()
+    fail.memberOf = true
+    const results = await Promise.allSettled(Array.from({ length: 5 }, () => access.resolve(req('reader'), { fresh: true })))
+    expect(results.map((r) => r.status)).toStrictEqual(Array(5).fill('rejected'))
+    expect(results.every((r) => r.reason instanceof Upstream)).toBe(true)
+    expect(roles.memberOf).toHaveBeenCalledTimes(1)
+    fail.memberOf = false
+    expect(await access.resolve(req('reader'), { fresh: true })).toMatchObject({ read: true })
+    expect(roles.memberOf).toHaveBeenCalledTimes(2)
+  })
+
+  it('does not store a missing identity, and answers every caller of that lookup null', async () => {
+    const { access, roles, world } = setup()
+    world.users.late = undefined
+    const answers = await burst(access, 'late', 5)
+    expect(answers).toStrictEqual(Array(5).fill(null))
+    expect(roles.identify).toHaveBeenCalledTimes(1)
+    world.users.late = { id: '300000000000000160', username: 'late', roles: [READER] }
+    expect((await access.resolve(req('late'), { fresh: true })).read).toBe(true)
+    expect(roles.identify).toHaveBeenCalledTimes(2)
+  })
+
+  it('shares nothing between requests that carry no Authorization header', async () => {
+    const { access, roles } = setup()
+    roles.identify.mockImplementation(async () => ({ id: USERS.reader.id, username: 'reader' }))
+    const anonymous = () => new Request('https://api.test/librarius/me')
+    await Promise.all([access.resolve(anonymous(), { fresh: true }), access.resolve(anonymous(), { fresh: true })])
+    await access.resolve(anonymous(), { fresh: true })
+    expect(roles.memberOf).toHaveBeenCalledTimes(3)
+  })
+
+  it('keeps no more write verdicts than maxEntries, and drops the one it stored first', async () => {
+    const { access, roles } = setup({ maxEntries: 1 })
+    await access.resolve(req('reader'), { fresh: true })
+    await access.resolve(req('legion'), { fresh: true })
+    await access.resolve(req('reader'), { fresh: true })
+    expect(roles.memberOf).toHaveBeenCalledTimes(3)
+  })
+
+  it('is looked up again after the lookup it shared has finished: the place it held is free', async () => {
+    const { access, roles, clock } = setup()
+    await burst(access, 'reader', 3)
+    clock.t += 3_000
+    await burst(access, 'reader', 3)
+    expect(roles.memberOf).toHaveBeenCalledTimes(2)
+  })
+
+  it('forgets every write verdict on forget(), the 30-second ones as well', async () => {
+    const { access, roles, world } = setup()
+    await access.resolve(req('reader'), { fresh: true })
+    world.users.reader = { ...USERS.reader, roles: [] }
+    access.forget()
+    expect((await access.resolve(req('reader'), { fresh: true })).read).toBe(false)
+    expect(roles.memberOf).toHaveBeenCalledTimes(2)
+  })
+
+  it('is not joined, once forget() has been called, by a lookup that began before it, and its answer is not stored', async () => {
+    const { access, roles, world } = setup()
+    const gates = []
+    roles.memberOf.mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          const roleList = world.users.reader.roles
+          gates.push(() => resolve({ roles: roleList, joinedAt: null, timeoutUntil: null, pending: false }))
+        }),
+    )
+    const before = access.resolve(req('reader'), { fresh: true })
+    await ticks()
+    access.forget()
+    world.users.reader = { ...USERS.reader, roles: [] }
+    const after = access.resolve(req('reader'), { fresh: true })
+    await ticks()
+    expect(gates).toHaveLength(2) // the second did not wait for the first
+    gates[0]() // the old lookup ends while the new one is still going
+    expect((await before).read).toBe(true)
+    // Somebody comes while the new lookup is going: they share it, not a third, and the old lookup's end did not clear its place.
+    const third = access.resolve(req('reader'), { fresh: true })
+    await ticks()
+    expect(gates).toHaveLength(2)
+    gates[1]()
+    expect((await after).read).toBe(false)
+    expect((await third).read).toBe(false)
+    // And what is kept is the new lookup's, not the old one's.
+    roles.memberOf.mockImplementation(async () => {
+      throw new Error('must not be asked')
+    })
+    expect((await access.resolve(req('reader'), { fresh: true })).read).toBe(false)
   })
 })
 

@@ -5,8 +5,13 @@
  *
  * identify()  → {id, username} | null (no/invalid token). Throws Upstream.
  * rolesOf()   → role id[] | null (not in the guild). Throws Upstream.
- * memberOf()  → { roles, joinedAt, timeoutUntil } | null: the same lookup, with when the present membership began (or null)
- *               and until when the member is timed out (`communication_disabled_until`, as Discord's ISO time; null for none).
+ * memberOf()  → { roles, joinedAt, timeoutUntil, pending } | null: the same lookup, with when the present membership began (or null),
+ *               until when the member is timed out (`communication_disabled_until`, as Discord's ISO time; null for none) and
+ *               whether they are still in Membership Screening (`pending`, true or false: only Discord's own true is true).
+ *               When Discord answers 429 it is Upstream like any other failure, and for as long as Discord says to wait
+ *               (Retry-After, a second when it says nothing usable, a minute at most) memberOf makes no call at all and is
+ *               Upstream at once, so that a burst of members does not make Discord's invalid-request count (which bans an
+ *               address) climb. Only memberOf waits: no other lookup here does.
  * guildAdmins() → { ownerId, adminRoleIds, everyoneAdmin }: whom the guild makes an admin. Throws Upstream.
  * isAdmin()   → guild owner, or a held role (incl. @everyone) grants
  *               Administrator. Throws Upstream.
@@ -16,13 +21,21 @@
 const TOKEN = /^Bearer ([A-Za-z0-9._~+/-]{1,512}=*)$/
 const SNOWFLAKE = /^\d{17,20}$/
 const ADMINISTRATOR = 0x8n
+// How long Discord is not asked again for a member after a 429 that says nothing usable, and the longest it is not asked.
+const DEFAULT_WAIT_S = 1
+const MAX_WAIT_S = 60
 // A role's permissions as a bigint; anything that is not digits is none.
 const perms = (r) => BigInt(/^\d{1,40}$/.test(r.permissions) ? r.permissions : 0)
 const carriesAdmin = (r) => (perms(r) & ADMINISTRATOR) === ADMINISTRATOR
+// The wait a Retry-After header asks for, in ms: seconds, possibly fractional; a missing or odd one is a second, and no wait is past a minute.
+const waitMs = (header) => {
+  const s = Number.parseFloat(header)
+  return Math.min(Number.isFinite(s) && s >= 0 ? s : DEFAULT_WAIT_S, MAX_WAIT_S) * 1000
+}
 
 export class Upstream extends Error {}
 
-export function createDiscordRoles({ fetchImpl = fetch, apiBase, guildId, botToken, timeoutMs = 5000 }) {
+export function createDiscordRoles({ fetchImpl = fetch, apiBase, guildId, botToken, timeoutMs = 5000, now = Date.now }) {
   const configured = [apiBase, guildId, botToken].every((v) => typeof v === 'string' && v !== '')
 
   async function get(path, authorization) {
@@ -32,7 +45,7 @@ export function createDiscordRoles({ fetchImpl = fetch, apiBase, guildId, botTok
         headers: { Authorization: authorization },
         signal: AbortSignal.timeout(timeoutMs),
       })
-      return { status: res.status, body: await res.json().catch(() => null) }
+      return { status: res.status, retryAfter: res.headers.get('Retry-After'), body: await res.json().catch(() => null) }
     } catch {
       // Network error, abort or timeout. Drop the original: its message can carry the request url, and with it a user id.
       throw new Upstream('Discord is unreachable.')
@@ -66,8 +79,16 @@ export function createDiscordRoles({ fetchImpl = fetch, apiBase, guildId, botTok
     return guild.body.roles.some((r) => held.has(r.id) && carriesAdmin(r))
   }
 
+  // When Discord lets memberOf ask again after a 429, on the clock `now` reads.
+  let heldUntil = 0
+
   async function memberOf(userId) {
+    if (now() < heldUntil) throw new Upstream('Discord asked for a wait.')
     const member = await bot(`/v10/guilds/${guildId}/members/${userId}`)
+    if (member.status === 429) {
+      heldUntil = now() + waitMs(member.retryAfter)
+      throw new Upstream()
+    }
     if (member.status === 404) return null
     if (member.status !== 200 || !Array.isArray(member.body?.roles)) throw new Upstream()
     const until = member.body.communication_disabled_until
@@ -76,6 +97,7 @@ export function createDiscordRoles({ fetchImpl = fetch, apiBase, guildId, botTok
       joinedAt: typeof member.body.joined_at === 'string' ? member.body.joined_at : null,
       // A time Discord gave, or none: a value that is no time is no timeout, since Discord only sends a time or null.
       timeoutUntil: typeof until === 'string' && !Number.isNaN(Date.parse(until)) ? until : null,
+      pending: member.body.pending === true,
     }
   }
 
