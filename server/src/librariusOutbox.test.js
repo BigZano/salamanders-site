@@ -48,6 +48,8 @@ function makeWorld() {
     events: [],
     tombstones: [],
     storeFails: {},
+    storeFailsAfter: {},
+    postMissing: false,
     nextEntry: 1,
     nextUpload: 1,
     nextId,
@@ -94,19 +96,26 @@ function makeWorld() {
       const e = w.entries.get(id)
       if (e !== undefined && e.state === 'sending') e.payload.progress = clone(progress)
     },
-    async outboxSet(id, { state, attempts, nextAt, error = null, messageState, event }) {
+    async outboxSet(id, { state, attempts, nextAt, error = null, messageState, event, queue = [] }) {
       maybeFail('outboxSet')
       const e = w.entries.get(id)
-      if (e === undefined) return
+      // As the real store: an entry that is not sending is left as it is, and nothing is written for it.
+      if (e === undefined || e.state !== 'sending') return
       e.state = state
       if (attempts !== undefined) e.attempts = attempts
       if (nextAt !== undefined) e.nextAt = asMs(nextAt)
       e.lastError = error === null ? null : error.slice(0, 500)
       if (messageState !== undefined && e.kind !== 'send' && w.messages.has(e.messageKey)) w.messages.get(e.messageKey).state = messageState
       if (event !== undefined) w.events.push({ at: Date.now(), actor: e.authorId, ...event })
+      for (const item of queue) w.enqueue({ kind: item.kind, key: item.messageKey, authorId: e.authorId, payload: item.payload })
     },
     async finishSend(id, { message, partIds, uploadIds, event }) {
       maybeFail('finishSend')
+      const e = w.entries.get(id)
+      if (e.state !== 'sending') return { stored: true, gone: [] }
+      const gone = (e.gone ?? []).filter((g) => partIds.includes(g))
+      if (gone.length > 0) return { stored: false, gone }
+      if (w.postMissing) return { stored: false, gone: null }
       for (const part of partIds) {
         const owner = partOwner(part)
         if (owner !== null && owner !== message.id) throw new Error('duplicate key value violates unique constraint (discord_id)')
@@ -115,24 +124,29 @@ function makeWorld() {
       w.messages.set(message.id, { ...clone(message), origin: 'site', state: null })
       w.parts.set(message.id, [...partIds])
       for (const upload of uploadIds) w.uploads.delete(upload)
-      const e = w.entries.get(id)
       e.state = 'sent'
       e.lastError = null
       w.events.push({ at: Date.now(), actor: message.authorId, ...event })
+      return { stored: true, gone: [] }
     },
     async finishEdit(id, { messageId, source, content, partIds, event }) {
       maybeFail('finishEdit')
-      const m = w.messages.get(messageId)
-      if (m !== undefined) {
-        Object.assign(m, { source, content, state: null, editedAt: Date.now() })
-        w.parts.set(messageId, [...partIds])
-      }
       const e = w.entries.get(id)
+      if (e.state !== 'sending') return { stored: true, gone: [] }
+      const gone = (e.gone ?? []).filter((g) => partIds.includes(g))
+      if (gone.length > 0) return { stored: false, gone }
+      const m = w.messages.get(messageId)
+      if (m === undefined) return { stored: false, gone: [] }
+      Object.assign(m, { source, content, state: null, editedAt: Date.now() })
+      w.parts.set(messageId, [...partIds])
       e.state = 'sent'
       w.events.push({ at: Date.now(), actor: e.authorId, ...event })
+      return { stored: true, gone: [] }
     },
     async finishDelete(id, { messageId, partIds, event }) {
       maybeFail('finishDelete')
+      const e = w.entries.get(id)
+      if (e.state !== 'sending') return
       if (w.messages.has(messageId)) w.tombstones.push(messageId)
       w.messages.delete(messageId)
       w.parts.delete(messageId)
@@ -140,7 +154,6 @@ function makeWorld() {
         const owner = partOwner(part)
         if (owner !== null) w.parts.delete(owner)
       }
-      const e = w.entries.get(id)
       e.state = 'sent'
       w.events.push({ at: Date.now(), actor: e.authorId, ...event })
     },
@@ -163,10 +176,33 @@ function makeWorld() {
     },
   }
 
+  // A write that was made, and whose answer was lost: the store applied it, and the worker is told it failed.
+  for (const name of ['outboxSet', 'finishSend', 'finishEdit', 'finishDelete']) {
+    const inner = w.store[name]
+    w.store[name] = async (...args) => {
+      const out = await inner(...args)
+      const err = w.storeFailsAfter[name]?.shift()
+      if (err) throw err
+      return out
+    }
+  }
+
   w.addUpload = (over = {}) => {
     const id = String(w.nextUpload++)
     w.uploads.set(id, { id, authorId: MEMBER, name: 'whatever.png', contentType: 'image/png', bytes: png(id.charCodeAt(0)), ...over })
     return id
+  }
+
+  /**
+   * What the store does when the gateway tells it that a message was deleted (siteDeleted, whose SQL is proven apart): a part
+   * that no stored reply owns, but that an entry on its way has sent, is noted in that entry.
+   */
+  w.partDeleted = (id) => {
+    const at = w.thread.findIndex((m) => m.id === id)
+    if (at !== -1) w.thread.splice(at, 1)
+    for (const e of w.entries.values()) {
+      if (['pending', 'sending'].includes(e.state) && ['send', 'edit'].includes(e.kind) && (e.payload.progress?.parts ?? []).some((part) => part.id === id)) (e.gone ??= []).push(id)
+    }
   }
 
   /** What Discord does with a request to the webhook, before any script has its say. */
@@ -230,7 +266,8 @@ function makeWorld() {
       throw new Error('socket hang up')
     }
     // A response of the script's own; `lands` has Discord do the work and still answer so, and `removes` has the message it names gone.
-    if (next.lands) effect(req)
+    // (A 2xx answer to a delete or an edit means Discord did it: only a send can be answered 2xx with no message.)
+    if (next.lands || (req.kind !== 'send' && next.status >= 200 && next.status < 300)) effect(req)
     if (next.removes) {
       const at = w.thread.findIndex((m) => m.id === req.messageId)
       if (at !== -1) w.thread.splice(at, 1)
@@ -913,15 +950,17 @@ describe('a stop and a restart never lose a part and never send one twice', () =
     expect(w.entry(id).state).toBe('sent')
   })
 
-  it('keeps the part in memory when writing it down fails, and does not send it again', async () => {
+  it('looks for the part again when writing it down fails, and does not send it again', async () => {
     w.storeFails.outboxProgress = [false, new Error('connection lost')]
     const id = w.enqueue({ payload: sendPayload() })
     await run(4000)
     expect(w.ours()).toHaveLength(1)
-    expect(w.entry(id).state).toBe('sending')
+    // The note of the part never reached the store, so the entry is tried again on the ladder, and finds the part by its text.
+    expect(w.entry(id)).toMatchObject({ state: 'pending', attempts: 1 })
     await later(2000)
     expect(w.sends()).toHaveLength(1)
     expect(w.entry(id).state).toBe('sent')
+    expect(w.ours()).toHaveLength(1)
   })
 
   it('looks again for a part that landed, at an attempt after a note that never reached the store', async () => {
@@ -1193,7 +1232,7 @@ describe('429: not accepted, not an attempt', () => {
 describe('blocked: never tried again, and two in an hour stop everything for an hour', () => {
   const block = (code = 200000) => answer(400, { code, message: 'blocked' })
 
-  it.each([200000, 200001])('ends the entry as blocked on code %i, and never sends it again', async (code) => {
+  it.each([200000, 200001, 240000])('ends the entry as blocked on code %i, and never sends it again', async (code) => {
     w.script.push(block(code))
     const id = w.enqueue({ payload: sendPayload() })
     await run(86_400_000)
@@ -1203,16 +1242,18 @@ describe('blocked: never tried again, and two in an hour stop everything for an 
     expect(w.events).toEqual([{ at: T0, actor: MEMBER, action: 'blocked', postId: THREAD, messageId: null, note: 'send' }])
   })
 
-  it('blocks an edit with its own words, and shows the message as blocked', async () => {
+  it('blocks an edit with its own words, and puts the message back as it was', async () => {
     const id = await sentReply('Before.')
     w.script.push(block())
     const e = w.enqueue({ kind: 'edit', key: id, payload: { postId: THREAD, source: 'After.', mentions: [] } })
     outbox.kick()
     await later(10_000)
     expect(w.entry(e)).toMatchObject({ state: 'blocked', lastError: 'Discord blocked this edit.' })
-    expect(w.messages.get(id).state).toBe('blocked')
     expect(w.messages.get(id).source).toBe('Before.')
-    expect(w.events.at(-1)).toMatchObject({ action: 'blocked', messageId: id, note: 'edit' })
+    expect(w.events.find((ev) => ev.action === 'blocked')).toMatchObject({ messageId: id, note: 'edit' })
+    // The edit that restores it has been through, so nothing is on its way.
+    expect(w.messages.get(id).state).toBeNull()
+    expect(w.textOf(w.ours()[0])).toBe(`Before.\n-# <@${MEMBER}>`)
   })
 
   it('blocks a delete with its own words', async () => {
@@ -1251,6 +1292,25 @@ describe('blocked: never tried again, and two in an hour stop everything for an 
     expect(w.sends().map((s) => s.at)).toEqual([T0, T0 + 1500, until])
     expect(w.entry(c).state).toBe('sent')
     expect(outbox.sendingPausedUntil()).toBeNull()
+  })
+
+  it.each([
+    [240000, 240000],
+    [200000, 240000],
+    [240000, 200001],
+  ])('counts a block for harmful links (240000) towards the breaker like any other: codes %i and %i pause everything for an hour', async (first, second) => {
+    w.script.push(block(first), block(second))
+    w.enqueue({ payload: sendPayload({ source: 'Blocked A.' }) })
+    w.enqueue({ payload: sendPayload({ source: 'Blocked B.' }) })
+    const c = w.enqueue({ payload: sendPayload({ source: 'After.' }) })
+    await run(10_000)
+    expect(w.sends()).toHaveLength(2)
+    const until = T0 + 1500 + 3_600_000
+    expect(outbox.sendingPausedUntil()).toBe(until)
+    await later(3_590_000)
+    expect(w.entry(c).state).toBe('pending')
+    await later(2000)
+    expect(w.entry(c).state).toBe('sent')
   })
 
   it('pauses edits and deletes as well, and a kick does not start anything in the pause', async () => {
@@ -1648,20 +1708,16 @@ describe('the store failing under the worker', () => {
 
   it('keeps an entry it could not settle, and settles it when it can, without sending again', async () => {
     w.storeFails.finishSend = [new Error('connection lost')]
+    w.storeFails.outboxSet = [new Error('connection lost')]
     const id = w.enqueue({ payload: sendPayload() })
     await run(4999)
+    // The store failed under the entry, and then under the write that puts it on the ladder: it stays as it is.
     expect(w.entry(id).state).toBe('sending')
     expect(w.ours()).toHaveLength(1)
     await later(1)
-    expect(w.entry(id).state).toBe('sent')
+    // The ladder step was decided when the store failed, so the entry was due when it could be written, and is sent (stored) now.
+    expect(w.entry(id)).toMatchObject({ state: 'sent', attempts: 1 })
     expect(w.sends()).toHaveLength(1)
-  })
-
-  it('does not count a failure of the store against the entry', async () => {
-    for (let i = 0; i < 8; i++) w.storeFails.outboxProgress = [...(w.storeFails.outboxProgress ?? []), new Error('connection lost')]
-    const id = w.enqueue({ payload: sendPayload() })
-    await run(300_000)
-    expect(w.entry(id)).toMatchObject({ state: 'sent', attempts: 0 })
   })
 
   it('does not lose a block when the store fails while it notes it', async () => {
@@ -1763,6 +1819,8 @@ describe('an edit', () => {
       expect(w.messages.get(id).source).toBe(after)
       expect(w.entry(e).state).toBe('sent')
       expect(w.events.at(-1).note).toBe(`${total} parts`)
+      // The edit of the first part that carries the links is written down with the others, once it is made.
+      expect(w.entry(e).payload.progress.done).toContain('links')
       // A new part is sent as the same author, and carries no file.
       for (const c of w.sends()) expect(c.body.username).toBe('Invented Name')
       for (const c of w.sends()) expect(c.files).toEqual([])
@@ -2022,6 +2080,8 @@ describe('a delete', () => {
     expect(w.thread).toEqual([])
     expect(w.messages.has(human)).toBe(false)
     expect(w.entry(d).state).toBe('sent')
+    // The bot's call is written down once it is made, so that a run after a failure of the store does not make it again.
+    expect(w.entry(d).payload.progress.done).toEqual(['bot'])
   })
 
   it('takes the parts it was told of when the message is no longer stored, as when Discord deleted one part', async () => {
@@ -2379,6 +2439,600 @@ describe('a message with a layout that is not one', () => {
 })
 
 
+describe('an entry that ends for good leaves nothing of itself in Discord', () => {
+  const block = () => answer(400, { code: 200000 })
+  const deletes = () => [...w.entries.values()].filter((e) => e.kind === 'delete')
+  const lateError = (Kind) => {
+    let sends = 0
+    return {
+      id: w.webhook.id,
+      send: async (...args) => {
+        if (sends++ === 1) throw new Kind('a bug that shows late')
+        return w.webhook.send(...args)
+      },
+      edit: w.webhook.edit,
+      remove: w.webhook.remove,
+      recent: w.webhook.recent,
+    }
+  }
+
+  it('queues a delete of the part that landed with the block, and the delete removes it', async () => {
+    w.script.push(null, block())
+    const id = w.enqueue({ payload: sendPayload({ source: TWO() }) })
+    await run(1600)
+    expect(w.entry(id)).toMatchObject({ state: 'blocked', lastError: 'Discord blocked this reply.' })
+    const [first] = w.ours().map((m) => m.id)
+    expect(deletes()).toHaveLength(1)
+    expect(deletes()[0]).toMatchObject({ messageKey: first, authorId: MEMBER, payload: { postId: THREAD, partIds: [first] } })
+    await later(5000)
+    expect(w.ours()).toEqual([])
+    expect(deletes()[0].state).toBe('sent')
+    expect([...w.messages.keys()]).toEqual([])
+    expect(w.events.map((e) => e.action)).toEqual(['blocked', 'delete'])
+  })
+
+  it('does the same when the ladder is used up on a later part, with every part that landed', async () => {
+    w.script.push(null, null, ...Array.from({ length: 5 }, () => answer(400, { code: 50035 })))
+    const id = w.enqueue({ payload: sendPayload({ source: THREE() }) })
+    await run(1_000_000)
+    expect(w.entry(id)).toMatchObject({ state: 'failed', lastError: 'Discord did not take this reply. Try again in a little while.' })
+    expect(deletes()[0].payload.partIds).toHaveLength(2)
+    expect(deletes()[0].state).toBe('sent')
+    expect(w.ours()).toEqual([])
+  })
+
+  it('does the same when the webhook may not write in the thread (a 403 is not tried again)', async () => {
+    w.script.push(null, answer(403, { code: 50013, message: 'Missing Permissions' }))
+    const id = w.enqueue({ payload: sendPayload({ source: TWO() }) })
+    await run(10_000)
+    expect(w.entry(id)).toMatchObject({ state: 'failed', attempts: 0, lastError: COPY.locked })
+    expect(w.sends()).toHaveLength(2)
+    expect(w.ours()).toEqual([])
+  })
+
+  it('does the same when the thread is gone after the first part', async () => {
+    w.script.push(null, answer(404, { code: 10003, message: 'Unknown Channel' }))
+    const id = w.enqueue({ payload: sendPayload({ source: TWO() }) })
+    await run(10_000)
+    expect(w.entry(id)).toMatchObject({ state: 'failed', lastError: COPY.threadGone })
+    expect(deletes()).toHaveLength(1)
+    expect(deletes()[0].state).toBe('sent')
+    expect(w.ours()).toEqual([])
+  })
+
+  it.each([TypeError, RangeError])('does the same when %s is thrown late, after a part landed', async (Kind) => {
+    outbox = make({ webhook: lateError(Kind) })
+    const id = w.enqueue({ payload: sendPayload({ source: TWO() }) })
+    await run(10_000)
+    expect(w.entry(id)).toMatchObject({ state: 'failed', attempts: 0, lastError: COPY.unsendable })
+    expect(w.ours()).toEqual([])
+    expect(deletes()).toHaveLength(1)
+  })
+
+  it('queues nothing for an entry that sent nothing', async () => {
+    w.script.push(block())
+    w.enqueue({ payload: sendPayload() })
+    await run(10_000)
+    expect([...w.entries.values()].map((e) => e.kind)).toEqual(['send'])
+  })
+
+  it('writes the block and the delete together, before anything else is done: a write the store loses is made again, and queues one delete', async () => {
+    w.script.push(null, block())
+    w.storeFails.outboxSet = [new Error('connection lost')]
+    const id = w.enqueue({ payload: sendPayload({ source: TWO() }) })
+    await run(4999)
+    // Two calls so far and no third, the entry still the worker's, and nothing queued.
+    expect(w.calls).toHaveLength(2)
+    expect(w.entry(id).state).toBe('sending')
+    expect(deletes()).toEqual([])
+    await later(10_000)
+    expect(w.entry(id).state).toBe('blocked')
+    expect(deletes()).toHaveLength(1)
+    expect(w.ours()).toEqual([])
+  })
+
+  it('does not queue a second delete, nor turn what ended into something else, when a write was made and its answer lost', async () => {
+    w.script.push(null, block())
+    w.storeFailsAfter.outboxSet = [new Error('connection lost')]
+    const id = w.enqueue({ payload: sendPayload({ source: TWO() }) })
+    await run(30_000)
+    expect(w.entry(id).state).toBe('blocked')
+    expect(deletes()).toHaveLength(1)
+    expect(w.events.filter((e) => e.action === 'blocked')).toHaveLength(1)
+    expect(w.ours()).toEqual([])
+  })
+
+  it('fails before the first part when any part could not be built, and sends nothing', async () => {
+    const a = w.enqueue({ payload: sendPayload({ source: THREE(), mentions: ['not an id'] }) })
+    const b = w.enqueue({ payload: sendPayload({ source: THREE(), username: '' }) })
+    await run(10_000)
+    for (const id of [a, b]) expect(w.entry(id)).toMatchObject({ state: 'failed', attempts: 0, lastError: COPY.unsendable })
+    expect(w.calls).toEqual([])
+    expect([...w.entries.values()].map((e) => e.kind)).toEqual(['send', 'send'])
+  })
+})
+
+describe('a delete of the site that is waiting does not swallow a part deleted in Discord', () => {
+  it('removes the parts that were left when the gateway took the reply, the route\'s delete having found the message gone', async () => {
+    const id = await sentReply(THREE('a', 'b', 'c'))
+    const [p1, p2, p3] = w.ours().map((m) => m.id)
+    // The member deletes on the site; the entry waits. Meanwhile part 2 is deleted in Discord, and the store (siteDeleted) drops the
+    // message and its parts, and queues a delete of what is left.
+    const route = w.enqueue({ kind: 'delete', key: id, payload: { postId: THREAD }, nextAt: T0 + 100_000 })
+    w.thread.splice(w.thread.findIndex((m) => m.id === p2), 1)
+    w.messages.delete(id)
+    w.parts.delete(id)
+    const own = w.enqueue({ kind: 'delete', key: id, payload: { postId: THREAD, partIds: [p1, p3] }, nextAt: T0 + 100_000 })
+    w.calls.length = 0
+    outbox.kick()
+    await later(200_000)
+    expect(w.ours().map((m) => m.id)).toEqual([])
+    expect(w.entry(route).state).toBe('sent')
+    expect(w.entry(own).state).toBe('sent')
+    expect(w.calls.map((c) => [c.kind, c.messageId])).toEqual([['remove', p1], ['remove', p3]])
+  })
+})
+
+describe('a webhook 403 ends the entry at once', () => {
+  const forbidden = () => answer(403, { code: 50013, message: 'Missing Permissions' })
+
+  it('fails a reply, an edit and a delete, with the words of a locked post, on no ladder', async () => {
+    const id = await sentReply('Before.')
+    const e = w.enqueue({ kind: 'edit', key: id, payload: { postId: THREAD, source: 'After.', mentions: [] } })
+    w.script.push(forbidden())
+    outbox.kick()
+    await later(10_000)
+    expect(w.entry(e)).toMatchObject({ state: 'failed', attempts: 0, lastError: COPY.locked })
+    const d = w.enqueue({ kind: 'delete', key: id, payload: { postId: THREAD } })
+    w.script.push(forbidden())
+    outbox.kick()
+    await later(10_000)
+    expect(w.entry(d)).toMatchObject({ state: 'failed', attempts: 0, lastError: COPY.locked })
+    w.script.push(forbidden())
+    const r = w.enqueue({ payload: sendPayload({ source: 'Another.' }) })
+    outbox.kick()
+    await later(10_000)
+    expect(w.entry(r)).toMatchObject({ state: 'failed', attempts: 0, lastError: COPY.locked })
+  })
+})
+
+describe('an edit that ends for good puts the message back as the store has it', () => {
+  const edit = (key, source, over = {}) => w.enqueue({ kind: 'edit', key, payload: { postId: THREAD, source, mentions: [], ...over } })
+  const block = () => answer(400, { code: 200000 })
+  const forbidden = () => answer(403, { code: 50013, message: 'Missing Permissions' })
+  const texts = () => w.ours().map((m) => w.textOf(m))
+  const ofKind = (kind) => [...w.entries.values()].filter((e) => e.kind === kind)
+
+  // Each case: the reply there is, the edit, what Discord answers to its calls (null: as it does), and the state the entry ends in.
+  it.each([
+    ['an in-place edit of the second part', THREE('a', 'b', 'c'), THREE('A', 'B', 'C'), [null, block()], 'blocked'],
+    ['the first in-place edit', THREE('a', 'b', 'c'), THREE('A', 'B', 'C'), [block()], 'blocked'],
+    ['the part that an append sends', 'Short.', TWO('a', 'b'), [null, block()], 'blocked'],
+    ['the second part that an append sends, the first having landed', 'Short.', THREE('a', 'b', 'c'), [null, null, block()], 'blocked'],
+    ['the links edit after an append', 'Short.', TWO('a', 'b'), [null, null, forbidden()], 'failed'],
+    ['the first removal of a surplus part', THREE('a', 'b', 'c'), 'Short.', [null, forbidden()], 'failed'],
+    ['the removal of a surplus part when parts stay', THREE('a', 'b', 'c'), TWO('A', 'B'), [null, null, forbidden()], 'failed'],
+  ])('leaves Discord and the store as they were when it fails at %s', async (_, before, after, script, end) => {
+    const id = await sentReply(before)
+    const ids = w.ours().map((m) => m.id)
+    const was = texts()
+    const { editedAt: _edited, ...row } = structuredClone(w.messages.get(id))
+    w.script.push(...script)
+    const e = edit(id, after)
+    outbox.kick()
+    await later(100_000)
+    expect(w.entry(e).state).toBe(end)
+    // The same messages, in the same order, saying the same, and no part of the edit left.
+    expect(w.ours().map((m) => m.id)).toEqual(ids)
+    expect(texts()).toEqual(was)
+    const { editedAt: _again, ...now } = w.messages.get(id)
+    expect(now).toEqual(row)
+    expect(w.parts.get(id)).toEqual(ids)
+    expect(ofKind('edit').map((x) => x.state)).toEqual([end, 'sent'])
+  })
+
+  it('removes the parts the edit added, and edits the first back, with no mention in it', async () => {
+    const id = await sentReply('Short.')
+    w.calls.length = 0
+    w.script.push(null, null, block())
+    edit(id, THREE('a', 'b', 'c'), { mentions: [MENTIONED] })
+    outbox.kick()
+    await later(100_000)
+    expect(w.calls.map((c) => c.kind)).toEqual(['edit', 'send', 'send', 'edit', 'remove'])
+    expect(w.calls[3].body.allowed_mentions).toEqual({ parse: [], users: [] })
+    const [d] = ofKind('delete')
+    expect(d).toMatchObject({ state: 'sent', payload: { postId: THREAD, partIds: [w.calls[4].messageId] } })
+    expect(texts()).toEqual([`Short.\n-# <@${MEMBER}>`])
+  })
+
+  it('puts the message back whatever the end: a ladder that is used up, a thread locked meanwhile, a bug', async () => {
+    const id = await sentReply(THREE('a', 'b', 'c'))
+    const was = texts()
+    w.script.push(null, ...Array.from({ length: 5 }, () => answer(502)))
+    const e = edit(id, THREE('A', 'B', 'C'))
+    outbox.kick()
+    await later(2_000_000)
+    expect(w.entry(e).state).toBe('failed')
+    expect(texts()).toEqual(was)
+    expect(w.messages.get(id).source).toBe(THREE('a', 'b', 'c'))
+  })
+
+  it('does not put back a reply it could not have changed: an edit that is refused before it begins', async () => {
+    const id = await sentReply('Short.')
+    w.calls.length = 0
+    edit(id, `${x(5000)}\n\n${x(5000)}\n\n${x(5000)}\n\n${x(5000)}`)
+    outbox.kick()
+    await later(10_000)
+    expect(w.calls).toEqual([])
+    expect(ofKind('edit')).toHaveLength(1)
+    expect(ofKind('edit')[0]).toMatchObject({ state: 'failed', lastError: COPY.tooLong })
+    expect(w.messages.get(id).state).toBeNull()
+  })
+
+  it('puts the message back when it ends for good on a later try, whatever that try did: an earlier one may have changed Discord', async () => {
+    const id = await sentReply('Before.')
+    w.storeFails.outboxMessage = [new Error('connection lost')]
+    const e = w.enqueue({ kind: 'edit', key: id, payload: { postId: THREAD, source: 'After.', mentions: [] }, attempts: 4 })
+    outbox.kick()
+    await later(100_000)
+    expect(w.entry(e).state).toBe('failed')
+    expect(ofKind('edit').map((x) => x.state)).toEqual(['failed', 'sent'])
+    expect(w.messages.get(id).state).toBeNull()
+  })
+
+  it('does not put a restore back in its turn: when it fails too, the entries end there', async () => {
+    const id = await sentReply(TWO('a', 'b'))
+    w.script.push(null, block(), block())
+    edit(id, TWO('A', 'B'))
+    outbox.kick()
+    await later(100_000)
+    expect(ofKind('edit').map((x) => x.state)).toEqual(['blocked', 'blocked'])
+    expect(ofKind('edit')[1].payload).toMatchObject({ postId: THREAD, mentions: [], restore: true })
+    expect(ofKind('edit')[1].payload.source).toBeUndefined()
+  })
+
+  it('cannot bring back a part the edit removed: the reply goes whole, as a part deleted in Discord takes it', async () => {
+    const id = await sentReply(THREE('a', 'b', 'c'))
+    // The edit removes the second part, and is refused at the third.
+    w.script.push(null, null, forbidden())
+    const e = edit(id, 'Short.')
+    outbox.kick()
+    await later(100_000)
+    expect(w.entry(e).state).toBe('failed')
+    expect(w.ours()).toEqual([])
+    expect(w.messages.has(id)).toBe(false)
+    expect(ofKind('edit')[1].state).toBe('sent')
+    expect(w.events.at(-1)).toMatchObject({ action: 'delete', messageId: id, note: 'A part was deleted in Discord.' })
+  })
+})
+
+describe('a store that fails under an entry is not asked for Discord\'s work over, and not for ever', () => {
+  const boom = () => new Error('connection lost')
+  const kinds = () => w.calls.map((c) => c.kind)
+
+  it.each([
+    ['a reply of two parts', () => w.enqueue({ payload: sendPayload({ source: TWO() }) }), 'finishSend', ['send', 'send', 'edit']],
+    ['a reply of three parts', () => w.enqueue({ payload: sendPayload({ source: THREE() }) }), 'finishSend', ['send', 'send', 'send', 'edit']],
+  ])('sends %s, adds its links and settles it once, whatever the store does to the write at the end', async (_, queue, name, expected) => {
+    queue()
+    w.storeFails[name] = [boom(), boom()]
+    await run(1_000_000)
+    expect(kinds()).toEqual(expected)
+    expect([...w.entries.values()][0]).toMatchObject({ state: 'sent', attempts: 2 })
+    expect(w.ours()).toHaveLength(expected.length - 1)
+    expect(w.messages.size).toBe(1)
+  })
+
+  it('does not read the pictures of a reply again when only the write at the end is made again', async () => {
+    const u = w.addUpload()
+    let reads = 0
+    const inner = w.store.uploadsFor
+    w.store.uploadsFor = async (...args) => {
+      reads++
+      return inner(...args)
+    }
+    w.storeFails.finishSend = [boom(), boom()]
+    const id = w.enqueue({ payload: sendPayload({ source: 'Look: ![a picture](upload:1)', uploads: [u] }) })
+    await run(1_000_000)
+    expect(w.entry(id)).toMatchObject({ state: 'sent', attempts: 2 })
+    expect(reads).toBe(1)
+    expect(w.sends()).toHaveLength(1)
+    expect(w.messages.size).toBe(1)
+  })
+
+  it('sends the reply even when the pictures are swept after its last part is in Discord', async () => {
+    const u = w.addUpload()
+    w.storeFails.finishSend = [boom()]
+    const id = w.enqueue({ payload: sendPayload({ source: 'Look: ![a picture](upload:1)', uploads: [u] }) })
+    await run(4000)
+    w.uploads.clear()
+    await later(10_000)
+    expect(w.entry(id).state).toBe('sent')
+    expect(w.messages.size).toBe(1)
+  })
+
+  it.each([
+    ['three parts to three', THREE('a', 'b', 'c'), THREE('A', 'B', 'C'), ['edit', 'edit', 'edit']],
+    ['three parts to one', THREE('a', 'b', 'c'), 'Short.', ['edit', 'remove', 'remove']],
+    ['one part to two', 'Short.', TWO('a', 'b'), ['edit', 'send', 'edit']],
+  ])('edits %s once, however often the write at the end fails', async (_, before, after, expected) => {
+    const id = await sentReply(before)
+    w.calls.length = 0
+    w.storeFails.finishEdit = [boom(), boom()]
+    const e = w.enqueue({ kind: 'edit', key: id, payload: { postId: THREAD, source: after, mentions: [] } })
+    outbox.kick()
+    await later(1_000_000)
+    expect(w.entry(e)).toMatchObject({ state: 'sent', attempts: 2 })
+    expect(kinds()).toEqual(expected)
+    expect(w.messages.get(id).source).toBe(after)
+  })
+
+  it('removes the parts of a reply once, however often the write at the end fails', async () => {
+    const id = await sentReply(THREE())
+    w.calls.length = 0
+    w.storeFails.finishDelete = [boom(), boom()]
+    const d = w.enqueue({ kind: 'delete', key: id, payload: { postId: THREAD } })
+    outbox.kick()
+    await later(1_000_000)
+    expect(w.entry(d)).toMatchObject({ state: 'sent', attempts: 2 })
+    expect(kinds()).toEqual(['remove', 'remove', 'remove'])
+    expect(w.ours()).toEqual([])
+  })
+
+  it('goes on from the calls of an entry that a restart found half-done, and does not make them again', async () => {
+    const id = await sentReply(THREE('a', 'b', 'c'))
+    w.calls.length = 0
+    w.script.push(null, answer(502))
+    const e = w.enqueue({ kind: 'edit', key: id, payload: { postId: THREAD, source: 'Short.', mentions: [] } })
+    outbox.kick()
+    await later(2000)
+    // The first edit is made; the removal after it fails, and the entry waits for its next try.
+    expect(w.entry(e).payload.progress.done).toHaveLength(1)
+    await outbox.stop()
+    outbox = make()
+    outbox.start()
+    await later(100_000)
+    expect(w.entry(e).state).toBe('sent')
+    // The edit once, the removal that failed and then every removal, once.
+    expect(kinds()).toEqual(['edit', 'remove', 'remove', 'remove'])
+  })
+
+  it('fails an entry the store keeps failing under, after the ladder, and removes what it sent', async () => {
+    w.storeFails.finishSend = Array.from({ length: 6 }, boom)
+    const id = w.enqueue({ payload: sendPayload({ source: TWO() }) })
+    let stored = 0
+    const inner = w.store.finishSend
+    w.store.finishSend = async (...args) => {
+      stored++
+      return inner(...args)
+    }
+    // Two parts at 0 and 1500, the links at 3000, and the store fails under the write at the end.
+    await run(3001)
+    expect(w.entry(id)).toMatchObject({ state: 'pending', attempts: 1 })
+    expect(w.entry(id).nextAt).toBe(T0 + 3000 + 5000)
+    await later(5000)
+    expect(w.entry(id)).toMatchObject({ state: 'pending', attempts: 2 })
+    expect(w.entry(id).nextAt).toBe(T0 + 8000 + 30_000)
+    await later(30_000)
+    expect(w.entry(id)).toMatchObject({ state: 'pending', attempts: 3 })
+    expect(w.entry(id).nextAt).toBe(T0 + 38_000 + 120_000)
+    await later(120_000)
+    expect(w.entry(id)).toMatchObject({ state: 'pending', attempts: 4 })
+    expect(w.entry(id).nextAt).toBe(T0 + 158_000 + 600_000)
+    await later(600_000)
+    expect(w.entry(id)).toMatchObject({ state: 'failed', lastError: COPY.unsendable })
+    await later(86_400_000)
+    expect(stored).toBe(5)
+    expect(kinds()).toEqual(['send', 'send', 'edit', 'remove', 'remove'])
+    expect(w.ours()).toEqual([])
+    expect(w.messages.size).toBe(0)
+  })
+
+  it('does not hold the queue up: the next entry is sent while this one waits for its step', async () => {
+    w.storeFails.finishSend = [boom()]
+    w.enqueue({ payload: sendPayload({ source: 'Fails once.' }) })
+    w.enqueue({ payload: sendPayload({ source: 'Goes through.' }) })
+    await run(3500)
+    expect(w.messages.size).toBe(1)
+    expect([...w.messages.values()][0].source).toBe('Goes through.')
+  })
+
+  it('does not count the ladder against an entry for a store that fails under the write that settles it', async () => {
+    w.storeFails.finishSend = [boom()]
+    w.storeFails.outboxSet = [boom(), boom(), boom()]
+    const id = w.enqueue({ payload: sendPayload() })
+    await run(60_000)
+    expect(w.entry(id)).toMatchObject({ state: 'sent', attempts: 1 })
+  })
+
+  it('does not turn an entry that was written as done into a failure when the answer of the write is lost', async () => {
+    const id = await sentReply('Before.')
+    w.storeFailsAfter.finishEdit = [boom()]
+    const e = w.enqueue({ kind: 'edit', key: id, payload: { postId: THREAD, source: 'After.', mentions: [] } })
+    outbox.kick()
+    await later(60_000)
+    expect(w.entry(e)).toMatchObject({ state: 'sent', attempts: 0 })
+    expect(w.messages.get(id).source).toBe('After.')
+    const first = w.enqueue({ payload: sendPayload({ source: 'Next.' }) })
+    w.storeFailsAfter.finishSend = [boom()]
+    outbox.kick()
+    await later(60_000)
+    expect(w.entry(first)).toMatchObject({ state: 'sent', attempts: 0 })
+    expect(w.sends()).toHaveLength(2)
+    const d = w.enqueue({ kind: 'delete', key: id, payload: { postId: THREAD } })
+    w.storeFailsAfter.finishDelete = [boom()]
+    outbox.kick()
+    await later(60_000)
+    expect(w.entry(d)).toMatchObject({ state: 'sent', attempts: 0 })
+    expect(w.events.filter((ev) => ev.action === 'delete')).toHaveLength(1)
+  })
+})
+
+describe('a part that Discord loses while a reply or an edit is on its way', () => {
+  const PART_DELETED = 'A part was deleted in Discord.'
+
+  it('takes the reply with it: the parts that are left are removed, and nothing is stored', async () => {
+    const id = w.enqueue({ payload: sendPayload({ source: THREE() }) })
+    await run(1501)
+    expect(w.sends()).toHaveLength(2)
+    w.partDeleted(w.ours()[1].id)
+    const [p1] = w.ours().map((m) => m.id)
+    await later(30_000)
+    expect(w.entry(id).state).toBe('sent')
+    expect(w.ours()).toEqual([])
+    expect(w.messages.size).toBe(0)
+    expect(w.parts.size).toBe(0)
+    expect(w.calls.filter((c) => c.kind === 'remove').map((c) => c.messageId).sort()).toEqual([p1, w.calls.at(-1).messageId].sort())
+    expect(w.events.at(-1)).toMatchObject({ action: 'delete', postId: THREAD, note: PART_DELETED })
+    expect([...w.uploads.keys()]).toEqual([])
+  })
+
+  it('does the same for a part deleted just before the reply is stored', async () => {
+    const inner = w.store.finishSend
+    w.store.finishSend = async (id, args) => {
+      w.partDeleted(args.partIds[1])
+      return inner(id, args)
+    }
+    const id = w.enqueue({ payload: sendPayload({ source: TWO() }) })
+    await run(30_000)
+    expect(w.entry(id).state).toBe('sent')
+    expect(w.ours()).toEqual([])
+    expect(w.messages.size).toBe(0)
+    // Only the part that is still there is removed.
+    expect(w.calls.filter((c) => c.kind === 'remove')).toHaveLength(1)
+  })
+
+  it('does the same for an edit that has added a part which is deleted meanwhile', async () => {
+    const id = await sentReply('Short.')
+    w.calls.length = 0
+    const e = w.enqueue({ kind: 'edit', key: id, payload: { postId: THREAD, source: TWO('a', 'b'), mentions: [] } })
+    outbox.kick()
+    await later(1501)
+    expect(w.calls.map((c) => c.kind)).toEqual(['edit', 'send'])
+    w.partDeleted(w.ours()[1].id)
+    await later(30_000)
+    expect(w.entry(e).state).toBe('sent')
+    expect(w.ours()).toEqual([])
+    expect(w.messages.has(id)).toBe(false)
+    expect(w.events.at(-1)).toMatchObject({ action: 'delete', messageId: id, note: PART_DELETED })
+    // Only the part that is still there is removed: the one Discord lost is not asked for again.
+    expect(w.calls.filter((c) => c.kind === 'remove').map((c) => c.messageId)).toEqual([id])
+  })
+
+  it('removes every part, the added ones too, of an edit whose message is gone from the store by the time it ends', async () => {
+    const id = await sentReply('Short.')
+    w.calls.length = 0
+    const inner = w.store.finishEdit
+    w.store.finishEdit = async (...args) => {
+      w.messages.delete(id)
+      w.parts.delete(id)
+      return inner(...args)
+    }
+    const e = w.enqueue({ kind: 'edit', key: id, payload: { postId: THREAD, source: THREE('a', 'b', 'c'), mentions: [] } })
+    outbox.kick()
+    await later(60_000)
+    expect(w.entry(e).state).toBe('sent')
+    expect(w.ours()).toEqual([])
+    expect(w.calls.filter((c) => c.kind === 'remove')).toHaveLength(3)
+  })
+
+  it('fails a reply whose post is not stored, and removes what it sent', async () => {
+    w.postMissing = true
+    const id = w.enqueue({ payload: sendPayload({ source: TWO() }) })
+    await run(30_000)
+    expect(w.entry(id)).toMatchObject({ state: 'failed', lastError: COPY.threadGone })
+    expect(w.ours()).toEqual([])
+    expect(w.messages.size).toBe(0)
+  })
+})
+
+describe('the links forward, when what goes wrong is more than a nicety', () => {
+  // A reply of two parts on the last try of its ladder, whose links edit is answered with `last`.
+  async function lastTry(last, attempts = 4) {
+    w.script.push(null, null, last)
+    const id = w.enqueue({ payload: sendPayload({ source: TWO() }), attempts })
+    await run(10_000)
+    return id
+  }
+
+  it('is not given up when the webhook is refused on the last try: the entry waits, and nothing is stored without links', async () => {
+    const id = await lastTry(answer(401, {}))
+    expect(outbox.webhookRefused()).toMatchObject({ status: 401 })
+    expect(w.entry(id).state).toBe('pending')
+    expect(w.messages.size).toBe(0)
+  })
+
+  it('is not given up when a limit is global, on the last try: the entry waits for the time Discord says', async () => {
+    const id = await lastTry(answer(429, { retry_after: 40, global: true }))
+    expect(w.entry(id)).toMatchObject({ state: 'pending', attempts: 4 })
+    expect(w.entry(id).nextAt).toBe(T0 + 3000 + 40_000)
+    expect(w.messages.size).toBe(0)
+  })
+
+  it('is not given up for a limit that is not global either', async () => {
+    const id = await lastTry(answer(429, { retry_after: 40, global: false }))
+    expect(w.entry(id)).toMatchObject({ state: 'pending', attempts: 4 })
+    expect(w.messages.size).toBe(0)
+  })
+
+  it('is not given up when the thread is gone, on the last try: the reply fails, and what landed is removed', async () => {
+    const id = await lastTry(answer(404, { code: 10003 }))
+    expect(w.entry(id)).toMatchObject({ state: 'failed', lastError: COPY.threadGone })
+    expect(w.messages.size).toBe(0)
+    await later(10_000)
+    expect(w.ours()).toEqual([])
+  })
+
+  it.each([0, 4])('is given up for a 403 (the thread locked), on try %i, and the reply is stored without them', async (attempts) => {
+    const id = await lastTry(answer(403, { code: 50013 }), attempts)
+    expect(w.entry(id).state).toBe('sent')
+    expect(w.events[0].note).toBe('2 parts, no links')
+    expect(w.messages.size).toBe(1)
+    expect(w.ours()).toHaveLength(2)
+  })
+})
+
+describe('what is taken for a refusal of Discord\'s', () => {
+  it('is only a WebhookError: an error of the store that carries the same words goes up the ladder', async () => {
+    w.storeFails.finishSend = [Object.assign(new Error('connection lost'), { fatal: true, blocked: true, status: 403, threadGone: true })]
+    const id = w.enqueue({ payload: sendPayload() })
+    await run(10_000)
+    expect(w.entry(id)).toMatchObject({ state: 'sent', attempts: 1 })
+    expect(outbox.webhookRefused()).toBeNull()
+    expect(outbox.sendingPausedUntil()).toBeNull()
+  })
+
+  it('is only a WebhookError for the links forward too: a failure of the bot that carries the same words is a failure like any', async () => {
+    w.script.push(null, null, answer(400, { code: 50083 }))
+    w.discord.setArchived = async () => {
+      throw Object.assign(new Upstream('The bot is down.'), { blocked: true, status: 403, fatal: true, threadGone: true })
+    }
+    const id = w.enqueue({ payload: sendPayload({ source: TWO() }) })
+    // The links go out at 3000, and the entry waits until 8000 for its next try.
+    await run(4000)
+    expect(w.entry(id)).toMatchObject({ state: 'pending', attempts: 1 })
+    expect(outbox.webhookRefused()).toBeNull()
+    expect(outbox.sendingPausedUntil()).toBeNull()
+    expect(w.messages.size).toBe(0)
+  })
+})
+
+describe('a try of the ladder goes on from what the one before it did', () => {
+  it('reads no picture again when the parts it has left carry none', async () => {
+    let reads = 0
+    const inner = w.store.uploadsFor
+    w.store.uploadsFor = async (...args) => {
+      reads++
+      return inner(...args)
+    }
+    w.script.push(null, answer(400, { code: 50035 }))
+    const id = w.enqueue({ payload: sendPayload({ source: THREE() }) })
+    await run(30_000)
+    expect(w.entry(id)).toMatchObject({ state: 'sent', attempts: 1 })
+    expect(reads).toBe(1)
+  })
+})
+
 describe('never twice, never lost (property)', () => {
   const OUTCOMES = {
     ok: () => null,
@@ -2448,8 +3102,12 @@ describe('never twice, never lost (property)', () => {
               expect(w.parts.get(stored[0].id)).toEqual(there.map(([m]) => m.id))
               expect(stored[0].id).toBe(there[0][0].id)
             } else {
-              // A reply that did not go leaves no message of the site behind.
+              // A reply that did not go leaves no message of the site behind...
               expect([...w.messages.values()].filter((m) => m.source === sourceOf(i, n))).toHaveLength(0)
+              // ...and, once what was queued for it has run, no part of it in Discord. (A part that may have landed, which no look
+              // found, is not known to the worker: an entry that ends with one in doubt is left out.)
+              const cleaned = [...w.entries.values()].filter((e) => e.kind === 'delete').every((e) => e.state === 'sent')
+              if (cleaned && entry.payload.progress?.inflight == null) for (let k = 1; k <= n; k++) expect(holders(i, k)).toHaveLength(0)
             }
           })
           // The limits hold within one run of the worker.
@@ -2500,7 +3158,6 @@ describe('edits and deletes never leave a part twice, nor a reply that is gone h
   const tokenOf = (i, k) => `E${i}P${k}`
   const sourceOf = (i, n, version) => Array.from({ length: n }, (_, k) => `${tokenOf(i, k + 1)}${n === 1 ? ` short ${version}` : x(version === 1 ? 3000 : 2999)}`).join('\n\n')
   const holders = (i, k) => w.ours().filter((m) => w.textOf(m).includes(tokenOf(i, k)))
-
   it('holds for any mix of failures, restarts and lost answers', async () => {
     await fc.assert(
       fc.asyncProperty(scenario, async ({ parts, ops, script, actions }) => {
@@ -2534,6 +3191,10 @@ describe('edits and deletes never leave a part twice, nor a reply that is gone h
           }
           for (let i = 0; i < 12; i++) await vi.advanceTimersByTimeAsync(1_200_000)
 
+          // A reply that Discord lost (a `gone` answer removes a part by itself) and whose entry then ended for good, for the whole
+          // ladder, before the store could be told: it is still stored, and the member's own retry finishes it (every removal is
+          // harmless the second time).
+          const ghost = (key) => script.includes('gone') && [...w.entries.values()].some((e) => e.messageKey === key && (e.state === 'failed' || e.state === 'blocked'))
           parts.forEach((n, i) => {
             const { kind, n2 } = ops[i]
             const entry = queued[i] === null ? null : w.entry(queued[i])
@@ -2550,11 +3211,19 @@ describe('edits and deletes never leave a part twice, nor a reply that is gone h
               expect(row.state).toBeNull()
               for (let k = 1; k <= 3; k++) expect(holders(i, k)).toHaveLength(k <= n2 ? 1 : 0)
               expect(w.parts.get(keys[i])).toEqual(Array.from({ length: n2 }, (_, k) => holders(i, k + 1)[0].id))
-            } else if (row !== undefined) {
+            } else if (row !== undefined && !ghost(keys[i])) {
               // Whatever became of the edit or delete, a message that is stored has its parts, in order, in Discord, or says it is on its way.
               const stored = w.parts.get(keys[i])
               expect(stored).toBeDefined()
               expect(stored[0]).toBe(keys[i])
+              // An edit that ended for good, and whose restore went through, left the message as it was: its source, and every part, in Discord.
+              const restores = [...w.entries.values()].filter((e) => e.kind === 'edit' && e.payload.restore === true)
+              const cleaned = [...w.entries.values()].filter((e) => e.kind === 'delete').every((e) => e.state === 'sent')
+              if (kind === 'edit' && entry.state !== 'sent' && restores.every((e) => e.state === 'sent') && cleaned && row.state === null) {
+                expect(row.source).toBe(sourceOf(i, n, 1))
+                for (let k = 1; k <= 3; k++) expect(holders(i, k)).toHaveLength(k <= n ? 1 : 0)
+                for (let k = 1; k <= n; k++) expect(w.textOf(holders(i, k)[0])).toContain(n === 1 ? 'short 1' : x(3000))
+              }
             }
             if (row !== undefined && (kind === 'none' || entry.state === 'sent' || entry.state === 'failed' || entry.state === 'blocked')) expect(w.messages.get(keys[i]).state === 'sending').toBe(false)
           })

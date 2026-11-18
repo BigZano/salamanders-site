@@ -21,19 +21,28 @@
  *   [upload ids], username, avatarUrl | null, siteUrl }. It is cut into parts by toDiscord, and the parts are sent in order,
  *   each carrying the link back to the first; once the last is sent, the first is edited to carry the links forward. Then, in
  *   one transaction, the message is stored (origin 'site', its source and its layout, which an edit needs), its parts are
- *   written and the uploads are deleted. A message has no id of its own: its id is its first part's.
+ *   written and the uploads are deleted. A message has no id of its own: its id is its first part's. Every part is built, and
+ *   checked by sendBody, before the first is sent, so that a reply that cannot go fails before any of it is in Discord. If the
+ *   store learns, when it stores the reply, that a part was deleted in Discord meanwhile, the reply is not stored: the rest of its
+ *   parts are removed, as when the links edit finds the first deleted. If its post is not stored, the reply fails.
  * - An edit (kind 'edit'): payload { postId, source, mentions }, the key the id of the message. The text is cut again; the
  *   parts that are there are edited in place, parts that are not needed are deleted and new ones added, and the first is
  *   edited last to carry the links. Pictures are fixed when a reply is sent: the webhook cannot change the files of a message,
  *   so an edit that would put a picture in another part, or take one away, or add one (placement() of the form says) is
  *   refused: "That edit would move or change a picture...". An edit sends no `attachments`, so Discord keeps each part's files.
+ *   An edit that ends for good (failed or blocked) after it began to change Discord queues an edit of its own, { postId, mentions:
+ *   [], restore: true }, that puts the message back as the store has it (it takes the text from the store, and is never put back
+ *   in its turn). That is queued for any edit that was tried more than once, too: an earlier try may have changed Discord.
  * - A delete (kind 'delete'): payload { postId, partIds? }, the key the id of the message. A reply of the site is removed from
  *   Discord part by part, through the webhook; a message a person wrote in Discord, by the bot. Then the message is deleted
  *   from the store.
- * The parts the worker has sent are in payload.progress: { form, parts: [{ id, at, attachments }], inflight }. `parts` are the
- * parts this entry made (for an edit, only the ones it added), `inflight` the index of a part it was sending when it
- * stopped, or null: it is written BEFORE a part is sent and cleared once the part's id is written, so a restart knows when
- * a part may or may not be in Discord.
+ * The parts the worker has sent are in payload.progress: { form, parts: [{ id, at, attachments }], inflight, images, linked,
+ * done }. `parts` are the parts this entry made (for an edit, only the ones it added), `inflight` the index of a part it was
+ * sending when it stopped, or null: it is written BEFORE a part is sent and cleared once the part's id is written, so a restart
+ * knows when a part may or may not be in Discord. `images` are the names the reply's pictures are sent under, `linked` whether
+ * the links forward were added (false: the reply goes without them) and `done` the other calls to Discord an entry has made
+ * (an edit of a part, a removal), written when each is done: a run of the entry after a failure of the store, a try of the
+ * ladder or a restart goes on from there, and does not make a call twice.
  *
  * Never twice. A part is only sent again when it is certain that it did not land: a refusal of Discord (a 4xx, a 429) is
  * certain; a timeout, a reset, a 5xx or an answer with no message is not (`unknown` of the webhook client). After an
@@ -47,15 +56,21 @@
  * - at most 20 sends in any 60 s; the worker waits until the oldest has left the window;
  * - a 429 sets the entry's next try to its Retry-After: it is not an attempt of the ladder, and not a block. A 429 that is
  *   global pauses every webhook call until then;
- * - blocked (Discord code 200000 or 200001): the entry is 'blocked' and never tried again. Two blocks within an hour pause all
- *   work for an hour (the breaker); the blocks are noted in librarius_events, so a restart builds the pause again;
+ * - blocked (what the webhook client calls `blocked`: Discord code 200000, "Message was blocked by automatic moderation", 200001,
+ *   "Title was blocked by automatic moderation", or 240000, "Message was blocked because it contains harmful links"): the entry is
+ *   'blocked' and never tried again. Two blocks within an hour pause all work for an hour (the breaker); the blocks are noted in
+ *   librarius_events, so a restart builds the pause again;
  * - fatal (the webhook is refused or gone): the worker stops, the entry goes back to 'pending', and webhookRefused() says so;
- * - any other failure of Discord's (the webhook's or the bot's) is tried again after 5 s, 30 s, 2 min and 10 min, and then the
- *   entry is 'failed'. Something that cannot succeed (a TypeError or RangeError: a bad entry) fails at once. A failure of the
- *   store is neither: the entry is kept as it is, with what the worker knows of it, and tried again every 5 s, never counted.
+ * - any other failure (of Discord's, the webhook's or the bot's, or of the store under this entry) is tried again after 5 s, 30 s,
+ *   2 min and 10 min, and then the entry is 'failed'. Something that cannot succeed (a TypeError or RangeError: a bad entry)
+ *   fails at once. When the store fails under the write that settles an entry, the write is made again every 5 s, and that is
+ *   not counted: only an entry that fails each time it is run is.
  * - a thread that is archived (400, code 50083) is unarchived through the bot, the call is made again, and the thread is archived
- *   again when the entry is done. If the bot may not (403) the entry fails with "This post is locked in Discord.", and is not
- *   tried again.
+ *   again when the entry is done. If the bot may not (403), or the webhook is refused with a 403, the entry fails with "This post
+ *   is locked in Discord.", and is not tried again.
+ * - an entry that ends for good (failed or blocked) leaves nothing of itself in Discord: in the same transaction that writes its
+ *   end, a delete of the parts it sent is queued (for a reply, the parts that landed; for an edit, the ones it added), and, for an
+ *   edit that may have changed the parts that were there, an edit that puts them back as the store has them.
  * - a thread that is gone: a reply fails with "This post is gone from Discord."; for an edit or a delete the message goes from
  *   the store and the entry is done. A part of a reply that an edit finds deleted in Discord takes the whole reply with it
  *   (the other parts are deleted through the webhook), as when the gateway says a part was deleted.
@@ -250,6 +265,19 @@ export function createOutbox({ store, webhook, discord, form = DEFAULT_FORM, gui
   const save = (entry) => store.outboxProgress(entry.id, entry.payload.progress)
 
   /**
+   * Does a call to Discord once for the entry, however often the entry is run again: a call that is done is written down
+   * (progress.done) when it is, so that a run after a failure of the store, or a try of the ladder, or a restart goes on from there.
+   */
+  async function once(entry, key, call) {
+    const progress = progressOf(entry)
+    progress.done ??= []
+    if (progress.done.includes(key)) return
+    await call()
+    progress.done.push(key)
+    await save(entry)
+  }
+
+  /**
    * → the message of our webhook in the thread that is this part, or null: its text, and not taken by a reply already. A part's
    * text names the part before it (its link back), so no part can match another of the reply, nor one of another reply.
    */
@@ -304,13 +332,19 @@ export function createOutbox({ store, webhook, discord, form = DEFAULT_FORM, gui
 
   /**
    * Whether an error of the edit that adds the links forward to a reply's first part means the reply is done without them: the
-   * parts are in Discord already, and the links are a nicety, so Discord's refusing them is no reason to lose the reply, and
-   * the other failures are tried again like any, until the last try.
+   * parts are in Discord already, and the links are a nicety, so Discord's refusing them (a block, or a locked thread) is no
+   * reason to lose the reply, and the other failures are tried again like any, until the last try. What has a meaning of its own
+   * (the webhook refused, a limit of Discord's, the thread gone) is not swallowed on the last try, but goes up to be decided
+   * as it is for any call.
    */
   const linksLost = (entry, err) => {
-    if (err instanceof WebhookError && err.blocked) {
-      noteBlockAt(now())
-      return true
+    if (err instanceof WebhookError) {
+      if (err.blocked) {
+        noteBlockAt(now())
+        return true
+      }
+      if (err.status === 403) return true
+      if (err.fatal || err.status === 429 || err.threadGone) return false
     }
     // The last try, and a stop is not a failure.
     return !(err instanceof Halt) && entry.attempts >= LADDER_MS.length
@@ -321,36 +355,48 @@ export function createOutbox({ store, webhook, discord, form = DEFAULT_FORM, gui
     const progress = progressOf(entry)
     const useForm = progress.form ?? form
     progress.form = useForm
-    const uploads = await heldUploads(entry, p)
-    const images = uploads.map((upload, i) => ({ ref: i + 1, name: pictureName(i + 1, upload.contentType) }))
+    // The pictures are read when a part has to carry one, and their names are written down with the first part sent: a run after
+    // the last part is in Discord needs no picture.
+    let held = null
+    const uploadsOf = async () => (held ??= await heldUploads(entry, p))
+    progress.images ??= (await uploadsOf()).map((upload, i) => ({ ref: i + 1, name: pictureName(i + 1, upload.contentType) }))
+    const { images } = progress
     const options = (partIds) => ({ form: useForm, authorId: entry.authorId, replyTo: p.replyTo, siteUrl: p.siteUrl, images, thread: { urlBase: urlBase(p.postId), partIds } })
+    const filesOf = async (built) => {
+      if (built.files.length === 0) return []
+      const uploads = await uploadsOf()
+      return built.files.map((name) => {
+        const upload = uploads[images.findIndex((image) => image.name === name)]
+        return { name, type: upload.contentType, bytes: upload.bytes }
+      })
+    }
     const plan = toDiscord(p.source, options([]))
     if (plan.overBudget) throw new Refusal(COPY.tooLong)
     const n = plan.parts.length
     const known = progress.parts.map((part) => part.id)
+    // Every part is built and checked before the first is sent: a reply that cannot go fails before any of it is in Discord.
+    for (const built of plan.parts) bodyOf(useForm, built, p)
+    for (const built of plan.parts.slice(known.length)) await filesOf(built)
     for (let index = known.length; index < n; index++) {
       const built = toDiscord(p.source, options(known)).parts[index]
-      const files = built.files.map((name) => {
-        const upload = uploads[images.findIndex((image) => image.name === name)]
-        return { name, type: upload.contentType, bytes: upload.bytes }
-      })
-      await sendPart(entry, ctx, { index, known, built, body: bodyOf(useForm, built, p), files })
+      await sendPart(entry, ctx, { index, known, built, body: bodyOf(useForm, built, p), files: await filesOf(built) })
     }
-    let linked = true
-    if (n > 1) {
+    if (n > 1 && progress.linked === undefined) {
       const first = toDiscord(p.source, options(known)).parts[0]
       try {
         await editCall(ctx, known[0], bodyOf(useForm, first, p))
+        progress.linked = true
       } catch (err) {
         // The first part was deleted in Discord, so the reply goes with it.
         if (err instanceof WebhookError && err.messageGone) return purge(entry, ctx, known[0], known, PART_DELETED)
         if (!linksLost(entry, err)) throw err
-        linked = false
+        progress.linked = false
       }
+      await save(entry)
     }
     const [head] = progress.parts
     const attachments = parseMessage({ id: head.id, channel_id: p.postId, type: 0, author: { id: entry.authorId }, attachments: progress.parts.flatMap((part) => part.attachments) }).attachments
-    await store.finishSend(entry.id, {
+    const done = await store.finishSend(entry.id, {
       message: {
         id: head.id,
         postId: p.postId,
@@ -367,13 +413,18 @@ export function createOutbox({ store, webhook, discord, form = DEFAULT_FORM, gui
       },
       partIds: known,
       uploadIds: p.uploads,
-      event: { action: 'send', postId: p.postId, messageId: head.id, note: `${n} ${n === 1 ? 'part' : 'parts'}${linked ? '' : ', no links'}` },
+      event: { action: 'send', postId: p.postId, messageId: head.id, note: `${n} ${n === 1 ? 'part' : 'parts'}${progress.linked === false ? ', no links' : ''}` },
     })
+    if (done.stored) return
+    // Nothing is stored. With no list of lost parts the post is not stored, and the reply is failed (what landed is removed with
+    // it); a part that was deleted in Discord meanwhile takes the reply with it, and the rest of it is removed.
+    if (done.gone === null) throw new Refusal(COPY.threadGone)
+    return purge(entry, ctx, known[0], known.filter((id) => !done.gone.includes(id)), PART_DELETED)
   }
 
   /** The message goes from the store, and so do its parts from Discord (the ones left): an edit or a delete that finds it gone ends there. */
   async function purge(entry, ctx, messageId, partIds, note) {
-    for (const id of partIds) await removeCall(ctx, id)
+    for (const id of partIds) await once(entry, `remove:${id}`, () => removeCall(ctx, id))
     await store.finishDelete(entry.id, { messageId, partIds, event: { action: 'delete', postId: ctx.threadId, messageId, note } })
   }
 
@@ -382,39 +433,48 @@ export function createOutbox({ store, webhook, discord, form = DEFAULT_FORM, gui
     const message = await store.outboxMessage(entry.messageKey)
     if (message === null) throw new Refusal(COPY.messageGone)
     if (message.origin !== 'site') throw new Refusal(COPY.notSite)
+    // A restore says nothing of the text: it is what the store has.
+    const source = p.restore === true ? message.source : p.source
     const { layout } = message
     const base = { form: layout.form, authorId: message.authorId, replyTo: layout.replyTo, siteUrl: layout.siteUrl, images: layout.images }
     const options = (partIds) => ({ ...base, thread: { urlBase: urlBase(p.postId), partIds } })
     // Pictures are fixed when a reply is sent: an edit may change the words, never where the pictures fall.
-    if (JSON.stringify(placement(message.source, base)) !== JSON.stringify(placement(p.source, base))) throw new Refusal(COPY.pictures)
+    if (JSON.stringify(placement(message.source, base)) !== JSON.stringify(placement(source, base))) throw new Refusal(COPY.pictures)
     const progress = progressOf(entry)
     const existing = message.parts
     const known = [...existing, ...progress.parts.map((part) => part.id)]
-    const plan = toDiscord(p.source, options(known))
+    const plan = toDiscord(source, options(known))
     if (plan.overBudget) throw new Refusal(COPY.tooLong)
     const wanted = plan.parts.length
     const body = (built) => bodyOf(layout.form, built, { username: layout.username, avatarUrl: layout.avatarUrl, mentions: p.mentions })
+    let done
     try {
-      for (let i = 0; i < Math.min(existing.length, wanted); i++) await editCall(ctx, existing[i], body(plan.parts[i]))
+      for (let i = 0; i < Math.min(existing.length, wanted); i++) await once(entry, `edit:${existing[i]}`, () => editCall(ctx, existing[i], body(plan.parts[i])))
       for (let index = known.length; index < wanted; index++) {
         // A part that is new carries no file: placement() of the new text is the old one, so no picture falls in it.
-        const built = toDiscord(p.source, options(known)).parts[index]
+        const built = toDiscord(source, options(known)).parts[index]
         await sendPart(entry, ctx, { index, known, built, body: body(built), files: [] })
       }
-      for (let i = wanted; i < existing.length; i++) await removeCall(ctx, existing[i])
-      if (wanted > existing.length) await editCall(ctx, known[0], body(toDiscord(p.source, options(known)).parts[0]))
+      for (let i = wanted; i < existing.length; i++) await once(entry, `remove:${existing[i]}`, () => removeCall(ctx, existing[i]))
+      if (wanted > existing.length) await once(entry, 'links', () => editCall(ctx, known[0], body(toDiscord(source, options(known)).parts[0])))
+      done = await store.finishEdit(entry.id, {
+        messageId: message.id,
+        source,
+        content: contentOf(source),
+        partIds: known.slice(0, wanted),
+        event: { action: 'edit', postId: p.postId, messageId: message.id, note: `${wanted} ${wanted === 1 ? 'part' : 'parts'}` },
+      })
     } catch (err) {
-      if (!(err instanceof WebhookError) || !err.messageGone) throw err
+      if (!(err instanceof WebhookError) || !err.messageGone) {
+        // The edit may have changed Discord, and the store may not have heard of it: if it ends for good, the message is put back as the store has it.
+        entry.touched = true
+        throw err
+      }
       // A part was deleted in Discord: the reply goes, all of it.
       return purge(entry, ctx, message.id, known, PART_DELETED)
     }
-    await store.finishEdit(entry.id, {
-      messageId: message.id,
-      source: p.source,
-      content: contentOf(p.source),
-      partIds: known.slice(0, wanted),
-      event: { action: 'edit', postId: p.postId, messageId: message.id, note: `${wanted} ${wanted === 1 ? 'part' : 'parts'}` },
-    })
+    // Not stored: a part was deleted in Discord while the edit was on its way, or the message is gone. The reply goes, all of it, with the parts the edit added.
+    if (!done.stored) return purge(entry, ctx, message.id, known.filter((id) => !done.gone.includes(id)), PART_DELETED)
   }
 
   async function runDelete(entry, ctx) {
@@ -422,7 +482,7 @@ export function createOutbox({ store, webhook, discord, form = DEFAULT_FORM, gui
     const progress = progressOf(entry)
     const message = await store.outboxMessage(entry.messageKey)
     if (message !== null && message.origin === 'discord') {
-      await discord.deleteMessage(p.postId, message.id)
+      await once(entry, 'bot', () => discord.deleteMessage(p.postId, message.id))
       return purge(entry, ctx, message.id, [], null)
     }
     if (progress.partIds === undefined) {
@@ -435,14 +495,33 @@ export function createOutbox({ store, webhook, discord, form = DEFAULT_FORM, gui
 
   const RUN = { send: runSend, edit: runEdit, delete: runDelete }
 
+  /**
+   * → the entries to queue with an entry that ended for good, so that it leaves nothing of itself in Discord: a delete of the
+   * parts it sent (a reply's, or the ones an edit added), and, for an edit that may have changed the parts there already, an edit
+   * that puts the message back as the store has it. They are written in the same transaction as the end of the entry. The message
+   * stays 'sending' until the restore is done, so that no other edit of it is taken meanwhile.
+   */
+  function leftovers(entry) {
+    const { postId } = entry.payload
+    const landed = (entry.payload.progress?.parts ?? []).map((part) => part.id)
+    const queue = []
+    // An edit may have changed what is in Discord when it ran into trouble this time (touched), or when it ran before (attempts). A restore is not restored.
+    if (entry.kind === 'edit' && entry.payload.restore !== true && (entry.touched === true || entry.attempts > 0)) {
+      queue.push({ kind: 'edit', messageKey: entry.messageKey, payload: { postId, mentions: [], restore: true } })
+    }
+    if (landed.length > 0) queue.push({ kind: 'delete', messageKey: landed[0], payload: { postId, partIds: landed } })
+    return queue
+  }
+
+  /** → what to write for an entry that ended for good in `state` ('failed' or 'blocked'): the member's words, and what puts Discord right. */
+  function endFor(entry, state, error, event) {
+    const queue = leftovers(entry)
+    const messageState = state === 'blocked' ? 'blocked' : null
+    return () => store.outboxSet(entry.id, { state, error, messageState, queue, event: { ...event, postId: entry.payload.postId, messageId: entry.kind === 'send' ? null : entry.messageKey } })
+  }
+
   /** The entry cannot be done, and the member is told why. */
-  const fail = (entry, error) =>
-    store.outboxSet(entry.id, {
-      state: 'failed',
-      error,
-      messageState: null,
-      event: { action: 'failed', postId: entry.payload.postId, messageId: entry.kind === 'send' ? null : entry.messageKey, note: error },
-    })
+  const fail = (entry, error) => endFor(entry, 'failed', error, { action: 'failed', note: error })
 
   /**
    * → what to write to the store for an entry that stopped on `err`: a function, which the worker runs, and runs again if the
@@ -450,22 +529,22 @@ export function createOutbox({ store, webhook, discord, form = DEFAULT_FORM, gui
    * global 429, a refused webhook) is decided here, once.
    */
   function settle(entry, err) {
-    if (err instanceof Refusal) return () => fail(entry, err.message)
+    // A stop is not a failure: the entry is left as it is.
+    if (err instanceof Halt) throw err
+    if (err instanceof Refusal) return fail(entry, err.message)
     if (err instanceof TypeError || err instanceof RangeError) {
       // Stryker disable next-line StringLiteral: what is logged is for the owner to read, and no test asserts it
       report(`entry ${entry.id} cannot be sent: ${describe(err)}`)
-      return () => fail(entry, COPY.unsendable)
+      return fail(entry, COPY.unsendable)
     }
     if (err instanceof WebhookError) {
       const decided = webhookOutcome(entry, err)
       if (decided !== null) return decided
-    } else if (!(err instanceof Upstream)) {
-      // Not Discord's doing, nor a stop's: the store failed under the entry. The worker tries it again as it is, after a wait.
-      throw err
     }
-    // Anything else of Discord's may pass: tried again after a wait, and failed when the waits are used up.
+    // Anything else may pass: tried again after a wait, and failed when the waits are used up. That holds for what is not of
+    // Discord's too (the store failing under this entry): an entry that fails again and again is not tried for ever.
     const attempts = entry.attempts + 1
-    if (attempts > LADDER_MS.length) return () => fail(entry, `Discord did not take this ${NOUN[entry.kind]}. Try again in a little while.`)
+    if (attempts > LADDER_MS.length) return fail(entry, err instanceof WebhookError || err instanceof Upstream ? `Discord did not take this ${NOUN[entry.kind]}. Try again in a little while.` : COPY.unsendable)
     const nextAt = now() + LADDER_MS[attempts - 1]
     // Stryker disable next-line StringLiteral: what is stored is for the owner to read
     return () => store.outboxSet(entry.id, { state: 'pending', attempts, nextAt, error: describe(err) })
@@ -481,21 +560,17 @@ export function createOutbox({ store, webhook, discord, form = DEFAULT_FORM, gui
     }
     if (err.blocked) {
       noteBlockAt(now())
-      return () =>
-        store.outboxSet(entry.id, {
-          state: 'blocked',
-          error: `Discord blocked this ${NOUN[entry.kind]}.`,
-          messageState: 'blocked',
-          event: { action: 'blocked', postId: entry.payload.postId, messageId: entry.kind === 'send' ? null : entry.messageKey, note: entry.kind },
-        })
+      return endFor(entry, 'blocked', `Discord blocked this ${NOUN[entry.kind]}.`, { action: 'blocked', note: entry.kind })
     }
     if (err.status === 429) {
       const nextAt = now() + err.retryAfterMs
       if (err.global) globalUntil = Math.max(globalUntil, nextAt)
       return () => store.outboxSet(entry.id, { state: 'pending', nextAt })
     }
+    // The thread is locked (or the webhook may not write in it): no wait changes that.
+    if (err.status === 403) return fail(entry, COPY.locked)
     if (err.threadGone) {
-      if (entry.kind === 'send') return () => fail(entry, COPY.threadGone)
+      if (entry.kind === 'send') return fail(entry, COPY.threadGone)
       // The parts of the message go with it (the store knows them by the message), and nothing is left in Discord to remove.
       return () => purge(entry, { threadId: entry.payload.postId }, entry.messageKey, [], COPY.threadGone)
     }

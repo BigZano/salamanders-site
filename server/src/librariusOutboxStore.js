@@ -21,19 +21,30 @@
  * claimOutbox(now) → the oldest entry that is due at `now` (a Date, ISO text or epoch milliseconds), now 'sending', or null.
  * outboxNextAt() → when the next pending entry is due, as ISO text, or null.
  * outboxProgress(id, progress) → writes payload.progress of an entry that is 'sending'.
- * outboxSet(id, { state, attempts, nextAt, error, messageState, event }) → one transition of an entry, with what goes with it:
- *   `state` is 'pending', 'sent', 'blocked' or 'failed'; `attempts` and `nextAt` are left as they are when not given; `error`
- *   (null for none) is last_error, cut to 500 characters; `messageState` (null, 'sending' or 'blocked'), when given, is set
- *   on the message an edit or a delete names; `event` is { action, postId, messageId, note }, noted with the entry's author.
- * finishSend(id, { message, partIds, uploadIds, event }) → the reply is done, in one transaction: the other parts of it that an
- *   import stored as messages of their own are deleted, the message is stored (origin 'site', with its attachments), its parts
- *   are written, its uploads (the author's) are deleted, the event is noted and the entry is 'sent'. The message is only
- *   stored when its post is.
- * finishEdit(id, { messageId, source, content, partIds, event }) → an edit is done, in one transaction: the message has its new
- *   source and content, its edit time and no state, its parts are the new list, and the entry is 'sent'. A message that is
- *   gone is not brought back, and gets no parts.
+ * outboxSet(id, { state, attempts, nextAt, error, messageState, event, queue }) → one transition of an entry that is 'sending'
+ *   (an entry in any other state is left as it is, and nothing else is written: a write that was made once is not made again),
+ *   with what goes with it: `state` is 'pending', 'sent', 'blocked' or 'failed'; `attempts` and `nextAt` are left as they are
+ *   when not given; `error` (null for none) is last_error, cut to 500 characters; `messageState` (null, 'sending' or
+ *   'blocked'), when given, is set on the message an edit or a delete names; `event` is { action, postId, messageId, note },
+ *   noted with the entry's author; `queue` (at most 2) is the entries to queue in the same transaction, as { kind: 'edit' |
+ *   'delete', messageKey, payload }, for the entry's author: what puts Discord right after an entry that ended for good (the
+ *   parts of a reply that never finished, an edit put back). An edit or a delete queued puts its message in the state
+ *   'sending', as enqueueOutbox does.
+ * finishSend(id, { message, partIds, uploadIds, event }) → { stored, gone }. The reply is done, in one transaction: the other
+ *   parts of it that an import stored as messages of their own are deleted, the message is stored (origin 'site', with its
+ *   attachments), its parts are written, its uploads (the author's) are deleted, the event is noted and the entry is 'sent';
+ *   `stored` is true, and an entry that was not 'sending' any more (it was done by a write that committed, whose answer was
+ *   lost) is left alone, and answers true too. Nothing is written, and `stored` is false, when `gone` lists parts that Discord
+ *   was told of as deleted while the reply was on its way (siteDeleted noted them in the entry), or, with `gone` null, when the
+ *   reply's post is not stored: the caller deals with what is in Discord.
+ * finishEdit(id, { messageId, source, content, partIds, event }) → { stored, gone }: an edit is done, in one transaction: the
+ *   message has its new source and content, its edit time and no state, its parts are the new list, and the entry is 'sent'.
+ *   As for finishSend, an entry that is not 'sending' is left alone (`stored` true); nothing is written, and `stored` is false,
+ *   for parts noted as deleted in Discord (`gone`), and, with `gone` empty, for a message that is not there any more: it is not
+ *   brought back.
  * finishDelete(id, { messageId, partIds, event }) → a delete is done, in one transaction: the message is deleted, noted in the
- *   tombstones for the readers, and its parts are forgotten, and the entry is 'sent'.
+ *   tombstones for the readers, and its parts are forgotten, and the entry is 'sent'. An entry that is not 'sending' is left
+ *   alone.
  * outboxMessage(messageId) → the message a worker acts on, or null: { id, postId, authorId, authorName, authorAvatar, origin,
  *   source, layout, state, parts: [the Discord ids of its parts, in order] }.
  * uploadsFor(authorId, ids) → [{ id, name, contentType, bytes }] for those of the author's uploads that are still held, in the
@@ -53,9 +64,12 @@
  * knownPartIds(ids) → the Set of those ids that are parts of a stored reply.
  * messageOfPart(id) → the id of the reply that a part belongs to, or `id` when it is no part of one: where a reaction lands.
  * siteDeleted(ids, postId) → { plain }: for those of `ids` that are parts of a reply of the site, the whole reply goes: its
- *   message is deleted (and noted in the tombstones), its parts are forgotten, and, unless one is on its way already, a
- *   delete of the parts that are left is queued. `plain` is the ids that are no part of one, which the caller deletes as
- *   messages of Discord.
+ *   message is deleted (and noted in the tombstones), its parts are forgotten, and a delete of the parts that are left is
+ *   queued, unless a delete that knows what to remove (payload.partIds or progress.partIds) is on its way already. (A delete
+ *   from the site's own route does not know yet: it reads the parts from the message, which is gone now. So its own delete is
+ *   queued beside it: removing a part twice is harmless.) `plain` is the ids that are no part of one, which the caller deletes
+ *   as messages of Discord. Of those, the ones that are parts of a reply or an edit still on its way (named in its progress,
+ *   not stored yet) are noted in that entry (payload.gone), so that finishSend or finishEdit does not store what Discord lost.
  * blockedSince(since) → the times (ISO) of the blocks noted since `since`, oldest first: what the breaker is built from again
  *   after a restart.
  */
@@ -71,6 +85,8 @@ const MAX_NOTE = 200
 const MAX_ACTION = 40
 const MAX_KEY = 64
 const MAX_PARTS = 3
+const QUEUE_KINDS = ['edit', 'delete']
+const MAX_QUEUED = 2
 const MAX_UPLOADS = 10
 const MAX_HELD_ASKED = 50
 const MAX_NAME = 100
@@ -122,6 +138,20 @@ function needEvent(event) {
   return { action, postId, messageId, note }
 }
 
+/** → the entries to queue with an entry that ended, checked: edits and deletes, each naming its message and its post. */
+function needQueue(queue) {
+  needList(queue, 'queue')
+  if (queue.length > MAX_QUEUED) throw new TypeError(`queue must hold at most ${MAX_QUEUED} entries`)
+  for (const item of queue) {
+    needObject(item, 'a queued entry')
+    if (!QUEUE_KINDS.includes(item.kind)) throw new TypeError(`the kind of a queued entry must be one of ${QUEUE_KINDS.join(', ')}`)
+    needId(item.messageKey, 'the messageKey of a queued entry')
+    needObject(item.payload, 'the payload of a queued entry')
+    needId(item.payload.postId, 'the payload.postId of a queued entry')
+  }
+  return queue
+}
+
 /** The entry as the worker reads it. */
 const entryOut = (r) => ({ id: r.id, kind: r.kind, messageKey: r.message_key, authorId: r.author_id, payload: r.payload, attempts: r.attempts })
 
@@ -170,6 +200,44 @@ function checkMessage(m) {
   for (const a of m.attachments) needId(a.id, 'attachment id')
 }
 
+/** Queue an entry, in a transaction. For an edit or a delete the message shows that something is on its way, with a new rev. */
+async function enqueueIn(q, { kind, messageKey, authorId, payload }) {
+  const { rows } = await q.query('insert into librarius_outbox (kind, message_key, author_id, payload) values ($1, $2, $3, $4::jsonb) returning id', [
+    kind,
+    messageKey,
+    authorId,
+    JSON.stringify(payload),
+  ])
+  if (kind !== 'send') await q.query("update librarius_messages set state = 'sending', rev = nextval('librarius_rev') where id = $1", [messageKey])
+  return { id: rows[0].id }
+}
+
+/**
+ * Note in the entries still on their way that these parts were deleted in Discord: the ones of those entries that this
+ * entry's progress names. finishSend and finishEdit read the note. Only the entries' payload.gone is written, never their
+ * progress, which the worker writes whole.
+ */
+async function noteGone(q, ids) {
+  const { rows } = await q.query(
+    `select id, payload from librarius_outbox
+      where kind in ('send', 'edit') and state in ('pending', 'sending')
+        and exists (select 1 from jsonb_array_elements(coalesce(payload->'progress'->'parts', '[]'::jsonb)) as part where part->>'id' = any($1::text[]))
+      order by id for update`,
+    [ids],
+  )
+  for (const row of rows) {
+    const named = row.payload.progress.parts.map((part) => part.id).filter((part) => ids.includes(part))
+    const gone = [...new Set([...(row.payload.gone ?? []), ...named])]
+    await q.query("update librarius_outbox set payload = jsonb_set(payload, '{gone}', $2::jsonb, true) where id = $1", [row.id, JSON.stringify(gone)])
+  }
+}
+
+/** → the entry's note of parts that Discord lost, those of `partIds` only, or null when the entry is not 'sending' (it is done already). Locks the entry. */
+async function goneOf(q, id, partIds) {
+  const { rows } = await q.query("select coalesce(payload->'gone', '[]'::jsonb) as gone from librarius_outbox where id = $1 and state = 'sending' for update", [id])
+  return rows.length === 0 ? null : rows[0].gone.filter((part) => partIds.includes(part))
+}
+
 export function createOutboxStore(pool) {
   const inTx = createInTx(pool)
 
@@ -181,17 +249,7 @@ export function createOutboxStore(pool) {
       needId(authorId, 'authorId')
       needObject(payload, 'payload')
       needId(payload.postId, 'payload.postId')
-      return inTx(async (q) => {
-        const { rows } = await q.query('insert into librarius_outbox (kind, message_key, author_id, payload) values ($1, $2, $3, $4::jsonb) returning id', [
-          kind,
-          messageKey,
-          authorId,
-          JSON.stringify(payload),
-        ])
-        // The message shows that something is on its way to Discord, and a reader is told, with a new rev.
-        if (kind !== 'send') await q.query("update librarius_messages set state = 'sending', rev = nextval('librarius_rev') where id = $1", [messageKey])
-        return { id: rows[0].id }
-      })
+      return inTx((q) => enqueueIn(q, { kind, messageKey, authorId, payload }))
     },
 
     async outboxInterrupted() {
@@ -221,7 +279,7 @@ export function createOutboxStore(pool) {
       await pool.query("update librarius_outbox set payload = jsonb_set(payload, '{progress}', $2::jsonb, true) where id = $1 and state = 'sending'", [id, JSON.stringify(progress)])
     },
 
-    async outboxSet(id, { state, attempts, nextAt, error = null, messageState, event } = {}) {
+    async outboxSet(id, { state, attempts, nextAt, error = null, messageState, event, queue = [] } = {}) {
       needSerial(id, 'id')
       if (!SET_STATES.includes(state)) throw new TypeError(`state must be one of ${SET_STATES.join(', ')}`)
       if (attempts !== undefined && !(Number.isSafeInteger(attempts) && attempts >= 0)) throw new TypeError('attempts must be a whole number of at least 0')
@@ -229,10 +287,11 @@ export function createOutboxStore(pool) {
       if (error !== null && typeof error !== 'string') throw new TypeError('error must be text or null')
       if (messageState !== undefined && !MESSAGE_STATES.includes(messageState)) throw new TypeError("messageState must be null, 'sending' or 'blocked'")
       const noted = event === undefined ? null : needEvent(event)
+      const queued = needQueue(queue)
       await inTx(async (q) => {
         const { rows } = await q.query(
           `update librarius_outbox set state = $2, attempts = coalesce($3::int, attempts), next_at = coalesce($4::timestamptz, next_at), last_error = $5
-            where id = $1 returning kind, message_key, author_id`,
+            where id = $1 and state = 'sending' returning kind, message_key, author_id`,
           [id, state, attempts ?? null, due, error === null ? null : error.slice(0, MAX_ERROR)],
         )
         if (rows.length === 0) return
@@ -241,6 +300,7 @@ export function createOutboxStore(pool) {
           await q.query("update librarius_messages set state = $2, rev = nextval('librarius_rev') where id = $1", [entry.message_key, messageState])
         }
         if (noted !== null) await logEvent(q, entry.author_id, noted)
+        for (const item of queued) await enqueueIn(q, { ...item, authorId: entry.author_id })
       })
     },
 
@@ -254,21 +314,25 @@ export function createOutboxStore(pool) {
       for (const upload of uploadIds) needSerial(upload, 'an upload id')
       const created = needTime(message.createdAt, 'createdAt')
       const noted = needEvent(event)
-      await inTx(async (q) => {
+      return inTx(async (q) => {
+        const gone = await goneOf(q, id, partIds)
+        // Done already, by a write that committed.
+        if (gone === null) return { stored: true, gone: [] }
+        if (gone.length > 0) return { stored: false, gone }
+        const { rows: posts } = await q.query('select 1 from librarius_posts where id = $1', [message.postId])
+        if (posts.length === 0) return { stored: false, gone: null }
         const rev = await nextRev(q)
         // An import that ran before this reply was done may have stored the later parts as messages of their own.
         if (partIds.length > 1) await deleteRows(q, partIds.slice(1), rev)
-        const { rows: written } = await q.query(
+        await q.query(
           `insert into librarius_messages
              (id, post_id, author_id, author_name, author_avatar, webhook_id, kind, content, embeds, stickers, reactions, reply_to, created_at, edited_at, rev, origin, source, state, layout)
-           select $1::bigint, $2::bigint, $3::bigint, $4::text, $5::text, $6::bigint, 0, $7::text, '[]'::jsonb, '[]'::jsonb, '[]'::jsonb, $8::bigint, $9::timestamptz, null, $10::bigint, 'site', $11::text, null, $12::jsonb
-            where exists (select 1 from librarius_posts where id = $2)
+           values ($1::bigint, $2::bigint, $3::bigint, $4::text, $5::text, $6::bigint, 0, $7::text, '[]'::jsonb, '[]'::jsonb, '[]'::jsonb, $8::bigint, $9::timestamptz, null, $10::bigint, 'site', $11::text, null, $12::jsonb)
            on conflict (id) do update set
              post_id = excluded.post_id, author_id = excluded.author_id, author_name = excluded.author_name, author_avatar = excluded.author_avatar,
              webhook_id = excluded.webhook_id, kind = excluded.kind, content = excluded.content, reply_to = excluded.reply_to,
              created_at = excluded.created_at, edited_at = excluded.edited_at, rev = excluded.rev, origin = excluded.origin,
-             source = excluded.source, state = excluded.state, layout = excluded.layout
-           returning id`,
+             source = excluded.source, state = excluded.state, layout = excluded.layout`,
           [
             message.id,
             message.postId,
@@ -284,21 +348,20 @@ export function createOutboxStore(pool) {
             JSON.stringify(message.layout),
           ],
         )
-        if (written.length > 0) {
-          await q.query('delete from librarius_attachments where message_id = $1', [message.id])
-          for (const a of message.attachments) {
-            await q.query(
-              `insert into librarius_attachments (id, message_id, position, filename, content_type, size, width, height, url, proxy_url, expires_at)
-               values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11) on conflict (id) do nothing`,
-              [a.id, message.id, a.position, a.filename, a.contentType, a.size, a.width, a.height, a.url, a.proxyUrl, a.expiresAt],
-            )
-          }
-          await q.query('delete from librarius_parts where message_id = $1', [message.id])
-          await writeParts(q, message.id, partIds)
+        await q.query('delete from librarius_attachments where message_id = $1', [message.id])
+        for (const a of message.attachments) {
+          await q.query(
+            `insert into librarius_attachments (id, message_id, position, filename, content_type, size, width, height, url, proxy_url, expires_at)
+             values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11) on conflict (id) do nothing`,
+            [a.id, message.id, a.position, a.filename, a.contentType, a.size, a.width, a.height, a.url, a.proxyUrl, a.expiresAt],
+          )
         }
+        await q.query('delete from librarius_parts where message_id = $1', [message.id])
+        await writeParts(q, message.id, partIds)
         if (uploadIds.length > 0) await q.query('delete from librarius_uploads where id = any($1::bigint[]) and author_id = $2', [uploadIds, message.authorId])
         await logEvent(q, message.authorId, noted)
         await q.query("update librarius_outbox set state = 'sent', last_error = null where id = $1", [id])
+        return { stored: true, gone: [] }
       })
     },
 
@@ -309,17 +372,21 @@ export function createOutboxStore(pool) {
       needParts(partIds)
       if (partIds[0] !== messageId) throw new TypeError('the first part is the message')
       const noted = needEvent(event)
-      await inTx(async (q) => {
+      return inTx(async (q) => {
+        const gone = await goneOf(q, id, partIds)
+        if (gone === null) return { stored: true, gone: [] }
+        if (gone.length > 0) return { stored: false, gone }
         const { rows: edited } = await q.query(
           "update librarius_messages set source = $2, content = $3, edited_at = now(), state = null, rev = nextval('librarius_rev') where id = $1 and origin = 'site' returning author_id",
           [messageId, source, content],
         )
-        if (edited.length > 0) {
-          await q.query('delete from librarius_parts where message_id = $1', [messageId])
-          await writeParts(q, messageId, partIds)
-        }
+        // A message that is gone is not brought back.
+        if (edited.length === 0) return { stored: false, gone: [] }
+        await q.query('delete from librarius_parts where message_id = $1', [messageId])
+        await writeParts(q, messageId, partIds)
         const { rows: entry } = await q.query("update librarius_outbox set state = 'sent', last_error = null where id = $1 returning author_id", [id])
-        if (entry.length > 0) await logEvent(q, entry[0].author_id, noted)
+        await logEvent(q, entry[0].author_id, noted)
+        return { stored: true, gone: [] }
       })
     },
 
@@ -330,11 +397,13 @@ export function createOutboxStore(pool) {
       for (const part of partIds) needId(part, 'a part id')
       const noted = needEvent(event)
       await inTx(async (q) => {
+        const { rows: entry } = await q.query("update librarius_outbox set state = 'sent', last_error = null where id = $1 and state = 'sending' returning author_id", [id])
+        // Done already, by a write that committed.
+        if (entry.length === 0) return
         const rev = await nextRev(q)
         await deleteRows(q, [messageId], rev)
         await q.query('delete from librarius_parts where message_id = $1 or discord_id = any($2::bigint[])', [messageId, partIds])
-        const { rows: entry } = await q.query("update librarius_outbox set state = 'sent', last_error = null where id = $1 returning author_id", [id])
-        if (entry.length > 0) await logEvent(q, entry[0].author_id, noted)
+        await logEvent(q, entry[0].author_id, noted)
       })
     },
 
@@ -451,6 +520,7 @@ export function createOutboxStore(pool) {
         const { rows: hit } = await q.query('select discord_id, message_id from librarius_parts where discord_id = any($1::bigint[])', [ids])
         const parts = new Set(hit.map((r) => r.discord_id))
         const plain = ids.filter((id) => !parts.has(id))
+        if (plain.length > 0) await noteGone(q, plain)
         if (hit.length === 0) return { plain }
         const rev = await nextRev(q)
         for (const messageId of new Set(hit.map((r) => r.message_id))) {
@@ -461,8 +531,10 @@ export function createOutboxStore(pool) {
           await q.query('delete from librarius_parts where message_id = $1', [messageId])
           const author = stored.length === 0 ? '0' : stored[0].author_id
           if (left.length > 0) {
-            const { rows: queued } = await q.query("select 1 from librarius_outbox where kind = 'delete' and message_key = $1 and state in ('pending', 'sending')", [messageId])
-            if (queued.length === 0) {
+            // A delete that knows its parts (the one an earlier call queued, or one at work) takes these; one that has yet to read them from the message, which is gone, does not.
+            const { rows: queued } = await q.query("select payload from librarius_outbox where kind = 'delete' and message_key = $1 and state in ('pending', 'sending') for update", [messageId])
+            const covered = queued.some(({ payload }) => payload.partIds !== undefined || payload.progress?.partIds !== undefined)
+            if (!covered) {
               await q.query("insert into librarius_outbox (kind, message_key, author_id, payload) values ('delete', $1, $2, $3::jsonb)", [
                 messageId,
                 author,

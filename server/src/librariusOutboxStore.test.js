@@ -228,7 +228,7 @@ describe('outboxSet', () => {
     await store(pool).outboxSet('12', { state: 'pending', attempts: 2, nextAt: '2026-11-18T10:00:30.000Z', error: 'Discord answered 502 to the webhook send.' })
     expect(log.map((l) => l.sql)).toEqual([
       'begin',
-      'update librarius_outbox set state = $2, attempts = coalesce($3::int, attempts), next_at = coalesce($4::timestamptz, next_at), last_error = $5 where id = $1 returning kind, message_key, author_id',
+      "update librarius_outbox set state = $2, attempts = coalesce($3::int, attempts), next_at = coalesce($4::timestamptz, next_at), last_error = $5 where id = $1 and state = 'sending' returning kind, message_key, author_id",
       'commit',
     ])
     expect(log[1].params).toEqual(['12', 'pending', 2, '2026-11-18T10:00:30.000Z', 'Discord answered 502 to the webhook send.'])
@@ -284,10 +284,74 @@ describe('outboxSet', () => {
     expect(log[2].params).toEqual([AUTHOR, 'blocked', POST, null, 'AutoMod'])
   })
 
-  it('does nothing more for an entry that is not there', async () => {
+  it('does nothing more for an entry that is not there, or is not sending any more: what was written once is not written again', async () => {
     const { pool, sqls } = fakePool()
-    await store(pool).outboxSet('12', { state: 'blocked', messageState: 'blocked', event: { action: 'blocked' } })
-    expect(sqls()).toEqual(['begin', has('update librarius_outbox'), 'commit'])
+    await store(pool).outboxSet('12', {
+      state: 'blocked',
+      messageState: 'blocked',
+      event: { action: 'blocked' },
+      queue: [{ kind: 'delete', messageKey: MSG, payload: { postId: POST } }],
+    })
+    expect(sqls()).toEqual(['begin', has("and state = 'sending'"), 'commit'])
+  })
+
+  describe('queue', () => {
+    const insert = 'insert into librarius_outbox (kind, message_key, author_id, payload) values ($1, $2, $3, $4::jsonb) returning id'
+    const messageState = "update librarius_messages set state = 'sending', rev = nextval('librarius_rev') where id = $1"
+    const withQueue = (kind) => fakePool([...entry(kind), ['insert into librarius_outbox', [{ id: '31' }]]])
+
+    it('queues each entry for the author of the entry, after the event, in the same transaction, in order', async () => {
+      const { pool, log } = withQueue('edit')
+      const restore = { kind: 'edit', messageKey: MSG, payload: { postId: POST, source: 'old', mentions: [], restore: true } }
+      const remove = { kind: 'delete', messageKey: MSG_2, payload: { postId: POST, partIds: [MSG_2] } }
+      await store(pool).outboxSet('12', { state: 'failed', error: 'x', messageState: null, event: { action: 'failed', postId: POST }, queue: [restore, remove] })
+      expect(log.map((l) => l.sql)).toEqual([
+        'begin',
+        has("and state = 'sending'"),
+        has('update librarius_messages set state = $2'),
+        has('insert into librarius_events'),
+        insert,
+        messageState,
+        insert,
+        messageState,
+        'commit',
+      ])
+      expect(log[4].params).toEqual(['edit', MSG, AUTHOR, JSON.stringify(restore.payload)])
+      expect(log[5].params).toEqual([MSG])
+      expect(log[6].params).toEqual(['delete', MSG_2, AUTHOR, JSON.stringify(remove.payload)])
+      expect(log[7].params).toEqual([MSG_2])
+    })
+
+    it('queues nothing when it is given nothing, and takes up to two', async () => {
+      const none = withQueue('send')
+      await store(none.pool).outboxSet('12', { state: 'failed' })
+      expect(none.sqls()).toEqual(['begin', has('update librarius_outbox'), 'commit'])
+      const two = withQueue('send')
+      const item = { kind: 'delete', messageKey: MSG, payload: { postId: POST } }
+      await store(two.pool).outboxSet('12', { state: 'failed', queue: [item, item] })
+      expect(two.sqls().filter((q) => q === insert)).toHaveLength(2)
+    })
+
+    it('rolls back everything when an entry cannot be queued', async () => {
+      const err = boom()
+      const { pool, sqls } = fakePool([...entry('send'), ['insert into librarius_outbox', err]])
+      await expect(store(pool).outboxSet('12', { state: 'failed', queue: [{ kind: 'delete', messageKey: MSG, payload: { postId: POST } }] })).rejects.toBe(err)
+      expect(sqls().at(-1)).toBe('rollback')
+    })
+
+    const good = { kind: 'delete', messageKey: MSG, payload: { postId: POST } }
+    it.each([
+      ...labelled([null, 'x', {}, 7]).map(([name, queue]) => [`queue ${name}`, queue, LIST_MSG('queue')]),
+      ['three entries', [good, good, good], 'queue must hold at most 2 entries'],
+      ...labelled([undefined, null, 'x', []]).map(([name, item]) => [`an entry ${name}`, [item], OBJECT_MSG('a queued entry')]),
+      ...labelled(['send', 'SEND', '', undefined, 7]).map(([name, kind]) => [`a kind ${name}`, [{ ...good, kind }], 'the kind of a queued entry must be one of edit, delete']),
+      ...labelled(BAD_IDS).map(([name, messageKey]) => [`a messageKey ${name}`, [{ ...good, messageKey }], ID_MSG('the messageKey of a queued entry')]),
+      ...labelled([undefined, null, 'x', []]).map(([name, payload]) => [`a payload ${name}`, [{ ...good, payload }], OBJECT_MSG('the payload of a queued entry')]),
+      ...labelled([...BAD_IDS, undefined]).map(([name, postId]) => [`a payload.postId ${name}`, [{ ...good, payload: { postId } }], ID_MSG('the payload.postId of a queued entry')]),
+    ])('refuses %s before any query', async (_, queue, message) => {
+      const rig = fakePool()
+      await refused(rig, () => store(rig.pool).outboxSet('12', { state: 'failed', queue }), message)
+    })
   })
 
   it('rolls back and throws what failed', async () => {
@@ -359,17 +423,20 @@ describe('finishSend', () => {
     attachments: [],
     ...over,
   })
+  const GONE_SQL = "select coalesce(payload->'gone', '[]'::jsonb) as gone from librarius_outbox where id = $1 and state = 'sending' for update"
   const run = (script, over = {}, args = {}) => {
-    const rig = revPool([...script, ['insert into librarius_messages', [{ id: MSG }]]])
+    const rig = revPool([...script, ["payload->'gone'", [{ gone: [] }]], ['select 1 from librarius_posts', [{ '?column?': 1 }]]])
     const done = store(rig.pool).finishSend('12', { message: message(over), partIds: [MSG], uploadIds: [], event: EVENT, ...args })
     return { ...rig, done }
   }
 
-  it('stores a one-part reply, its parts, the event and the state of the entry, in one transaction, in order', async () => {
+  it('stores a one-part reply, its parts, the event and the state of the entry, in one transaction, in order, and says it is stored', async () => {
     const r = run([])
-    await r.done
+    expect(await r.done).toEqual({ stored: true, gone: [] })
     expect(r.sqls()).toEqual([
       'begin',
+      GONE_SQL,
+      'select 1 from librarius_posts where id = $1',
       "select nextval('librarius_rev') as rev",
       has('insert into librarius_messages'),
       'delete from librarius_attachments where message_id = $1',
@@ -379,26 +446,26 @@ describe('finishSend', () => {
       "update librarius_outbox set state = 'sent', last_error = null where id = $1",
       'commit',
     ])
-    expect(r.log[2].params).toEqual([MSG, POST, AUTHOR, 'Invented Name', null, HOOK, 'hello', null, '2026-11-18T10:00:00.000Z', '900', 'hello', JSON.stringify({ form: 'v2' })])
-    expect(r.log[3].params).toEqual([MSG])
-    expect(r.log[4].params).toEqual([MSG])
-    expect(r.log[5].params).toEqual([MSG, [MSG]])
-    expect(r.log[6].params).toEqual([AUTHOR, 'send', POST, MSG, '1 part'])
-    expect(r.log[7].params).toEqual(['12'])
+    expect(r.log[1].params).toEqual(['12'])
+    expect(r.log[2].params).toEqual([POST])
+    expect(r.log[4].params).toEqual([MSG, POST, AUTHOR, 'Invented Name', null, HOOK, 'hello', null, '2026-11-18T10:00:00.000Z', '900', 'hello', JSON.stringify({ form: 'v2' })])
+    expect(r.log[5].params).toEqual([MSG])
+    expect(r.log[6].params).toEqual([MSG])
+    expect(r.log[7].params).toEqual([MSG, [MSG]])
+    expect(r.log[8].params).toEqual([AUTHOR, 'send', POST, MSG, '1 part'])
+    expect(r.log[9].params).toEqual(['12'])
   })
 
   it('writes the message as a message of the site, with no embeds, stickers or reactions, kind 0 and no state, and keeps the reactions a conflict finds', async () => {
     const r = run([])
     await r.done
-    const sql = r.log[2].sql
+    const sql = r.log[4].sql
     expect(sql).toContain("0, $7::text, '[]'::jsonb, '[]'::jsonb, '[]'::jsonb, $8::bigint, $9::timestamptz, null, $10::bigint, 'site', $11::text, null, $12::jsonb")
-    expect(sql).toContain('where exists (select 1 from librarius_posts where id = $2)')
     expect(sql).toContain('on conflict (id) do update set')
     expect(sql).not.toContain('reactions = excluded')
     for (const column of ['post_id', 'author_id', 'author_name', 'author_avatar', 'webhook_id', 'kind', 'content', 'reply_to', 'created_at', 'edited_at', 'rev', 'origin', 'source', 'state', 'layout']) {
       expect(sql).toContain(`${column} = excluded.${column}`)
     }
-    expect(sql).toContain('returning id')
   })
 
   it('stores the attachments of the message, in order, once the message is written', async () => {
@@ -416,15 +483,17 @@ describe('finishSend', () => {
   it('first deletes what an import stored as messages of the later parts, noting them for the readers, with the rev of the write', async () => {
     const r = run([], {}, { partIds: [MSG, MSG_2, MSG_3] })
     await r.done
-    expect(r.sqls().slice(0, 5)).toEqual([
+    expect(r.sqls().slice(0, 7)).toEqual([
       'begin',
+      GONE_SQL,
+      'select 1 from librarius_posts where id = $1',
       "select nextval('librarius_rev') as rev",
       'insert into librarius_tombstones (message_id, post_id, rev) select id, post_id, $2::bigint from librarius_messages where id = any($1::bigint[])',
       'delete from librarius_messages where id = any($1::bigint[])',
       has('insert into librarius_messages'),
     ])
-    expect(r.log[2].params).toEqual([[MSG_2, MSG_3], '900'])
-    expect(r.log[3].params).toEqual([[MSG_2, MSG_3]])
+    expect(r.log[4].params).toEqual([[MSG_2, MSG_3], '900'])
+    expect(r.log[5].params).toEqual([[MSG_2, MSG_3]])
     expect(r.log.find((l) => l.sql.startsWith('insert into librarius_parts')).params).toEqual([MSG, [MSG, MSG_2, MSG_3]])
   })
 
@@ -439,18 +508,28 @@ describe('finishSend', () => {
     expect(none.sqls().some((s) => s.includes('librarius_uploads'))).toBe(false)
   })
 
-  it('stores no attachments or parts for a reply whose post is not stored, but still ends the entry and notes the event', async () => {
-    const r = run([['insert into librarius_messages', []]], {}, { uploadIds: ['3'] })
-    await r.done
-    expect(r.sqls()).toEqual([
-      'begin',
-      "select nextval('librarius_rev') as rev",
-      has('insert into librarius_messages'),
-      has('delete from librarius_uploads'),
-      has('insert into librarius_events'),
-      has("update librarius_outbox set state = 'sent'"),
-      'commit',
-    ])
+  it('writes nothing, and says so, for an entry that is not sending any more: a write that was made is not made again', async () => {
+    const r = run([["payload->'gone'", []]])
+    expect(await r.done).toEqual({ stored: true, gone: [] })
+    expect(r.sqls()).toEqual(['begin', GONE_SQL, 'commit'])
+  })
+
+  it('writes nothing, and names the parts, when Discord deleted some of the parts of the reply while it was on its way', async () => {
+    const r = run([["payload->'gone'", [{ gone: [MSG_3, MSG_2] }]]], {}, { partIds: [MSG, MSG_2] })
+    expect(await r.done).toEqual({ stored: false, gone: [MSG_2] })
+    expect(r.sqls()).toEqual(['begin', GONE_SQL, 'commit'])
+  })
+
+  it('does not count a part that is not one of this reply', async () => {
+    const r = run([["payload->'gone'", [{ gone: [MSG_4] }]]], {}, { partIds: [MSG, MSG_2] })
+    expect(await r.done).toEqual({ stored: true, gone: [] })
+    expect(r.sqls()).toContain("update librarius_outbox set state = 'sent', last_error = null where id = $1")
+  })
+
+  it('writes nothing, and gives no list of lost parts, for a reply whose post is not stored: the caller has to deal with what is in Discord', async () => {
+    const r = run([['select 1 from librarius_posts', []]], {}, { uploadIds: ['3'] })
+    expect(await r.done).toEqual({ stored: false, gone: null })
+    expect(r.sqls()).toEqual(['begin', GONE_SQL, 'select 1 from librarius_posts where id = $1', 'commit'])
   })
 
   it('rolls back, with no state of the entry written, when any statement fails, and throws that error', async () => {
@@ -467,7 +546,7 @@ describe('finishSend', () => {
     for (const createdAt of [new Date(at), Date.parse(at)]) {
       const r = run([], { createdAt })
       await r.done
-      expect(r.log[2].params[8]).toBe(at)
+      expect(r.log[4].params[8]).toBe(at)
     }
   })
 
@@ -502,34 +581,36 @@ describe('finishSend', () => {
   it('takes a message with an avatar', async () => {
     const r = run([], { authorAvatar: 'https://cdn.discordapp.com/avatars/1/2.png' })
     await r.done
-    expect(r.log[2].params[4]).toBe('https://cdn.discordapp.com/avatars/1/2.png')
+    expect(r.log[4].params[4]).toBe('https://cdn.discordapp.com/avatars/1/2.png')
   })
 
   it('takes a reply to a message', async () => {
     const r = run([], { replyTo: MSG_4 })
     await r.done
-    expect(r.log[2].params[7]).toBe(MSG_4)
+    expect(r.log[4].params[7]).toBe(MSG_4)
   })
 
   it('takes ten uploads', async () => {
     const ids = Array.from({ length: 10 }, (_, i) => String(i + 1))
     const r = run([], {}, { uploadIds: ids })
-    await expect(r.done).resolves.toBeUndefined()
+    await expect(r.done).resolves.toEqual({ stored: true, gone: [] })
   })
 })
 
 describe('finishEdit', () => {
+  const GONE_SQL = "select coalesce(payload->'gone', '[]'::jsonb) as gone from librarius_outbox where id = $1 and state = 'sending' for update"
   const run = (script, args = {}) => {
-    const rig = fakePool([...script, ['update librarius_messages', [{ author_id: AUTHOR }]], ['update librarius_outbox', [{ author_id: AUTHOR }]]])
+    const rig = fakePool([...script, ["payload->'gone'", [{ gone: [] }]], ['update librarius_messages', [{ author_id: AUTHOR }]], ['update librarius_outbox', [{ author_id: AUTHOR }]]])
     const done = store(rig.pool).finishEdit('12', { messageId: MSG, source: 'new source', content: 'new content', partIds: [MSG, MSG_2], event: { action: 'edit', postId: POST, messageId: MSG }, ...args })
     return { ...rig, done }
   }
 
-  it('gives the message its new text, edit time and no state, replaces its parts, ends the entry and notes the event, in one transaction', async () => {
+  it('gives the message its new text, edit time and no state, replaces its parts, ends the entry and notes the event, in one transaction, and says it is stored', async () => {
     const r = run([])
-    await r.done
+    expect(await r.done).toEqual({ stored: true, gone: [] })
     expect(r.sqls()).toEqual([
       'begin',
+      GONE_SQL,
       "update librarius_messages set source = $2, content = $3, edited_at = now(), state = null, rev = nextval('librarius_rev') where id = $1 and origin = 'site' returning author_id",
       'delete from librarius_parts where message_id = $1',
       has('insert into librarius_parts'),
@@ -537,23 +618,35 @@ describe('finishEdit', () => {
       has('insert into librarius_events'),
       'commit',
     ])
-    expect(r.log[1].params).toEqual([MSG, 'new source', 'new content'])
-    expect(r.log[2].params).toEqual([MSG])
-    expect(r.log[3].params).toEqual([MSG, [MSG, MSG_2]])
-    expect(r.log[4].params).toEqual(['12'])
-    expect(r.log[5].params).toEqual([AUTHOR, 'edit', POST, MSG, null])
+    expect(r.log[1].params).toEqual(['12'])
+    expect(r.log[2].params).toEqual([MSG, 'new source', 'new content'])
+    expect(r.log[3].params).toEqual([MSG])
+    expect(r.log[4].params).toEqual([MSG, [MSG, MSG_2]])
+    expect(r.log[5].params).toEqual(['12'])
+    expect(r.log[6].params).toEqual([AUTHOR, 'edit', POST, MSG, null])
   })
 
-  it('does not bring back a message that is gone, nor give it parts, but ends the entry', async () => {
+  it('does not bring back a message that is gone, nor give it parts, nor end the entry: the caller has the parts to deal with', async () => {
     const r = run([['update librarius_messages', []]])
-    await r.done
-    expect(r.sqls()).toEqual(['begin', has('update librarius_messages'), has("update librarius_outbox set state = 'sent'"), has('insert into librarius_events'), 'commit'])
+    expect(await r.done).toEqual({ stored: false, gone: [] })
+    expect(r.sqls()).toEqual(['begin', GONE_SQL, has('update librarius_messages'), 'commit'])
   })
 
-  it('notes no event for an entry that is not there', async () => {
-    const r = run([['update librarius_outbox', []]])
-    await r.done
-    expect(r.sqls().some((s) => s.includes('librarius_events'))).toBe(false)
+  it('writes nothing for an entry that is not sending any more: a write that was made is not made again', async () => {
+    const r = run([["payload->'gone'", []]])
+    expect(await r.done).toEqual({ stored: true, gone: [] })
+    expect(r.sqls()).toEqual(['begin', GONE_SQL, 'commit'])
+  })
+
+  it('writes nothing, and names the parts, when Discord deleted some of the parts the edit made', async () => {
+    const r = run([["payload->'gone'", [{ gone: [MSG_3, MSG_2] }]]])
+    expect(await r.done).toEqual({ stored: false, gone: [MSG_2] })
+    expect(r.sqls()).toEqual(['begin', GONE_SQL, 'commit'])
+  })
+
+  it('does not count a part that is not one of the reply', async () => {
+    const r = run([["payload->'gone'", [{ gone: [MSG_4] }]]])
+    expect(await r.done).toEqual({ stored: true, gone: [] })
   })
 
   it('rolls back and throws what failed', async () => {
@@ -581,42 +674,43 @@ describe('finishEdit', () => {
 })
 
 describe('finishDelete', () => {
+  const END_SQL = "update librarius_outbox set state = 'sent', last_error = null where id = $1 and state = 'sending' returning author_id"
   const run = (script, args = {}) => {
     const rig = revPool([...script, ['update librarius_outbox', [{ author_id: AUTHOR }]]])
     const done = store(rig.pool).finishDelete('12', { messageId: MSG, partIds: [MSG, MSG_2], event: { action: 'delete', postId: POST, messageId: MSG }, ...args })
     return { ...rig, done }
   }
 
-  it('deletes the message, noting it for the readers, forgets its parts, ends the entry and notes the event, in one transaction', async () => {
+  it('ends the entry, deletes the message, noting it for the readers, forgets its parts and notes the event, in one transaction', async () => {
     const r = run([])
     await r.done
     expect(r.sqls()).toEqual([
       'begin',
+      END_SQL,
       "select nextval('librarius_rev') as rev",
       'insert into librarius_tombstones (message_id, post_id, rev) select id, post_id, $2::bigint from librarius_messages where id = any($1::bigint[])',
       'delete from librarius_messages where id = any($1::bigint[])',
       'delete from librarius_parts where message_id = $1 or discord_id = any($2::bigint[])',
-      "update librarius_outbox set state = 'sent', last_error = null where id = $1 returning author_id",
       has('insert into librarius_events'),
       'commit',
     ])
-    expect(r.log[2].params).toEqual([[MSG], '900'])
-    expect(r.log[3].params).toEqual([[MSG]])
-    expect(r.log[4].params).toEqual([MSG, [MSG, MSG_2]])
-    expect(r.log[5].params).toEqual(['12'])
+    expect(r.log[1].params).toEqual(['12'])
+    expect(r.log[3].params).toEqual([[MSG], '900'])
+    expect(r.log[4].params).toEqual([[MSG]])
+    expect(r.log[5].params).toEqual([MSG, [MSG, MSG_2]])
     expect(r.log[6].params).toEqual([AUTHOR, 'delete', POST, MSG, null])
   })
 
   it('takes an empty list of parts', async () => {
     const r = run([], { partIds: [] })
     await r.done
-    expect(r.log[4].params).toEqual([MSG, []])
+    expect(r.log[5].params).toEqual([MSG, []])
   })
 
-  it('notes no event for an entry that is not there', async () => {
+  it('writes nothing for an entry that is not sending any more: a write that was made is not made again', async () => {
     const r = run([['update librarius_outbox', []]])
     await r.done
-    expect(r.sqls().some((s) => s.includes('librarius_events'))).toBe(false)
+    expect(r.sqls()).toEqual(['begin', END_SQL, 'commit'])
   })
 
   it('rolls back and throws what failed', async () => {
@@ -765,6 +859,10 @@ describe('messageOfPart', () => {
   })
 })
 
+const NOTE_SQL = "select id, payload from librarius_outbox where kind in ('send', 'edit') and state in ('pending', 'sending') and exists (select 1 from jsonb_array_elements(coalesce(payload->'progress'->'parts', '[]'::jsonb)) as part where part->>'id' = any($1::text[])) order by id for update"
+const NOTE_UPDATE = "update librarius_outbox set payload = jsonb_set(payload, '{gone}', $2::jsonb, true) where id = $1"
+const QUEUED_SQL = "select payload from librarius_outbox where kind = 'delete' and message_key = $1 and state in ('pending', 'sending') for update"
+
 describe('siteDeleted', () => {
   // A reply of three parts MSG, MSG_2, MSG_3; MSG's message is stored.
   const partsOf = (rows) => ['select discord_id, message_id', rows]
@@ -777,8 +875,9 @@ describe('siteDeleted', () => {
   it('answers every id as plain when none is a part, after one question', async () => {
     const { pool, log } = fakePool()
     expect(await store(pool).siteDeleted([MSG, MSG_2], POST)).toEqual({ plain: [MSG, MSG_2] })
-    expect(log.map((l) => l.sql)).toEqual(['begin', 'select discord_id, message_id from librarius_parts where discord_id = any($1::bigint[])', 'commit'])
+    expect(log.map((l) => l.sql)).toEqual(['begin', 'select discord_id, message_id from librarius_parts where discord_id = any($1::bigint[])', NOTE_SQL, 'commit'])
     expect(log[1].params).toEqual([[MSG, MSG_2]])
+    expect(log[2].params).toEqual([[MSG, MSG_2]])
   })
 
   it('asks nothing for no ids', async () => {
@@ -788,18 +887,19 @@ describe('siteDeleted', () => {
   })
 
   it('takes the whole reply when one of its parts is deleted: the message goes, noted for the readers, and the parts left are queued for deletion', async () => {
-    const r = revPool([...three, ["select 1 from librarius_outbox", []]])
+    const r = revPool([...three, [QUEUED_SQL, []]])
     expect(await store(r.pool).siteDeleted([MSG_2, MSG_4], POST)).toEqual({ plain: [MSG_4] })
     expect(r.sqls()).toEqual([
       'begin',
       'select discord_id, message_id from librarius_parts where discord_id = any($1::bigint[])',
+      NOTE_SQL,
       "select nextval('librarius_rev') as rev",
       'select discord_id from librarius_parts where message_id = $1 order by part_index',
       'select post_id, author_id from librarius_messages where id = $1',
       'insert into librarius_tombstones (message_id, post_id, rev) select id, post_id, $2::bigint from librarius_messages where id = any($1::bigint[])',
       'delete from librarius_messages where id = any($1::bigint[])',
       'delete from librarius_parts where message_id = $1',
-      "select 1 from librarius_outbox where kind = 'delete' and message_key = $1 and state in ('pending', 'sending')",
+      QUEUED_SQL,
       "insert into librarius_outbox (kind, message_key, author_id, payload) values ('delete', $1, $2, $3::jsonb)",
       'insert into librarius_events (actor_id, action, post_id, message_id, note) values ($1, $2, $3, $4, $5)',
       'commit',
@@ -808,18 +908,73 @@ describe('siteDeleted', () => {
     expect(at('select discord_id from librarius_parts where message_id = $1 order by part_index')).toEqual([MSG])
     expect(at('select post_id, author_id from librarius_messages where id = $1')).toEqual([MSG])
     expect(at('delete from librarius_parts where message_id = $1')).toEqual([MSG])
-    expect(at("select 1 from librarius_outbox where kind = 'delete' and message_key = $1 and state in ('pending', 'sending')")).toEqual([MSG])
+    expect(at(QUEUED_SQL)).toEqual([MSG])
+    expect(at(NOTE_SQL)).toEqual([[MSG_4]])
     expect(at('delete from librarius_messages where id = any($1::bigint[])')).toEqual([[MSG]])
-    expect(r.log[5].params).toEqual([[MSG], '900'])
+    expect(r.log[6].params).toEqual([[MSG], '900'])
     expect(at("insert into librarius_outbox (kind, message_key, author_id, payload) values ('delete', $1, $2, $3::jsonb)")).toEqual([MSG, AUTHOR, JSON.stringify({ postId: POST, partIds: [MSG, MSG_3] })])
     expect(at('insert into librarius_events (actor_id, action, post_id, message_id, note) values ($1, $2, $3, $4, $5)')).toEqual([AUTHOR, 'deleted-in-discord', POST, MSG, null])
   })
 
-  it('queues nothing when a delete of the reply is on its way already', async () => {
-    const r = revPool([...three, ['select 1 from librarius_outbox', [{ '?column?': 1 }]]])
+  // A delete of the reply that is on its way, as the row of the outbox says.
+  it.each([
+    ['one that was queued with the parts to remove', { postId: POST, partIds: [MSG, MSG_3] }],
+    ['one at work, that has written down the parts it removes', { postId: POST, progress: { form: null, parts: [], inflight: null, partIds: [MSG, MSG_2, MSG_3] } }],
+  ])('queues nothing when %s is on its way already', async (_, payload) => {
+    const r = revPool([...three, [QUEUED_SQL, [{ payload }]]])
     await store(r.pool).siteDeleted([MSG_2], POST)
     expect(r.sqls().some((s) => s.startsWith('insert into librarius_outbox'))).toBe(false)
     expect(r.sqls()).toContain('delete from librarius_messages where id = any($1::bigint[])')
+  })
+
+  it.each([
+    ['a delete from the route, which will read its parts from the message, that is gone', [{ payload: { postId: POST } }]],
+    ['a delete that has begun but not written its parts down', [{ payload: { postId: POST, progress: { form: null, parts: [], inflight: null } } }]],
+    ['two that do not know them', [{ payload: { postId: POST } }, { payload: { postId: POST, progress: {} } }]],
+  ])('queues a delete of its own beside %s, since removing a part twice is harmless', async (_, rows) => {
+    const r = revPool([...three, [QUEUED_SQL, rows]])
+    await store(r.pool).siteDeleted([MSG_2], POST)
+    const queued = r.log.filter((l) => l.sql.startsWith('insert into librarius_outbox'))
+    expect(queued).toHaveLength(1)
+    expect(queued[0].params).toEqual([MSG, AUTHOR, JSON.stringify({ postId: POST, partIds: [MSG, MSG_3] })])
+  })
+
+  it('queues nothing when any one of the deletes on its way knows its parts, though the others do not', async () => {
+    const r = revPool([...three, [QUEUED_SQL, [{ payload: { postId: POST } }, { payload: { postId: POST, partIds: [MSG_3] } }]]])
+    await store(r.pool).siteDeleted([MSG_2], POST)
+    expect(r.sqls().some((s) => s.startsWith('insert into librarius_outbox'))).toBe(false)
+  })
+
+  describe('a part that no stored reply owns, which a reply or an edit on its way has sent', () => {
+    const rows = (...list) => revPool([[NOTE_SQL, list]])
+
+    it('notes it in that entry, beside what the entry had been told, once', async () => {
+      const r = rows(
+        { id: '5', payload: { postId: POST, progress: { parts: [{ id: MSG }, { id: MSG_2 }] }, gone: [MSG_4] } },
+        { id: '6', payload: { postId: POST, progress: { parts: [{ id: MSG_2 }, { id: MSG_3 }] } } },
+        { id: '7', payload: { postId: POST, progress: { parts: [{ id: MSG_2 }] }, gone: [MSG_2] } },
+      )
+      expect(await store(r.pool).siteDeleted([MSG_2, MSG_4], POST)).toEqual({ plain: [MSG_2, MSG_4] })
+      expect(r.sqls()).toEqual(['begin', 'select discord_id, message_id from librarius_parts where discord_id = any($1::bigint[])', NOTE_SQL, NOTE_UPDATE, NOTE_UPDATE, NOTE_UPDATE, 'commit'])
+      const writes = r.log.filter((l) => l.sql === NOTE_UPDATE).map((l) => l.params)
+      expect(writes).toEqual([
+        ['5', JSON.stringify([MSG_4, MSG_2])],
+        ['6', JSON.stringify([MSG_2])],
+        ['7', JSON.stringify([MSG_2])],
+      ])
+    })
+
+    it('notes it before it takes a reply of the site, for the parts of that reply and of another', async () => {
+      const r = revPool([...three, [NOTE_SQL, [{ id: '5', payload: { postId: POST, progress: { parts: [{ id: MSG_4 }] } } }]], [QUEUED_SQL, []]])
+      await store(r.pool).siteDeleted([MSG_2, MSG_4], POST)
+      expect(r.sqls().slice(0, 5)).toEqual(['begin', has('select discord_id, message_id'), NOTE_SQL, NOTE_UPDATE, "select nextval('librarius_rev') as rev"])
+    })
+
+    it('asks nothing of the entries when every id is a part of a stored reply', async () => {
+      const r = revPool([...three, [QUEUED_SQL, []]])
+      await store(r.pool).siteDeleted([MSG_2], POST)
+      expect(r.sqls()).not.toContain(NOTE_SQL)
+    })
   })
 
   it('queues nothing when no part is left, as for a reply of one part', async () => {
@@ -842,7 +997,7 @@ describe('siteDeleted', () => {
       ]),
       ['select discord_id from librarius_parts where message_id', (p) => (p[0] === MSG ? [{ discord_id: MSG }, { discord_id: MSG_2 }] : [{ discord_id: MSG_3 }, { discord_id: MSG_4 }])],
       ['select post_id, author_id from librarius_messages', [{ post_id: POST, author_id: AUTHOR }]],
-      ['select 1 from librarius_outbox', []],
+      [QUEUED_SQL, []],
     ])
     expect(await store(r.pool).siteDeleted([MSG, MSG_2, MSG_4], POST)).toEqual({ plain: [] })
     expect(r.sqls().filter((s) => s.startsWith("select nextval"))).toHaveLength(1)
@@ -858,7 +1013,7 @@ describe('siteDeleted', () => {
       partsOf([{ discord_id: MSG_2, message_id: MSG }]),
       ['select discord_id from librarius_parts where message_id', [{ discord_id: MSG }, { discord_id: MSG_2 }]],
       ['select post_id, author_id from librarius_messages', []],
-      ['select 1 from librarius_outbox', []],
+      [QUEUED_SQL, []],
     ])
     await store(r.pool).siteDeleted([MSG_2], POST)
     expect(r.log.find((l) => l.sql.startsWith('insert into librarius_outbox')).params).toEqual([MSG, '0', JSON.stringify({ postId: POST, partIds: [MSG] })])
@@ -867,7 +1022,7 @@ describe('siteDeleted', () => {
 
   it('rolls back and throws what failed', async () => {
     const err = boom()
-    const r = revPool([...three, ['insert into librarius_outbox', err], ['select 1 from librarius_outbox', []]])
+    const r = revPool([...three, ['insert into librarius_outbox', err], [QUEUED_SQL, []]])
     await expect(store(r.pool).siteDeleted([MSG_2], POST)).rejects.toBe(err)
     expect(r.sqls().at(-1)).toBe('rollback')
   })
