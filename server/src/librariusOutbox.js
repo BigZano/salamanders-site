@@ -5,16 +5,20 @@
  * Discord as it does it (payload.progress), so that a restart picks up where it stopped.
  *
  * createOutbox({ store, webhook, discord, form = 'v2', guildId, now = Date.now, timers = { setTimeout, clearTimeout }, log })
- *   → { start(), stop() → Promise, kick(), sendingPausedUntil(), webhookRefused() }
+ *   → { start(), stop() → Promise, kick(), sendingPausedUntil(), webhookRefused(), webhookId }
  *   `store` is the Librarius store (the outbox methods of librariusOutboxStore.js), `webhook` the client of librariusWebhook.js
- *   (made with `newest`, for recent()) and `discord` the bot client of librariusDiscord.js (setArchived, deleteMessage). `form`
+ *   and `discord` the bot client of librariusDiscord.js (setArchived, deleteMessage, messagesAfter). `form`
  *   is the form a new reply is sent in ('v2' or 'plain'); a reply keeps the one it began with. `guildId` makes the links
  *   between the parts of a reply. `now` is the clock, in milliseconds, and `timers` its timers: tests give it their own.
  *   start() begins the work, and takes up the entries a stop or a crash left half-done. kick() tells it that an entry was
  *   queued. stop() ends it at the next safe point, which is between two steps and never inside one, and answers when it has.
  *   sendingPausedUntil() is the time (ms) sending is paused until, by the breaker, or null. webhookRefused() is null, or
  *   { status, text } once Discord has refused the webhook itself: the worker has stopped for good (until a restart) and the
- *   routes should answer 503 to writes.
+ *   routes should answer 503 to writes. `webhookId` is the id of the webhook it sends through: a reply of another webhook (one
+ *   that was replaced since) cannot be edited, and a route may say so before it queues anything (COPY.olderWebhook).
+ *
+ * One worker sends at a time: start() takes a Postgres advisory lock (store.takeWorkerLock), and a worker that does not get it
+ * does not send, says so once, and asks again every 30 s (the one that holds it may have stopped). stop() lets it go.
  *
  * The worker runs one entry at a time, the oldest due first (a resumed one before them).
  * - A reply (kind 'send'): payload { postId, source, replyTo: { messageId, authorId, url } | null, mentions: [ids], uploads:
@@ -46,20 +50,30 @@
  *
  * Never twice. A part is only sent again when it is certain that it did not land: a refusal of Discord (a 4xx, a 429) is
  * certain; a timeout, a reset, a 5xx or an answer with no message is not (`unknown` of the webhook client). After an
- * unknown, and after a restart with `inflight` set, the worker reads the thread's recent messages from our webhook and looks for
- * one whose text is the part's and which no reply has taken as its part yet. (A part's text names the part before it, so no
- * part matches another's.) One found is adopted as the part. Only when there is none is the part sent again, once; a second unknown ends the attempt, and
+ * unknown, and after a restart with `inflight` set, the worker waits until 5 s after the send began (Discord may take a moment to show a
+ * message it has made), then reads the thread's messages from 5 s before the send began (progress.inflightAt is written with `inflight`,
+ * and the read is messagesAfter of the snowflake of that time) and looks, among those of our webhook, for one whose text is the part's
+ * and which no reply has taken as its part yet. (A part's text names the part before it, so no part matches another's.) One found is
+ * adopted as the part. Only when there is none is the part sent again, once; a second unknown ends the attempt, and
  * the next attempt looks again before it sends. A failed look is a failed attempt, never a resend.
+ *
+ * Another webhook. A reply keeps the id of the webhook that sent it (progress.webhookId while it is sent, then the message's webhook_id,
+ * and each part's). The webhook of an address that was made again is another one, and Discord lets a webhook edit and delete only its own
+ * messages. So, for a message of another webhook: a delete removes its parts through the bot (deleteMessage); an edit is refused ("This reply
+ * was sent through an older webhook..."), the way a route refuses it before it is queued; and a send that was interrupted with parts of the
+ * old webhook in Discord removes them through the bot and begins again from the first part.
  *
  * The limits (the spec's "no strikes" numbers):
  * - every webhook call (send, edit or delete), whichever entry it is for, goes out at least 1500 ms after the one before it;
- * - at most 20 sends in any 60 s; the worker waits until the oldest has left the window;
+ * - at most 20 sends in any 60 s, counted when they land (they end), not when they begin; the worker waits until the oldest has left
+ *   the window. The window is built again at start from the parts the entries have sent (store.sendTimesSince);
  * - a 429 sets the entry's next try to its Retry-After: it is not an attempt of the ladder, and not a block. A 429 that is
  *   global pauses every webhook call until then;
  * - blocked (what the webhook client calls `blocked`: Discord code 200000, "Message was blocked by automatic moderation", 200001,
  *   "Title was blocked by automatic moderation", or 240000, "Message was blocked because it contains harmful links"): the entry is
  *   'blocked' and never tried again. Two blocks within an hour pause all work for an hour (the breaker); the blocks are noted in
- *   librarius_events, so a restart builds the pause again;
+ *   librarius_events (the block of the edit that adds the links too), and the pause itself and a global 429's time are kept with them
+ *   (store.outboxHold), so a restart is no pardon;
  * - fatal (the webhook is refused or gone): the worker stops, the entry goes back to 'pending', and webhookRefused() says so;
  * - any other failure (of Discord's, the webhook's or the bot's, or of the store under this entry) is tried again after 5 s, 30 s,
  *   2 min and 10 min, and then the entry is 'failed'. Something that cannot succeed (a TypeError or RangeError: a bad entry)
@@ -89,6 +103,16 @@ const BREAKER_WINDOW_MS = 3_600_000
 const BREAKER_PAUSE_MS = 3_600_000
 const LADDER_MS = [5_000, 30_000, 120_000, 600_000]
 const STORE_RETRY_MS = 5_000
+// How long a worker that did not get the lock waits to ask again.
+const LOCK_RETRY_MS = 30_000
+// Discord may take a moment to show a message it has made: a look for a send that may have landed waits until this long after the send began,
+// and reads the thread from this long before it began.
+const LOOK_WAIT_MS = 5_000
+const LOOK_MARGIN_MS = 5_000
+// When a send that was interrupted does not say when it began, the look goes back this far.
+const LOOK_FALLBACK_MS = 3_600_000
+const LOOK_PAGE = 100
+const DISCORD_EPOCH_MS = 1420070400000
 // A longer wait than this is waited in steps, since a timer holds 24 days at most.
 const MAX_WAKE_MS = 3_600_000
 const ARCHIVED_CODE = 50083
@@ -96,6 +120,11 @@ const CONTENT_MAX = 4000
 const EXTENSIONS = { 'image/png': 'png', 'image/jpeg': 'jpg', 'image/webp': 'webp', 'image/gif': 'gif' }
 
 const STORE_METHODS = [
+  'takeWorkerLock',
+  'releaseWorkerLock',
+  'outboxHold',
+  'noteBlock',
+  'sendTimesSince',
   'outboxInterrupted',
   'claimOutbox',
   'outboxNextAt',
@@ -119,6 +148,7 @@ export const COPY = Object.freeze({
   uploadsGone: 'A picture of this reply is no longer held. Post it again.',
   messageGone: 'This reply is no longer there.',
   notSite: 'Only replies written on the site can be edited here.',
+  olderWebhook: "This reply was sent through an older webhook, so it can't be edited from the site. Delete it and post it again.",
   unsendable: 'This reply could not be sent.',
 })
 const NOUN = { send: 'reply', edit: 'edit', delete: 'delete' }
@@ -147,11 +177,14 @@ function textOf(message) {
 /** → at most CONTENT_MAX characters of the source, never cutting a pair. */
 const contentOf = (source) => Array.from(source).slice(0, CONTENT_MAX).join('')
 
+/** → the snowflake of a time (ms), as text: what messagesAfter reads from. A time before Discord's epoch is the start. */
+const snowflakeAt = (ms) => String(BigInt(Math.max(ms - DISCORD_EPOCH_MS, 0)) << 22n)
+
 export function createOutbox({ store, webhook, discord, form = DEFAULT_FORM, guildId, now = Date.now, timers, log = console.error }) {
   for (const name of STORE_METHODS) if (typeof store?.[name] !== 'function') throw new TypeError(`store.${name} must be a function.`)
-  for (const name of ['send', 'edit', 'remove', 'recent']) if (typeof webhook?.[name] !== 'function') throw new TypeError(`webhook.${name} must be a function.`)
+  for (const name of ['send', 'edit', 'remove']) if (typeof webhook?.[name] !== 'function') throw new TypeError(`webhook.${name} must be a function.`)
   if (!isId(webhook.id)) throw new TypeError('webhook.id must be a Discord id.')
-  for (const name of ['setArchived', 'deleteMessage']) if (typeof discord?.[name] !== 'function') throw new TypeError(`discord.${name} must be a function.`)
+  for (const name of ['setArchived', 'deleteMessage', 'messagesAfter']) if (typeof discord?.[name] !== 'function') throw new TypeError(`discord.${name} must be a function.`)
   if (!FORMS.includes(form)) throw new TypeError('form must be "v2" or "plain".')
   if (!isId(guildId)) throw new TypeError('guildId must be a Discord id.')
   if (typeof now !== 'function') throw new TypeError('now must be a function.')
@@ -164,6 +197,8 @@ export function createOutbox({ store, webhook, discord, form = DEFAULT_FORM, gui
   const report = (text) => log(`Librarius outbox: ${text}`)
 
   let started = false
+  // Whether this worker has said that another one holds the lock: it says it once.
+  let told = false
   // Set when the worker starts: whether it is being stopped, whether it has read what the store keeps, and whether a kick came
   // while it was working.
   let stopping
@@ -174,24 +209,28 @@ export function createOutbox({ store, webhook, discord, form = DEFAULT_FORM, gui
   // The entries a stop left half-done, read when the worker starts.
   let resumeQueue
   let refused = null
-  // When the last webhook call ended, when a global 429 lets them go on, and until when the breaker has stopped everything.
-  let lastCallAt = -Infinity
+  // When the last webhook call ended (set when the worker starts), when a global 429 lets them go on, and until when the breaker has stopped everything.
+  let lastCallAt
   let globalUntil = 0
   let pausedUntil = 0
-  // The times of the last CEILING sends, and of the blocks that count towards the breaker.
+  // The times of the last CEILING sends that landed, and of the blocks that count towards the breaker.
+  // Stryker disable next-line ArrayDeclaration: initialise empties it before anything reads it
   const sends = []
   // Stryker disable next-line ArrayDeclaration: a text among the times is dropped by the first filter, as no time is within an hour of it
   let blocks = []
   const sleeping = new Set()
 
-  /** The breaker: a block at time `t` counts, and the second within an hour pauses everything for an hour. */
+  /**
+   * The breaker: a block at time `t` counts, and the second within an hour pauses everything for an hour. → the time it now pauses until
+   * when this block tripped it, else null, for the caller to write down with the block: a pause that a restart forgets is no pause.
+   */
   function noteBlockAt(t) {
     blocks = blocks.filter((b) => t - b < BREAKER_WINDOW_MS)
     blocks.push(t)
-    if (blocks.length >= BREAKER_BLOCKS) {
-      pausedUntil = t + BREAKER_PAUSE_MS
-      blocks.length = 0
-    }
+    if (blocks.length < BREAKER_BLOCKS) return null
+    pausedUntil = Math.max(pausedUntil, t + BREAKER_PAUSE_MS)
+    blocks.length = 0
+    return pausedUntil
   }
 
   /** Waits `ms`, unless stop() is called, which ends the wait with a Halt. */
@@ -227,15 +266,23 @@ export function createOutbox({ store, webhook, discord, form = DEFAULT_FORM, gui
       if (wait <= 0) break
       await sleep(wait)
     }
-    if (isSend) {
-      sends.push(now())
-      if (sends.length > CEILING) sends.shift()
-    }
     try {
-      return await call()
+      const out = await call()
+      if (isSend) landed()
+      return out
+    } catch (err) {
+      // A send that may have landed counts as one that did: the ceiling is for what Discord may have taken.
+      if (isSend && err instanceof WebhookError && err.unknown) landed()
+      throw err
     } finally {
       lastCallAt = now()
     }
+  }
+
+  /** A send ended, and may have made a message: it is counted, as of now. */
+  function landed() {
+    sends.push(now())
+    if (sends.length > CEILING) sends.shift()
   }
 
   /** Makes a call to a thread. A thread that is archived is unarchived, once, and the call made again. */
@@ -278,13 +325,20 @@ export function createOutbox({ store, webhook, discord, form = DEFAULT_FORM, gui
   }
 
   /**
-   * → the message of our webhook in the thread that is this part, or null: its text, and not taken by a reply already. A part's
-   * text names the part before it (its link back), so no part can match another of the reply, nor one of another reply.
+   * → the message of the webhook `hook` in the thread that is this part, or null: its text, and not taken by a reply already. A part's
+   * text names the part before it (its link back), so no part can match another of the reply, nor one of another reply. The look
+   * waits until `settleAt` (ms), so that Discord has had the time to show a message it made, and then reads the thread from just before
+   * `startedAt`, when the send began: the messages after that, and not the newest few, which a busy thread would have pushed it out of.
    */
-  async function lookup(ctx, text) {
-    const recent = await webhook.recent(ctx.threadId)
-    const taken = await store.knownPartIds(recent.map((m) => m.id))
-    return recent.find((m) => !taken.has(m.id) && textOf(m).trim() === text) ?? null
+  async function lookup(ctx, text, { hook, startedAt, settleAt }) {
+    const wait = settleAt - now()
+    // Stryker disable next-line EqualityOperator: a wait of nothing is the same as no wait
+    if (wait > 0) await sleep(wait)
+    const page = await discord.messagesAfter(ctx.threadId, snowflakeAt(startedAt - LOOK_MARGIN_MS), LOOK_PAGE)
+    const ours = page.filter((m) => m?.webhook_id === hook)
+    const taken = await store.knownPartIds(ours.map((m) => m.id))
+    // The newest of those that match: a message of an earlier try of ours that is no part is older.
+    return ours.findLast((m) => !taken.has(m.id) && textOf(m).trim() === text) ?? null
   }
 
   /**
@@ -299,13 +353,17 @@ export function createOutbox({ store, webhook, discord, form = DEFAULT_FORM, gui
       known.push(message.id)
       return save(entry)
     }
+    // The part's start time and its webhook: what the look needs, and what a restart must be able to read.
+    const look = (settleAt) => ({ hook: progress.webhookId ?? webhook.id, startedAt: progress.inflightAt ?? now() - LOOK_FALLBACK_MS, settleAt })
     if (progress.inflight === index) {
-      // The part may have landed before a stop: look before sending.
-      const found = await lookup(ctx, built.text)
+      // The part may have landed before a stop: look before sending, once Discord has had its time to show it.
+      const found = await lookup(ctx, built.text, look((progress.inflightAt ?? 0) + LOOK_WAIT_MS))
       if (found !== null) return adopt(found)
     }
     // Written down before the send, every time: what is in memory may be a note the store never took.
     progress.inflight = index
+    progress.inflightAt = now()
+    progress.webhookId ??= webhook.id
     await save(entry)
     for (let sent = 0; ; sent++) {
       try {
@@ -314,7 +372,7 @@ export function createOutbox({ store, webhook, discord, form = DEFAULT_FORM, gui
         // Only a send that may have landed is looked for, and sent again once.
         if (!(err instanceof WebhookError) || !err.unknown || sent === 1) throw err
       }
-      const found = await lookup(ctx, built.text)
+      const found = await lookup(ctx, built.text, look(now() + LOOK_WAIT_MS))
       if (found !== null) return adopt(found)
     }
   }
@@ -339,11 +397,7 @@ export function createOutbox({ store, webhook, discord, form = DEFAULT_FORM, gui
    */
   const linksLost = (entry, err) => {
     if (err instanceof WebhookError) {
-      if (err.blocked) {
-        noteBlockAt(now())
-        return true
-      }
-      if (err.status === 403) return true
+      if (err.blocked || err.status === 403) return true
       if (err.fatal || err.status === 429 || err.threadGone) return false
     }
     // The last try, and a stop is not a failure.
@@ -373,9 +427,10 @@ export function createOutbox({ store, webhook, discord, form = DEFAULT_FORM, gui
     const plan = toDiscord(p.source, options([]))
     if (plan.overBudget) throw new Refusal(COPY.tooLong)
     const n = plan.parts.length
-    const known = progress.parts.map((part) => part.id)
     // Every part is built and checked before the first is sent: a reply that cannot go fails before any of it is in Discord.
     for (const built of plan.parts) bodyOf(useForm, built, p)
+    if (progress.webhookId !== undefined && progress.webhookId !== webhook.id) await startOver(entry, ctx, (landedIds) => toDiscord(p.source, options(landedIds)).parts)
+    const known = progress.parts.map((part) => part.id)
     for (const built of plan.parts.slice(known.length)) await filesOf(built)
     for (let index = known.length; index < n; index++) {
       const built = toDiscord(p.source, options(known)).parts[index]
@@ -383,6 +438,8 @@ export function createOutbox({ store, webhook, discord, form = DEFAULT_FORM, gui
     }
     if (n > 1 && progress.linked === undefined) {
       const first = toDiscord(p.source, options(known)).parts[0]
+      let blocked = false
+      let pause = null
       try {
         await editCall(ctx, known[0], bodyOf(useForm, first, p))
         progress.linked = true
@@ -391,8 +448,12 @@ export function createOutbox({ store, webhook, discord, form = DEFAULT_FORM, gui
         if (err instanceof WebhookError && err.messageGone) return purge(entry, ctx, known[0], known, PART_DELETED)
         if (!linksLost(entry, err)) throw err
         progress.linked = false
+        blocked = err instanceof WebhookError && err.blocked
+        if (blocked) pause = noteBlockAt(now())
       }
       await save(entry)
+      // A block of Discord's is noted, with the pause it may have caused, as any other is: the reply is stored without its links, and a restart must still know.
+      if (blocked) await store.noteBlock(entry.id, { event: { action: 'blocked', postId: p.postId, messageId: known[0], note: 'links' }, hold: pause === null ? undefined : { pausedUntil: pause } })
     }
     const [head] = progress.parts
     const attachments = parseMessage({ id: head.id, channel_id: p.postId, type: 0, author: { id: entry.authorId }, attachments: progress.parts.flatMap((part) => part.attachments) }).attachments
@@ -422,9 +483,34 @@ export function createOutbox({ store, webhook, discord, form = DEFAULT_FORM, gui
     return purge(entry, ctx, known[0], known.filter((id) => !done.gone.includes(id)), PART_DELETED)
   }
 
-  /** The message goes from the store, and so do its parts from Discord (the ones left): an edit or a delete that finds it gone ends there. */
-  async function purge(entry, ctx, messageId, partIds, note) {
-    for (const id of partIds) await once(entry, `remove:${id}`, () => removeCall(ctx, id))
+  /**
+   * A reply that was begun through a webhook that is not this one (the address was made again): what it sent is removed through the bot,
+   * which may delete any message, and the reply begins again from its first part. `partsFor(ids)` → the parts of the reply, cut as they
+   * were with `ids` sent, for the text of the part that may be in Discord without the worker knowing its id: it is looked for among the
+   * old webhook's messages, as a send that may have landed is, and removed with the rest.
+   */
+  async function startOver(entry, ctx, partsFor) {
+    const progress = progressOf(entry)
+    const old = progress.parts.map((part) => part.id)
+    if (progress.inflight !== null) {
+      const found = await lookup(ctx, partsFor(old)[progress.inflight].text, { hook: progress.webhookId, startedAt: progress.inflightAt ?? now() - LOOK_FALLBACK_MS, settleAt: (progress.inflightAt ?? 0) + LOOK_WAIT_MS })
+      if (found !== null) old.push(found.id)
+    }
+    for (const id of old) await once(entry, `bot:${id}`, () => discord.deleteMessage(ctx.threadId, id))
+    progress.parts = []
+    progress.inflight = null
+    progress.webhookId = webhook.id
+    delete progress.inflightAt
+    delete progress.linked
+    await save(entry)
+  }
+
+  /**
+   * The message goes from the store, and so do its parts from Discord (the ones left): an edit or a delete that finds it gone ends there.
+   * `byBot` removes them through the bot, for parts of a webhook that is not this one.
+   */
+  async function purge(entry, ctx, messageId, partIds, note, byBot = false) {
+    for (const id of partIds) await once(entry, `remove:${id}`, () => (byBot ? discord.deleteMessage(ctx.threadId, id) : removeCall(ctx, id)))
     await store.finishDelete(entry.id, { messageId, partIds, event: { action: 'delete', postId: ctx.threadId, messageId, note } })
   }
 
@@ -433,6 +519,8 @@ export function createOutbox({ store, webhook, discord, form = DEFAULT_FORM, gui
     const message = await store.outboxMessage(entry.messageKey)
     if (message === null) throw new Refusal(COPY.messageGone)
     if (message.origin !== 'site') throw new Refusal(COPY.notSite)
+    // Discord lets a webhook edit only its own messages: a reply of another one (the address was made again) is not edited here.
+    if (message.webhookId !== webhook.id) throw new Refusal(COPY.olderWebhook)
     // A restore says nothing of the text: it is what the store has.
     const source = p.restore === true ? message.source : p.source
     const { layout } = message
@@ -490,7 +578,9 @@ export function createOutbox({ store, webhook, discord, form = DEFAULT_FORM, gui
       progress.partIds = p.partIds ?? (message === null ? [] : message.parts)
       await save(entry)
     }
-    return purge(entry, ctx, entry.messageKey, progress.partIds, null)
+    // The parts of another webhook (one that was replaced) are removed through the bot: this webhook may not delete them.
+    const sentBy = p.webhookId ?? message?.webhookId ?? null
+    return purge(entry, ctx, entry.messageKey, progress.partIds, null, sentBy !== null && sentBy !== webhook.id)
   }
 
   const RUN = { send: runSend, edit: runEdit, delete: runDelete }
@@ -509,15 +599,15 @@ export function createOutbox({ store, webhook, discord, form = DEFAULT_FORM, gui
     if (entry.kind === 'edit' && entry.payload.restore !== true && (entry.touched === true || entry.attempts > 0)) {
       queue.push({ kind: 'edit', messageKey: entry.messageKey, payload: { postId, mentions: [], restore: true } })
     }
-    if (landed.length > 0) queue.push({ kind: 'delete', messageKey: landed[0], payload: { postId, partIds: landed } })
+    if (landed.length > 0) queue.push({ kind: 'delete', messageKey: landed[0], payload: { postId, partIds: landed, webhookId: entry.payload.progress.webhookId } })
     return queue
   }
 
   /** → what to write for an entry that ended for good in `state` ('failed' or 'blocked'): the member's words, and what puts Discord right. */
-  function endFor(entry, state, error, event) {
+  function endFor(entry, state, error, event, hold) {
     const queue = leftovers(entry)
     const messageState = state === 'blocked' ? 'blocked' : null
-    return () => store.outboxSet(entry.id, { state, error, messageState, queue, event: { ...event, postId: entry.payload.postId, messageId: entry.kind === 'send' ? null : entry.messageKey } })
+    return () => store.outboxSet(entry.id, { state, error, messageState, queue, hold, event: { ...event, postId: entry.payload.postId, messageId: entry.kind === 'send' ? null : entry.messageKey } })
   }
 
   /** The entry cannot be done, and the member is told why. */
@@ -559,13 +649,15 @@ export function createOutbox({ store, webhook, discord, form = DEFAULT_FORM, gui
       return () => store.outboxSet(entry.id, { state: 'pending' })
     }
     if (err.blocked) {
-      noteBlockAt(now())
-      return endFor(entry, 'blocked', `Discord blocked this ${NOUN[entry.kind]}.`, { action: 'blocked', note: entry.kind })
+      // The pause the block may have caused is written with it, in one transaction.
+      const pause = noteBlockAt(now())
+      return endFor(entry, 'blocked', `Discord blocked this ${NOUN[entry.kind]}.`, { action: 'blocked', note: entry.kind }, pause === null ? undefined : { pausedUntil: pause })
     }
     if (err.status === 429) {
       const nextAt = now() + err.retryAfterMs
       if (err.global) globalUntil = Math.max(globalUntil, nextAt)
-      return () => store.outboxSet(entry.id, { state: 'pending', nextAt })
+      // A global limit holds every call of the webhook, and a restart must not forget it.
+      return () => store.outboxSet(entry.id, { state: 'pending', nextAt, hold: err.global ? { globalUntil } : undefined })
     }
     // The thread is locked (or the webhook may not write in it): no wait changes that.
     if (err.status === 403) return fail(entry, COPY.locked)
@@ -606,21 +698,42 @@ export function createOutbox({ store, webhook, discord, form = DEFAULT_FORM, gui
     )
   }
 
-  /** The things only the store knows, read again at each start: the entries a stop left half-done, and the blocks of the last two hours. */
+  /**
+   * Takes the lock, and reads what only the store knows, again at each start: the pause and the global hold that were in force, the sends of the
+   * last minute, the blocks of the last hour, and the entries a stop left half-done. → false when another worker holds the lock: this one does not send.
+   */
   async function initialise() {
-    const blocked = await store.blockedSince(now() - 2 * BREAKER_WINDOW_MS)
+    if (!(await store.takeWorkerLock())) {
+      if (!told) {
+        told = true
+        report('another worker holds the outbox, so this one does not send.')
+      }
+      return false
+    }
+    const t = now()
+    const held = await store.outboxHold()
+    const lately = await store.sendTimesSince(t - CEILING_WINDOW_MS)
+    const blocked = await store.blockedSince(t - BREAKER_WINDOW_MS)
     const left = await store.outboxInterrupted()
+    pausedUntil = held.pausedUntil === null ? 0 : Date.parse(held.pausedUntil)
+    globalUntil = held.globalUntil === null ? 0 : Date.parse(held.globalUntil)
+    sends.length = 0
+    sends.push(...lately.slice(-CEILING).map((at) => Date.parse(at)))
+    // Stryker disable next-line ArrayDeclaration: a text among the times is dropped by the first filter, as no time is within an hour of it
+    blocks = []
+    // Blocks of the last hour only: a pause is kept as it was, so no older block is needed to find it again.
     for (const at of blocked) noteBlockAt(Date.parse(at))
     resumeQueue = left
-    // A call may have gone out just before the stop that left these: the first one waits its time.
-    if (left.length > 0) lastCallAt = now()
+    // A call may have gone out just before the stop or the crash: the first one waits its time.
+    lastCallAt = t
     ready = true
+    return true
   }
 
   /** Works through what is due, and sets a timer for what is not yet. Never rejects. */
   async function pass() {
     try {
-      if (!ready) await initialise()
+      if (!ready && !(await initialise())) return schedule(LOCK_RETRY_MS)
       while (!stopping && refused === null) {
         const wait = pausedUntil - now()
         if (wait > 0) return schedule(wait)
@@ -679,6 +792,9 @@ export function createOutbox({ store, webhook, discord, form = DEFAULT_FORM, gui
       for (const waiter of [...sleeping]) waiter.cancel()
       await running
       started = false
+      // Another worker may take the lock now, and this one may start again.
+      // Stryker disable next-line ArrowFunction,StringLiteral: what is logged is for the owner to read, and no test asserts it
+      await store.releaseWorkerLock().catch((err) => report(`the lock could not be let go: ${describe(err)}`))
     },
 
     kick,
@@ -686,5 +802,7 @@ export function createOutbox({ store, webhook, discord, form = DEFAULT_FORM, gui
     sendingPausedUntil: () => (pausedUntil > now() ? pausedUntil : null),
 
     webhookRefused: () => refused,
+
+    webhookId: webhook.id,
   }
 }

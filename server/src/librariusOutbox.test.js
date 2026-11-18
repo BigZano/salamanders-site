@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import * as fc from 'fast-check'
 import { COPY, createOutbox } from './librariusOutbox.js'
-import { createWebhookClient } from './librariusWebhook.js'
+import { WebhookError, createWebhookClient } from './librariusWebhook.js'
 import { Upstream } from './discordRoles.js'
 
 // Every id, name, link and token here is invented. The worker runs on fake timers and a fake clock, against a small model of
@@ -19,6 +19,7 @@ const MEMBER = '200000000000000401'
 const MEMBER_2 = '200000000000000402'
 const REPLIED = '200000000000000406'
 const MENTIONED = '200000000000000407'
+const OLD_HOOK = '200000000000000451' // a webhook that was replaced
 const SITE = 'https://site.example/librarius/200000000000000404'
 const AVATAR = 'https://cdn.discordapp.com/avatars/200000000000000401/0a1b2c3d.png'
 const T0 = Date.parse('2026-11-18T10:00:00.000Z')
@@ -37,7 +38,12 @@ function makeWorld() {
     calls: [], // every webhook call: { kind, at, thread, messageId, body, files }
     bot: [], // every call of the bot: { kind, ... }
     script: [], // what the next webhook requests answer: null (as Discord would), a response, or { throws, lands }
-    newestFails: [],
+    lookFails: [],
+    // What the worker holds in the store (ISO text or null), whether the lock is free for it, and what it did with the lock.
+    holds: { pausedUntil: null, globalUntil: null },
+    lockFree: true,
+    lockCalls: [],
+    looks: [],
     archived: false,
     locked: false,
     life: 0,
@@ -64,6 +70,15 @@ function makeWorld() {
   }
   const partOwner = (id) => [...w.parts.entries()].find(([, ids]) => ids.includes(id))?.[0] ?? null
 
+  /** What the store does with a hold: a time never moves back. */
+  w.hold = (hold) => {
+    for (const key of ['pausedUntil', 'globalUntil']) {
+      if (hold[key] === undefined) continue
+      const was = w.holds[key] === null ? -Infinity : Date.parse(w.holds[key])
+      if (asMs(hold[key]) > was) w.holds[key] = new Date(asMs(hold[key])).toISOString()
+    }
+  }
+
   w.enqueue = ({ kind = 'send', key, authorId = MEMBER, payload, nextAt = Date.now(), state = 'pending', attempts = 0 }) => {
     const id = String(w.nextEntry++)
     w.entries.set(id, { id, kind, messageKey: key ?? `${id}`.padStart(32, 'a'), authorId, payload: clone(payload), state, attempts, nextAt: asMs(nextAt), lastError: null })
@@ -75,6 +90,36 @@ function makeWorld() {
   }
 
   w.store = {
+    async takeWorkerLock() {
+      maybeFail('takeWorkerLock')
+      w.lockCalls.push('take')
+      return w.lockFree
+    },
+    async releaseWorkerLock() {
+      maybeFail('releaseWorkerLock')
+      w.lockCalls.push('release')
+    },
+    async outboxHold() {
+      maybeFail('outboxHold')
+      return { ...w.holds }
+    },
+    async noteBlock(id, { event, hold }) {
+      maybeFail('noteBlock')
+      const e = w.entries.get(id)
+      if (e === undefined || e.state !== 'sending') return
+      w.events.push({ at: Date.now(), actor: e.authorId, ...event })
+      if (hold !== undefined) w.hold(hold)
+    },
+    async sendTimesSince(since) {
+      maybeFail('sendTimesSince')
+      return [...w.entries.values()]
+        .filter((e) => ['send', 'edit'].includes(e.kind))
+        .flatMap((e) => e.payload.progress?.parts ?? [])
+        .map((part) => asMs(part.at))
+        .filter((t) => t >= asMs(since))
+        .sort((a, b) => a - b)
+        .map((t) => new Date(t).toISOString())
+    },
     async outboxInterrupted() {
       maybeFail('outboxInterrupted')
       return [...w.entries.values()].filter((e) => e.state === 'sending').map(view)
@@ -96,11 +141,12 @@ function makeWorld() {
       const e = w.entries.get(id)
       if (e !== undefined && e.state === 'sending') e.payload.progress = clone(progress)
     },
-    async outboxSet(id, { state, attempts, nextAt, error = null, messageState, event, queue = [] }) {
+    async outboxSet(id, { state, attempts, nextAt, error = null, messageState, event, queue = [], hold }) {
       maybeFail('outboxSet')
       const e = w.entries.get(id)
       // As the real store: an entry that is not sending is left as it is, and nothing is written for it.
       if (e === undefined || e.state !== 'sending') return
+      if (hold !== undefined) w.hold(hold)
       e.state = state
       if (attempts !== undefined) e.attempts = attempts
       if (nextAt !== undefined) e.nextAt = asMs(nextAt)
@@ -277,9 +323,15 @@ function makeWorld() {
 
   w.discord = {
     async newest(threadId, limit = 100) {
-      const fail = w.newestFails.shift()
-      if (fail !== undefined) throw fail
       return [...w.thread].reverse().slice(0, limit)
+    },
+    async messagesAfter(threadId, afterId, limit = 100) {
+      w.looks.push({ threadId, afterId, limit, at: Date.now() })
+      const fail = w.lookFails.shift()
+      if (fail !== undefined) throw fail
+      // The snowflake holds a time: what is after it is what came later, and a message with no time is taken as recent.
+      const since = Number(BigInt(afterId) >> 22n) + 1420070400000
+      return w.thread.filter((m) => m.timestamp === undefined || Date.parse(m.timestamp) > since).slice(0, limit)
     },
     async setArchived(threadId, archived) {
       w.bot.push({ kind: 'archive', threadId, archived, at: Date.now() })
@@ -332,7 +384,9 @@ let w
 let outbox
 beforeEach(() => {
   vi.useFakeTimers()
-  vi.setSystemTime(T0)
+  // A worker that starts waits the spacing before its first call (a call may have gone out just before the crash that is being recovered
+  // from), so the clock begins one spacing before T0 and the first call of a test is at T0.
+  vi.setSystemTime(T0 - SPACING)
   w = makeWorld()
 })
 afterEach(async () => {
@@ -349,7 +403,8 @@ async function run(ms = 60_000, over = {}) {
   outbox.start()
   // A worker that is going already is told of what was queued since.
   if (!fresh) outbox.kick()
-  await vi.advanceTimersByTimeAsync(ms)
+  // A worker that starts waits the spacing before its first call, so `ms` is counted from that first call.
+  await vi.advanceTimersByTimeAsync(fresh ? SPACING + ms : ms)
 }
 const later = (ms) => vi.advanceTimersByTimeAsync(ms)
 /** Sends a reply through the worker and answers the id of the message it made. */
@@ -398,17 +453,17 @@ describe('createOutbox: the options', () => {
 
   it.each([
     ['a store without a method', () => ({ ...ok(), store: { ...w.store, finishSend: undefined } }), 'store.finishSend must be a function.'],
-    ['no store', () => ({ ...ok(), store: undefined }), 'store.outboxInterrupted must be a function.'],
-    ...['outboxInterrupted', 'claimOutbox', 'outboxNextAt', 'outboxProgress', 'outboxSet', 'finishSend', 'finishEdit', 'finishDelete', 'outboxMessage', 'uploadsFor', 'knownPartIds', 'blockedSince'].map((name) => [
+    ['no store', () => ({ ...ok(), store: undefined }), 'store.takeWorkerLock must be a function.'],
+    ...['takeWorkerLock', 'releaseWorkerLock', 'outboxHold', 'noteBlock', 'sendTimesSince', 'outboxInterrupted', 'claimOutbox', 'outboxNextAt', 'outboxProgress', 'outboxSet', 'finishSend', 'finishEdit', 'finishDelete', 'outboxMessage', 'uploadsFor', 'knownPartIds', 'blockedSince'].map((name) => [
       `a store with no ${name}`,
       () => ({ ...ok(), store: { ...w.store, [name]: 'x' } }),
       `store.${name} must be a function.`,
     ]),
-    ...['send', 'edit', 'remove', 'recent'].map((name) => [`a webhook with no ${name}`, () => ({ ...ok(), webhook: { ...w.webhook, [name]: null } }), `webhook.${name} must be a function.`]),
+    ...['send', 'edit', 'remove'].map((name) => [`a webhook with no ${name}`, () => ({ ...ok(), webhook: { ...w.webhook, [name]: null } }), `webhook.${name} must be a function.`]),
     ['no webhook', () => ({ ...ok(), webhook: undefined }), 'webhook.send must be a function.'],
-    ['a webhook with no id', () => ({ ...ok(), webhook: { send() {}, edit() {}, remove() {}, recent() {}, id: undefined } }), 'webhook.id must be a Discord id.'],
-    ['a webhook with a bad id', () => ({ ...ok(), webhook: { send() {}, edit() {}, remove() {}, recent() {}, id: '12' } }), 'webhook.id must be a Discord id.'],
-    ...['setArchived', 'deleteMessage'].map((name) => [`a bot with no ${name}`, () => ({ ...ok(), discord: { ...w.discord, [name]: 1 } }), `discord.${name} must be a function.`]),
+    ['a webhook with no id', () => ({ ...ok(), webhook: { send() {}, edit() {}, remove() {}, id: undefined } }), 'webhook.id must be a Discord id.'],
+    ['a webhook with a bad id', () => ({ ...ok(), webhook: { send() {}, edit() {}, remove() {}, id: '12' } }), 'webhook.id must be a Discord id.'],
+    ...['setArchived', 'deleteMessage', 'messagesAfter'].map((name) => [`a bot with no ${name}`, () => ({ ...ok(), discord: { ...w.discord, [name]: 1 } }), `discord.${name} must be a function.`]),
     ['no bot', () => ({ ...ok(), discord: undefined }), 'discord.setArchived must be a function.'],
     ['a form that is no form', () => ({ ...ok(), form: 'html' }), 'form must be "v2" or "plain".'],
     ['no guild id', () => ({ ...ok(), guildId: undefined }), 'guildId must be a Discord id.'],
@@ -600,6 +655,19 @@ describe('the ceiling: 20 sends in 60 seconds', () => {
     expect(w.ours()).toHaveLength(24)
   })
 
+  it('counts the last 20 sends, not the first: a send that is late moves the window of the sends after it', async () => {
+    w.enqueue({ payload: sendPayload({ source: 'First.' }), nextAt: T0 })
+    for (let i = 1; i < 22; i++) w.enqueue({ payload: sendPayload({ source: `Reply ${i}.` }), nextAt: T0 + 40_000 })
+    await run(300_000)
+    const at = w.sends().map((c) => c.at - T0)
+    // The first at 0, the next 20 from 40 s, 1.5 s apart. The 21st is ready at 68.5 s and goes: the first left the window at 60 s. The
+    // 22nd must wait for the second, which was sent at 40 s: it goes at 100 s, and not at 70 s as it would if the window began at the first.
+    expect(at[0]).toBe(0)
+    expect(at[1]).toBe(40_000)
+    expect(at[20]).toBe(68_500)
+    expect(at[21]).toBe(100_000)
+  })
+
   it('counts sends only: edits and deletes neither fill the window nor wait for it', async () => {
     const first = await sentReply('First.')
     w.calls.length = 0
@@ -611,12 +679,121 @@ describe('the ceiling: 20 sends in 60 seconds', () => {
     expect(gaps().every((g) => g === 1500)).toBe(true)
   })
 
-  it('counts a send that failed, since Discord did', async () => {
-    for (let i = 0; i < 25; i++) w.script.push(answer(400, { code: 50035 }))
-    for (let i = 0; i < 25; i++) w.enqueue({ payload: sendPayload({ source: `Reply ${i}.` }) })
+  it('does not count a send that Discord refused: it made no message, so it fills no window', async () => {
+    // (A 403 ends an entry at once: a refusal that is tried again would send more than once.)
+    for (let i = 0; i < 25; i++) w.script.push(answer(403, { code: 50013 }))
+    for (let i = 0; i < 26; i++) w.enqueue({ payload: sendPayload({ source: `Reply ${i}.` }) })
     await run(200_000)
-    const at = w.sends().map((c) => c.at)
-    for (let i = 0; i + 20 < at.length; i++) expect(at[i + 20] - at[i]).toBeGreaterThanOrEqual(60_000)
+    expect(w.sends()).toHaveLength(26)
+    expect(gaps().every((g) => g === 1500)).toBe(true)
+    expect(w.ours()).toHaveLength(1)
+  })
+
+  describe('from what landed, as the store knows it, and from when it landed', () => {
+    const S = T0 - SPACING // the clock as the worker starts
+    /** `n` parts that landed `ago` ms before the worker starts, `step` ms apart, from the oldest. Entries done, with their parts in progress, as the store keeps them. */
+    const landedBefore = (n, ago, step = 1000) => {
+      for (let i = 0; i < n; i++) {
+        const at = new Date(S - ago + i * step).toISOString()
+        w.enqueue({ state: 'sent', payload: sendPayload({ progress: { form: 'v2', parts: [{ id: w.nextId(), at, attachments: [] }], inflight: null } }) })
+      }
+    }
+
+    it('rebuilds the window at start: with 20 sends in the last minute, the next waits until the oldest has left it', async () => {
+      landedBefore(20, 50_000)
+      w.enqueue({ payload: sendPayload({ source: 'Next.' }) })
+      await run(60_000)
+      // The oldest landed 50 s before the start: it leaves the window 10 s after it.
+      expect(w.sends().map((c) => c.at - S)).toEqual([10_000])
+    })
+
+    it('has no wait for 19 sends in the last minute, and counts the 20th: the next waits', async () => {
+      landedBefore(19, 50_000)
+      w.enqueue({ payload: sendPayload({ source: 'Twentieth.' }) })
+      w.enqueue({ payload: sendPayload({ source: 'Twenty-first.' }) })
+      await run(60_000)
+      expect(w.sends().map((c) => c.at - S)).toEqual([SPACING, 10_000])
+    })
+
+    it('keeps the last 20 of more than 20, and reads only the last minute', async () => {
+      landedBefore(25, 50_000)
+      landedBefore(5, 130_000)
+      w.enqueue({ payload: sendPayload({ source: 'Next.' }) })
+      await run(60_000)
+      // The 20th latest of the 25 landed at 50 s before the start minus 5 s... : 6th of the 25 (at index 5) + 60 s.
+      expect(w.sends().map((c) => c.at - S)).toEqual([-50_000 + 5_000 + 60_000])
+    })
+
+    it('asks the store for the last minute only', async () => {
+      const asked = []
+      const real = w.store.sendTimesSince
+      w.store.sendTimesSince = async (since) => (asked.push(since), real(since))
+      await run(1)
+      expect(asked).toEqual([S - 60_000])
+    })
+
+    it('counts a send whose answer was lost: it may have made a message', async () => {
+      landedBefore(19, 50_000)
+      w.script.push({ throws: true, lands: true })
+      w.enqueue({ payload: sendPayload({ source: 'Lost answer.' }) })
+      w.enqueue({ payload: sendPayload({ source: 'Next.' }) })
+      await run(60_000)
+      // The first is adopted after the look, at 5 s; the 20 sends in the window then make the next wait until the oldest has left it.
+      expect(w.sends().map((c) => c.at - S)).toEqual([SPACING, 10_000])
+    })
+
+    /** A webhook that is the real one but for what `over` says. */
+    const stub = (over) => ({ id: HOOK, send: (...a) => w.webhook.send(...a), edit: (...a) => w.webhook.edit(...a), remove: (...a) => w.webhook.remove(...a), ...over })
+
+    it('counts only a send: an edit that may have been made fills no place of the window', async () => {
+      landedBefore(19, 50_000)
+      const id = w.nextId()
+      w.messages.set(id, { id, origin: 'site', postId: THREAD, authorId: MEMBER, webhookId: HOOK, source: 'Before.', state: null, layout: { form: 'v2', replyTo: null, siteUrl: SITE, username: 'Invented Name', avatarUrl: AVATAR, images: [] } })
+      w.parts.set(id, [id])
+      w.enqueue({ kind: 'edit', key: id, payload: { postId: THREAD, source: 'After.', mentions: [] } })
+      w.enqueue({ payload: sendPayload({ source: 'Next.' }) })
+      const webhook = stub({
+        edit: async () => {
+          throw new WebhookError('Discord did not answer.', { unknown: true })
+        },
+      })
+      await run(60_000, { webhook })
+      // The edit is a call at the start, and the send follows it by the spacing: it waits for no window.
+      expect(w.sends().map((c) => c.at - S)).toEqual([2 * SPACING])
+    })
+
+    it('counts only what the webhook client says may have landed: another error of a send, with the same word, is no landing', async () => {
+      landedBefore(19, 50_000)
+      let sent = 0
+      const webhook = stub({
+        send: async (...args) => {
+          if (sent++ === 0) throw Object.assign(new Error('odd'), { unknown: true })
+          return w.webhook.send(...args)
+        },
+      })
+      w.enqueue({ payload: sendPayload({ source: 'Odd.' }) })
+      w.enqueue({ payload: sendPayload({ source: 'Next.' }) })
+      await run(60_000, { webhook })
+      // The odd error ended the first attempt of 'Odd.' at the start, and 'Next.' went after it, by the spacing, with no wait for the window.
+      expect(w.sends()[0].at - S).toBe(2 * SPACING)
+    })
+
+    it('counts a send when it lands, not when it begins: a slow one leaves the window a call later', async () => {
+      const slow = w.fetchImpl
+      w.fetchImpl = async (url, init) => {
+        const r = await slow(url, init)
+        await new Promise((resolve) => setTimeout(resolve, 1500))
+        return r
+      }
+      w.webhook = createWebhookClient({ fetchImpl: w.fetchImpl, url: `${API}/webhooks/${HOOK}/${TOKEN}`, apiBase: API, newest: w.discord.newest })
+      for (let i = 0; i < 21; i++) w.enqueue({ payload: sendPayload({ source: `Reply ${i}.` }) })
+      await run(120_000, { webhook: w.webhook })
+      const at = w.sends().map((c) => c.at - S)
+      // Each call takes 1500 ms and the next begins 1500 ms after its end. The first lands at S + 3000, so the 21st waits until S + 63000
+      // (it is ready at S + 61500, and a window counted from the first call's start would let it go then).
+      expect(at.slice(0, 20)).toEqual(Array.from({ length: 20 }, (_, i) => 1500 + 3000 * i))
+      expect(at[20]).toBe(63_000)
+    })
   })
 })
 
@@ -748,11 +925,11 @@ describe('no blind resend: a send that may have landed is looked for before it i
     expect([...w.messages.keys()]).toEqual([w.ours()[0].id])
   })
 
-  it('sends it again, once, when it did not land, 1500 ms after the first', async () => {
+  it('sends it again, once, when it did not land, 5 s after the first: the look waits for Discord to show what it made', async () => {
     w.script.push(lost)
     const id = w.enqueue({ payload: sendPayload() })
     await run()
-    expect(w.sends().map((c) => c.at - T0)).toEqual([0, 1500])
+    expect(w.sends().map((c) => c.at - T0)).toEqual([0, 5000])
     expect(w.ours()).toHaveLength(1)
     expect(w.entry(id).state).toBe('sent')
   })
@@ -774,7 +951,7 @@ describe('no blind resend: a send that may have landed is looked for before it i
     w.script.push(lost, landed)
     const id = w.enqueue({ payload: sendPayload() })
     await run()
-    expect(w.sends().map((c) => c.at - T0)).toEqual([0, 1500])
+    expect(w.sends().map((c) => c.at - T0)).toEqual([0, 5000])
     expect(w.ours()).toHaveLength(1)
     expect(w.entry(id)).toMatchObject({ state: 'sent', attempts: 1 })
   })
@@ -782,11 +959,11 @@ describe('no blind resend: a send that may have landed is looked for before it i
   it('goes to the ladder after two unknowns, and looks first at the next attempt, which sends once', async () => {
     w.script.push(lost, lost)
     const id = w.enqueue({ payload: sendPayload() })
-    await run(1500)
+    await run(5000)
     expect(w.entry(id)).toMatchObject({ state: 'pending', attempts: 1 })
-    expect(w.entry(id).nextAt).toBe(T0 + 1500 + 5000)
+    expect(w.entry(id).nextAt).toBe(T0 + 5000 + 5000)
     await later(10_000)
-    expect(w.sends().map((c) => c.at - T0)).toEqual([0, 1500, 6500])
+    expect(w.sends().map((c) => c.at - T0)).toEqual([0, 5000, 10_000])
     expect(w.ours()).toHaveLength(1)
     expect(w.entry(id).state).toBe('sent')
   })
@@ -813,6 +990,33 @@ describe('no blind resend: a send that may have landed is looked for before it i
     expect([...w.messages.keys()]).toEqual([first.id, second.id])
   })
 
+  it('does not take a part of a reply that is stored, though it is recent and has the same words', async () => {
+    const a = await sentReply('Same words.', {}, 2000)
+    w.script.push(lost)
+    const asked = []
+    const inner = w.store.knownPartIds
+    w.store.knownPartIds = async (ids) => (asked.push([...ids]), inner(ids))
+    const id = w.enqueue({ payload: sendPayload({ source: 'Same words.' }) })
+    outbox.kick()
+    await later(10_000)
+    expect(w.entry(id).state).toBe('sent')
+    expect(w.ours()).toHaveLength(2)
+    expect(w.ours()[0].id).toBe(a)
+    expect([...w.messages.keys()]).toEqual([a, w.ours()[1].id])
+    // The store is asked about the messages of our webhook that the look found, and about no other.
+    expect(asked).toEqual([[a]])
+  })
+
+  it('is not made to fail by what Discord puts in the page that is no message', async () => {
+    w.script.push(lost)
+    const real = w.discord.messagesAfter
+    w.discord.messagesAfter = async (...args) => [null, 7, 'x', undefined, ...(await real(...args))]
+    w.enqueue({ payload: sendPayload() })
+    await run(10_000)
+    expect(w.sends()).toHaveLength(2)
+    expect(w.ours()).toHaveLength(1)
+  })
+
   it('does not take a message of someone else with the same words', async () => {
     w.thread.push({ id: w.nextId(), webhook_id: '200000000000000999', content: `Hello there.\n-# <@${MEMBER}>`, attachments: [] })
     w.thread.push({ id: w.nextId(), webhook_id: null, content: `Hello there.\n-# <@${MEMBER}>`, attachments: [] })
@@ -823,7 +1027,7 @@ describe('no blind resend: a send that may have landed is looked for before it i
     expect(w.sends()).toHaveLength(2)
   })
 
-  it('takes the newest of two that match, and a match of any age in the last twenty', async () => {
+  it('takes the newest of two that match', async () => {
     const old = w.nextId()
     w.thread.push({ id: old, webhook_id: HOOK, content: '', components: [{ type: 17, components: [{ type: 10, content: `Hello there.\n-# <@${MEMBER}>` }] }], attachments: [] })
     w.script.push(landed)
@@ -848,22 +1052,21 @@ describe('no blind resend: a send that may have landed is looked for before it i
 
   it('does not send again when it cannot look: the attempt fails, and the next one looks', async () => {
     w.script.push(lost)
-    w.newestFails.push(new Upstream('Discord is unreachable.'))
+    w.lookFails.push(new Upstream('Discord is unreachable.'))
     const id = w.enqueue({ payload: sendPayload() })
-    await run(1500)
+    await run(5000)
     expect(w.sends()).toHaveLength(1)
     expect(w.entry(id)).toMatchObject({ state: 'pending', attempts: 1, lastError: 'Error: Discord is unreachable.' })
     await later(10_000)
-    expect(w.sends().map((c) => c.at - T0)).toEqual([0, 5000])
+    expect(w.sends().map((c) => c.at - T0)).toEqual([0, 10_000])
     expect(w.ours()).toHaveLength(1)
   })
 
   it('does not look at a thread for a send that was plainly refused, and sends again at the next attempt after looking', async () => {
     w.script.push(answer(400, { code: 50035 }))
-    const looks = vi.spyOn(w.discord, 'newest')
     w.enqueue({ payload: sendPayload() })
     await run(1000)
-    expect(looks).not.toHaveBeenCalled()
+    expect(w.looks).toEqual([])
   })
 })
 
@@ -886,26 +1089,44 @@ describe('a stop and a restart never lose a part and never send one twice', () =
     expect(w.parts.get(w.ours()[0].id)).toEqual(w.ours().map((m) => m.id))
   })
 
-  it('waits its 1500 ms after the stop before it makes a call that the one before it may have made just before', async () => {
+  it('waits its 1500 ms after the start before it makes a call that the one before it may have made just before', async () => {
+    // An entry left between two parts: the first is in Discord, and nothing says a second is on its way.
+    const first = w.nextId()
+    w.enqueue({ state: 'sending', payload: sendPayload({ source: THREE(), progress: { form: 'v2', parts: [{ id: first, at: new Date().toISOString(), attachments: [] }], inflight: null } }) })
+    outbox = make()
+    const startedAt = Date.now()
+    outbox.start()
+    await later(1499)
+    expect(w.calls).toEqual([])
+    await later(1)
+    expect(w.calls[0].at).toBe(startedAt + 1500)
+  })
+
+  it('waits 5 s after the part was noted before it looks for a part that may be in Discord, and sends it when it is not there', async () => {
     w.enqueue({ payload: sendPayload({ source: THREE() }) })
     await run(1000)
     await outbox.stop()
-    const stoppedAt = Date.now()
+    const noted = w.entries.get('1').payload.progress.inflightAt
     outbox = make()
     outbox.start()
     await later(20_000)
-    expect(w.calls[1].at - w.calls[0].at).toBeGreaterThanOrEqual(1500)
-    expect(w.calls[1].at).toBe(stoppedAt + 1500)
+    // The part was noted as about to be sent at T0, when the first part landed: the look waits until noted + 5 s, and finds nothing.
+    expect(w.looks[0].at).toBe(noted + 5000)
+    expect(w.calls[1].at).toBe(noted + 5000)
   })
 
-  it('does not wait for anything when it resumes nothing: its first call is at once', async () => {
+  it('waits its first call by the spacing even when it resumes nothing: a call may have gone out before the crash, and which is not known', async () => {
     await run(1000)
     await outbox.stop()
     outbox = make()
     w.enqueue({ payload: sendPayload() })
+    const startedAt = Date.now()
     outbox.start()
-    await later(0)
+    await later(1499)
+    expect(w.calls).toHaveLength(0)
+    await later(1)
     expect(w.calls).toHaveLength(1)
+    expect(w.calls[0].at).toBe(startedAt + 1500)
   })
 
   it('writes down where it is going to send before it does, so a part in flight is known', async () => {
@@ -935,7 +1156,7 @@ describe('a stop and a restart never lose a part and never send one twice', () =
     const id = w.enqueue({ payload: sendPayload({ source: TWO() }) })
     outbox = make({ webhook: w.webhook })
     outbox.start()
-    await later(500)
+    await later(2000)
     const stopped = outbox.stop()
     await later(2000)
     await stopped
@@ -1016,7 +1237,7 @@ describe('a stop and a restart never lose a part and never send one twice', () =
     // Let a worker run the part, then cut its notes back to what they were.
     outbox = make()
     outbox.start()
-    await later(1600)
+    await later(4600)
     expect(w.ours()).toHaveLength(2)
     entry.state = 'sending'
     entry.payload.progress = { form: 'v2', parts: [{ id: first.id, at: first.timestamp, attachments: [] }], inflight: 1 }
@@ -1379,12 +1600,12 @@ describe('blocked: never tried again, and two in an hour stop everything for an 
     expect(w.sends()).toHaveLength(3)
   })
 
-  it('reads back only the blocks of the last two hours, and in order', async () => {
+  it('reads back only the blocks of the last hour, and in order', async () => {
     w.events.push({ at: T0 - 3 * 3_600_000, action: 'blocked' }, { at: T0 - 3_000_000, action: 'blocked' }, { at: T0 - 100, action: 'send' })
     outbox = make()
     outbox.start()
     await later(10)
-    // One block in two hours is no pause, the old one does not count with it, and a send is no block.
+    // One block in the hour is no pause, the old one does not count with it, and a send is no block.
     expect(outbox.sendingPausedUntil()).toBeNull()
     await outbox.stop()
     w.events.push({ at: T0 - 600_000, action: 'blocked' })
@@ -1550,7 +1771,7 @@ describe('the links forward, which come last', () => {
     w.script.push(null, null, answer(400, { code: 200001 }))
     await run(30_000)
     expect(w.entry(id)).toMatchObject({ state: 'sent', lastError: null })
-    expect(w.events[0].note).toBe('2 parts, no links')
+    expect(w.events.find((e) => e.action === 'send').note).toBe('2 parts, no links')
     expect(outbox.sendingPausedUntil()).toBe(T0 + 13_000 + 3_600_000)
   })
 
@@ -1689,16 +1910,21 @@ describe('the store failing under the worker', () => {
   it('looks again in five seconds when it cannot claim an entry', async () => {
     w.storeFails.claimOutbox = [new Error('connection lost')]
     const id = w.enqueue({ payload: sendPayload() })
-    await run(4999)
+    outbox = make()
+    outbox.start()
+    await later(4999)
     expect(w.calls).toEqual([])
     await later(1)
     expect(w.entry(id).state).toBe('sent')
-    expect(w.calls[0].at).toBe(T0 + 5000)
+    // The clock began 1500 ms before T0, and the spacing from the start had passed by the time it looked again.
+    expect(w.calls[0].at).toBe(T0 - 1500 + 5000)
   })
 
   it('looks again in five seconds when it cannot read what is due next', async () => {
     w.storeFails.outboxNextAt = [new Error('connection lost')]
-    await run(100)
+    outbox = make()
+    outbox.start()
+    await later(100)
     w.enqueue({ payload: sendPayload(), nextAt: T0 + 2000 })
     await later(4899)
     expect(w.calls).toEqual([])
@@ -1738,8 +1964,8 @@ describe('the store failing under the worker', () => {
     expect(w.calls).toEqual([])
     await later(3000)
     expect(w.entry(id).state).toBe('sent')
-    // A call may just have gone out before the stop that left the entry: the first waits its 1500 ms, from when it began again.
-    expect(w.calls[0].at).toBe(T0 + 5000 + 1500)
+    // A call may just have gone out before the stop that left the entry: the first waits its 1500 ms, from when it began again (the clock began 1500 ms before T0).
+    expect(w.calls[0].at).toBe(T0 - 1500 + 5000 + 1500)
   })
 })
 
@@ -1908,9 +2134,9 @@ describe('an edit', () => {
 
   it('fails when the message is not there any more, or is not the site\'s to edit', async () => {
     const gone = edit('200000000000000999', 'After.')
-    w.messages.set('200000000000000998', { id: '200000000000000998', origin: 'discord', postId: THREAD, authorId: MEMBER, source: null, layout: null, state: null })
+    w.messages.set('200000000000000998', { id: '200000000000000998', origin: 'discord', postId: THREAD, authorId: MEMBER, webhookId: null, source: null, layout: null, state: null })
     const theirs = edit('200000000000000998', 'After.')
-    w.messages.set('200000000000000997', { id: '200000000000000997', origin: 'site', postId: THREAD, authorId: MEMBER, source: 'x', layout: null, state: null })
+    w.messages.set('200000000000000997', { id: '200000000000000997', origin: 'site', postId: THREAD, authorId: MEMBER, webhookId: HOOK, source: 'x', layout: null, state: null })
     const unknown = edit('200000000000000997', 'After.')
     await run(5000)
     expect(w.entry(gone)).toMatchObject({ state: 'failed', lastError: 'This reply is no longer there.' })
@@ -2180,13 +2406,12 @@ describe('what a message of the thread says, read as text', () => {
     w.script.push(lost)
     w.enqueue({ payload: sendPayload() })
     // The message that did land, as Discord may give it: no content field at all, the words in the components.
-    const real = w.discord.newest
-    w.discord.newest = async (...args) => {
+    const real = w.discord.messagesAfter
+    w.discord.messagesAfter = async (...args) => {
       const page = await real(...args)
       return [{ id: w.nextId(), webhook_id: HOOK, attachments: [], components: [{ type: 17, components: [{ type: 10, content: `Hello there.\n-# <@${MEMBER}>` }] }] }, ...page]
     }
-    w.webhook = createWebhookClient({ fetchImpl: w.fetchImpl, url: `${API}/webhooks/${HOOK}/${TOKEN}`, apiBase: API, newest: w.discord.newest })
-    await run(5000, { webhook: w.webhook })
+    await run(10_000)
     expect(w.sends()).toHaveLength(1)
     expect(w.entry('1').state).toBe('sent')
   })
@@ -2199,7 +2424,7 @@ describe('what a message of the thread says, read as text', () => {
     // A plain message of that content: the worker is V2, but the words are what is looked for.
     outbox = make()
     outbox.start()
-    await later(5000)
+    await later(10_000)
     expect(w.sends()).toHaveLength(1)
   })
 
@@ -2207,7 +2432,7 @@ describe('what a message of the thread says, read as text', () => {
     const u = w.addUpload()
     w.script.push({ throws: true, lands: true })
     const id = w.enqueue({ payload: sendPayload({ source: 'Before the picture.\n\n![alt](upload:1)\n\nAfter the picture.', uploads: [u] }) })
-    await run(5000)
+    await run(10_000)
     // The picture is a component between the two texts, and the message that landed is found by its words all the same.
     expect(w.sends()).toHaveLength(1)
     expect(w.entry(id).state).toBe('sent')
@@ -2220,7 +2445,7 @@ describe('what a message of the thread says, read as text', () => {
     }
     w.thread.push({ id: w.nextId(), webhook_id: HOOK, content: 5, attachments: [] })
     w.enqueue({ payload: sendPayload() })
-    await run(5000)
+    await run(10_000)
     expect(w.sends()).toHaveLength(2)
     expect(w.entry('1').state).toBe('sent')
   })
@@ -2303,7 +2528,8 @@ describe('what is left running', () => {
     outbox = make({ webhook: w.webhook })
     w.enqueue({ payload: sendPayload({ source: 'Second.' }) })
     outbox.start()
-    await later(100)
+    // (The first call of a worker is 1500 ms after its start, and takes 1000 ms here: the stop comes in the middle of it.)
+    await later(2000)
     const stopped = outbox.stop()
     w.enqueue({ payload: sendPayload({ source: 'Third.' }) })
     outbox.kick()
@@ -3084,7 +3310,7 @@ describe('never twice, never lost (property)', () => {
               outbox = make()
               outbox.start()
             } else if (a.type === 'storefail') (w.storeFails[a.name] ??= []).push(new Error('connection lost'))
-            else w.newestFails.push(new Upstream('Discord is unreachable.'))
+            else w.lookFails.push(new Upstream('Discord is unreachable.'))
           }
           for (let i = 0; i < 12; i++) await vi.advanceTimersByTimeAsync(1_200_000)
 
@@ -3238,4 +3464,732 @@ describe('edits and deletes never leave a part twice, nor a reply that is gone h
       { numRuns: Number(process.env.P6_RUNS ?? 100) },
     )
   }, 600_000)
+})
+
+describe('one worker sends at a time: the lock', () => {
+  const START = T0 - SPACING
+
+  it('takes the lock before it reads or sends anything', async () => {
+    const order = []
+    for (const name of ['takeWorkerLock', 'outboxHold', 'sendTimesSince', 'blockedSince', 'outboxInterrupted', 'claimOutbox']) {
+      const inner = w.store[name]
+      w.store[name] = async (...args) => (order.push(name), inner(...args))
+    }
+    w.enqueue({ payload: sendPayload() })
+    await run()
+    expect(order.slice(0, 5)).toEqual(['takeWorkerLock', 'outboxHold', 'sendTimesSince', 'blockedSince', 'outboxInterrupted'])
+    expect(order[5]).toBe('claimOutbox')
+    expect(w.ours()).toHaveLength(1)
+  })
+
+  it('does not send, nor read, when another worker holds it, and says so once', async () => {
+    w.lockFree = false
+    const told = []
+    const id = w.enqueue({ payload: sendPayload() })
+    const reads = vi.spyOn(w.store, 'outboxInterrupted')
+    outbox = make({ log: (line) => told.push(line) })
+    outbox.start()
+    await later(200_000)
+    expect(w.calls).toEqual([])
+    expect(reads).not.toHaveBeenCalled()
+    expect(w.entry(id).state).toBe('pending')
+    expect(told).toHaveLength(1)
+    expect(told[0]).toBe('Librarius outbox: another worker holds the outbox, so this one does not send.')
+  })
+
+  it('asks again every 30 s, and goes to work when the lock is let go', async () => {
+    w.lockFree = false
+    const id = w.enqueue({ payload: sendPayload() })
+    outbox = make()
+    outbox.start()
+    await later(29_999)
+    expect(w.lockCalls).toEqual(['take'])
+    await later(1)
+    expect(w.lockCalls).toEqual(['take', 'take'])
+    await later(30_000)
+    expect(w.lockCalls).toEqual(['take', 'take', 'take'])
+    expect(w.calls).toEqual([])
+    w.lockFree = true
+    await later(30_000)
+    expect(w.lockCalls).toHaveLength(4)
+    await later(5000)
+    expect(w.entry(id).state).toBe('sent')
+    expect(w.calls[0].at).toBe(START + 90_000 + 1500)
+  })
+
+  it('does not say again that another worker holds it when it loses the lock after it had it, and asks again', async () => {
+    const told = []
+    outbox = make({ log: (line) => told.push(line) })
+    outbox.start()
+    await later(100)
+    await outbox.stop()
+    w.lockFree = false
+    outbox.start()
+    await later(100)
+    expect(told).toHaveLength(1)
+  })
+
+  it('lets the lock go at a stop, after the work is done, and asks for it again at the next start', async () => {
+    w.enqueue({ payload: sendPayload() })
+    await run(10_000)
+    expect(w.lockCalls).toEqual(['take'])
+    await outbox.stop()
+    expect(w.lockCalls).toEqual(['take', 'release'])
+    outbox.start()
+    await later(100)
+    expect(w.lockCalls).toEqual(['take', 'release', 'take'])
+  })
+
+  it('lets the lock go for a worker that was never started, and a failure to let it go is no failure of the stop', async () => {
+    const told = []
+    outbox = make({ log: (line) => told.push(line) })
+    await outbox.stop()
+    expect(w.lockCalls).toEqual(['release'])
+    w.storeFails.releaseWorkerLock = [new Error('connection lost')]
+    outbox.start()
+    await later(100)
+    await expect(outbox.stop()).resolves.toBeUndefined()
+    expect(told.some((line) => line.includes('connection lost'))).toBe(true)
+  })
+
+  it('asks for the lock again when the store fails after it, since it holds it already', async () => {
+    w.storeFails.outboxHold = [new Error('connection lost')]
+    const id = w.enqueue({ payload: sendPayload() })
+    outbox = make()
+    outbox.start()
+    await later(20_000)
+    expect(w.lockCalls).toEqual(['take', 'take'])
+    expect(w.entry(id).state).toBe('sent')
+  })
+
+  it('says which webhook it sends through, for a route that refuses what it cannot edit', () => {
+    outbox = make()
+    expect(outbox.webhookId).toBe(HOOK)
+  })
+})
+
+describe('what a restart must not lose: the pause, the global hold, the blocks', () => {
+  const block = (code = 200000) => answer(400, { code, message: 'blocked' })
+  const START = T0 - SPACING
+
+  it('holds all sending until the pause that was in force when it stopped, and no longer', async () => {
+    w.holds.pausedUntil = new Date(START + 600_000).toISOString()
+    const id = w.enqueue({ payload: sendPayload() })
+    outbox = make()
+    outbox.start()
+    await later(10)
+    expect(outbox.sendingPausedUntil()).toBe(START + 600_000)
+    await later(599_000)
+    expect(w.calls).toEqual([])
+    await later(1000)
+    expect(w.entry(id).state).toBe('sent')
+    expect(w.calls[0].at).toBe(START + 600_000)
+    expect(outbox.sendingPausedUntil()).toBeNull()
+  })
+
+  it('knows a pause that is over for what it is', async () => {
+    w.holds.pausedUntil = new Date(START - 1).toISOString()
+    outbox = make()
+    outbox.start()
+    await later(10)
+    expect(outbox.sendingPausedUntil()).toBeNull()
+  })
+
+  it('holds every call until the global 429 that was in force, edits and deletes too', async () => {
+    w.holds.globalUntil = new Date(START + 20_000).toISOString()
+    w.enqueue({ payload: sendPayload() })
+    await run(30_000)
+    expect(w.calls[0].at).toBe(START + 20_000)
+  })
+
+  it('writes the pause with the second block within an hour, in the transaction that ends the entry, and not with the first', async () => {
+    w.script.push(block(), block())
+    w.enqueue({ payload: sendPayload({ source: 'Blocked A.' }) })
+    w.enqueue({ payload: sendPayload({ source: 'Blocked B.' }) })
+    const sets = []
+    const inner = w.store.outboxSet
+    w.store.outboxSet = async (id, patch) => (sets.push([id, patch.state, patch.hold]), inner(id, patch))
+    await run(10_000)
+    expect(sets).toEqual([
+      ['1', 'blocked', undefined],
+      ['2', 'blocked', { pausedUntil: T0 + 1500 + 3_600_000 }],
+    ])
+    expect(w.holds.pausedUntil).toBe(new Date(T0 + 1500 + 3_600_000).toISOString())
+    expect(w.holds.globalUntil).toBeNull()
+  })
+
+  it('is paused after a restart by the pause it wrote, whether or not the blocks are still read back', async () => {
+    w.script.push(block(), block())
+    w.enqueue({ payload: sendPayload({ source: 'Blocked A.' }) })
+    w.enqueue({ payload: sendPayload({ source: 'Blocked B.' }) })
+    await run(10_000)
+    const until = outbox.sendingPausedUntil()
+    await outbox.stop()
+    w.events.length = 0
+    outbox = make()
+    outbox.start()
+    await later(10)
+    expect(outbox.sendingPausedUntil()).toBe(until)
+  })
+
+  it('does not shorten a pause that was written when the blocks it read back would make a shorter one', async () => {
+    w.holds.pausedUntil = new Date(T0 + 3_000_000).toISOString()
+    w.events.push({ at: T0 - 1_000_000, action: 'blocked' }, { at: T0 - 900_000, action: 'blocked' })
+    outbox = make()
+    outbox.start()
+    await later(10)
+    expect(outbox.sendingPausedUntil()).toBe(T0 + 3_000_000)
+  })
+
+  it('reads the blocks of the last hour only: two that are an hour and a minute old are no pause', async () => {
+    w.events.push({ at: START - 3_660_000, action: 'blocked' }, { at: START - 3_650_000, action: 'blocked' })
+    outbox = make()
+    outbox.start()
+    await later(10)
+    expect(outbox.sendingPausedUntil()).toBeNull()
+    await outbox.stop()
+    w.events.push({ at: START - 3_000_000, action: 'blocked' })
+    outbox = make()
+    outbox.start()
+    await later(10)
+    expect(outbox.sendingPausedUntil()).toBeNull()
+  })
+
+  it('forgets the blocks it counted before a stop when it starts again, and counts what the store says', async () => {
+    w.script.push(block())
+    w.enqueue({ payload: sendPayload({ source: 'Blocked A.' }) })
+    await run(5000)
+    await outbox.stop()
+    w.events.length = 0
+    w.script.push(block())
+    w.enqueue({ payload: sendPayload({ source: 'Blocked B.' }) })
+    outbox.start()
+    await later(10_000)
+    // The first block is no longer counted, so the second is the only one: no pause.
+    expect(outbox.sendingPausedUntil()).toBeNull()
+  })
+
+  it('writes the global hold with a 429 that is global, and nothing for one that is not', async () => {
+    w.script.push(answer(429, { retry_after: 20, global: true }))
+    const id = w.enqueue({ payload: sendPayload() })
+    await run(100)
+    expect(w.holds.globalUntil).toBe(new Date(T0 + 20_000).toISOString())
+    expect(w.entry(id).state).toBe('pending')
+    await outbox.stop()
+    outbox = null
+    w.holds.globalUntil = null
+    w.script.push(answer(429, { retry_after: 20 }))
+    const second = w.enqueue({ payload: sendPayload({ source: 'Second.' }), nextAt: Date.now() })
+    await run(100)
+    expect(w.holds.globalUntil).toBeNull()
+    expect(w.entry(second).state).toBe('pending')
+  })
+
+  it('is held by the global 429 it wrote after a restart', async () => {
+    w.script.push(answer(429, { retry_after: 30, global: true }))
+    w.enqueue({ payload: sendPayload() })
+    await run(100)
+    await outbox.stop()
+    outbox = make()
+    w.enqueue({ payload: sendPayload({ source: 'Next.' }) })
+    outbox.start()
+    await later(10_000)
+    expect(w.sends()).toHaveLength(1)
+    await later(30_000)
+    expect(w.sends()[1].at).toBe(T0 + 30_000)
+    expect(w.ours()).toHaveLength(2)
+  })
+
+  describe('the block of the edit that adds the links forward', () => {
+    const linksBlocked = (code = 200000) => {
+      w.script.push(null, null, answer(400, { code }))
+      return w.enqueue({ payload: sendPayload({ source: TWO() }) })
+    }
+
+    it('is noted by the author of the entry, with the first part, and the reply is stored without its links', async () => {
+      const id = linksBlocked()
+      await run(30_000)
+      expect(w.entry(id).state).toBe('sent')
+      const noted = w.events.filter((e) => e.action === 'blocked')
+      expect(noted).toEqual([{ at: expect.any(Number), actor: MEMBER, action: 'blocked', postId: THREAD, messageId: w.ours()[0].id, note: 'links' }])
+      expect(w.holds.pausedUntil).toBeNull()
+    })
+
+    it('is read back after a restart, with the blocks of any other entry', async () => {
+      linksBlocked()
+      await run(30_000)
+      await outbox.stop()
+      w.script.push(answer(400, { code: 200000 }))
+      w.enqueue({ payload: sendPayload({ source: 'Blocked.' }) })
+      outbox = make()
+      outbox.start()
+      await later(10_000)
+      expect(outbox.sendingPausedUntil()).not.toBeNull()
+      expect(w.holds.pausedUntil).not.toBeNull()
+    })
+
+    it('writes the pause it may cause with the note, when it is the second block in the hour', async () => {
+      w.script.push(answer(400, { code: 200000 }))
+      w.enqueue({ payload: sendPayload({ source: 'Blocked first.' }) })
+      linksBlocked(200001)
+      await run(30_000)
+      expect(w.holds.pausedUntil).toBe(new Date(outbox.sendingPausedUntil()).toISOString())
+      expect(outbox.sendingPausedUntil()).not.toBeNull()
+    })
+
+    it('is not noted for a locked thread, which is no block of Discord’s moderation', async () => {
+      w.script.push(null, null, answer(403, { code: 50013 }))
+      const id = w.enqueue({ payload: sendPayload({ source: TWO() }) })
+      await run(30_000)
+      expect(w.entry(id).state).toBe('sent')
+      expect(w.events.filter((e) => e.action === 'blocked')).toEqual([])
+    })
+
+    it('is not counted for the breaker when it is a locked thread that refuses it: the next real block is the first', async () => {
+      w.script.push(null, null, answer(403, { code: 50013 }), answer(400, { code: 200000 }))
+      w.enqueue({ payload: sendPayload({ source: TWO() }) })
+      const blocked = w.enqueue({ payload: sendPayload({ source: 'Blocked.' }) })
+      await run(30_000)
+      expect(w.entry(blocked).state).toBe('blocked')
+      expect(outbox.sendingPausedUntil()).toBeNull()
+      expect(w.holds.pausedUntil).toBeNull()
+    })
+
+    it('is not made again, nor noted twice, when the store fails under the note: the links are given up, and the reply goes on', async () => {
+      const id = linksBlocked()
+      w.storeFails.noteBlock = [new Error('connection lost')]
+      await run(200_000)
+      expect(w.entry(id).state).toBe('sent')
+      expect(w.calls.filter((c) => c.kind === 'edit')).toHaveLength(1)
+      expect(w.ours()).toHaveLength(2)
+      expect(w.events.filter((e) => e.action === 'blocked')).toEqual([])
+    })
+  })
+})
+
+describe('the look for a part that may have landed: from when it began, after Discord has had time', () => {
+  const lost = { throws: true }
+  const snowflakeOf = (ms) => String(BigInt(ms - 1420070400000) << 22n)
+
+  it('reads the thread after the snowflake of five seconds before the send began, a hundred at most', async () => {
+    w.script.push(lost)
+    w.enqueue({ payload: sendPayload() })
+    await run(10_000)
+    expect(w.looks).toHaveLength(1)
+    // The note that the part is about to be sent is written as the worker begins (the spacing holds the call 1500 ms more), and the look reads from before it.
+    expect(w.looks[0]).toMatchObject({ threadId: THREAD, afterId: snowflakeOf(T0 - SPACING - 5000), limit: 100 })
+    expect(w.looks[0].at).toBe(T0 + 5000)
+  })
+
+  it('writes down when a part began and which webhook sends it, with the note that it is about to be sent', async () => {
+    w.enqueue({ payload: sendPayload({ source: TWO() }) })
+    const seen = []
+    const inner = w.store.outboxProgress
+    w.store.outboxProgress = async (entryId, progress) => (seen.push(JSON.parse(JSON.stringify(progress))), inner(entryId, progress))
+    await run(100)
+    // Written before the part is sent, with the time of the note and the webhook it will be sent through.
+    expect(seen[0]).toMatchObject({ inflight: 0, inflightAt: T0 - SPACING, webhookId: HOOK, parts: [] })
+    expect(seen[1]).toMatchObject({ inflight: null, webhookId: HOOK })
+    expect(seen[1].parts).toHaveLength(1)
+  })
+
+  it('does not take a message from before the look begins, though its words are the part’s', async () => {
+    w.script.push(lost)
+    w.thread.push({ id: w.nextId(), webhook_id: HOOK, content: `Hello there.\n-# <@${MEMBER}>`, timestamp: new Date(T0 - 60_000).toISOString(), attachments: [] })
+    const id = w.enqueue({ payload: sendPayload() })
+    await run(10_000)
+    expect(w.sends()).toHaveLength(2)
+    expect(w.entry(id).state).toBe('sent')
+  })
+
+  it('takes a message from after it began, and one from a few seconds before: the clocks may differ', async () => {
+    w.script.push({ throws: true, lands: true })
+    const id = w.enqueue({ payload: sendPayload() })
+    await run(10_000)
+    expect(w.sends()).toHaveLength(1)
+    expect(w.entry(id).state).toBe('sent')
+  })
+
+  it('takes the newest of the messages after it that match, and none of another webhook’s', async () => {
+    w.script.push(lost)
+    const other = { id: w.nextId(), webhook_id: OLD_HOOK, content: `Hello there.\n-# <@${MEMBER}>`, timestamp: new Date(T0 + 1000).toISOString(), attachments: [] }
+    w.thread.push(other)
+    const id = w.enqueue({ payload: sendPayload() })
+    await run(10_000)
+    expect(w.sends()).toHaveLength(2)
+    expect(w.entry(id).state).toBe('sent')
+    expect([...w.messages.keys()]).not.toContain(other.id)
+  })
+
+  it('waits 5 s after a send that may have landed before it looks, and counts from the end of the call', async () => {
+    w.script.push(lost)
+    const slow = w.fetchImpl
+    w.fetchImpl = async (url, init) => {
+      const r = await slow(url, init).catch((err) => {
+        throw err
+      })
+      return r
+    }
+    w.enqueue({ payload: sendPayload() })
+    await run(4999)
+    expect(w.looks).toEqual([])
+    await later(1)
+    expect(w.looks).toHaveLength(1)
+  })
+
+  it('looks from an hour back when the note of when the part began is missing', async () => {
+    const id = w.enqueue({ state: 'sending', payload: sendPayload({ progress: { form: 'v2', parts: [], inflight: 0 } }) })
+    await run(2000)
+    expect(w.looks).toHaveLength(1)
+    expect(w.looks[0].afterId).toBe(snowflakeOf(T0 - SPACING - 3_600_000 - 5000))
+    expect(w.entry(id).state).toBe('sent')
+  })
+
+  it('ends its wait at a stop: the part is looked for again at the next start', async () => {
+    w.script.push(lost)
+    const id = w.enqueue({ payload: sendPayload() })
+    await run(3000)
+    await outbox.stop()
+    expect(w.looks).toEqual([])
+    expect(w.entry(id).state).toBe('sending')
+    expect(w.entry(id).payload.progress.inflight).toBe(0)
+    outbox = make()
+    outbox.start()
+    await later(20_000)
+    expect(w.entry(id).state).toBe('sent')
+    // The first send did not land, and the second does.
+    expect(w.sends()).toHaveLength(2)
+    expect(w.ours()).toHaveLength(1)
+  })
+})
+
+describe('another webhook: a reply sent through one that the address was made again for', () => {
+  const edit = (key, source, over = {}) => w.enqueue({ kind: 'edit', key, payload: { postId: THREAD, source, mentions: [], ...over } })
+  const remove = (key, over = {}) => w.enqueue({ kind: 'delete', key, payload: { postId: THREAD, ...over } })
+  const botDeletes = () => w.bot.filter((b) => b.kind === 'delete').map((b) => b.messageId)
+  /** A reply that the old webhook sent: its parts are in the thread as that webhook's, and its message says so. */
+  async function oldReply(source = THREE(), hook = OLD_HOOK) {
+    const id = await sentReply(source)
+    w.messages.get(id).webhookId = hook
+    for (const m of w.thread) if (w.parts.get(id).includes(m.id)) m.webhook_id = hook
+    w.calls.length = 0
+    w.bot.length = 0
+    return id
+  }
+  const OLDER = "This reply was sent through an older webhook, so it can't be edited from the site. Delete it and post it again."
+
+  describe('an edit', () => {
+    it('is refused with what the member is told, before anything is sent, and the message is left as it was', async () => {
+      const id = await oldReply('Before.')
+      const e = edit(id, 'After.')
+      outbox.kick()
+      await later(5000)
+      expect(COPY.olderWebhook).toBe(OLDER)
+      expect(w.entry(e)).toMatchObject({ state: 'failed', lastError: OLDER })
+      expect(w.calls).toEqual([])
+      expect(botDeletes()).toEqual([])
+      expect(w.messages.get(id)).toMatchObject({ source: 'Before.', state: null })
+      // Nothing is queued to put it right: nothing was changed.
+      expect([...w.entries.values()]).toHaveLength(2)
+    })
+
+    it.each([
+      ['no webhook noted for it', null],
+      ['a webhook it does not send through', OLD_HOOK],
+    ])('is refused for a message with %s', async (_, hook) => {
+      const id = await oldReply('Before.', hook)
+      const e = edit(id, 'After.')
+      outbox.kick()
+      await later(5000)
+      expect(w.entry(e)).toMatchObject({ state: 'failed', lastError: OLDER })
+    })
+
+    it('is not refused for a message of the webhook it sends through', async () => {
+      const id = await sentReply('Before.')
+      const e = edit(id, 'After.')
+      outbox.kick()
+      await later(5000)
+      expect(w.entry(e).state).toBe('sent')
+    })
+
+    it('puts nothing back for an edit of such a message that was queued as a restore, and does not queue more', async () => {
+      const id = await oldReply('Before.')
+      const e = edit(id, 'ignored', { restore: true })
+      outbox.kick()
+      await later(5000)
+      expect(w.entry(e)).toMatchObject({ state: 'failed', lastError: OLDER })
+      expect([...w.entries.values()]).toHaveLength(2)
+    })
+
+    it('says what the route says, word for word, and in one place', () => {
+      outbox = make()
+      expect(COPY.olderWebhook).toBe(OLDER)
+    })
+  })
+
+  describe('a delete', () => {
+    it('removes every part through the bot, and none through the webhook, and the message goes from the store', async () => {
+      const id = await oldReply(THREE())
+      const parts = [...w.parts.get(id)]
+      remove(id)
+      outbox.kick()
+      await later(30_000)
+      expect(botDeletes()).toEqual(parts)
+      expect(w.calls).toEqual([])
+      expect(w.thread.filter((m) => parts.includes(m.id))).toEqual([])
+      expect(w.messages.has(id)).toBe(false)
+      expect(w.tombstones).toContain(id)
+      expect(w.bot.filter((b) => b.kind === 'delete').every((b) => b.threadId === THREAD)).toBe(true)
+    })
+
+    it('removes the parts of a message of the webhook it sends through with the webhook, and none with the bot', async () => {
+      const id = await sentReply(THREE())
+      const parts = [...w.parts.get(id)]
+      w.calls.length = 0
+      w.bot.length = 0
+      remove(id)
+      outbox.kick()
+      await later(30_000)
+      expect(w.calls.map((c) => [c.kind, c.messageId])).toEqual(parts.map((p) => ['remove', p]))
+      expect(botDeletes()).toEqual([])
+    })
+
+    it('removes the parts of a message with no webhook noted through the webhook, as it did before there was one to note', async () => {
+      const id = await oldReply('One.', null)
+      remove(id)
+      outbox.kick()
+      await later(10_000)
+      expect(w.calls.map((c) => c.kind)).toEqual(['remove'])
+      expect(botDeletes()).toEqual([])
+    })
+
+    it.each([
+      ['an old webhook', OLD_HOOK, 'bot'],
+      ['the webhook it sends through', HOOK, 'webhook'],
+      ['no webhook it knows of', null, 'webhook'],
+    ])('removes what a delete queued by the gateway names, sent by %s, through the %s, when the message is not stored', async (_, hook, through) => {
+      const a = w.nextId()
+      const b = w.nextId()
+      for (const id of [a, b]) w.thread.push({ id, webhook_id: hook ?? HOOK, content: 'x', attachments: [] })
+      const e = remove(a, { partIds: [a, b], webhookId: hook })
+      await run(30_000)
+      expect(w.entry(e).state).toBe('sent')
+      expect(w.thread.filter((m) => [a, b].includes(m.id))).toEqual([])
+      if (through === 'bot') {
+        expect(botDeletes()).toEqual([a, b])
+        expect(w.calls).toEqual([])
+      } else {
+        expect(w.calls.map((c) => c.kind)).toEqual(['remove', 'remove'])
+        expect(botDeletes()).toEqual([])
+      }
+    })
+
+    it('decides by what the delete says before what the message says: a delete that names its webhook knows best', async () => {
+      const id = await oldReply('One.', OLD_HOOK)
+      remove(id, { partIds: [id], webhookId: HOOK })
+      outbox.kick()
+      await later(10_000)
+      expect(w.calls.map((c) => c.kind)).toEqual(['remove'])
+      expect(botDeletes()).toEqual([])
+    })
+
+    it('does not remove through the webhook, whose answer would be "gone" for a message that is not its own, and so strand it', async () => {
+      const id = await oldReply('One.')
+      const [part] = w.parts.get(id)
+      remove(id)
+      outbox.kick()
+      await later(10_000)
+      expect(w.thread.some((m) => m.id === part)).toBe(false)
+      expect(w.calls).toEqual([])
+    })
+
+    it('does the removals it has done once, when the store fails and the entry is tried again', async () => {
+      const id = await oldReply(THREE())
+      const parts = [...w.parts.get(id)]
+      w.storeFails.finishDelete = [new Error('connection lost')]
+      remove(id)
+      outbox.kick()
+      await later(60_000)
+      expect(botDeletes()).toEqual(parts)
+      expect(w.messages.has(id)).toBe(false)
+    })
+  })
+
+  describe('an entry that ends for good after it sent a part', () => {
+    it('queues the delete of what it sent with the webhook it sent it through', async () => {
+      w.script.push(null, answer(400, { code: 200000 }))
+      const id = w.enqueue({ payload: sendPayload({ source: TWO() }) })
+      await run(10_000)
+      expect(w.entry(id).state).toBe('blocked')
+      const queued = [...w.entries.values()].find((e) => e.kind === 'delete')
+      const landed = w.entry(id).payload.progress.parts.map((p) => p.id)
+      expect(landed).toHaveLength(1)
+      expect(queued.messageKey).toBe(landed[0])
+      expect(queued.payload).toMatchObject({ postId: THREAD, partIds: landed, webhookId: HOOK })
+    })
+  })
+
+  describe('a reply that was begun through an old webhook, and is taken up again', () => {
+    const oldPart = (over = {}) => ({ id: w.nextId(), webhook_id: OLD_HOOK, content: '', components: [{ type: 17, components: [{ type: 10, content: 'old words' }] }], timestamp: new Date(T0).toISOString(), attachments: [], ...over })
+    const left = (parts, over = {}) =>
+      w.enqueue({
+        state: 'sending',
+        payload: sendPayload({ source: THREE(), progress: { form: 'v2', webhookId: OLD_HOOK, parts: parts.map((m) => ({ id: m.id, at: m.timestamp, attachments: [] })), inflight: null, ...over } }),
+      })
+
+    it('removes what the old webhook sent through the bot, and sends the whole reply again from its first part through this one', async () => {
+      const first = oldPart()
+      w.thread.push(first)
+      const id = left([first])
+      await run(30_000)
+      expect(botDeletes()).toEqual([first.id])
+      expect(w.thread.some((m) => m.id === first.id)).toBe(false)
+      expect(w.entry(id).state).toBe('sent')
+      expect(w.ours()).toHaveLength(3)
+      expect(w.ours().every((m) => m.webhook_id === HOOK)).toBe(true)
+      expect(w.calls.map((c) => c.kind)).toEqual(['send', 'send', 'send', 'edit'])
+      expect(w.calls.some((c) => c.messageId === first.id)).toBe(false)
+      const stored = [...w.messages.keys()]
+      expect(stored).toEqual([w.ours()[0].id])
+      expect(w.parts.get(stored[0])).toEqual(w.ours().map((m) => m.id))
+      expect(w.messages.get(stored[0]).webhookId).toBe(HOOK)
+      expect(w.entry(id).payload.progress.webhookId).toBe(HOOK)
+    })
+
+    it('removes every part it sent, and puts nothing of the old reply in the new one', async () => {
+      const a = oldPart()
+      const b = oldPart()
+      w.thread.push(a, b)
+      left([a, b], { inflight: null })
+      await run(30_000)
+      expect(botDeletes()).toEqual([a.id, b.id])
+      expect(w.sends()).toHaveLength(3)
+    })
+
+    it('begins again with no note of the links forward, so the new reply gets its own', async () => {
+      const first = oldPart()
+      w.thread.push(first)
+      left([first], { linked: true })
+      await run(30_000)
+      expect(w.calls.filter((c) => c.kind === 'edit')).toHaveLength(1)
+      expect(w.calls.at(-1).kind).toBe('edit')
+    })
+
+    it('looks for the part that may have been in Discord when it stopped, among the old webhook’s messages, and removes it too', async () => {
+      const lost = oldPart({ components: [{ type: 17, components: [{ type: 10, content: `Hello there.\n-# <@${MEMBER}>` }] }], timestamp: new Date(T0 - 1000).toISOString() })
+      const another = oldPart({ components: [{ type: 17, components: [{ type: 10, content: 'something else' }] }] })
+      const ours = oldPart({ webhook_id: HOOK, components: [{ type: 17, components: [{ type: 10, content: `Hello there.\n-# <@${MEMBER}>` }] }] })
+      w.thread.push(lost, another, ours)
+      const id = w.enqueue({ state: 'sending', payload: sendPayload({ progress: { form: 'v2', webhookId: OLD_HOOK, parts: [], inflight: 0, inflightAt: T0 - 1000 } }) })
+      await run(30_000)
+      expect(botDeletes()).toEqual([lost.id])
+      expect(w.thread.some((m) => m.id === another.id)).toBe(true)
+      expect(w.thread.some((m) => m.id === ours.id)).toBe(true)
+      expect(w.entry(id).state).toBe('sent')
+      expect(w.sends()).toHaveLength(1)
+    })
+
+    it('looks from when the part was noted, after Discord has had its 5 s, with the old webhook’s id', async () => {
+      const id = w.enqueue({ state: 'sending', payload: sendPayload({ progress: { form: 'v2', webhookId: OLD_HOOK, parts: [], inflight: 0, inflightAt: T0 + 1000 } }) })
+      await run(30_000)
+      expect(w.looks[0].afterId).toBe(String(BigInt(T0 + 1000 - 5000 - 1420070400000) << 22n))
+      expect(w.looks[0].at).toBe(T0 + 6000)
+      expect(w.entry(id).state).toBe('sent')
+    })
+
+    it('looks from an hour back when it was not noted when the part began', async () => {
+      w.enqueue({ state: 'sending', payload: sendPayload({ progress: { form: 'v2', webhookId: OLD_HOOK, parts: [], inflight: 0 } }) })
+      await run(30_000)
+      expect(w.looks[0].afterId).toBe(String(BigInt(T0 - SPACING - 3_600_000 - 5000 - 1420070400000) << 22n))
+    })
+
+    it('sends on, with no removal, when the part that may have been sent is not in Discord', async () => {
+      const id = w.enqueue({ state: 'sending', payload: sendPayload({ progress: { form: 'v2', webhookId: OLD_HOOK, parts: [], inflight: 0, inflightAt: T0 - 1000 } }) })
+      await run(30_000)
+      expect(botDeletes()).toEqual([])
+      expect(w.entry(id).state).toBe('sent')
+      expect(w.ours()).toHaveLength(1)
+    })
+
+    it('does not remove a part twice when the store fails after one removal, nor send before they are all gone', async () => {
+      const a = oldPart()
+      const b = oldPart()
+      w.thread.push(a, b)
+      const inner = w.discord.deleteMessage
+      const tried = []
+      let failed = false
+      w.discord.deleteMessage = async (threadId, id) => {
+        tried.push(id)
+        if (id === b.id && !failed) {
+          failed = true
+          throw new Upstream('Discord is unreachable.')
+        }
+        return inner(threadId, id)
+      }
+      const id = left([a, b])
+      await run(60_000)
+      expect(tried).toEqual([a.id, b.id, b.id])
+      expect(w.entry(id).state).toBe('sent')
+      expect(w.ours()).toHaveLength(3)
+    })
+
+    it('goes on as before when the webhook is the one that began it: nothing is removed, and no part is sent again', async () => {
+      const first = oldPart({ webhook_id: HOOK })
+      w.thread.push(first)
+      w.enqueue({ state: 'sending', payload: sendPayload({ source: THREE(), progress: { form: 'v2', webhookId: HOOK, parts: [{ id: first.id, at: first.timestamp, attachments: [] }], inflight: null } }) })
+      await run(30_000)
+      expect(botDeletes()).toEqual([])
+      expect(w.sends()).toHaveLength(2)
+    })
+
+    it('treats a reply with no webhook noted as one of this webhook (an entry from before it was noted)', async () => {
+      const first = oldPart({ webhook_id: HOOK })
+      w.thread.push(first)
+      w.enqueue({ state: 'sending', payload: sendPayload({ source: THREE(), progress: { form: 'v2', parts: [{ id: first.id, at: first.timestamp, attachments: [] }], inflight: null } }) })
+      await run(30_000)
+      expect(botDeletes()).toEqual([])
+      expect(w.sends()).toHaveLength(2)
+    })
+
+    it('stops being held to the old webhook once it has begun again: the note is this webhook’s, written with the removal', async () => {
+      const first = oldPart()
+      w.thread.push(first)
+      const id = left([first])
+      const seen = []
+      const inner = w.store.outboxProgress
+      w.store.outboxProgress = async (entryId, progress) => (seen.push(JSON.parse(JSON.stringify(progress))), inner(entryId, progress))
+      await run(30_000)
+      const begun = seen.find((p) => p.parts.length === 0 && p.webhookId === HOOK)
+      expect(begun).toBeDefined()
+      expect(begun.inflight).toBeNull()
+      expect(begun.done).toContain(`bot:${first.id}`)
+      expect('linked' in begun).toBe(false)
+      expect(w.entry(id).state).toBe('sent')
+    })
+  })
+})
+
+describe('a kick that comes while the worker is finishing', () => {
+  it('is not lost: an entry queued after the worker saw nothing due, and before it was done, is taken up', async () => {
+    outbox = make()
+    const inner = w.store.outboxNextAt
+    let release
+    let gated = false
+    w.store.outboxNextAt = async () => {
+      const out = await inner()
+      if (!gated) {
+        gated = true
+        await new Promise((resolve) => (release = resolve))
+      }
+      return out
+    }
+    outbox.start()
+    await later(10)
+    // The worker has read that nothing is due, and has not yet finished.
+    const id = w.enqueue({ payload: sendPayload() })
+    outbox.kick()
+    release()
+    await later(10_000)
+    expect(w.entry(id).state).toBe('sent')
+  })
 })
