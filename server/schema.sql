@@ -362,3 +362,68 @@ create table if not exists librarius_sync (
   last_ok_at   timestamptz,
   last_error   text
 );
+
+-- What the site sends to Discord (batch 2, librariusOutbox.js): a reply, an edit or a delete is a row here before anything
+-- is sent, so that a restart loses none of them and the worker can tell what it had begun. message_key names the message:
+-- a random key for a reply that has no id yet (its id is its first part's, once Discord has made it), the message's id for
+-- an edit or a delete. payload is what the worker needs, and what it has done so far (payload.progress). A row is never
+-- sent twice: see the module.
+create table if not exists librarius_outbox (
+  id           bigserial primary key,
+  kind         text not null check (kind in ('send', 'edit', 'delete')),
+  message_key  text not null,
+  author_id    bigint not null,
+  payload      jsonb not null,
+  state        text not null default 'pending' check (state in ('pending', 'sending', 'sent', 'blocked', 'failed')),
+  attempts     int not null default 0,
+  next_at      timestamptz not null default now(),
+  last_error   text,
+  created_at   timestamptz not null default now()
+);
+
+create index if not exists librarius_outbox_due_idx on librarius_outbox (next_at) where state = 'pending';
+create index if not exists librarius_outbox_key_idx on librarius_outbox (message_key);
+
+-- The Discord messages a site reply was sent as, in order: discord_id is the id of each, and message_id is the first one's,
+-- which is the reply's own id. Only a finished reply has rows here; they are how a part deleted or reacted to in Discord
+-- is known for a part of a reply of the site.
+create table if not exists librarius_parts (
+  message_id  bigint not null,
+  part_index  smallint not null,
+  discord_id  bigint primary key,
+  unique (message_id, part_index)
+);
+
+-- The pictures of a reply that is being written, held until it is sent or an hour has passed.
+create table if not exists librarius_uploads (
+  id            bigserial primary key,
+  author_id     bigint not null,
+  name          text not null,
+  content_type  text not null,
+  bytes         bytea not null,
+  created_at    timestamptz not null default now()
+);
+
+-- A note of what the site did in the Librarius (a reply sent, edited or deleted, one Discord blocked, one deleted in
+-- Discord), for the moderators. It never holds the text of a reply.
+create table if not exists librarius_events (
+  id          bigserial primary key,
+  at          timestamptz not null default now(),
+  actor_id    bigint not null,
+  action      text not null,
+  post_id     bigint,
+  message_id  bigint,
+  note        text
+);
+
+create index if not exists librarius_events_action_idx on librarius_events (action, at);
+
+-- librarius_messages exists once batch 1 is live, so these come as their own alter statements. origin says who made a
+-- message: 'discord' (a person in Discord) or 'site' (the outbox). A site message keeps the extended markdown it was
+-- written in (source) and how it was laid out (layout: the form, the reply link, the button link, the pictures), which an
+-- edit needs to cut it as it was. state is null, 'sending' while an edit or a delete is on its way, or 'blocked' when
+-- Discord refused an edit.
+alter table librarius_messages add column if not exists origin text not null default 'discord' check (origin in ('discord', 'site'));
+alter table librarius_messages add column if not exists source text;
+alter table librarius_messages add column if not exists state text check (state in ('sending', 'blocked'));
+alter table librarius_messages add column if not exists layout jsonb;

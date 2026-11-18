@@ -20,6 +20,7 @@
  * librarius_sync column name taken from SYNC_COLUMNS.
  */
 import { createInTx } from './inTx.js'
+import { createOutboxStore } from './librariusOutboxStore.js'
 import { applyReaction, attachmentUrl } from './librariusParse.js'
 
 const SNOWFLAKE = /^\d{17,20}$/
@@ -650,5 +651,8 @@ export function createLibrariusStore(pool) {
     async pruneTombstones(before) {
       await pool.query('delete from librarius_tombstones where deleted_at < $1', [needTime(before, 'before')])
     },
+
+    // What the site sends to Discord, and the messages it made there (batch 2): the outbox's own methods.
+    ...createOutboxStore(pool),
   }
 }
