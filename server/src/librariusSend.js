@@ -8,7 +8,7 @@
  *
  * validateReply({ source, replyTo, mentions, uploads }, { form, automod, mentionCap, ownUploadIds, authorId, siteUrl })
  *   → Promise of { ok: true, clean } | { ok: false, status, error, rule?, match? }. It is async because the regular expressions of the
- *   rules run in a thread of their own (see scanInWorker), which it waits for without holding up the server.
+ *   rules run in a child process of their own (see createRegexRunner), which it waits for without holding up the server.
  *   The first argument is what the writer sent, and may be anything: a body that is not a reply, or a field of the wrong kind,
  *   is refused like any other reply that cannot be sent, never thrown. The options are the caller's, and a wrong one is a
  *   TypeError (a wrong kind of value) or a RangeError (a wrong value), before the reply is looked at (a rejection of the promise).
@@ -19,8 +19,9 @@
  *     plain function has no `regex`, and no pattern is run for it). `mentionCap`:
  *     the most mentions, 10 at most and 10 by default; the least of it and that of `automod` holds. `ownUploadIds`: a list or
  *     a Set of the ids of the files the writer may use. `authorId` and `siteUrl` are the writer's and the link of the "Open
- *     On Site" button, which the budget counts (the footer takes room); by default the longest they can be, so that a reply
- *     that passes never goes over once they are known.
+ *     On Site" button, and have no default: the budget counts them (the footer takes room), and the text that is checked is the one
+ *     that is sent, which is cut the same way only for the same two (a TypeError when either is not a string; the form says whether it
+ *     is a Discord id and an https link). The caller gives the ones the send will use.
  *   The checks run in this order, and the first to fail answers (the copy is the error):
  *   1. Nothing to send, 400: no text, or only whitespace, or only what shows nothing. "Write something first."
  *   2. Too long, 413: a source of more than MAX_SOURCE (16,000) UTF-16 units is refused before it is parsed, and so is one
@@ -42,28 +43,36 @@
  *      that was sent, so it points into the text the writer sees. What is sent is not the text that was written (a picture
  *      written inside a line is sent as a file and leaves nothing in the line, so `zo![](upload:1)rp` is "zorp" in the message,
  *      and in the cell of a table or a note the same), and Discord's own AutoMod does not filter what a webhook posts, so the
- *      rules are run over each message of the reply too: over the contents of the Text Displays of a V2 message (each on its
+ *      keywords are run over each message of the reply too: over the contents of the Text Displays of a V2 message (each on its
  *      own, and joined by a line end as the fallback shows them, so that the two forms refuse the same replies), or the text of a
  *      plain one, without the lines that the site writes there (the line of the
  *      message it answers, the mark `**2/3**` of a part, the footer) and the label of the button. A hit there that the source did
  *      not have is the same refusal with `match: null`: the text it is in is not the writer's, so the source has no place for it
- *      (the AST has no positions to say which picture it was). Then the regular expressions, over the source and the messages
- *      together, in the one budget of REGEX_BUDGET_MS. A pattern that matches is the same refusal, `match` the place in the source
- *      when it was found in the source and null when in a message. A reply that could not be checked, because a pattern was not
- *      done in the budget or the source is over 10,000 characters and a pattern has to run, is 422 with the error "This reply
- *      couldn't be checked against the server's rules. Try a shorter one." and no `rule`.
+ *      (the AST has no positions to say which picture it was). The source and each of those texts are also read with each masked
+ *      link `[text](address)` put by its text (unmasked()), when that is not the same text: `[zo](https://e.com)rp` shows "zorp", and
+ *      Discord's own reading of it, with the brackets, would not call it one. Those hits have `match: null` too. Then the regular
+ *      expressions, over the texts that are sent only (they are at most 4,000 characters each, where the source is up to 16,000, and
+ *      the time of a pattern with several `.*` grows with the 4th power of its text), in the one budget of REGEX_BUDGET_MS. A pattern
+ *      that matches is the same refusal, with `match: null`. A reply that could not be checked is 422 with the error "This reply
+ *      couldn't be checked against the server's rules. Try a shorter one." and no `rule`: a pattern was not done in the budget (or
+ *      the child it runs in did not answer, or was too busy to be asked), or a text folds to more than it may, which is to more than 4
+ *      times its length (1,000 at least), or to more than 64,000 characters more than its text, in all the texts of the reply: folding
+ *      a text of characters that decompose to 18 each (U+FDFA) would hold up the server for most of a second.
  *   `clean` is { source, replyTo, mentions, uploads }, all copies: the source with every NUL and every lone half of a pair
  *   replaced by U+FFFD (Postgres cannot store them), one for one; `replyTo` as { authorId, url } or null; `mentions` the ids
  *   of the people mentioned, in the order they are first mentioned; `uploads` as it was.
  *
- * automodMatcher(rules, { memberRoleIds, channelIds, isAdmin, log }) → (text) => null | { rule, start, end }, with `.regex` and `.mentionCap`
+ * automodMatcher(rules, { memberRoleIds, channelIds, isAdmin, log }) → (text, spend) => null | { rule, start, end }, with `.regex` and `.mentionCap`
  *   `rules` are the guild's AutoMod rules as Discord gives them. `memberRoleIds` are the roles of the member, `channelIds` the
  *   ids of the places the reply goes to (the forum, and its category and post if they are known), `isAdmin` that the member
  *   holds Administrator or Manage Server, for whom Discord applies no rule (so no rule is applied here). `log` (console.error)
  *   is given a line, once for each rule and never with a pattern or a text, when a regular expression of the rule is skipped. The
  *   function that comes back answers for one text, by the keywords of the rules only: the first rule, in the order given, that
- *   blocks it, as its name and where in `text` (the text is a string and `start` < `end` ≤ its length). Its `regex(texts)` answers
- *   for the regular expressions, async: for a list of texts (the source first), null when no pattern matches one, { rule, text,
+ *   blocks it, as its name and where in `text` (the text is a string and `start` < `end` ≤ its length). It throws Unfoldable for a text
+ *   that folds to more than 4 times its length (1,000 at least) or to more than `spend.left` characters more than it is, where `spend`
+ *   is { left } shared by the texts of one reply (64,000 for a call that is not given one), which it takes from; a rule with no keyword
+ *   to look for does not fold the text. Its `regex(texts)` answers
+ *   for the regular expressions, async: for a list of texts, null when no pattern matches one, { rule, text,
  *   start, end } for the first that does (`text` the place of the text in the list, the first text that any pattern matches, and
  *   in it the first rule), or { unchecked: true } when it could not be told: a text is over 10,000 characters, or the patterns were
  *   not done within REGEX_BUDGET_MS (250 ms) for all the texts together, or an answer came in later than that, even one that said
@@ -96,21 +105,24 @@
  *     - an allow list never lets a match go that it does not wholly cover, and an entry that is empty, or only stars, lets
  *       nothing go; a keyword of nothing, or only stars, matches nothing.
  *   - Mention spam (type 5) is a cap, not a match: min(10, `mention_total_limit` - 1), or 0 if the limit is not a whole number.
- *   - `regex_patterns` are Rust's, as Discord says, and run as JavaScript's in Unicode mode and in any case, in ONE worker thread for
- *     the whole process (scanInWorker, and the file librariusRegexWorker.js, which only calls scanPatterns), so that a text made
- *     to be slow never holds up the server. A pattern is first read by translatePattern(): a leading `(?i)`, `\A`, `\z`, `\pL` and
- *     `.` are written as JavaScript has them, and a pattern that cannot be read the same way (`\b`, `\w`, `\d`, a class of POSIX, ...)
- *     is skipped, with no other reading to fall back on, and the rule is named once in the log; automodUnchecked(rules) lists those
- *     rules so that the people who manage the server can be told what the site cannot check. An empty match is no match. The allow
- *     list does not let a match of a pattern go. When the budget is over the worker is ended (and not waited for) and the next
- *     reply gets a new one, since a regular expression that runs long cannot be stopped from inside; the reply that ran over is
- *     refused, as is one with a text over the cap: failing open would let through what a rule may have blocked.
+ *   - `regex_patterns` are Rust's, as Discord says, and run as JavaScript's in Unicode mode and in any case, in ONE child process for
+ *     the whole server (createRegexRunner, and the file librariusRegexWorker.js, which only calls answerJob), so that a text made
+ *     to be slow never holds up the server. A pattern is first read by translatePattern(): a leading `(?i)`, `\A`, `\z`, `\pL`, `.`,
+ *     `\s` and `\S` are written as JavaScript has them, and a pattern that cannot be read the same way (`\b`, `\w`, `\d`, a class of
+ *     POSIX, a group of flags with an `s`, ...) is skipped, with no other reading to fall back on, and the rule is named once in the
+ *     log; automodUnchecked(rules) lists those rules so that the people who manage the server can be told what the site cannot check.
+ *     An empty match is no match. The allow list does not let a match of a pattern go. When the budget is over the child is KILLED
+ *     (SIGKILL, which stops a regular expression that is running, on Node and on Bun, where a worker thread that is terminated runs it
+ *     to its end) and the next reply gets a new one; the reply that ran over is refused, as is one with a text over the cap: failing
+ *     open would let through what a rule may have blocked.
  *
  * automodUnchecked(rules) → the names of the rules that are on, each once and in the order of the rules, with a regular expression that
  *   translatePattern() gives up on, which the site cannot check (for the people who manage the server to be told of).
- * translatePattern(source) → the JavaScript source for a pattern of Rust's, or null; scanPatterns(job) and scanInWorker(job) are the
- *   job of the worker thread, run in it and handed to it. shownBy(parts, { reply, footer }) → the texts that the messages of a reply
- *   show of the reply itself (see validateReply). All four are exported for the worker file and for the tests.
+ * translatePattern(source) → the JavaScript source for a pattern of Rust's, or null; scanPatterns(job) is the job of the child
+ *   process, run by answerJob(job) (for the worker file) and handed to it by scanInWorker(job), which createRegexRunner(spawnChild)
+ *   makes for the child that spawnRegexWorker() starts. shownBy(parts, { reply, footer }) → the texts that the messages of a reply
+ *   show of the reply itself (see validateReply); unmasked(text) → the text with its masked links put by their texts; Unfoldable is
+ *   what the matcher throws for a text that folds to more than it may. All of them are exported for the worker file and for the tests.
  *
  * cleanName(name) → the name a reply is sent under: at most 80 characters, at least 1. Only the first 400 UTF-16 units of the
  *   name are read (the names of Discord have at most 32). Controls, format characters (zero-width ones, direction marks, the joiner
@@ -119,16 +131,25 @@
  *   nothing taken out), and again for what taking them out joins, then the name is trimmed and cut to 80 UTF-16 units, never
  *   in the middle of a pair. What is left of nothing is "Member", and so is what is no text.
  */
-import { Worker } from 'node:worker_threads'
+import { spawn } from 'node:child_process'
+import { fileURLToPath } from 'node:url'
 import { parse, walk } from './librariusMarkdown.js'
 import { DEFAULT_FORM, limitFor, toDiscord } from './librariusForm.js'
 
 export const MAX_SOURCE = 16_000
 export const MENTION_CAP = 10
 const MAX_UPLOADS = 10
-// How long all the regular expressions of one reply may take together, from the moment the work is handed over to the worker.
+// How long all the regular expressions of one reply may take together, from the moment the work is handed to a child process that is ready.
 const REGEX_BUDGET_MS = 250
+// How long a new child process has to say that it is ready, which the budget of a job does not count; and how many jobs wait for the one that runs.
+const REGEX_READY_MS = 2_000
+const REGEX_MAX_WAITING = 8
 const REGEX_MAX_INPUT = 10_000
+// How far folding may grow a text: to FOLD_RATIO times its length (and to FOLD_FLOOR when it is short), and by FOLD_TOTAL characters in all
+// the texts of one reply. Decomposing a character gives up to 18 (U+FDFA), so that a text made of them is 18 times as long to fold.
+const FOLD_RATIO = 4
+const FOLD_FLOOR = 1_000
+const FOLD_TOTAL = 64_000
 // How many characters a `*` inside a keyword may stand for.
 const MAX_GAP = 60
 const NAME_MAX = 80
@@ -138,10 +159,6 @@ const NAME_READ = 400
 const FALLBACK_NAME = 'Member'
 const KEYWORD = 1
 const MENTION_SPAM = 5
-
-// What a message may hold, at its longest: so that a reply that passes is not over once the real ones are known.
-const WORST_ID = '9'.repeat(20)
-const WORST_URL = `https://${'a'.repeat(192)}`
 
 const COPY = {
   empty: 'Write something first.',
@@ -160,8 +177,10 @@ const listOf = (v) => (Array.isArray(v) ? v : [])
 
 // Whitespace, the line ends included, but not the zero-width characters (which are format characters, and show nothing).
 const SPACE = /[\u0009-\u000d\u0085\p{Zs}\p{Zl}\p{Zp}]/u
-// What shows nothing, and what Discord's markdown takes out of a message when it shows it. Whitespace is looked for first.
-const IGNORABLE = /[\p{Cf}\p{Cc}\p{Cs}*_~|`\\]/u
+// What shows nothing, and what Discord's markdown takes out of a message when it shows it. Whitespace is looked for first. The default
+// ignorables of Unicode are what a renderer is told to show as nothing, and take in the fillers of Hangul (U+115F, U+1160, U+3164 and
+// U+FFA0) and the characters that are not assigned yet; the blank of Braille (U+2800) shows nothing and is not one of them.
+const IGNORABLE = /[\p{Cf}\p{Cc}\p{Cs}\p{Default_Ignorable_Code_Point}\u{2800}*_~|`\\]/u
 const MARK = /\p{M}/u
 const LETTER = /^\p{L}$/u
 // Scripts written without a space between words: a letter of one is no part of a word of another.
@@ -171,6 +190,9 @@ const DROPPED = 'dropped'
 const SPACED = 'spaced'
 const MODES = [DROPPED, SPACED]
 
+// Decomposed (NFKD), then lower, upper, lower: U+1E9E (capital sharp s) has the lower case `ß`, which only the upper case `SS` turns into `ss`.
+const decomposed = (text) => text.normalize('NFKD').toLowerCase().toUpperCase().toLowerCase()
+
 /**
  * → { s, from, to }: the text as it is compared. Every character is decomposed (NFKD), put in one case, and left out if it
  * is a combining mark. Whitespace becomes one space for a run of it. What shows nothing (IGNORABLE) is left out in the
@@ -179,20 +201,29 @@ const MODES = [DROPPED, SPACED]
  */
 function fold(text, mode) {
   let s = ''
+  // Whether `s` ends in a space, kept apart: asking the string itself flattens it, again for every character of a text made of spaces.
+  let spaced = false
   const from = []
   const to = []
   const put = (c, start, end) => {
     s += c
-    from.push(...Array(c.length).fill(start))
-    to.push(...Array(c.length).fill(end))
+    spaced = c === ' '
+    from.push(start)
+    to.push(end)
+    // A character of two units has the place of its first for its second.
+    if (c.length > 1) {
+      from.push(start)
+      to.push(end)
+    }
   }
   let start = 0
   for (const ch of text) {
     const end = start + ch.length
-    // Lower, upper, lower: U+1E9E (capital sharp s) has the lower case `ß`, which only the upper case `SS` turns into `ss`.
-    for (const c of ch.normalize('NFKD').toLowerCase().toUpperCase().toLowerCase()) {
+    // Stryker disable next-line ConditionalExpression,EqualityOperator: a character of ASCII is its own decomposition and has one lower case, so this is only how soon the folding is done
+    const read = ch.charCodeAt(0) < 0x80 ? ch.toLowerCase() : decomposed(ch)
+    for (const c of read) {
       if (SPACE.test(c) || (mode === SPACED && IGNORABLE.test(c))) {
-        if (!s.endsWith(' ')) put(' ', start, end)
+        if (!spaced) put(' ', start, end)
       } else if (!IGNORABLE.test(c) && !MARK.test(c)) put(c, start, end)
     }
     start = end
@@ -226,6 +257,27 @@ function wordsOf(s) {
 
 /** → the words of a folded text, worked out the first time they are asked for. */
 const wordsIn = (folded) => (folded.words ??= wordsOf(folded.s))
+
+/** What the matcher throws for a text that folds to more than it may (see foldBoth): validateReply says that it could not be checked. */
+export class Unfoldable extends RangeError {
+  constructor() {
+    super('the text folds to more than it may')
+  }
+}
+
+/**
+ * → { dropped, spaced }, the two readings of `text` (see fold), or throws Unfoldable when folding would make the text more than FOLD_RATIO
+ * times as long (FOLD_FLOOR at least), or add more than what is left in `spend.left`, which is what it takes from. The size is that of the
+ * decomposed text, worked out by the runtime in one go and a fair measure of the work: it counts the marks that the folding then drops, which
+ * are no growth of any script and cost nothing here. A text that is refused is never walked, so what it costs is the same whatever it is.
+ */
+function foldBoth(text, spend) {
+  const size = decomposed(text).length
+  const added = size - text.length
+  if (size > Math.max(FOLD_RATIO * text.length, FOLD_FLOOR) || added > spend.left) throw new Unfoldable()
+  spend.left -= added
+  return { [DROPPED]: fold(text, DROPPED), [SPACED]: fold(text, SPACED) }
+}
 /**
  * → { segments, startFree, endFree } for a keyword as Discord's filter is written, read in `mode`; null when it holds nothing.
  * Space round the keyword is not part of it: ` *cat` is the suffix `*cat` (Discord's documentation does not say whether a keyword
@@ -264,50 +316,66 @@ function reach(s, start, pos, segments, k, needEdge) {
 }
 
 /**
- * → [start, end] of each place the keyword matches in the folded text, one at a time and in order, with the whole word that a `*`
- * reaches into. A place costs what its edges cost, which is a look at the text beside it, never the length of the word.
+ * Gives `visit(start, end)` each place the keyword matches in the folded text, one at a time and in order, with the whole word that a `*`
+ * reaches into, until it answers true. A place costs what its edges cost, which is a look at the text beside it, never the length of the
+ * word, and nothing is made for it: a keyword that matches at every place of a long word is a lot of places.
  */
-function* spansOf(folded, keyword) {
+function eachSpan(folded, keyword, visit) {
   const { s } = folded
   const { start, end } = wordsIn(folded)
   const { segments, startFree, endFree } = keyword
   const [head, ...rest] = segments
-  for (let i = s.indexOf(head); i !== -1; i = s.indexOf(head, i + 1)) {
+  let next = 0
+  for (let i = s.indexOf(head); i !== -1; i = s.indexOf(head, next)) {
+    next = i + 1
     const inside = inWord(start, i - 1)
     if (!startFree && inside) continue
     const stop = reach(s, start, i + head.length, rest, 0, !endFree)
+    // Stryker disable next-line ConditionalExpression: a place with no match that is given on, as ending at -1, is covered by anything (the reach is at least 0), adds nothing to an allow list and takes the loop on no further, so this only saves the work
     if (stop === -1) continue
     // The word the keyword is in or at, where a * lets it reach: with no * at that end the edge held, and nothing is added.
-    yield [inside ? start[i - 1] : i, inWord(start, stop) ? end[stop] : stop]
+    const last = inWord(start, stop) ? end[stop] : stop
+    // A keyword of one piece that a `*` frees at both ends takes in the whole word that it is in. A match in it that ends where that
+    // word does, or before, takes in no more than the one before, so the places up to the last that could end there are not looked at: a
+    // word of a single letter that the keyword `*a*` is found in at every place is one match, which is all that the allow list or the rule
+    // has to know. `latest` is that last place.
+    const latest = last - head.length
+    // Stryker disable next-line ConditionalExpression,LogicalOperator,ArithmeticOperator: the condition is what makes the skipping provably safe. Applied to the other keywords it passes over places inside the word that the first match took in, which are refused as the start of a match (a keyword that is not free at its start) or add no more, and no text of the model that the tests compare with tells that from one place at a time; the walk that does not skip at all is what the test of the 100 allow entries measures. One place more or fewer that is looked at holds no more than the span
+    if (rest.length === 0 && startFree && endFree) next = Math.max(next, latest + 1)
+    if (visit(inside ? start[i - 1] : i, last)) return
   }
 }
 
-/** → the spans of an allow list in a form that tells whether one span lies wholly inside another: sorted by start, with how far each reaches. */
+/**
+ * → for each place of the folded text, how far the spans of an allow list reach that start at or before it (0 for none), so that whether a
+ * span lies wholly inside one of them is one look. Each span is put at its start, which keeps the furthest, and the reach is then carried
+ * on from place to place: no list of the spans, no sort.
+ */
 function allowedIn(norm, allow) {
-  const spans = []
-  for (const keyword of allow) for (const span of spansOf(norm, keyword)) spans.push(span)
-  spans.sort((x, y) => x[0] - y[0])
-  const reach = []
-  for (const [, end] of spans) reach.push(reach.length === 0 ? end : Math.max(end, reach[reach.length - 1]))
-  return { spans, reach }
+  const reach = new Int32Array(norm.s.length + 1)
+  for (const keyword of allow) {
+    eachSpan(norm, keyword, (start, end) => {
+      reach[start] = Math.max(reach[start], end)
+      return false
+    })
+  }
+  // Stryker disable next-line EqualityOperator: a place past the end of the typed array is never written
+  for (let i = 1; i < reach.length; i++) reach[i] = Math.max(reach[i], reach[i - 1])
+  return reach
 }
 
 /** → whether [a, b) lies inside one span: of those that start at or before `a`, the furthest that any reaches (nothing is at least `b` when none starts so early). */
-function covers({ spans, reach }, a, b) {
-  let low = 0
-  let high = spans.length
-  while (low < high) {
-    const mid = (low + high) >> 1
-    if (spans[mid][0] <= a) low = mid + 1
-    else high = mid
-  }
-  return reach[low - 1] >= b
-}
+const covers = (reach, a, b) => reach[a] >= b
 
 /** → [a, b] of the first match of the keyword that the allow list does not cover, or null. `allowOf()` is the allow list, read when the first match is found and not before, and a match found is not looked past. */
 function firstUncovered(folded, keyword, allowOf) {
-  for (const span of spansOf(folded, keyword)) if (!covers(allowOf(), span[0], span[1])) return span
-  return null
+  let found = null
+  eachSpan(folded, keyword, (a, b) => {
+    if (covers(allowOf(), a, b)) return false
+    found = [a, b]
+    return true
+  })
+  return found
 }
 
 // The regular expressions of the rules are Rust's, and run as JavaScript's, in Unicode mode and in any case (`giu`). What cannot be
@@ -316,17 +384,22 @@ const PATTERN_FLAGS = 'giu'
 // The escapes that a regular expression of Rust reads as Unicode, and JavaScript's reads as ASCII (word characters, digits, the
 // edge of a word): a pattern with one would match less here than in Discord, so it is not run.
 const ASCII_ONLY = new Set(['b', 'B', 'w', 'W', 'd', 'D'])
-// Rust's `\s` also holds U+0085 (NEL), which JavaScript's does not.
-const WHITE = String.raw`\s\u0085`
+// What Rust's `\s` is: the White_Space of Unicode, written out. JavaScript's `\s` holds U+FEFF, which is not white space, and lacks U+0085
+// (NEL), so it is not used, and `\S` and `[^\s]` then match what Rust's do (a zero-width no-break space is no space to Rust).
+const WHITE = String.raw`\u{9}-\u{d}\u{20}\u{85}\u{a0}\u{1680}\u{2000}-\u{200a}\u{2028}\u{2029}\u{202f}\u{205f}\u{3000}`
+// What follows the `(?` of a group of flags, up to its `:` or `)`, when an `s` is among them: `.` takes a line feed there.
+const DOTALL_FLAGS = /^[a-zA-Z-]*s/
 
 /**
  * → a regular expression of Rust's, as the JavaScript source that matches the same texts (to be run as `giu`), or null when there
  * is none that is sure to: not a string, `\b` `\B` `\w` `\W` `\d` `\D` (Unicode in Rust, ASCII in JavaScript), a class of POSIX
  * (`[[:alpha:]]`), a class inside a class or an intersection, a difference or a symmetric difference in one, `\S` in one, a
- * class that starts with `]`, and whatever else does not compile in Unicode mode (`(?P<name>...)`, a flag in the middle, `\p{Greek}`,
+ * class that starts with `]`, a group of flags with an `s` (`(?s:...)`), and whatever else does not compile in Unicode mode (`(?P<name>...)`, a flag in the middle, `\p{Greek}`,
  * `\x{41}`, an escape of a letter that stands for nothing). Translated: a leading `(?i)` is taken off (every pattern is run in any
  * case), `\A` is `^`, `\z` is `$`, `\pL` is `\p{L}` (and `\PL`), `.` is any character but a line feed (JavaScript's would also leave
- * out a carriage return and the line and paragraph separators) and `\s` takes in U+0085.
+ * out a carriage return and the line and paragraph separators), and `\s` and `\S` are the White_Space of Unicode written out, which
+ * has U+0085 and not U+FEFF (the `\s` of JavaScript has the one and lacks the other). A group of flags with an `s` among them is given up
+ * on too: `.` takes a line feed in it, which the `.` written here does not.
  */
 export function translatePattern(source) {
   if (typeof source !== 'string') return null
@@ -338,10 +411,12 @@ export function translatePattern(source) {
     const d = source[i + 1] ?? ''
     if (c === '\\') {
       if (ASCII_ONLY.has(d)) return null
+      // `\S` in a class is "everything but white space" among other members, which a class of JavaScript's cannot say.
+      // Stryker disable next-line ConditionalExpression,StringLiteral: the compile check below refuses it too (the class that this would write in the class leaves a `]` alone); this is what says why
+      if (d === 'S' && inClass) return null
       if (d === 'A' && !inClass) out += '^'
       else if (d === 'z' && !inClass) out += '$'
       else if (d === 's') out += inClass ? WHITE : `[${WHITE}]`
-      // In a class this is a class in a class, which does not compile in Unicode mode (the `]` of the inner one leaves the outer one's alone).
       else if (d === 'S') out += `[^${WHITE}]`
       else if ((d === 'p' || d === 'P') && source[i + 2] !== '{') {
         // One letter after \p is the name of a property, as \p{L}; none makes `\p{}`, which does not compile.
@@ -366,6 +441,8 @@ export function translatePattern(source) {
       // A `]` that comes first is a character of the class in Rust's, and the end of an empty class in JavaScript's.
       if (source[i] === ']') return null
     } else {
+      // A group of flags with an `s` in it would make `.` match a line feed there, which the `[^\n]` written for it does not.
+      if (c === '(' && d === '?' && DOTALL_FLAGS.test(source.slice(i + 2))) return null
       out += c === '.' ? '[^\\n]' : c
       i += 1
     }
@@ -396,9 +473,15 @@ function firstFilled(re, text) {
  * → { text, rule, start, end } of the first match of a job, or null: the first text (a place in `texts`) that a pattern matches,
  * and in it the first rule (a place in `rules`) that one of its patterns matches, at the earliest start of them. A job is
  * { rules: [[source, ...], ...], texts: [text, ...] }, the sources as translatePattern() gives them. This is what the worker runs
- * (so it is here, with the rest of the checks, and the worker file only calls it); a source that does not compile is an exception.
+ * (so it is here, with the rest of the checks, and the worker file only calls it); a source that does not compile, and a job that is not
+ * a list of lists of texts and a list of texts, are an exception: no text that was not read may be told as one with no match.
  */
 export function scanPatterns({ rules, texts }) {
+  // Not a text, and not a pattern, is no match for a pattern to find, and no match must not be what a text that was never read answers.
+  const isList = (value, ofWhat) => Array.isArray(value) && value.every(ofWhat)
+  if (!isList(texts, (text) => typeof text === 'string') || !isList(rules, (sources) => isList(sources, (source) => typeof source === 'string'))) {
+    throw new TypeError('the job must be a list of lists of patterns and a list of texts')
+  }
   const regexes = rules.map((sources) => sources.map((source) => new RegExp(source, PATTERN_FLAGS)))
   for (let t = 0; t < texts.length; t++) {
     for (let r = 0; r < regexes.length; r++) {
@@ -413,74 +496,180 @@ export function scanPatterns({ rules, texts }) {
   return null
 }
 
-// The worker that runs the patterns of the rules: one for the whole process, in a thread of its own so that the work of a text that
-// is made to be slow never holds up the server. The worker is started when it is first wanted, and a job that is not answered in
-// its budget, or that crashes it, ends it and the next job starts another. A job waits for the one before it, so that what it is
-// given is its own.
-const WORKER_FILE = new URL('./librariusRegexWorker.js', import.meta.url)
-let worker = null
-let turn = Promise.resolve()
+/**
+ * → { found } (the answer of scanPatterns()) or { failed: true } for a job: what the child process says to each job it is sent. A job
+ * that cannot be run (a source that does not compile, a text that is no text) must not end the child with a trace of its own on the
+ * log, which would carry the pattern: it is told as a failure, and the message of the error is left out.
+ */
+export function answerJob(job) {
+  try {
+    return { found: scanPatterns(job) }
+  } catch {
+    return { failed: true }
+  }
+}
 
-// Told once for the whole process, for a worker that cannot run is made again by every job, and would be told again each time. What it
-// says is left out: it may hold a path, and a failure of the worker must never carry a pattern or a text into a log. A reply that a pattern
-// applies to is refused (fail closed) while it fails, so the owner is told why, once.
+// The process that runs the patterns of the rules: one for the whole server, so that the work of a text made to be slow holds up that
+// process and never the server, and so that it can be KILLED when it is not done in time. (A thread cannot be: on Bun a worker that is
+// terminated runs the regular expression it is in to its end, which for a pattern with several `.*` can take minutes of a core.)
+// It is started when it is first wanted, and a job that is not answered in its budget, or that ends it, kills it and the next job
+// starts another. The jobs run one at a time, so that each is given the answer of its own.
+const WORKER_FILE = fileURLToPath(new URL('./librariusRegexWorker.js', import.meta.url))
+
+// Told once for the whole process, for a child that cannot run is made again by every job, and would be told again each time. What it says
+// is left out: a trace of it may hold a path, and a failure of the child must never carry a pattern or a text into a log. A reply that a
+// pattern applies to is refused (fail closed) while it fails, so the owner is told why, once.
 let workerTold = false
 
 // Stryker disable BlockStatement,ConditionalExpression,BooleanLiteral,StringLiteral: the log, which no test asserts
 function workerFailed() {
   if (workerTold) return
   workerTold = true
-  console.error("Librarius: the thread that checks AutoMod patterns failed, so a reply that a rule's pattern applies to is refused until it runs again.")
+  console.error("Librarius: the process that checks AutoMod patterns failed, so a reply that a rule's pattern applies to is refused until it runs again.")
 }
 // Stryker restore BlockStatement,ConditionalExpression,BooleanLiteral,StringLiteral
 
-function startWorker() {
-  const started = new Worker(WORKER_FILE)
-  // It never keeps the process alive by itself.
-  started.unref()
-  // A worker that fails does not answer, and the budget ends the wait for it; its error is not an error of the server, which is
-  // what an error with no listener would be.
-  // Stryker disable next-line StringLiteral: without a listener for it, the next error of the worker is thrown and ends the process, which the runner counts as a crash and not as a kill
-  started.on('error', workerFailed)
-  return started
-}
-
-/** → what the thread of `job` answered ({ found }), or null when it did not within the budget (as a worker that failed does not). Asks `current`. */
-function ask(current, job) {
-  return new Promise((resolve) => {
-    const asked = performance.now()
-    const done = (answer) => {
-      clearTimeout(timer)
-      current.off('message', answered)
-      resolve(answer)
-    }
-    // An answer that came late is as good as none, even when it says there was no match: the time is what was refused.
-    const answered = (answer) => done(performance.now() - asked >= REGEX_BUDGET_MS ? null : answer)
-    const timer = setTimeout(() => done(null), REGEX_BUDGET_MS)
-    current.on('message', answered)
-    current.postMessage(job)
-  })
+/**
+ * → a new child process that runs librariusRegexWorker.js with the runtime of the server (`node` for the tests, `bun` in the container),
+ * with a channel of its own for messages that are plain JSON, and nothing else: no standard input or output, and none of the environment of
+ * the server, which holds its secrets. It never keeps the server alive by itself.
+ */
+export function spawnRegexWorker() {
+  const child = spawn(process.execPath, [WORKER_FILE], { stdio: ['ignore', 'ignore', 'inherit', 'ipc'], serialization: 'json', env: {} })
+  child.unref()
+  // Stryker disable next-line OptionalChaining: Node's channel can be let go of and Bun's has no such call (its child does not hold the server alive); the suite runs on Node
+  child.channel?.unref?.()
+  return child
 }
 
 /**
- * → { found } (the answer of scanPatterns() for `job`) or null: the worker did not answer in REGEX_BUDGET_MS (a worker that crashed does not). It is
- * then ended, and never waited for, and the next job is run by a new one. Jobs run one at a time.
+ * → what `child` says that `accept` takes for the answer (any value but undefined), or null when it said nothing within `limit` ms, ended, or
+ * failed first. `handOver(fail)` is called once the listening has started, to hand over the work, and `fail()` ends the wait with null.
  */
-export function scanInWorker(job) {
-  const next = turn.then(async () => {
-    const current = (worker ??= startWorker())
-    const answer = await ask(current, job)
-    if (answer === null) {
-      worker = null
-      // Not waited for (on Bun it comes back when the regular expression it was in is over, which can be a second), and it does not fail.
-      void current.terminate()
+function hear(child, limit, accept, handOver) {
+  return new Promise((resolve) => {
+    const done = (answer) => {
+      clearTimeout(timer)
+      child.off('message', heard)
+      child.off('exit', fail)
+      child.off('error', fail)
+      resolve(answer)
     }
-    return answer
+    const heard = (message) => {
+      const answer = accept(message)
+      if (answer !== undefined) done(answer)
+    }
+    const fail = () => done(null)
+    const timer = setTimeout(fail, limit)
+    child.on('message', heard)
+    child.once('exit', fail)
+    child.once('error', fail)
+    handOver(fail)
   })
-  // A job that could not be handed over rejects its caller, and must not stop the jobs after it.
-  turn = next.catch(() => {})
-  return next
 }
+
+const isAnswer = (message) => isObject(message) && message.found !== undefined
+
+/**
+ * → a function that runs a job in a child process of the kind that `spawnChild()` makes (spawnRegexWorker(), and what the tests put in its
+ * place), and answers { found } (the answer of scanPatterns() for the job) or null: it was not answered in REGEX_BUDGET_MS, from the moment
+ * it was handed to a child that is ready (the time a child takes to start is not counted, but a child not ready in REGEX_READY_MS is
+ * failed, and so is every job that waits for it); or the child ended, or failed, or said something that is no answer; or REGEX_MAX_WAITING
+ * jobs are waiting for the one that runs already. A null is never "no match": the caller must refuse the reply. A child that did not answer
+ * in time is killed (SIGKILL, which stops a regular expression that is running) and forgotten, and the next job starts another. A job
+ * rejects its caller when a child cannot be started at all.
+ */
+export function createRegexRunner(spawnChild) {
+  // The child that the next job uses, or null; { child, ready } with `ready` the promise of true when it said so, and null when it did not.
+  let current = null
+  const queue = []
+  let busy = false
+
+  function begin() {
+    const child = spawnChild()
+    const entry = { child, ready: null }
+    // Without a listener, an error of the child is thrown, and ends the server.
+    child.on('error', workerFailed)
+    // A child that ends when no job is using it (or in the middle of one) is forgotten, so that the next job starts another.
+    child.once('exit', () => {
+      if (current === entry) {
+        current = null
+        workerFailed()
+      }
+    })
+    entry.ready = hear(child, REGEX_READY_MS, (message) => (isObject(message) && message.ready === true ? true : undefined), () => {})
+    return entry
+  }
+
+  // The job that discards a child is the one that was using it, so the child is the current one, or was forgotten already (it ended).
+  function discard(entry) {
+    current = null
+    entry.child.kill('SIGKILL')
+  }
+
+  /** → the answer of the child that `entry` is to `job`, or null: it did not within the budget, or it failed. */
+  async function ask(entry, job) {
+    let asked
+    // An answer that came late is as good as none, even when it says there was no match: the time is what was refused.
+    const accept = (message) => {
+      if (performance.now() - asked >= REGEX_BUDGET_MS) return null
+      if (isAnswer(message)) return message
+      workerFailed()
+      return null
+    }
+    return hear(entry.child, REGEX_BUDGET_MS, accept, (fail) => {
+      asked = performance.now()
+      try {
+        entry.child.send(job, (error) => {
+          if (error) fail()
+        })
+      } catch {
+        // A job that cannot be written to the child (JSON has no BigInt) is one that cannot be run.
+        fail()
+      }
+    })
+  }
+
+  async function run(job) {
+    current ??= begin()
+    const entry = current
+    if ((await entry.ready) !== true) {
+      discard(entry)
+      workerFailed()
+      for (const waiting of queue.splice(0)) waiting.resolve(null)
+      return null
+    }
+    const answer = await ask(entry, job)
+    if (answer === null) discard(entry)
+    return answer
+  }
+
+  async function pump() {
+    if (busy) return
+    busy = true
+    for (let next = queue.shift(); next !== undefined; next = queue.shift()) {
+      try {
+        next.resolve(await run(next.job))
+      } catch (error) {
+        next.reject(error)
+      }
+    }
+    busy = false
+  }
+
+  return (job) =>
+    new Promise((resolve, reject) => {
+      if (queue.length >= REGEX_MAX_WAITING) {
+        resolve(null)
+        return
+      }
+      queue.push({ job, resolve, reject })
+      void pump()
+    })
+}
+
+/** → what the one child process of the server answers to `job` (see createRegexRunner). */
+export const scanInWorker = createRegexRunner(spawnRegexWorker)
 
 /** → the ids as a Set: a list of text, or none given. */
 function idSet(value, what) {
@@ -575,12 +764,16 @@ export function automodMatcher(rules, options = {}) {
     const take = (start, end) => {
       if (best === null || start < best.start) best = { start, end }
     }
-    for (const mode of MODES) {
-      const folded = norm(mode)
-      let allow = null
-      for (const keyword of rule[mode].keywords) {
-        const span = firstUncovered(folded, keyword, () => (allow ??= allowedIn(folded, rule[mode].allow)))
-        if (span !== null) take(folded.from[span[0]], folded.to[span[1] - 1])
+    // The two readings of a keyword hold something or both hold nothing (what is left out in one is a space in the other, and spaces at the
+    // ends are cut), so a rule of no keyword that is read as it is written leaves the text alone, and is not folded.
+    if (rule[DROPPED].keywords.length > 0) {
+      for (const mode of MODES) {
+        const folded = norm(mode)
+        let allow = null
+        for (const keyword of rule[mode].keywords) {
+          const span = firstUncovered(folded, keyword, () => (allow ??= allowedIn(folded, rule[mode].allow)))
+          if (span !== null) take(folded.from[span[0]], folded.to[span[1] - 1])
+        }
       }
     }
     for (const re of rule.literals) {
@@ -590,11 +783,12 @@ export function automodMatcher(rules, options = {}) {
     return best
   }
 
-  // Of keywords only: the patterns are run by matcher.regex(), which waits for a worker.
-  const matcher = (text) => {
+  // Of keywords only: the patterns are run by matcher.regex(), which waits for a child process. `spend` is what the texts of one reply may
+  // add by being folded, in all (see foldBoth): the caller that asks about several texts gives them one, and a call that is given none has its own.
+  const matcher = (text, spend = { left: FOLD_TOTAL }) => {
     if (typeof text !== 'string') throw new TypeError('the text must be a string')
-    const readings = {}
-    const norm = (mode) => (readings[mode] ??= fold(text, mode))
+    let readings = null
+    const norm = (mode) => (readings ??= foldBoth(text, spend))[mode]
     for (const rule of compiled) {
       const found = firstIn(rule, text, norm)
       if (found !== null) return { rule: rule.name, start: found.start, end: found.end }
@@ -617,9 +811,6 @@ export function automodMatcher(rules, options = {}) {
     const { found } = answer
     return found === null ? null : { rule: withPatterns[found.rule].name, text: found.text, start: found.start, end: found.end }
   }
-  // The thread starts while the keywords are being looked at, so that its start is not in the budget of the first answer.
-  // Stryker disable next-line ConditionalExpression,BlockStatement,EqualityOperator,AssignmentOperator: only how soon the first answer comes
-  if (withPatterns.length > 0) worker ??= startWorker()
   matcher.mentionCap = mentionCap
   return matcher
 }
@@ -629,6 +820,10 @@ const BARRIERS = new Set(['line', 'heading', 'subtext', 'blank', 'divider', 'cod
 // What follows the `](` of a masked link, as an address (with at most one level of parentheses in it) between at most a pair of
 // angle brackets, and the closing parenthesis. Runs of spaces are made one first, so that this is linear.
 const LINK_SHAPED = /\]\( ?<?((?:[^\s()<>[\]]|\([^\s()<>[\]]*\))*)>? ?\)/g
+// A masked link as it is written, `[text](address)`, with the text of one line and no bracket in it and the address of one line with at
+// most one level of parentheses in it (a title, a space and angle brackets are all characters of it). No part of it can start before another
+// ends, so that finding the links of any text is a single pass.
+const MASKED_LINK = /\[([^\][\n]*)\]\((?:[^()\][\n]|\([^()\][\n]*\))*\)/g
 const ANGLE_LINK = /<([a-z][a-z0-9+.-]*):[^\s<>]*>/gi
 const HTTP_ADDRESS = /^https?:\/\//
 // What Discord writes in angle brackets with a colon in it, and is no link: a timestamp, a slash command, an emoji, and the
@@ -668,6 +863,14 @@ function hasBadLink(literal) {
 }
 
 const refused = (status, error, more = {}) => ({ ok: false, status, error, ...more })
+
+/**
+ * → the text with each masked link `[text](address)` put by its text: what a reader of the message takes for words, which the brackets and
+ * the address of the link split (`[zo](https://e.com)rp` shows "zorp"). Discord's own rules read the characters that are sent, so this is
+ * a reading that only the site has, for where it is not told what Discord does: it can only refuse more. Not a parse: a pattern that looks
+ * like a link in code is read as one too, which gives one more reading that holds the same words.
+ */
+export const unmasked = (text) => text.replace(MASKED_LINK, '$1')
 
 // The kind of a component that is a Text Display, in the messages of the form.
 const TEXT_DISPLAY = 10
@@ -712,9 +915,11 @@ export function shownBy(parts, fixed) {
 
 export async function validateReply(input, options) {
   if (!isObject(options)) throw new TypeError('the options must be an object')
-  const { form, automod, mentionCap = MENTION_CAP, ownUploadIds, authorId = WORST_ID, siteUrl = WORST_URL } = options
+  const { form, automod, mentionCap = MENTION_CAP, ownUploadIds, authorId, siteUrl } = options
   limitFor(form === undefined ? DEFAULT_FORM : form)
   if (typeof automod !== 'function') throw new TypeError('automod must be a function')
+  if (typeof authorId !== 'string') throw new TypeError('authorId must be a string')
+  if (typeof siteUrl !== 'string') throw new TypeError('siteUrl must be a string')
   if (!Number.isInteger(mentionCap) || mentionCap < 0 || mentionCap > MENTION_CAP) throw new RangeError(`mentionCap must be a whole number from 0 to ${MENTION_CAP}`)
   if (ownUploadIds !== undefined && !Array.isArray(ownUploadIds) && !(ownUploadIds instanceof Set)) throw new TypeError('ownUploadIds must be a list or a set')
   const own = new Set(ownUploadIds)
@@ -748,8 +953,6 @@ export async function validateReply(input, options) {
   for (const id of seen.users) if (!CANON_ID.test(id) || !allowed.has(id)) return refused(400, COPY.mention(cap))
 
   const blocked = (found, at) => refused(422, COPY.blocked(found.rule), { rule: found.rule, match: at })
-  const hit = automod(text)
-  if (hit !== null) return blocked(hit, { start: hit.start, end: hit.end })
 
   // What is sent is not the text that was written: a picture written inside a line is sent as a file, and nothing of it is left in
   // the line, so `zo![](upload:1)rp` is "zorp" there. Whatever the rules find in the parts and not in the source is refused as well.
@@ -758,15 +961,30 @@ export async function validateReply(input, options) {
   const stand = toDiscord('x', { ...common, images: [] }).parts[0].text.split('\n')
   const fixed = { reply: replyTo === null ? null : stand[0], footer: stand[stand.length - 1] }
   const shown = shownBy(sent.parts, fixed)
-  for (const part of shown) {
-    const found = automod(part)
-    if (found !== null) return blocked(found, null)
+
+  // The keywords read the source, and then each text that is sent, and each of them again with the masked links read as their text, when
+  // that is not the same text. A text that folds to more than it may (Unfoldable) was not checked: the reply is refused, not let through.
+  const spend = { left: FOLD_TOTAL }
+  try {
+    const hit = automod(text, spend)
+    if (hit !== null) return blocked(hit, { start: hit.start, end: hit.end })
+    const bare = unmasked(text)
+    const reads = [...(bare === text ? [] : [bare]), ...shown.flatMap((part) => (unmasked(part) === part ? [part] : [part, unmasked(part)]))]
+    for (const read of reads) {
+      const found = automod(read, spend)
+      if (found !== null) return blocked(found, null)
+    }
+  } catch (error) {
+    if (!(error instanceof Unfoldable)) throw error
+    return refused(422, COPY.unchecked)
   }
 
+  // The patterns read what is sent only (see scanInWorker): the source holds what is not sent, and is up to 16,000 characters, where
+  // the time of a pattern with several `.*` grows with the 4th power of the text.
   if (typeof automod.regex === 'function') {
-    const found = await automod.regex([text, ...shown])
+    const found = await automod.regex(shown)
     if (found !== null && found.unchecked === true) return refused(422, COPY.unchecked)
-    if (found !== null) return blocked(found, found.text === 0 ? { start: found.start, end: found.end } : null)
+    if (found !== null) return blocked(found, null)
   }
 
   return {

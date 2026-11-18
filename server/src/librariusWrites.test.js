@@ -481,11 +481,12 @@ describe('reply: the request', () => {
   })
 })
 
-describe('reply: a regular expression that could not be checked', () => {
+describe('reply: a reply that could not be checked', () => {
   const COPY_UNCHECKED = "This reply couldn't be checked against the server's rules. Try a shorter one."
-  // A rule with a pattern the site can run, and a reply over the 10,000 characters that a pattern is run over: it cannot be checked.
-  const regexRule = () => ({ id: '200000000000000472', name: 'invented patterns', enabled: true, trigger_type: 1, trigger_metadata: { keyword_filter: [], regex_patterns: ['zorp'] }, exempt_roles: [], exempt_channels: [] })
-  const long = () => json({ source: 'x'.repeat(10_001) })
+  // A rule with a keyword, and a reply of 11,000 characters that fold to 18 each (U+FDFA): folding them would hold the server up, so it is not
+  // done, and the reply cannot be checked.
+  const regexRule = () => ({ id: '200000000000000472', name: 'invented keywords', enabled: true, trigger_type: 1, trigger_metadata: { keyword_filter: ['zorp'], regex_patterns: [] }, exempt_roles: [], exempt_channels: [] })
+  const long = () => json({ source: '\ufdfa'.repeat(11_000) })
 
   it('is 422 with that copy, and no rule or match, as validateReply says it, and queues nothing', async () => {
     const t = world({ rules: [regexRule()] })
@@ -505,7 +506,7 @@ describe('reply: a regular expression that could not be checked', () => {
 
   it('is the same 422 for an edit', async () => {
     const t = world({ rules: [regexRule()] })
-    const got = await out(await t.writes.edit(M_SITE, json({ source: 'x'.repeat(10_001), mentions: [] }), verdictOf()))
+    const got = await out(await t.writes.edit(M_SITE, json({ source: '\ufdfa'.repeat(11_000), mentions: [] }), verdictOf()))
     expect(got.status).toBe(422)
     expect(got.body).toStrictEqual({ error: COPY_UNCHECKED })
   })

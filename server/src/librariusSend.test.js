@@ -1,7 +1,10 @@
+import { spawn, execFile } from 'node:child_process'
+import { EventEmitter } from 'node:events'
+import { readFileSync } from 'node:fs'
 import { describe, it, expect, vi, beforeAll, afterEach } from 'vitest'
 import * as fc from 'fast-check'
 import { toDiscord } from './librariusForm.js'
-import { MAX_SOURCE, MENTION_CAP, automodMatcher, automodUnchecked, cleanName, scanInWorker, scanPatterns, shownBy, translatePattern, validateReply } from './librariusSend.js'
+import { MAX_SOURCE, MENTION_CAP, Unfoldable, answerJob, automodMatcher, automodUnchecked, cleanName, createRegexRunner, scanInWorker, scanPatterns, shownBy, spawnRegexWorker, translatePattern, unmasked, validateReply } from './librariusSend.js'
 
 // Every id, name, keyword, rule and link here is invented.
 const U1 = '200000000000000421'
@@ -502,6 +505,36 @@ describe('automodMatcher: the cap on mentions', () => {
   })
 })
 
+// What the checks of the time that a text takes are made of. A check at four times the length takes about four times as long when the walk
+// is linear and about sixteen times as long when it is quadratic, whatever the speed of the host or of Stryker's instrumented copy of the
+// module, so the ratio is what is measured. It is the ratio of the medians of 5 runs of each, so that one slow run (the collector, a
+// busy host) does not decide it. A loose ceiling on the time of the longer one is kept besides, for a walk that is slow and not quadratic.
+const RATIO = 8
+const BOUND_MS = 4_000
+const median = (list) => [...list].sort((a, b) => a - b)[Math.floor(list.length / 2)]
+// → the median time of the thunk over 5 runs, after one that is not counted (it pays for the compiling of the code it runs).
+function timeOf(thunk) {
+  thunk()
+  return median(
+    Array.from({ length: 5 }, () => {
+      const started = performance.now()
+      thunk()
+      return performance.now() - started
+    }),
+  )
+}
+// → what a check takes at 4n against what it takes at n, as `make(n)` gives the thunk for a text of about n characters.
+function scaling(make, n = 4_000) {
+  const small = timeOf(make(n))
+  const large = timeOf(make(4 * n))
+  return { ratio: large / Math.max(small, 0.05), ms: large }
+}
+function expectLinear(label, make, n) {
+  const { ratio, ms } = scaling(make, n)
+  expect(ratio, label).toBeLessThan(RATIO)
+  expect(ms, label).toBeLessThan(BOUND_MS)
+}
+
 describe('translatePattern: a pattern of Rust\'s, as the pattern JavaScript runs', () => {
   it('leaves a pattern that means the same in both as it is', () => {
     for (const source of ['zorp', 'zor+p', 'a|b', '(a)(b)', '[a-z]+', '\\.', 'a{2,3}', '\\p{Lu}{2}', '\\P{L}', '[\\p{L}0-9]', '^a$', '(?<n>a)', '😀+', '\\n\\t', '\\x41', '\\u0041', '\\/']) {
@@ -546,12 +579,62 @@ describe('translatePattern: a pattern of Rust\'s, as the pattern JavaScript runs
     expect(translatePattern('[^.]')).toBe('[^.]')
   })
 
-  it('reads \\s as holding U+0085, in a class and out of one, and gives up on \\S in a class', () => {
-    expect(translatePattern('a\\sb')).toBe('a[\\s\\u0085]b')
-    expect(translatePattern('[\\s]')).toBe('[\\s\\u0085]')
-    expect(translatePattern('[a\\sb]')).toBe('[a\\s\\u0085b]')
-    expect(translatePattern('a\\Sb')).toBe('a[^\\s\\u0085]b')
+  it('reads \\s, \\S and [^\\s] as Rust does, by the White_Space of Unicode that it names: U+0085 is white space and U+FEFF is not', () => {
+    // Rust's White_Space, written out: the \\s of JavaScript has U+FEFF and lacks U+0085.
+    const white = (c) => (c >= 0x9 && c <= 0xd) || c === 0x20 || c === 0x85 || c === 0xa0 || c === 0x1680 || (c >= 0x2000 && c <= 0x200a) || c === 0x2028 || c === 0x2029 || c === 0x202f || c === 0x205f || c === 0x3000
+    const forms = [['\\s', true], ['[\\s]', true], ['[b\\s]', true], ['[\\sb]', true], ['\\S', false], ['[^\\s]', false], ['[^b\\s]', false]]
+    for (const [source, isWhite] of forms) {
+      const re = new RegExp(`^${translatePattern(source)}$`, 'u')
+      const wrong = []
+      for (let c = 0; c <= 0xffff; c++) {
+        if (c >= 0xd800 && c <= 0xdfff) continue
+        if (c === 0x62 && source.includes('b')) continue
+        if (re.test(String.fromCodePoint(c)) !== (white(c) === isWhite)) wrong.push(c.toString(16))
+      }
+      for (const c of [0x10000, 0x1f600, 0xe0020, 0x10ffff]) if (re.test(String.fromCodePoint(c)) !== !isWhite) wrong.push(c.toString(16))
+      expect(wrong, source).toEqual([])
+    }
+    expect(new RegExp(translatePattern('[b\\s]'), 'u').test('b')).toBe(true)
+    expect(new RegExp(translatePattern('[^b\\s]'), 'u').test('b')).toBe(false)
+  })
+
+  it('writes \\s and \\S in a pattern and leaves the rest of it as it is, and gives up on \\S in a class', () => {
+    expect(translatePattern('a\\sb')).toMatch(/^a\[[^\]]+\]b$/)
+    expect(translatePattern('a\\Sb')).toMatch(/^a\[\^[^\]]+\]b$/)
+    expect(translatePattern('[a\\sb]')).toMatch(/^\[a[^\]]+b\]$/)
+    expect(translatePattern('\\\\sb')).toBe('\\\\sb')
+    expect(translatePattern('\\\\S')).toBe('\\\\S')
     expect(translatePattern('[\\S]')).toBeNull()
+    expect(translatePattern('[a\\S]')).toBeNull()
+    expect(translatePattern('[^\\S]')).toBeNull()
+  })
+
+  it('gives up on a group of flags with an s in it, where Rust\'s . takes a line feed and the . written here does not', () => {
+    for (const source of ['(?Us:a)', '(?sU:a)', '(?s:zo.rp)', '(?is:zo.rp)', '(?si:a)', '(?-s:a.b)', '(?s-i:a)', '(?i-s:a)', 'a(?s:.)b', '(?sx:a)', '((?s:a))', '(?m-s:a)', '(?i)(?s:a)', '(?s:', '(?is)a', '(?s)a']) {
+      expect(translatePattern(source), source).toBeNull()
+    }
+  })
+
+  it('keeps the groups it can read the same: of other flags, of no flags, a look at what follows, and a name that has an s in it', () => {
+    expect(translatePattern('(?i:a.b)')).toBe('(?i:a[^\\n]b)')
+    expect(translatePattern('(?m:a)')).toBe('(?m:a)')
+    expect(translatePattern('(?:a)')).toBe('(?:a)')
+    expect(translatePattern('(?=a)a')).toBe('(?=a)a')
+    expect(translatePattern('(?!a)b')).toBe('(?!a)b')
+    expect(translatePattern('(?<s>a)')).toBe('(?<s>a)')
+    expect(translatePattern('(?<name>s)')).toBe('(?<name>s)')
+    expect(translatePattern('(?i:s)')).toBe('(?i:s)')
+    expect(translatePattern('(?:s)')).toBe('(?:s)')
+    expect(translatePattern('(as)')).toBe('(as)')
+    expect(translatePattern('(ss)')).toBe('(ss)')
+    expect(translatePattern('zo?s')).toBe('zo?s')
+    expect(translatePattern('(a?s)')).toBe('(a?s)')
+  })
+
+  it('does not take what is only written like a group of flags for one: an escaped parenthesis, and a class', () => {
+    expect(translatePattern('\\(?s:a')).toBe('\\(?s:a')
+    expect(translatePattern('[(?s]')).toBe('[(?s]')
+    expect(translatePattern('a\\(?s')).toBe('a\\(?s')
   })
 
   it('gives up on what Rust reads as Unicode and JavaScript reads as ASCII, wherever it stands', () => {
@@ -571,7 +654,7 @@ describe('translatePattern: a pattern of Rust\'s, as the pattern JavaScript runs
     // What follows a class is read outside it again.
     expect(translatePattern('[a].')).toBe('[a][^\\n]')
     expect(translatePattern('[^a]\\Az')).toBe('[^a]^z')
-    expect(translatePattern('[a]\\s')).toBe('[a][\\s\\u0085]')
+    expect(translatePattern('[a]\\s')).toMatch(/^\[a\]\[[^\]]+\]$/)
     expect(translatePattern('[a][b]')).toBe('[a][b]')
   })
 
@@ -708,6 +791,11 @@ describe('scanPatterns: what the worker runs', () => {
   it('throws for a source that does not compile, which translatePattern never gives', () => {
     expect(() => scan([['(']], ['a'])).toThrow(SyntaxError)
   })
+
+  it('throws for a job that is not made of lists of texts, so that no text that was not read is told as one with no match', () => {
+    for (const rules of [undefined, null, 'a', 5, {}, [5], [null], ['a'], [[5]], [[null]], [[['a']]], [['a'], 5], [['a', 5]], [[], null], [['a'], ['b', null]]]) throwsAs(() => scan(rules, ['a']), TypeError, 'the job must be a list of lists of patterns and a list of texts')
+    for (const texts of [undefined, null, 'a', 5, {}, [5], [null], [undefined], [['a']], new Set(['a']), ['a', 5], [5, 'a'], ['a', null]]) throwsAs(() => scan([['a']], texts), TypeError, 'the job must be a list of lists of patterns and a list of texts')
+  })
 })
 
 describe('automodMatcher: regular expressions, in a worker of their own', () => {
@@ -754,6 +842,26 @@ describe('automodMatcher: regular expressions, in a worker of their own', () => 
     expect(await found('a.b', 'a\nb')).toBeNull()
     expect(await found('a\\sb', 'a\u0085b')).toBe(0)
     expect(await found('a\\sb', 'a b')).toBe(0)
+  })
+
+  it('finds what Rust finds with \\S and [^\\s] beside U+FEFF, which is not white space for it, and not with \\s', async () => {
+    const found = async (pattern, text) => (await regex([withRegex([pattern])], [text]))?.start ?? null
+    expect(await found('zo\\Srp', 'zo\ufeffrp')).toBe(0)
+    expect(await found('zo[^\\s]rp', 'zo\ufeffrp')).toBe(0)
+    expect(await found('discord\\.gg/\\S+', 'discord.gg/\ufeffinvite')).toBe(0)
+    expect(await found('zo\\srp', 'zo\ufeffrp')).toBeNull()
+    expect(await found('zo[\\s]rp', 'zo\ufeffrp')).toBeNull()
+    expect(await found('zo\\srp', 'zo\u0085rp')).toBe(0)
+    expect(await found('zo\\Srp', 'zo\u0085rp')).toBeNull()
+    expect(await found('zo\\srp', 'zo\u3000rp')).toBe(0)
+  })
+
+  it('does not run a pattern with an s group, which would miss a line feed that Rust\'s . takes, and the others of its rule are run', async () => {
+    expect(await regex([withRegex(['(?s:zo.rp)'])], ['zo\nrp'])).toBeNull()
+    expect(await regex([withRegex(['(?s:zo.rp)', 'gronk'])], ['zo\nrp gronk'])).toEqual(hitAt(0, 6, 11))
+    expect(automodUnchecked([withRegex(['(?s:zo.rp)'], { name: 'Dotall' })])).toEqual(['Dotall'])
+    expect(await regex([withRegex(['(?i:zo.rp)'])], ['zo\nrp'])).toBeNull()
+    expect(await regex([withRegex(['(?i:zo.rp)'])], ['ZOxRP'])).toEqual(hitAt(0, 0, 5))
   })
 
   it('skips a pattern it cannot read the same way, and runs the rule\'s others', async () => {
@@ -912,7 +1020,438 @@ describe('automodMatcher: regular expressions, in a worker of their own', () => 
   })
 })
 
-describe('scanInWorker: the one worker', () => {
+describe('answerJob: what the child process says to a job', () => {
+  it('is { found } of the scan, which is null when nothing matched', () => {
+    expect(answerJob({ rules: [['zor+p']], texts: ['a zorrp'] })).toEqual({ found: { text: 0, rule: 0, start: 2, end: 7 } })
+    expect(answerJob({ rules: [['zorp']], texts: ['nothing'] })).toEqual({ found: null })
+  })
+
+  it('is { failed: true } for a job that cannot be run, and never says what was in it', () => {
+    for (const job of [{ rules: [['(']], texts: ['a'] }, { rules: [['a']], texts: [null] }, { rules: [['a']], texts: [5] }, { rules: [['a']], texts: 'x' }, { rules: 'a', texts: ['a'] }, { rules: [[5]], texts: ['a'] }, { rules: [5], texts: ['a'] }, {}, null, 5]) {
+      expect(answerJob(job), JSON.stringify(job)).toEqual({ failed: true })
+    }
+  })
+})
+
+// What the runner is given in place of a child process, so that the time and what it says are the test's: a child that reads from its
+// parent (`send`), is killed (`kill`), says things (`emit('message', ...)`), and ends (`emit('exit', ...)`).
+class FakeChild extends EventEmitter {
+  constructor(onSend = () => {}) {
+    super()
+    this.jobs = []
+    this.signals = []
+    this.onSend = onSend
+  }
+
+  send(job, callback) {
+    this.jobs.push(job)
+    this.onSend(job, callback)
+  }
+
+  kill(signal) {
+    this.signals.push(signal)
+    return true
+  }
+}
+const flush = () => new Promise((resolve) => setImmediate(resolve))
+const JOB = { rules: [['zorp']], texts: ['a zorp'] }
+const FOUND = { found: { text: 0, rule: 0, start: 2, end: 6 } }
+
+describe('createRegexRunner: the jobs, the child they run in, and the time they have', () => {
+  afterEach(() => {
+    vi.useRealTimers()
+    vi.restoreAllMocks()
+  })
+
+  function runner(onSend) {
+    const children = []
+    const scan = createRegexRunner(() => {
+      const child = new FakeChild(onSend)
+      children.push(child)
+      return child
+    })
+    return { children, scan }
+  }
+  const ready = async (child) => {
+    child.emit('message', { ready: true })
+    await flush()
+  }
+
+  it('sends a job to a child that is ready, and answers what the child answers', async () => {
+    const { children, scan } = runner()
+    const done = scan(JOB)
+    expect(children).toHaveLength(1)
+    expect(children[0].jobs).toEqual([])
+    await ready(children[0])
+    expect(children[0].jobs).toEqual([JOB])
+    children[0].emit('message', FOUND)
+    expect(await done).toEqual(FOUND)
+    expect(children[0].signals).toEqual([])
+    // What it listened for while the job was in the child is let go of: one `exit` and one `error` stay, for the child's own sake.
+    expect(children[0].listenerCount('message')).toBe(0)
+    expect(children[0].listenerCount('exit')).toBe(1)
+    expect(children[0].listenerCount('error')).toBe(1)
+  })
+
+  it('answers { found: null } as it is: no match is an answer', async () => {
+    const { children, scan } = runner()
+    const done = scan(JOB)
+    await ready(children[0])
+    children[0].emit('message', { found: null })
+    expect(await done).toEqual({ found: null })
+  })
+
+  it('keeps one child for the jobs after it, and starts none before the first job', async () => {
+    const { children, scan } = runner((job, callback) => callback(null))
+    expect(children).toHaveLength(0)
+    const first = scan(JOB)
+    await ready(children[0])
+    children[0].emit('message', FOUND)
+    await first
+    const second = scan(JOB)
+    await flush()
+    children[0].emit('message', { found: null })
+    expect(await second).toEqual({ found: null })
+    expect(children).toHaveLength(1)
+    expect(children[0].jobs).toEqual([JOB, JOB])
+  })
+
+  it('runs the jobs one at a time, in the order they came, each with the answer of its own', async () => {
+    const { children, scan } = runner()
+    const a = scan({ ...JOB, n: 'a' })
+    const b = scan({ ...JOB, n: 'b' })
+    const c = scan({ ...JOB, n: 'c' })
+    await ready(children[0])
+    expect(children[0].jobs.map((j) => j.n)).toEqual(['a'])
+    children[0].emit('message', { found: { text: 0, rule: 0, start: 1, end: 2 } })
+    await flush()
+    expect(children[0].jobs.map((j) => j.n)).toEqual(['a', 'b'])
+    children[0].emit('message', { found: { text: 0, rule: 0, start: 3, end: 4 } })
+    await flush()
+    children[0].emit('message', { found: null })
+    expect(await a).toEqual({ found: { text: 0, rule: 0, start: 1, end: 2 } })
+    expect(await b).toEqual({ found: { text: 0, rule: 0, start: 3, end: 4 } })
+    expect(await c).toEqual({ found: null })
+    expect(children).toHaveLength(1)
+  })
+
+  it('refuses the 10th job at once when the first is running and 8 wait, and runs all of the others', async () => {
+    const { children, scan } = runner()
+    const settled = []
+    const jobs = Array.from({ length: 9 }, (_, i) => scan({ ...JOB, n: i }).then((answer) => (settled.push(i), answer)))
+    expect(await scan(JOB)).toBeNull()
+    expect(settled).toEqual([])
+    await ready(children[0])
+    for (let i = 0; i < 9; i++) {
+      expect(children[0].jobs).toHaveLength(i + 1)
+      children[0].emit('message', { found: { text: i, rule: 0, start: 0, end: 1 } })
+      await flush()
+    }
+    const answers = await Promise.all(jobs)
+    expect(answers.map((a) => a.found.text)).toEqual([0, 1, 2, 3, 4, 5, 6, 7, 8])
+    expect(children[0].jobs.map((j) => j.n)).toEqual([0, 1, 2, 3, 4, 5, 6, 7, 8])
+  })
+
+  it('takes a job again once the line has gone down, and refuses none while 8 wait or fewer', async () => {
+    const { children, scan } = runner()
+    const jobs = Array.from({ length: 9 }, () => scan(JOB))
+    await ready(children[0])
+    for (let i = 0; i < 9; i++) {
+      children[0].emit('message', { found: null })
+      await flush()
+    }
+    expect(await Promise.all(jobs)).toEqual(Array(9).fill({ found: null }))
+    const again = scan(JOB)
+    await flush()
+    children[0].emit('message', FOUND)
+    expect(await again).toEqual(FOUND)
+  })
+
+  it('does not count the time a child takes to start, but gives the job its 250 ms from the moment it is sent', async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
+    const { children, scan } = runner()
+    const done = scan(JOB)
+    await vi.advanceTimersByTimeAsync(1_500)
+    await ready(children[0])
+    expect(children[0].jobs).toHaveLength(1)
+    await vi.advanceTimersByTimeAsync(249)
+    children[0].emit('message', FOUND)
+    expect(await done).toEqual(FOUND)
+    expect(children[0].signals).toEqual([])
+    // No timer is left to fire for a job that is over, nor for a child that said it was ready.
+    expect(vi.getTimerCount()).toBe(0)
+  })
+
+  it('answers null for a job not answered in 250 ms, kills the child, forgets it, and starts a new one for the next job', async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
+    const { children, scan } = runner()
+    let answer = 'pending'
+    const done = scan(JOB).then((a) => (answer = a))
+    await ready(children[0])
+    await vi.advanceTimersByTimeAsync(249)
+    expect(answer).toBe('pending')
+    expect(children[0].signals).toEqual([])
+    await vi.advanceTimersByTimeAsync(1)
+    await done
+    expect(answer).toBeNull()
+    expect(children[0].signals).toEqual(['SIGKILL'])
+    const next = scan(JOB)
+    expect(children).toHaveLength(2)
+    await ready(children[1])
+    children[1].emit('message', FOUND)
+    expect(await next).toEqual(FOUND)
+    // Whatever the first child says or does now is nobody's answer, and does not make the child that is in use one that is forgotten.
+    children[0].emit('message', { found: null })
+    children[0].emit('exit', null, 'SIGKILL')
+    expect(children[1].signals).toEqual([])
+    const third = scan(JOB)
+    await flush()
+    children[1].emit('message', FOUND)
+    expect(await third).toEqual(FOUND)
+    expect(children).toHaveLength(2)
+  })
+
+  it('does not start the clock of the next job in the time that the one before it takes', async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
+    const { children, scan } = runner()
+    const a = scan(JOB)
+    const b = scan(JOB)
+    await ready(children[0])
+    await vi.advanceTimersByTimeAsync(200)
+    children[0].emit('message', FOUND)
+    await a
+    await vi.advanceTimersByTimeAsync(200)
+    children[0].emit('message', FOUND)
+    expect(await b).toEqual(FOUND)
+    expect(children).toHaveLength(1)
+  })
+
+  it('does not take an answer that came in the budget or later for one, and kills the child', async () => {
+    const real = performance.now.bind(performance)
+    const clock = vi.spyOn(performance, 'now')
+    for (const [gap, expected] of [[249.9, FOUND], [250, null], [10_000, null]]) {
+      let readings = 0
+      clock.mockImplementation(() => (new Error().stack.includes('librariusSend.js') ? (readings++ === 0 ? 1_000 : 1_000 + gap) : real()))
+      const { children, scan } = runner()
+      const done = scan(JOB)
+      await ready(children[0])
+      children[0].emit('message', FOUND)
+      expect(await done, String(gap)).toEqual(expected)
+      expect(children[0].signals, String(gap)).toEqual(expected === null ? ['SIGKILL'] : [])
+    }
+  })
+
+  it('fails a child that is not ready in 2 seconds: every job that waits is answered null, the child is killed, and the next job starts a new one', async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
+    const { children, scan } = runner()
+    const answers = {}
+    const jobs = [1, 2, 3].map((i) => scan(JOB).then((a) => (answers[i] = a)))
+    await vi.advanceTimersByTimeAsync(1_999)
+    expect(answers).toEqual({})
+    expect(children[0].signals).toEqual([])
+    await vi.advanceTimersByTimeAsync(1)
+    await Promise.all(jobs)
+    expect(answers).toEqual({ 1: null, 2: null, 3: null })
+    expect(children).toHaveLength(1)
+    expect(children[0].signals).toEqual(['SIGKILL'])
+    expect(children[0].jobs).toEqual([])
+    const next = scan(JOB)
+    expect(children).toHaveLength(2)
+    await ready(children[1])
+    children[1].emit('message', FOUND)
+    expect(await next).toEqual(FOUND)
+  })
+
+  it('does not take a late "ready" for a child that was failed, and runs jobs that come after it on the new one', async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
+    const { children, scan } = runner()
+    const first = scan(JOB)
+    await vi.advanceTimersByTimeAsync(2_000)
+    expect(await first).toBeNull()
+    const second = scan(JOB)
+    children[0].emit('message', { ready: true })
+    await flush()
+    expect(children[0].jobs).toEqual([])
+    await ready(children[1])
+    expect(children[1].jobs).toEqual([JOB])
+    children[1].emit('message', FOUND)
+    expect(await second).toEqual(FOUND)
+  })
+
+  it('ignores a message that is not "ready" while it waits for it', async () => {
+    const { children, scan } = runner()
+    const done = scan(JOB)
+    for (const message of [{ found: null }, {}, null, 'ready', 5, { ready: 'yes' }, { ready: false }, []]) children[0].emit('message', message)
+    await flush()
+    expect(children[0].jobs).toEqual([])
+    await ready(children[0])
+    expect(children[0].jobs).toEqual([JOB])
+    children[0].emit('message', FOUND)
+    expect(await done).toEqual(FOUND)
+  })
+
+  it('answers null at once, for the waiting jobs too, when the child ends or fails before it is ready, and the next job starts a new one', async () => {
+    for (const event of [['exit', 1, null], ['exit', null, 'SIGKILL'], ['error', new Error('spawn failed')]]) {
+      const { children, scan } = runner()
+      const jobs = [scan(JOB), scan(JOB)]
+      children[0].emit(...event)
+      expect(await Promise.all(jobs), event[0]).toEqual([null, null])
+      expect(children[0].jobs).toEqual([])
+      const next = scan(JOB)
+      expect(children).toHaveLength(2)
+      await ready(children[1])
+      children[1].emit('message', FOUND)
+      expect(await next).toEqual(FOUND)
+    }
+  })
+
+  it('answers null for a job when the child ends in the middle of it, which is no answer of "no match", and starts a new one for the next', async () => {
+    for (const event of [['exit', 1, null], ['exit', null, 'SIGSEGV'], ['error', new Error('broken pipe')]]) {
+      const { children, scan } = runner()
+      const done = scan(JOB)
+      await ready(children[0])
+      const started = performance.now()
+      children[0].emit(...event)
+      expect(await done, event[0]).toBeNull()
+      expect(performance.now() - started).toBeLessThan(200)
+      const next = scan(JOB)
+      expect(children).toHaveLength(2)
+      await ready(children[1])
+      children[1].emit('message', FOUND)
+      expect(await next).toEqual(FOUND)
+    }
+  })
+
+  it('starts a new child for the next job when the one it had ends between two jobs', async () => {
+    const { children, scan } = runner()
+    const first = scan(JOB)
+    await ready(children[0])
+    children[0].emit('message', FOUND)
+    await first
+    children[0].emit('exit', 1, null)
+    const second = scan(JOB)
+    expect(children).toHaveLength(2)
+    await ready(children[1])
+    children[1].emit('message', FOUND)
+    expect(await second).toEqual(FOUND)
+  })
+
+  it('does not end the process for an error of the child, which ends the job it is in, and the next job starts a new child', async () => {
+    const { children, scan } = runner()
+    const first = scan(JOB)
+    await ready(children[0])
+    expect(() => children[0].emit('error', new Error('x'))).not.toThrow()
+    expect(await first).toBeNull()
+    const second = scan(JOB)
+    await ready(children[1])
+    children[1].emit('message', FOUND)
+    expect(await second).toEqual(FOUND)
+    expect(() => children[1].emit('error', new Error('later'))).not.toThrow()
+    expect(() => children[0].emit('error', new Error('later still'))).not.toThrow()
+  })
+
+  it('takes nothing for an answer that has no `found`, and kills the child that said it', async () => {
+    for (const message of [{}, { failed: true }, null, 'found', 5, [], { found: undefined }, { ready: true }]) {
+      const { children, scan } = runner()
+      const done = scan(JOB)
+      await ready(children[0])
+      children[0].emit('message', message)
+      expect(await done, JSON.stringify(message)).toBeNull()
+      expect(children[0].signals).toEqual(['SIGKILL'])
+    }
+  })
+
+  it('answers null for a job that cannot be sent: a refusal of the channel, or a job it cannot write', async () => {
+    const refusing = runner((job, callback) => callback(new Error('channel closed')))
+    const a = refusing.scan(JOB)
+    await ready(refusing.children[0])
+    const started = performance.now()
+    expect(await a).toBeNull()
+    // At once, and not when the 250 ms are over.
+    expect(performance.now() - started).toBeLessThan(150)
+    expect(refusing.children[0].signals).toEqual(['SIGKILL'])
+
+    const throwing = runner(() => {
+      throw new TypeError('cannot write')
+    })
+    const b = throwing.scan(JOB)
+    await ready(throwing.children[0])
+    const throwingStarted = performance.now()
+    expect(await b).toBeNull()
+    expect(performance.now() - throwingStarted).toBeLessThan(150)
+    expect(throwing.children[0].signals).toEqual(['SIGKILL'])
+
+    const next = throwing.scan(JOB)
+    expect(throwing.children).toHaveLength(2)
+    await ready(throwing.children[1])
+    expect(await next).toBeNull()
+  })
+
+  it('takes the callback of a send that went well for nothing', async () => {
+    const { children, scan } = runner((job, callback) => callback(null))
+    const done = scan(JOB)
+    await ready(children[0])
+    children[0].emit('message', FOUND)
+    expect(await done).toEqual(FOUND)
+  })
+
+  it('rejects the job, and not the ones after it, when a child cannot be started at all', async () => {
+    let starts = 0
+    const scan = createRegexRunner(() => {
+      if (starts++ === 0) throw new Error('cannot start')
+      const child = new FakeChild()
+      queueMicrotask(() => child.emit('message', { ready: true }))
+      child.onSend = () => queueMicrotask(() => child.emit('message', FOUND))
+      return child
+    })
+    const [a, b] = await Promise.allSettled([scan(JOB), scan(JOB)])
+    expect(a.status).toBe('rejected')
+    expect(a.reason.message).toBe('cannot start')
+    expect(b).toEqual({ status: 'fulfilled', value: FOUND })
+  })
+
+  it('gives each job that comes together with others the answer that the child gave to it, and no other', async () => {
+    const { children, scan } = runner()
+    const jobs = Array.from({ length: 9 }, (_, i) => scan({ rules: [['x']], texts: [`t${i}`], n: i }))
+    await ready(children[0])
+    for (let i = 0; i < 9; i++) {
+      expect(children[0].jobs[i].n).toBe(i)
+      children[0].emit('message', { found: { text: i, rule: 0, start: i, end: i + 1 } })
+      await flush()
+    }
+    const answers = await Promise.all(jobs)
+    answers.forEach((answer, i) => expect(answer).toEqual({ found: { text: i, rule: 0, start: i, end: i + 1 } }))
+  })
+})
+
+describe('scanInWorker: the one child process, the real one', () => {
+  const alive = (pid) => {
+    try {
+      process.kill(pid, 0)
+      return true
+    } catch (error) {
+      if (error.code === 'ESRCH') return false
+      throw error
+    }
+  }
+  const IPC = { stdio: ['ignore', 'ignore', 'inherit', 'ipc'], serialization: 'json', env: {} }
+  const WORKER = new URL('./librariusRegexWorker.js', import.meta.url).href
+  // A child that is made by a script of the test, in place of the one of the module.
+  const standIn = (script) => () => spawn(process.execPath, ['--input-type=module', '-e', script], IPC)
+  // The module's own child, with what the test needs to know of each: its pid, and the time it was over.
+  function recording(make = spawnRegexWorker) {
+    const children = []
+    const scan = createRegexRunner(() => {
+      const child = make()
+      children.push({ pid: child.pid, ended: new Promise((resolve) => child.once('exit', (code, signal) => resolve({ code, signal }))) })
+      return child
+    })
+    return { children, scan }
+  }
+  const SLOW = { rules: [['(a+)+$']], texts: [`${'a'.repeat(60)}!`] }
+  const FAST = { rules: [['a']], texts: ['xa'] }
+  const FAST_FOUND = { found: { text: 0, rule: 0, start: 1, end: 2 } }
+
   it('answers { found } of a job, and the same job again', async () => {
     const job = { rules: [['zor+p']], texts: ['a zorrp'] }
     expect(await scanInWorker(job)).toEqual({ found: { text: 0, rule: 0, start: 2, end: 7 } })
@@ -920,41 +1459,171 @@ describe('scanInWorker: the one worker', () => {
     expect(await scanInWorker({ rules: [['x']], texts: ['a'] })).toEqual({ found: null })
   })
 
-  it('answers null for a job that crashes the worker, and the next job gets a new one', async () => {
+  it('answers null for a job that cannot be run, a pattern that does not compile, and the next job is answered', async () => {
     expect(await scanInWorker({ rules: [['(']], texts: ['a'] })).toBeNull()
-    expect(await scanInWorker({ rules: [['a']], texts: ['a'] })).toEqual({ found: { text: 0, rule: 0, start: 0, end: 1 } })
+    expect(await scanInWorker(FAST)).toEqual(FAST_FOUND)
   })
 
-  it('rejects a job that cannot be handed over, and the jobs after it still run', async () => {
-    await expect(scanInWorker({ rules: [], texts: [() => 1] })).rejects.toThrow()
-    expect(await scanInWorker({ rules: [['a']], texts: ['a'] })).toEqual({ found: { text: 0, rule: 0, start: 0, end: 1 } })
+  it('answers null for a job that cannot be written to the child, and the jobs after it still run', async () => {
+    // With a child that is ready, so that what is timed is the job and not the start of a child.
+    expect(await scanInWorker(FAST)).toEqual(FAST_FOUND)
+    const started = performance.now()
+    expect(await scanInWorker({ rules: [['a']], texts: [1n] })).toBeNull()
+    expect(performance.now() - started).toBeLessThan(150)
+    expect(await scanInWorker(FAST)).toEqual(FAST_FOUND)
   })
 
-  it('stays answering after a worker is ended for being slow', async () => {
-    expect(await scanInWorker({ rules: [['(a+)+$']], texts: [`${'a'.repeat(60)}!`] })).toBeNull()
-    for (let i = 0; i < 3; i++) expect(await scanInWorker({ rules: [['a']], texts: ['xa'] })).toEqual({ found: { text: 0, rule: 0, start: 1, end: 2 } })
+  it('kills the child of a job that runs past the budget: its pid is gone, and the next job is answered by a new child', async () => {
+    const { children, scan } = recording()
+    const started = performance.now()
+    expect(await scan(SLOW)).toBeNull()
+    const took = performance.now() - started
+    expect(took).toBeGreaterThanOrEqual(240)
+    expect(took).toBeLessThan(2_500)
+    expect(children).toHaveLength(1)
+    expect((await children[0].ended).signal).toBe('SIGKILL')
+    expect(alive(children[0].pid)).toBe(false)
+    expect(await scan(FAST)).toEqual(FAST_FOUND)
+    expect(children).toHaveLength(2)
+    expect(children[1].pid).not.toBe(children[0].pid)
+    expect(alive(children[1].pid)).toBe(true)
+    process.kill(children[1].pid, 'SIGKILL')
+  })
+
+  it('kills the child of every job that goes over, one after the other, and leaves none running', async () => {
+    const { children, scan } = recording()
+    for (let i = 0; i < 3; i++) expect(await scan(SLOW)).toBeNull()
+    expect(children).toHaveLength(3)
+    for (const child of children) {
+      expect((await child.ended).signal).toBe('SIGKILL')
+      expect(alive(child.pid)).toBe(false)
+    }
+  })
+
+  it('answers null for a job in whose middle the child ends, long before the budget, and the next job is answered', async () => {
+    let made = 0
+    const { children, scan } = recording(() => (made++ === 0 ? standIn("process.on('message', () => process.exit(1)); process.send({ ready: true })")() : spawnRegexWorker()))
+    const started = performance.now()
+    expect(await scan(FAST)).toBeNull()
+    expect(performance.now() - started).toBeLessThan(240)
+    expect((await children[0].ended).code).toBe(1)
+    expect(await scan(FAST)).toEqual(FAST_FOUND)
+    expect(children).toHaveLength(2)
+    process.kill(children[1].pid, 'SIGKILL')
+  })
+
+  it('does not count the time a child takes to start in the budget of its first job', async () => {
+    const { children, scan } = recording(standIn(`setTimeout(() => import(${JSON.stringify(WORKER)}), 600)`))
+    const started = performance.now()
+    expect(await scan(FAST)).toEqual(FAST_FOUND)
+    expect(performance.now() - started).toBeGreaterThanOrEqual(600)
+    process.kill(children[0].pid, 'SIGKILL')
+  })
+
+  it('answers null at once for a child that cannot be started, and starts another for the next job', async () => {
+    let made = 0
+    const { children, scan } = recording(() => (made++ === 0 ? spawn('/nonexistent/librarius-regex-child', [], IPC) : spawnRegexWorker()))
+    const started = performance.now()
+    expect(await scan(FAST)).toBeNull()
+    expect(performance.now() - started).toBeLessThan(1_500)
+    expect(await scan(FAST)).toEqual(FAST_FOUND)
+    expect(children).toHaveLength(2)
+    process.kill(children[1].pid, 'SIGKILL')
+  })
+
+  it('starts a new child for the next job when the one it had was killed from outside between two jobs', async () => {
+    const { children, scan } = recording()
+    expect(await scan(FAST)).toEqual(FAST_FOUND)
+    process.kill(children[0].pid, 'SIGKILL')
+    await children[0].ended
+    expect(await scan(FAST)).toEqual(FAST_FOUND)
+    expect(children).toHaveLength(2)
+    process.kill(children[1].pid, 'SIGKILL')
+  })
+
+  it('gives each of many jobs that come together the answer of its own', async () => {
+    const jobs = Array.from({ length: 9 }, (_, i) => ({ rules: [[`t${i}x`], [`t${i}`]], texts: ['nothing', `a t${i}x b`] }))
+    const answers = await Promise.all(jobs.map((job) => scanInWorker(job)))
+    answers.forEach((answer, i) => expect(answer, String(i)).toEqual({ found: { text: 1, rule: 0, start: 2, end: 4 + String(i).length } }))
+  })
+
+  it('gives each of the replies that come together the answer of its own, whatever its rule and its text', async () => {
+    const asked = Array.from({ length: 9 }, (_, i) => {
+      const m = matcher([keywordRule([], { regex_patterns: [`token${i}`] }, { name: `Rule ${i}` })])
+      return { i, answer: m.regex(['nothing', `a token${i} here`]) }
+    })
+    for (const { i, answer } of asked) expect(await answer, String(i)).toEqual({ rule: `Rule ${i}`, text: 1, start: 2, end: 8 })
+  })
+
+  it('does not give the child what the server keeps in its environment', async () => {
+    if (process.platform !== 'linux') return
+    process.env.LIBRARIUS_TEST_SECRET = 'not-for-the-child'
+    try {
+      const { children, scan } = recording()
+      expect(await scan(FAST)).toEqual(FAST_FOUND)
+      const names = readFileSync(`/proc/${children[0].pid}/environ`, 'utf8').split('\0').filter(Boolean).map((entry) => entry.split('=')[0])
+      expect(names.every((name) => name.startsWith('NODE_CHANNEL'))).toBe(true)
+      process.kill(children[0].pid, 'SIGKILL')
+    } finally {
+      delete process.env.LIBRARIUS_TEST_SECRET
+    }
+  })
+
+  it('does not keep a process alive that has nothing else to do, and the child goes with it', async () => {
+    const script = `
+      import { createRegexRunner, spawnRegexWorker } from ${JSON.stringify(new URL('./librariusSend.js', import.meta.url).href)}
+      const pids = []
+      const scan = createRegexRunner(() => { const c = spawnRegexWorker(); pids.push(c.pid); return c })
+      const answer = await scan({ rules: [['a']], texts: ['xa'] })
+      console.log(JSON.stringify({ answer, pids }))
+    `
+    const out = await new Promise((resolve, reject) => {
+      execFile(process.execPath, ['--input-type=module', '-e', script], { timeout: 10_000, env: {} }, (error, stdout) => (error ? reject(error) : resolve(stdout)))
+    })
+    const { answer, pids } = JSON.parse(out)
+    expect(answer).toEqual(FAST_FOUND)
+    await new Promise((resolve) => setTimeout(resolve, 300))
+    expect(alive(pids[0])).toBe(false)
   })
 })
 
-describe('automodMatcher: it stays linear in the length of the text', () => {
+// The tests that time a walk take long where Stryker's instrumented copy of the module runs them (every line asks which mutant is on),
+// far over the 5 s that a test has.
+const TIMED = { timeout: 120_000 }
+
+describe('automodMatcher: it stays linear in the length of the text', TIMED, () => {
   // One word of 16,000 characters, which the old reading walked end to end for every place a keyword met it: seconds, on Bun
-  // 7 s for `*ass*` and 20 s for `*a*`. Each check is 6 to 37 ms now (Node and Bun, see the report), and up to about 1.1 s when
-  // Stryker's instrumented copy of the module runs it. The bound is far above both, so that a loaded host and the mutation run do
-  // not fail it, and still under what a quadratic walk takes, which is more than that on every runtime, instrumented or not.
-  const BOUND_MS = 4_000
-  const timed = (fn) => {
-    const started = performance.now()
-    const value = fn()
-    return { value, ms: performance.now() - started }
-  }
+  // 7 s for `*ass*` and 20 s for `*a*`.
   const word = (unit, n = 16_000) => unit.repeat(Math.ceil(n / unit.length)).slice(0, n)
 
-  it('answers `*a*`, `*ab*` and `*ass*` over one long word, and says where, within the bound', () => {
+  it('measures what it says it does: a walk that is quadratic is over the ratio, and a linear one is under it', () => {
+    const quadratic = (n) => () => {
+      let sum = 0
+      for (let i = 0; i < n; i++) for (let j = 0; j < n; j += 8) sum += i ^ j
+      return sum
+    }
+    const linear = (n) => () => {
+      let sum = 0
+      for (let i = 0; i < n * 64; i++) sum += i ^ 3
+      return sum
+    }
+    expect(scaling(quadratic, 2_000).ratio).toBeGreaterThan(RATIO)
+    expect(scaling(linear, 2_000).ratio).toBeLessThan(RATIO)
+  })
+
+  it('answers `*a*`, `*ab*` and `*ass*` over one long word, and says where', () => {
     for (const [keyword, unit] of [['*a*', 'a'], ['*ab*', 'ab'], ['*ass*', 'ass'], ['*a*', 'ab'], ['*ass*', 'bass']]) {
-      const text = word(unit)
-      const { value, ms } = timed(() => find([keyword], text))
-      expect(value, keyword + unit).toEqual(hit(0, 16_000))
-      expect(ms, keyword + unit).toBeLessThan(BOUND_MS)
+      expect(find([keyword], word(unit)), keyword + unit).toEqual(hit(0, 16_000))
+    }
+  })
+
+  it('takes four times as long for four times the word, with `*a*` and `*ass*`', () => {
+    for (const [keyword, unit] of [['*a*', 'a'], ['*ass*', 'ass'], ['*ass*', 'bass']]) {
+      expectLinear(keyword + unit, (n) => {
+        const text = word(unit, n)
+        const m = matcher([keywordRule([keyword])])
+        return () => m(text)
+      })
     }
   })
 
@@ -972,51 +1641,228 @@ describe('automodMatcher: it stays linear in the length of the text', () => {
     expect(find(['zorp'], '\u{10428}zorp')).toBeNull()
   })
 
-  it('answers a prefix and a suffix keyword over one long word, within the bound', () => {
+  it('answers a prefix and a suffix keyword over one long word', () => {
     const text = word('a')
     for (const [keywords, expected] of [[['a*'], hit(0, 16_000)], [['*a'], hit(0, 16_000)], [['aa*'], hit(0, 16_000)], [['*aa'], hit(0, 16_000)], [['a'], null], [['ab*'], null], [['*ba'], null], [['*a*b'], null]]) {
-      const { value, ms } = timed(() => find(keywords, text))
-      expect(value, keywords.join()).toEqual(expected)
-      expect(ms, keywords.join()).toBeLessThan(BOUND_MS)
+      expect(find(keywords, text), keywords.join()).toEqual(expected)
     }
   })
 
-  it('answers when every place the keyword meets the word is a match, whatever the word is made of', () => {
-    for (const unit of ['é', '𐐨', 'a\u0301', 'a\u200b', 'a*', 'a_']) {
-      const text = word(unit, 15_000)
-      const { ms } = timed(() => find(['*a*', '*𐐨*', '*é*'], text))
-      expect(ms, JSON.stringify(unit)).toBeLessThan(BOUND_MS)
+  it('takes four times as long for four times the word, with a prefix, a suffix, a whole word and a wildcard in the middle', () => {
+    for (const keywords of [['a*'], ['*aa'], ['a'], ['*a*b']]) {
+      expectLinear(keywords.join(), (n) => {
+        const text = word('a', n)
+        const m = matcher([keywordRule(keywords)])
+        return () => m(text)
+      })
     }
+  })
+
+  it('takes four times as long for four times the word, whatever the word is made of, when every place the keyword meets it is a match', () => {
+    for (const unit of ['𐐨', 'a\u200b', 'a*']) {
+      expectLinear(JSON.stringify(unit), (n) => {
+        const text = word(unit, n)
+        const m = matcher([keywordRule(['*a*', '*𐐨*', '*é*'])])
+        return () => m(text)
+      })
+    }
+  })
+
+  it('lets an allow entry that is free at both ends cover the match of a place it did not start from, in a word that has no letters in it', () => {
+    // `*a1*` matches at 0 (the word is the letter at 2 as well: it ends at 3) and at 2 (it ends at 4): the second is the one that covers `a1` there.
+    expect(find(['a1'], 'a1a1', { allow_list: ['*a1*'] })).toBeNull()
+    expect(find(['a1'], 'a1a1')).toEqual(hit(2, 4))
+    expect(find(['a1'], 'a1a1 a1', { allow_list: ['*a1*'] })).toBeNull()
+    expect(find(['1a'], 'a1a1', { allow_list: ['*1a*'] })).toBeNull()
   })
 
   it('stops at the first match the allow list does not cover, and walks the rest only while it does', () => {
     const text = word('a')
     // Every match is inside the word, which the allow list covers: all of them are looked at, each in a moment.
-    const covered = timed(() => find(['*a*'], text, { allow_list: ['*a*'] }))
-    expect(covered.value).toBeNull()
-    expect(covered.ms).toBeLessThan(BOUND_MS)
+    expect(find(['*a*'], text, { allow_list: ['*a*'] })).toBeNull()
     // The first word is covered, in every one of its 8,000 places; the second is not, and is what is found.
-    const partly = timed(() => find(['*a*'], `${'a'.repeat(8_000)} ${'a'.repeat(7_000)}`, { allow_list: [`*${'a'.repeat(7_500)}*`] }))
-    expect(partly.value).toEqual(hit(8_001, 15_001))
-    expect(partly.ms).toBeLessThan(BOUND_MS)
-    const first = timed(() => find(['*a*'], `${'a'.repeat(7_000)} ${'a'.repeat(8_000)}`, { allow_list: [`*${'a'.repeat(7_500)}*`] }))
-    expect(first.value).toEqual(hit(0, 7_000))
-    expect(first.ms).toBeLessThan(BOUND_MS)
-    const many = timed(() => find(['a*', '*a', '*a*'], text, { allow_list: ['*aa*', 'a*', '*a'] }))
-    expect(many.value).toBeNull()
-    expect(many.ms).toBeLessThan(BOUND_MS)
+    expect(find(['*a*'], `${'a'.repeat(8_000)} ${'a'.repeat(7_000)}`, { allow_list: [`*${'a'.repeat(7_500)}*`] })).toEqual(hit(8_001, 15_001))
+    expect(find(['*a*'], `${'a'.repeat(7_000)} ${'a'.repeat(8_000)}`, { allow_list: [`*${'a'.repeat(7_500)}*`] })).toEqual(hit(0, 7_000))
+    expect(find(['a*', '*a', '*a*'], text, { allow_list: ['*aa*', 'a*', '*a'] })).toBeNull()
   })
 
-  it('answers a text of many short words, and a keyword in all of them, within the bound', () => {
-    const text = 'ass '.repeat(4_000)
-    for (const keywords of [['*ass*'], ['ass'], ['ass*'], ['*ass']]) {
-      const { value, ms } = timed(() => find(keywords, text))
-      expect(value, keywords.join()).toEqual(hit(0, 3))
-      expect(ms, keywords.join()).toBeLessThan(BOUND_MS)
+  it('takes four times as long for four times the word, with an allow list that covers every match, and with several rules', () => {
+    for (const [keywords, allow] of [[['*a*'], ['*a*']], [['a*', '*a', '*a*'], ['*aa*', 'a*', '*a']]]) {
+      expectLinear(`${keywords} / ${allow}`, (n) => {
+        const text = word('a', n)
+        const m = matcher([keywordRule(keywords, { allow_list: allow })])
+        return () => m(text)
+      })
     }
-    const allowed = timed(() => find(['*ass*'], text, { allow_list: ['ass'] }))
-    expect(allowed.value).toBeNull()
-    expect(allowed.ms).toBeLessThan(BOUND_MS)
+  })
+
+  it('takes no longer for 100 allow entries that overlap on one word of 11,000 characters, which each cover every match', () => {
+    const allow = Array.from({ length: 100 }, (_, i) => `*${'a'.repeat(i + 1)}*`)
+    const text = word('a', 11_000)
+    const m = matcher([keywordRule(['*a*'], { allow_list: allow })])
+    expect(m(text)).toBeNull()
+    // 5 to 13 ms (Node and Bun); the walk that looks at every place that each of the 100 entries matches at, which is 1.1 million
+    // matches and 55 million comparisons, took 150 to 250 ms, and takes about 4 times that in Stryker's copy of the module.
+    expect(timeOf(() => m(text))).toBeLessThan(150)
+  })
+
+  it('answers a text of many short words, and a keyword in all of them', () => {
+    const text = 'ass '.repeat(4_000)
+    for (const keywords of [['*ass*'], ['ass'], ['ass*'], ['*ass']]) expect(find(keywords, text), keywords.join()).toEqual(hit(0, 3))
+    expect(find(['*ass*'], text, { allow_list: ['ass'] })).toBeNull()
+  })
+
+  it('takes four times as long for four times the words, when there are many short ones', () => {
+    for (const [keywords, allow] of [[['*ass*'], []], [['ass'], []], [['*ass*'], ['ass']]]) {
+      expectLinear(`${keywords} / ${allow}`, (n) => {
+        const text = 'ass '.repeat(n / 4)
+        const m = matcher([keywordRule(keywords, { allow_list: allow })])
+        return () => m(text)
+      })
+    }
+  })
+})
+
+describe('automodMatcher: a text that folds to far more than it is', () => {
+  const guard = matcher([keywordRule(['zorp'])])
+  const FDFA = '\ufdfa'
+  // Of the characters that make up the text, `fdfa` fold to 18 each (U+FDFA) and `plain` to one.
+  const mixed = (fdfa, plain) => FDFA.repeat(fdfa) + 'a'.repeat(plain)
+
+  it('throws Unfoldable for a text that folds to more than 4 times its length, and takes one that folds to exactly that', () => {
+    // 45 characters of 255 fold to 18 each: 210 + 810 = 1,020, which is 4 times 255.
+    expect(guard(mixed(45, 210))).toBeNull()
+    throwsAs(() => guard(mixed(46, 209)), Unfoldable, 'the text folds to more than it may')
+    expect(guard(mixed(45, 210).replace('a', ' zorp '))).toEqual(hit(46, 50))
+  })
+
+  it('lets a short text fold to 1,000 whatever its length, since nothing short can make the work long', () => {
+    expect(guard(mixed(55, 10))).toBeNull()
+    throwsAs(() => guard(mixed(55, 11)), Unfoldable, 'the text folds to more than it may')
+    expect(guard(FDFA)).toBeNull()
+    expect(guard(FDFA.repeat(3))).toBeNull()
+  })
+
+  it('takes the texts that folding makes longer by a little, as most of what is written in a script with accents or capitals does', () => {
+    expect(guard('É'.repeat(4_000))).toBeNull()
+    expect(guard('é'.repeat(4_000))).toBeNull()
+    expect(guard('ß'.repeat(4_000))).toBeNull()
+    expect(guard('ǆ'.repeat(4_000))).toBeNull()
+    expect(guard('x   '.repeat(2_000))).toBeNull()
+  })
+
+  it('takes a text that grows to the total that is left, charges it, and throws for one that grows past it', () => {
+    // Each ß folds to ss: one more than it is.
+    const spend = { left: 250 }
+    expect(guard('ß'.repeat(100), spend)).toBeNull()
+    expect(spend.left).toBe(150)
+    expect(guard('abc', spend)).toBeNull()
+    expect(spend.left).toBe(150)
+    expect(guard('ß'.repeat(150), spend)).toBeNull()
+    expect(spend.left).toBe(0)
+    expect(guard('abc', spend)).toBeNull()
+    throwsAs(() => guard('ß', spend), Unfoldable, 'the text folds to more than it may')
+    expect(spend.left).toBe(0)
+    throwsAs(() => guard('ß'.repeat(100), { left: 99 }), Unfoldable, 'the text folds to more than it may')
+  })
+
+  it('lets one reply grow its texts to 64,000 characters in all, which a call that is not given a total has to itself', () => {
+    expect(guard('ß'.repeat(64_000))).toBeNull()
+    throwsAs(() => guard('ß'.repeat(64_001)), Unfoldable, 'the text folds to more than it may')
+    // What is charged is not charged twice, nor kept from one call to the next.
+    expect(guard('ß'.repeat(64_000))).toBeNull()
+  })
+
+  it('does not fold at all, and so does not throw, when no rule has a keyword to look for', () => {
+    const big = FDFA.repeat(11_000)
+    expect(matcher([])(big)).toBeNull()
+    expect(matcher([keywordRule([], { regex_patterns: ['x'] })])(big)).toBeNull()
+    expect(matcher([keywordRule(['zorp'], {}, { enabled: false })])(big)).toBeNull()
+    expect(matcher([keywordRule(['zorp'], {}, { exempt_roles: [ROLE_A] })], { memberRoleIds: [ROLE_A] })(big)).toBeNull()
+    expect(matcher([mentionRule(5)])(big)).toBeNull()
+    // The keywords that are looked for as they are written are not folded either.
+    expect(matcher([keywordRule(['||'])])(`${big}||`)).toEqual(hit(11_000, 11_002))
+  })
+
+  it('answers 11,000 characters that fold to 18 each in a few milliseconds, where reading them took seconds', () => {
+    const started = performance.now()
+    throwsAs(() => guard(FDFA.repeat(11_000)), Unfoldable, 'the text folds to more than it may')
+    // 7 s on Node and 0.33 s on Bun before the bound; about 5 ms now.
+    expect(performance.now() - started).toBeLessThan(250)
+  })
+
+  it('does not fold a keyword, which the people who manage the server wrote, against the bound', () => {
+    expect(() => matcher([keywordRule([FDFA.repeat(60)])])).not.toThrow()
+    expect(matcher([keywordRule([FDFA.repeat(40)])])(`a ${FDFA.repeat(40)} b`)).toEqual(hit(2, 42))
+  })
+})
+
+describe('automodMatcher: what shows as blank', () => {
+  // Characters that show nothing and are no space, no control and no format character: the fillers of Hangul, the blank of Braille, and
+  // the ones that Unicode keeps for what is not yet written (the default ignorables, assigned or not).
+  const BLANKS = ['\u115f', '\u1160', '\u3164', '\uffa0', '\u2800', '\u2065', '\ufff0', '\u{e0000}', '\u17b5', '\u034f']
+
+  it('reads each of them as nothing and as a space, so that a word they split is found, and so is a phrase they stand in for the space of', () => {
+    for (const blank of BLANKS) {
+      const name = `U+${blank.codePointAt(0).toString(16)}`
+      expect(find(['zorp'], `zo${blank}rp`), name).toEqual(hit(0, 4 + blank.length))
+      expect(find(['the mat'], `the${blank}mat`), name).toEqual(hit(0, 6 + blank.length))
+      expect(find(['*zorp'], `a ${blank}zorp`), name).toEqual(hit(2 + blank.length, 6 + blank.length))
+      expect(find(['zorp'], `zo${blank}${blank}rp`), name).toEqual(hit(0, 4 + 2 * blank.length))
+      expect(find(['zorp'], `zo${blank}x${blank}rp`), name).toBeNull()
+    }
+  })
+
+  it('reads the examples of the review: the filler of Hangul between two words, and the unassigned ignorable inside one', () => {
+    expect(find(['the mat'], 'the\u3164mat')).toEqual(hit(0, 7))
+    expect(find(['zorp'], 'zo\u2065rp')).toEqual(hit(0, 5))
+  })
+
+  it('does not read a letter of Hangul, or a pattern of Braille that is not blank, as nothing', () => {
+    expect(find(['zorp'], 'zoㄱrp')).toBeNull()
+    expect(find(['zorp'], 'zo⠁rp')).toBeNull()
+    expect(find(['zorp'], 'zoᅡrp')).toBeNull()
+  })
+
+  it('strips them from a name, where they could hide a word that Discord refuses', () => {
+    expect(cleanName('disc\u3164ord')).toBe('Member')
+    expect(cleanName('cly\u2800de')).toBe('Member')
+  })
+})
+
+describe('unmasked: the text of the masked links of a text, without their brackets and their addresses', TIMED, () => {
+  it('is the text of a link put where the link was, and the text before and after it as it was', () => {
+    expect(unmasked('[zo](https://e.com)rp')).toBe('zorp')
+    expect(unmasked('zo[rp](https://e.com)')).toBe('zorp')
+    expect(unmasked('a [b](https://e.com) c [d](https://f.com) e')).toBe('a b c d e')
+    expect(unmasked('[a](u)[b](u)[c](u)')).toBe('abc')
+    expect(unmasked('[](https://e.com)x')).toBe('x')
+    expect(unmasked('[zo]()rp')).toBe('zorp')
+  })
+
+  it('reads the address as Discord does: a title, angle brackets, one level of parentheses, and a space of the one that writes it', () => {
+    for (const link of ['[zo](https://e.com "a title")rp', '[zo](<https://e.com>)rp', '[zo](https://e.com/a_(b))rp', '[zo]( https://e.com )rp', '[zo](https://e.com/(a)(b))rp']) {
+      expect(unmasked(link), link).toBe('zorp')
+    }
+  })
+
+  it('leaves what is not a masked link as it is', () => {
+    for (const text of ['zorp', '', '[zo]', '[zo] (https://e.com)rp', '[zo](https://e.com', '[zo\nx](https://e.com)rp', '(zo)[rp]', '[zo][rp]', '[zo](https://e.com\n)rp', '[zo](https://e.com/((a)))rp', '[zo[x]](u)', '](u)', '[](']) {
+      expect(unmasked(text), JSON.stringify(text)).toBe(text)
+    }
+  })
+
+  it('reads the inner link of two that are nested, which is what Discord shows of them, once', () => {
+    expect(unmasked('[a [zo](u)rp](v)')).toBe('[a zorp](v)')
+  })
+
+  it('takes four times as long for four times the text, whatever the shape of the text that is no link, or half of one', () => {
+    for (const unit of ['[a](', '[', '](', '[a](b', '[a](b)', '[a](b "']) {
+      expectLinear(JSON.stringify(unit), (n) => {
+        const text = unit.repeat(Math.ceil(n / unit.length))
+        return () => unmasked(text)
+      })
+    }
   })
 })
 
@@ -1252,7 +2098,8 @@ describe('automodMatcher: against a plain model of the rules', () => {
 })
 
 const none = () => null
-const opts = (over = {}) => ({ form: 'v2', automod: none, ownUploadIds: [], ...over })
+const SITE = 'https://example.test/x'
+const opts = (over = {}) => ({ form: 'v2', automod: none, ownUploadIds: [], authorId: U1, siteUrl: SITE, ...over })
 const send = (input, over) => validateReply(input, opts(over))
 const reply = (source, over = {}) => ({ source, replyTo: null, mentions: [], uploads: [], ...over })
 
@@ -1375,13 +2222,13 @@ describe('validateReply: the 3 messages of Discord', () => {
   })
 
   it('uses the primary form when it is not told', async () => {
-    expect((await validateReply(reply(words(1_300)), { automod: none, ownUploadIds: [] })).ok).toBe(true)
+    expect((await validateReply(reply(words(1_300)), { automod: none, ownUploadIds: [], authorId: U1, siteUrl: SITE })).ok).toBe(true)
   })
 
   // The first size of a reply, in words, that one set of options takes and another does not: where a length of the footer, the
   // author or the reply line shows. The plain form holds about 1,050 of these words in 3 messages.
   const between = async (take, refuse) => {
-    for (let n = 900; n < 1_100; n++) if ((await send(reply(words(n)), take)).ok && (await send(reply(words(n)), refuse)).status === 413) return n
+    for (let n = 1_000; n < 1_150; n++) if ((await send(reply(words(n)), take)).ok && (await send(reply(words(n)), refuse)).status === 413) return n
     return null
   }
 
@@ -1394,20 +2241,24 @@ describe('validateReply: the 3 messages of Discord', () => {
     expect(await send(reply(words(n)), { form: 'plain', siteUrl: long })).toEqual(BUDGET)
   })
 
-  it('counts the longest footer there can be when it is not told what it is', async () => {
-    const longest = `https://${'a'.repeat(192)}`
-    expect(longest).toHaveLength(200)
-    for (const n of [1_040, 1_050, 1_056, 1_057, 1_058, 1_060]) {
-      const known = await send(reply(words(n)), { form: 'plain', siteUrl: longest, authorId: '9'.repeat(20) })
-      expect(await send(reply(words(n)), { form: 'plain' }), String(n)).toEqual(known)
+  it('has to be told who writes and where the button goes, so that what it counts and what it checks are what is sent', async () => {
+    const options = { form: 'v2', automod: none, ownUploadIds: [] }
+    for (const [name, value] of [['authorId', undefined], ['authorId', null], ['authorId', 5], ['authorId', {}], ['siteUrl', undefined], ['siteUrl', null], ['siteUrl', 5], ['siteUrl', ['https://s.example/']]]) {
+      const given = { authorId: U1, siteUrl: SITE, ...options, [name]: value }
+      await rejectsAs(validateReply(reply('hi'), given), TypeError, `${name} must be a string`)
+      // Before the reply is looked at: a reply that is refused for what it says is no excuse.
+      await rejectsAs(validateReply(reply(''), given), TypeError, `${name} must be a string`)
     }
+    await rejectsAs(validateReply(reply('hi'), options), TypeError, 'authorId must be a string')
   })
 
   it('counts the room that the author takes, as the caller says it is', async () => {
-    const n = await between({ form: 'plain', authorId: '1'.repeat(17) }, { form: 'plain', authorId: '1'.repeat(20) })
+    // With the longest link there can be, so that the 3 characters of the author are the ones that decide.
+    const siteUrl = `https://${'a'.repeat(192)}`
+    const n = await between({ form: 'plain', siteUrl, authorId: '1'.repeat(17) }, { form: 'plain', siteUrl, authorId: '1'.repeat(20) })
     expect(n).not.toBeNull()
-    expect(await send(reply(words(n)), { form: 'plain' })).toEqual(BUDGET)
-    expect((await send(reply(words(n)), { form: 'plain', authorId: U1 })).ok).toBe(true)
+    expect(await send(reply(words(n)), { form: 'plain', siteUrl, authorId: '1'.repeat(20) })).toEqual(BUDGET)
+    expect((await send(reply(words(n)), { form: 'plain', siteUrl, authorId: '1'.repeat(17) })).ok).toBe(true)
     await expect(send(reply('hi'), { authorId: 'x' })).rejects.toThrow(RangeError)
     await expect(send(reply('hi'), { siteUrl: 'http://s.example/' })).rejects.toThrow(RangeError)
   })
@@ -1415,7 +2266,7 @@ describe('validateReply: the 3 messages of Discord', () => {
   it('counts the room that the reply line takes', async () => {
     const replyTo = { authorId: REPLIED, url: JUMP }
     let n = null
-    for (let k = 900; k < 1_100 && n === null; k++) {
+    for (let k = 1_000; k < 1_150 && n === null; k++) {
       const without = (await send(reply(words(k)), { form: 'plain' })).ok
       if (without && (await send(reply(words(k), { replyTo }), { form: 'plain' })).status === 413) n = k
     }
@@ -2094,15 +2945,25 @@ describe('validateReply: the regular expressions of the server\'s rules', () => 
   const UNCHECKED = { ok: false, status: 422, error: "This reply couldn't be checked against the server's rules. Try a shorter one." }
   const by = (rules, source, over = {}) => send(reply(source, over.reply), { automod: matcher(rules), ...over.options })
 
-  it('refuses a reply that a pattern matches, with the rule and where in the source', async () => {
-    expect(await by([withRegex(['zor+p'], { name: 'No Zorp' })], 'Say zorrp now')).toEqual({
-      ok: false,
-      status: 422,
-      error: 'Blocked by the server\'s AutoMod rule "No Zorp".',
-      rule: 'No Zorp',
-      match: { start: 4, end: 9 },
-    })
-    expect((await by([withRegex(['zor+p'])], 'Say nothing')).ok).toBe(true)
+  it('refuses a reply that a pattern matches in what is sent, with the rule and no place, since the place is in a text the writer never sees', async () => {
+    for (const form of ['v2', 'plain']) {
+      expect(await by([withRegex(['zor+p'], { name: 'No Zorp' })], 'Say zorrp now', { options: { form } })).toEqual({
+        ok: false,
+        status: 422,
+        error: 'Blocked by the server\'s AutoMod rule "No Zorp".',
+        rule: 'No Zorp',
+        match: null,
+      })
+      expect((await by([withRegex(['zor+p'])], 'Say nothing', { options: { form } })).ok).toBe(true)
+    }
+  })
+
+  it('runs the patterns over what is sent and not over the source, which holds what is not sent', async () => {
+    const options = { ownUploadIds: ['u1'] }
+    const input = { reply: { uploads: ['u1'] }, options }
+    expect((await by([withRegex(['upload'])], 'a ![x](upload:1) b', input)).ok).toBe(true)
+    expect((await by([withRegex(['\\!\\['])], 'a ![x](upload:1) b', input)).ok).toBe(true)
+    expect((await by([withRegex(['a\\s+b'])], 'a ![x](upload:1) b', input)).rule).toBe('Test Rule')
   })
 
   it('refuses a reply that a pattern matches only in what is sent, with no match in the source', async () => {
@@ -2110,11 +2971,12 @@ describe('validateReply: the regular expressions of the server\'s rules', () => 
     expect(r).toEqual({ ok: false, status: 422, error: 'Blocked by the server\'s AutoMod rule "No Zorp".', rule: 'No Zorp', match: null })
   })
 
-  it('says it could not check a reply of more than 10,000 characters, when a pattern would have to run, and no rule name', async () => {
+  it('checks a reply of more than 10,000 characters message by message, so that no pattern runs over all of it', async () => {
     const long = `${'word '.repeat(2_100)}x`
     expect(long.length).toBeGreaterThan(10_000)
-    expect(await by([withRegex(['needle'])], long)).toEqual(UNCHECKED)
-    expect((await by([keywordRule(['needle'])], long)).ok).toBe(true)
+    // Three messages of the primary form hold about 11,800 characters.
+    expect((await by([withRegex(['needle'])], long)).ok).toBe(true)
+    expect((await by([withRegex(['needle'], { name: 'Last' })], `${long} needle`)).rule).toBe('Last')
     expect((await by([withRegex(['needle'], { enabled: false })], long)).ok).toBe(true)
   })
 
@@ -2143,13 +3005,155 @@ describe('validateReply: the regular expressions of the server\'s rules', () => 
     expect((await send(reply('zorp'), { automod: () => null })).ok).toBe(true)
   })
 
-  it('asks for the source first, then each text that is sent, in one go', async () => {
+  it('asks for the texts that are sent, in one go, and never for the source', async () => {
     const asked = []
     const automod = Object.assign(() => null, { regex: async (texts) => (asked.push(texts), null) })
     expect((await send(reply('Say hi'), { automod })).ok).toBe(true)
-    expect(asked).toEqual([['Say hi', 'Say hi']])
-    expect((await send(reply('x'), { automod: Object.assign(() => null, { regex: async () => ({ rule: 'Mock', text: 1, start: 0, end: 1 }) }) })).match).toBeNull()
-    expect((await send(reply('x'), { automod: Object.assign(() => null, { regex: async () => ({ rule: 'Mock', text: 0, start: 0, end: 1 }) }) })).match).toEqual({ start: 0, end: 1 })
+    expect((await send(reply('x ![](upload:1) y', { uploads: ['u1'] }), { automod, ownUploadIds: ['u1'], form: 'plain' })).ok).toBe(true)
+    expect(asked).toEqual([['Say hi'], ['x  y']])
+    for (const text of [0, 1]) {
+      const found = Object.assign(() => null, { regex: async () => ({ rule: 'Mock', text, start: 0, end: 1 }) })
+      expect(await send(reply('x'), { automod: found })).toEqual({ ok: false, status: 422, error: 'Blocked by the server\'s AutoMod rule "Mock".', rule: 'Mock', match: null })
+    }
+  })
+})
+
+describe('validateReply: a reply whose texts fold to far more than they are', () => {
+  const UNCHECKED = { ok: false, status: 422, error: "This reply couldn't be checked against the server's rules. Try a shorter one." }
+  const zorp = () => matcher([keywordRule(['zorp'], {}, { name: 'No Zorp' })])
+  const FDFA = '\ufdfa'
+  // n characters of the text, whole ones.
+  const fit = (unit, n) => {
+    let text = ''
+    while (text.length < n) text += unit
+    return text.slice(0, n).replace(/[\ud800-\udbff]$/, '')
+  }
+
+  it('refuses 11,000 characters that fold to 18 each as a reply that could not be checked, within a few milliseconds', async () => {
+    const started = performance.now()
+    expect(await send(reply(FDFA.repeat(11_000)), { automod: zorp() })).toEqual(UNCHECKED)
+    // The keywords took 7 s on Node and 0.33 s on Bun for this before the bound; the bound answers in about 5 ms on both.
+    expect(performance.now() - started).toBeLessThan(250)
+  })
+
+  it('refuses it in the fallback form too, and when it is a part of a longer reply', async () => {
+    expect(await send(reply(FDFA.repeat(1_900)), { automod: zorp(), form: 'plain' })).toEqual(UNCHECKED)
+    expect(await send(reply(`${'word '.repeat(500)}${FDFA.repeat(2_000)}`), { automod: zorp() })).toEqual(UNCHECKED)
+  })
+
+  it('takes it when no rule would read it, which is no keyword rule or none that applies', async () => {
+    expect((await send(reply(FDFA.repeat(11_000)))).ok).toBe(true)
+    expect((await send(reply(FDFA.repeat(11_000)), { automod: matcher([]) })).ok).toBe(true)
+    expect((await send(reply(FDFA.repeat(11_000)), { automod: matcher([keywordRule([], { regex_patterns: ['x'] })]) })).ok).toBe(true)
+  })
+
+  it('does not refuse the ordinary replies of about 10,000 characters in scripts that grow when they are folded, or in emoji', async () => {
+    const ordinary = {
+      Korean: '안녕하세요 여러분, 오늘은 날씨가 정말 좋네요. 같이 게임해요! 한글은 음절마다 두세 개의 자모로 풀립니다. ',
+      Arabic: 'مَرْحَبًا بِكُمْ فِي موقعنا الرسمي، ﷲ يحفظكم. شكراً جزيلاً على الدعم والمساعدة. ',
+      Devanagari: 'नमस्ते दुनिया, यह एक परीक्षण है। क़ख़ग ज़िंदगी फ़ौज और ड़ाल। मुझे हिंदी में लिखना पसंद है। ',
+      Japanese: 'こんにちは世界、これはテストです。ｶﾞｷﾞｸﾞｹﾞｺﾞ ガギグゲゴ ﾊﾟﾋﾟﾌﾟ 日本語の文章です。',
+      emoji: '😀👍🎉❤️👨‍👩‍👧🏳️‍🌈 hi 🔥🔥🔥 ',
+    }
+    for (const [name, unit] of Object.entries(ordinary)) {
+      const text = fit(unit, 10_000)
+      expect(text.length, name).toBeGreaterThan(9_990)
+      const r = await send(reply(text), { automod: zorp() })
+      expect(r.ok, name).toBe(true)
+    }
+  })
+
+  it('does not refuse ordinary text that grows as much as the scripts that grow most, whole as a reply of 3 messages', async () => {
+    // Hangul syllables with a final consonant are three letters when they are taken apart: about as long as a text gets in daily use.
+    const all3 = fit('각낙닥락막박삭악작착칵탁팍학', 10_000)
+    expect(all3.normalize('NFKD').length).toBeGreaterThan(29_000)
+    expect((await send(reply(all3), { automod: zorp() })).ok).toBe(true)
+  })
+
+  it('counts what every text of the reply adds, the source, the messages and the texts that are read without the brackets of a link, together', async () => {
+    // 17 plain characters and 3 that fold to 18: each text of it is 3.55 times as long folded, and adds 2.55 characters for each it has.
+    const dense = fit(`${'a'.repeat(17)}${FDFA.repeat(3)}`, 10_900)
+    // The source and the messages: about 2 * 28,000 added, which is under 64,000.
+    expect((await send(reply(dense), { automod: zorp() })).ok).toBe(true)
+    // The same with a masked link as well: the texts without its brackets are read too, which is more than the total.
+    expect(await send(reply(`[x](https://e.com) ${dense}`), { automod: zorp() })).toEqual(UNCHECKED)
+  })
+
+  it('gives the matcher one allowance for the whole reply, and a new one for the next', async () => {
+    const seen = []
+    const automod = (text, spend) => (seen.push(spend), null)
+    await send(reply('Say hi'), { automod })
+    await send(reply('Say hi'), { automod })
+    expect(seen).toHaveLength(4)
+    expect(seen[0]).toBe(seen[1])
+    expect(seen[2]).toBe(seen[3])
+    expect(seen[0]).not.toBe(seen[2])
+    expect(seen[0]).toEqual({ left: 64_000 })
+  })
+
+  it('does not take another error of the matcher for a reply that could not be checked', async () => {
+    const automod = () => {
+      throw new TypeError('the matcher is broken')
+    }
+    await rejectsAs(send(reply('Say hi'), { automod }), TypeError, 'the matcher is broken')
+    const unfoldable = () => {
+      throw new Unfoldable()
+    }
+    expect(await send(reply('Say hi'), { automod: unfoldable })).toEqual(UNCHECKED)
+  })
+})
+
+describe('validateReply: a masked link, read without its brackets as well', () => {
+  const REFUSED = { ok: false, status: 422, error: 'Blocked by the server\'s AutoMod rule "No Zorp".', rule: 'No Zorp', match: null }
+  const zorp = () => matcher([keywordRule(['zorp'], {}, { name: 'No Zorp' })])
+
+  it('refuses the word that the text of a link and the text beside it make, in both forms, with no place in the source', async () => {
+    for (const form of ['v2', 'plain']) {
+      for (const source of ['[zo](https://e.com)rp', 'zo[rp](https://e.com)', '[zo](https://e.com)[rp](https://e.com)', '[z](https://e.com)[o](https://e.com)[r](https://e.com)[p](https://e.com)', '[zo](https://e.com "a title")rp', '[zo](<https://e.com>)rp', '[zo](https://e.com/a_(b))rp', '**[zo](https://e.com)rp**']) {
+        expect(await send(reply(source), { automod: zorp(), form }), `${form} ${source}`).toEqual(REFUSED)
+      }
+    }
+  })
+
+  it('takes what is no word of the rule once the links are read without their brackets, and what is no masked link', async () => {
+    for (const source of ['[zo](https://e.com)xp', '[zo] (https://e.com)rp', '[zo](https://e.com', '[zo\nx](https://e.com)rp', '(zo)[rp]', '[zo][rp]']) {
+      expect((await send(reply(source), { automod: zorp() })).ok, source).toBe(true)
+    }
+  })
+
+  it('refuses it when only what is sent holds it, as a picture of the source stands between the two halves there', async () => {
+    const source = '[zo](https://e.com)![x](upload:1)rp'
+    for (const form of ['v2', 'plain']) {
+      expect(await send(reply(source, { uploads: ['u1'] }), { automod: zorp(), ownUploadIds: ['u1'], form }), form).toEqual(REFUSED)
+    }
+  })
+
+  it('asks the matcher about the source and each message, and each of them again without the brackets of its links when that is not the same', async () => {
+    const seen = []
+    const automod = (text) => (seen.push(text), null)
+    await send(reply('[zo](https://e.com)rp'), { automod, form: 'plain' })
+    expect(seen).toEqual(['[zo](https://e.com)rp', 'zorp', '[zo](<https://e.com>)rp', 'zorp'])
+    seen.length = 0
+    await send(reply('fine'), { automod, form: 'plain' })
+    expect(seen).toEqual(['fine', 'fine'])
+    seen.length = 0
+    await send(reply('[a](https://e.com) b'), { automod, form: 'plain' })
+    expect(seen).toEqual(['[a](https://e.com) b', 'a b', '[a](<https://e.com>) b', 'a b'])
+  })
+
+  it('asks about the source with its links read and the messages without, for a link that exists only in the source', async () => {
+    const seen = []
+    const automod = (text) => (seen.push(text), null)
+    await send(reply('[zo](https://e.com)![x](upload:1)rp', { uploads: ['u1'] }), { automod, ownUploadIds: ['u1'], form: 'plain' })
+    expect(seen).toEqual(['[zo](https://e.com)![x](upload:1)rp', 'zo!xrp', '[zo](<https://e.com>)rp', 'zorp'])
+  })
+
+  it('answers a text of nothing but links and brackets at the speed of any other text', async () => {
+    for (const unit of ['[a](', '[', '](', '[a](b', '[a](b)']) {
+      const started = performance.now()
+      await send(reply(unit.repeat(Math.floor(15_000 / unit.length))), { automod: zorp(), form: 'v2' })
+      expect(performance.now() - started, unit).toBeLessThan(3_000)
+    }
   })
 })
 
@@ -2178,7 +3182,7 @@ describe('validateReply: the options', () => {
   })
 
   it('takes no form for the primary form', async () => {
-    expect((await validateReply(reply('hi'), { automod: none, ownUploadIds: [], form: undefined })).ok).toBe(true)
+    expect((await validateReply(reply('hi'), { automod: none, ownUploadIds: [], form: undefined, authorId: U1, siteUrl: SITE })).ok).toBe(true)
   })
 
   it('refuses a matcher that is not a function', async () => {
@@ -2198,8 +3202,8 @@ describe('validateReply: the options', () => {
 
   it('refuses ids of pictures that are not a list or a set', async () => {
     for (const ownUploadIds of ['u1', {}, 5, null, new Map()]) await rejectsAs(send(reply('hi'), { ownUploadIds }), TypeError, 'ownUploadIds must be a list or a set')
-    expect((await validateReply(reply('hi'), { automod: none })).ok).toBe(true)
-    expect(await validateReply(reply('![a](upload:1)', { uploads: ['Stryker was here'] }), { automod: none })).toEqual({
+    expect((await validateReply(reply('hi'), { automod: none, authorId: U1, siteUrl: SITE })).ok).toBe(true)
+    expect(await validateReply(reply('![a](upload:1)', { uploads: ['Stryker was here'] }), { automod: none, authorId: U1, siteUrl: SITE })).toEqual({
       ok: false,
       status: 400,
       error: "That picture isn't one of yours.",
