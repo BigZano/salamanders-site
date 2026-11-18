@@ -317,9 +317,13 @@ if (librariusConfigured) {
     })
     // Run once the server is listening, and in this order: the repair of the replies of the site, the posts it listens to, the import (not waited for: it can
     // take minutes), the import's timer (its first run is the one just started), the link timer, the gateway, and, with a
-    // webhook, the outbox (it takes up what a stop left half-done) and the upload sweeper. A step that fails is logged and
-    // the rest go on: the catch-up that follows READY loads the posts again, so a failed load only delays the live feed, and
-    // the import's timer tries a failed import again.
+    // webhook, the outbox and the upload sweeper. A step that fails is logged and the rest go on: the catch-up that follows READY
+    // loads the posts again, so a failed load only delays the live feed, and the import's timer tries a failed import again.
+    // Three things that the replies need are not steps of their own. The outbox takes the advisory lock (one process sends) as it
+    // starts, never rejects, and asks for the lock again every 30 seconds when another API holds it. The upload sweeper prunes the
+    // outbox on its own timer (at its first sweep, then hourly), and a prune that fails is logged and tried at the next sweep. The
+    // worker thread that runs the AutoMod patterns starts the first time a reply is checked against a rule that has one, and a
+    // worker that cannot run is logged once and makes that reply be refused, never sent unchecked (librariusSend.js).
     startLibrarius = async () => {
       // What an image that did not know the replies, or a webhook that was replaced, let the import write over them is put right before
       // anything reads or writes the forum, and once is enough (it does nothing when there is nothing to put right). It runs with the
