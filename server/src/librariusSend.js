@@ -43,7 +43,8 @@
  *      written inside a line is sent as a file and leaves nothing in the line, so `zo![](upload:1)rp` is "zorp" in the message,
  *      and in the cell of a table or a note the same), and Discord's own AutoMod does not filter what a webhook posts, so the
  *      rules are run over each message of the reply too: over the contents of the Text Displays of a V2 message (each on its
- *      own, as they are shown apart), or the text of a plain one, without the lines that the site writes there (the line of the
+ *      own, and joined by a line end as the fallback shows them, so that the two forms refuse the same replies), or the text of a
+ *      plain one, without the lines that the site writes there (the line of the
  *      message it answers, the mark `**2/3**` of a part, the footer) and the label of the button. A hit there that the source did
  *      not have is the same refusal with `match: null`: the text it is in is not the writer's, so the source has no place for it
  *      (the AST has no positions to say which picture it was). Then the regular expressions, over the source and the messages
@@ -673,10 +674,12 @@ const withoutLastLine = (text, line) => (text === line ? '' : text.endsWith(`\n$
 const withoutMark = (text, mark) => (text.startsWith(mark) && (text.length === mark.length || ' \n'.includes(text[mark.length])) ? text.slice(mark.length + 1) : text)
 
 /**
- * → the texts that the parts of a reply show of the reply itself, as the form built them: the Text Displays of a V2 part, or the
- * text of a plain one, each without what the site puts there (the line of the message it answers, the mark of the part, the footer,
- * which are the same whatever was written, and which the rules were never written for). A picture written inside a line is not in
- * these texts, nor is the text of one that has nothing to show, so what stood on its two sides is next to each other here.
+ * → the texts that the parts of a reply show of the reply itself, as the form built them: the Text Displays of a V2 part, one by one
+ * and then, when there are two or more, joined by a line end (which is what the fallback shows of the same part), or the text of a
+ * plain one, each without what the site puts there (the line of the message it answers, the mark of the part, the footer, which are
+ * the same whatever was written, and which the rules were never written for). Never the texts of two parts together: they are two
+ * messages. A picture written inside a line is not in these texts, nor is the text of one that has nothing to show, so what stood on
+ * its two sides is next to each other here.
  */
 export function shownBy(parts, fixed) {
   const texts = []
@@ -685,7 +688,11 @@ export function shownBy(parts, fixed) {
     if (k === 0 && fixed.reply !== null) shown[0] = withoutFirstLine(shown[0], fixed.reply)
     if (parts.length > 1) shown[0] = withoutMark(shown[0], `**${k + 1}/${parts.length}**`)
     if (k === parts.length - 1) shown[shown.length - 1] = withoutLastLine(shown[shown.length - 1], fixed.footer)
-    for (const text of shown) if (text !== '') texts.push(text)
+    const kept = shown.filter((text) => text !== '')
+    texts.push(...kept)
+    // A V2 message is read as what the fallback shows of the same part too, its displays joined by a line end: the same reply is
+    // refused in both forms. A picture on a line of its own sets two displays apart there and is only blank lines in the fallback.
+    if (kept.length > 1) texts.push(kept.join('\n'))
   })
   return texts
 }

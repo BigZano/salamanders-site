@@ -1788,7 +1788,20 @@ describe('shownBy: what the messages show of the reply itself', () => {
 
   it('is the text of a plain message, and the contents of the Text Displays of a V2 one, one by one', () => {
     expect(shownBy([plain('hello\nthere')], { reply: null, footer: FOOT })).toEqual(['hello\nthere'])
-    expect(shownBy([v2('first', 'second', 'third')], { reply: null, footer: FOOT })).toEqual(['first', 'second', 'third'])
+    expect(shownBy([v2('first')], { reply: null, footer: FOOT })).toEqual(['first'])
+  })
+
+  it('adds, for a V2 message of more than one Text Display, the contents joined by a line end, which is what the fallback shows of it', () => {
+    expect(shownBy([v2('first', 'second', 'third')], { reply: null, footer: FOOT })).toEqual(['first', 'second', 'third', 'first\nsecond\nthird'])
+    expect(shownBy([v2('first', '', 'third')], { reply: null, footer: FOOT })).toEqual(['first', 'third', 'first\nthird'])
+    // A plain message is one text, and a V2 one with one display shows nothing more.
+    expect(shownBy([plain('first\nsecond')], { reply: null, footer: FOOT })).toEqual(['first\nsecond'])
+    expect(shownBy([v2('first', FOOT)], { reply: null, footer: FOOT })).toEqual(['first'])
+  })
+
+  it('joins the Text Displays of each message by themselves, and never those of two messages', () => {
+    const parts = [v2('**1/2** a', 'b'), v2('**2/2** c', 'd')]
+    expect(shownBy(parts, { reply: null, footer: FOOT })).toEqual(['a', 'b', 'a\nb', 'c', 'd', 'c\nd'])
   })
 
   it('finds Text Displays however deep they are in the components, and skips what is not one', () => {
@@ -1808,13 +1821,13 @@ describe('shownBy: what the messages show of the reply itself', () => {
       ],
       files: [],
     }
-    expect(shownBy([part], { reply: null, footer: FOOT })).toEqual(['one', 'two'])
+    expect(shownBy([part], { reply: null, footer: FOOT })).toEqual(['one', 'two', 'one\ntwo'])
   })
 
   it('takes the reply line off the start of the first message, and the footer off the end of the last', () => {
     expect(shownBy([plain(`${REPLY}\nhello\n${FOOT}`)], fixed)).toEqual(['hello'])
     expect(shownBy([v2(`${REPLY}\nhello\n${FOOT}`)], fixed)).toEqual(['hello'])
-    expect(shownBy([v2(`${REPLY}\nhello`, `more\n${FOOT}`)], fixed)).toEqual(['hello', 'more'])
+    expect(shownBy([v2(`${REPLY}\nhello`, `more\n${FOOT}`)], fixed)).toEqual(['hello', 'more', 'hello\nmore'])
   })
 
   it('takes a line off that is the whole of its Text Display, and leaves nothing of it', () => {
@@ -1834,7 +1847,7 @@ describe('shownBy: what the messages show of the reply itself', () => {
 
   it('takes nothing off the start when there is no reply line, even a first line that says null or is the stand-in', () => {
     expect(shownBy([plain('null\nx')], { reply: null, footer: FOOT })).toEqual(['null\nx'])
-    expect(shownBy([v2('null', 'more')], { reply: null, footer: FOOT })).toEqual(['null', 'more'])
+    expect(shownBy([v2('null', 'more')], { reply: null, footer: FOOT })).toEqual(['null', 'more', 'null\nmore'])
   })
 
   it('looks for the reply line in the first part only, and for the footer in the last only', () => {
@@ -1940,11 +1953,14 @@ describe('validateReply: the text that is sent, not only the text that was writt
     }
   })
 
-  it('reads the words that a picture alone on its line leaves the text of as two Text Displays, and as one text in the fallback', async () => {
-    const source = 'the\n\n![x](upload:1)\n\nmat'
-    expect(phrase(source)).toBeNull()
-    expect((await via(source, phrase, { form: 'v2' })).ok).toBe(true)
-    expect(await via(source, phrase, { form: 'plain' })).toEqual(BLOCK('No Mat'))
+  it('refuses the words that a picture alone on its line sets apart, in the primary form as in the fallback: the same reply, the same answer', async () => {
+    // In V2 the two halves are two Text Displays, and in the fallback one text with the picture's lines gone: what a reader sees is the same.
+    for (const source of ['the\n\n![x](upload:1)\n\nmat', 'the\n![x](upload:1)\nmat', 'the\n\n![x](upload:1)\n\n![x](upload:1)\n\nmat', '> the\n\n![x](upload:1)\n\nmat']) {
+      expect(phrase(source), source).toBeNull()
+      for (const form of ['v2', 'plain']) expect(await via(source, phrase, { form }), `${form} ${source}`).toEqual(BLOCK('No Mat'))
+    }
+    // The same without the phrase: nothing is refused.
+    for (const form of ['v2', 'plain']) expect((await via('the\n\n![x](upload:1)\n\nmug', phrase, { form })).ok, form).toBe(true)
   })
 
   it('does not look at what the site writes into a message: the reply line, the mark of a part, the footer, the button', async () => {
@@ -2022,6 +2038,39 @@ describe('validateReply: the text that is sent, not only the text that was writt
       )
       // Not a property that holds because nothing reaches it: a good part of the sources are ones that only the sent text refuses.
       expect(onlyInSent).toBeGreaterThan(100)
+    })
+
+    it('refuses the same replies in the primary form and in the fallback, where each is one message (the property)', async () => {
+      // The two forms cut a reply in different places (3,950 and 1,950 characters a message), so a reply of more than one message in
+      // either has parts that the other has not: those are left out, and a reply that is long in both is checked by the property above,
+      // on its own parts. What is compared is a reply that either form sends as one message, where the text shown is the same text
+      // (the picture lines that set it apart in V2 are blank lines in the fallback), whatever the order and the placing of pictures.
+      const two = automodMatcher([keywordRule(['*zorp*', 'the mat'], {}, { name: 'No Zorp' })], quiet)
+      const pieces = fc.constantFrom('zo', 'rp', 'z', 'orp', 'zorp', 'the', 'mat', ' ', '\n', '\n\n', '\n\n![x](upload:1)\n\n', '\n![](upload:1)\n', '![x](upload:1)', '![](upload:1)', '**', '||', '~~', '> ', '- ', '# ', '---', '\n\n---\n\n', '| a | b |\n|---|---|\n| ', ' |', '[^1]', '\n\n[^1]: ', '`', '\\')
+      // Half the sources are built around the two keywords, with what sets the halves apart between them; half are made of anything.
+      const gap = fc.constantFrom('![x](upload:1)', '![](upload:1)', '\n\n![x](upload:1)\n\n', '\n![](upload:1)\n', ' ![x](upload:1) ', '**![x](upload:1)**', '||![x](upload:1)||', '\n\n---\n\n', '\n\n', ' ', '')
+      const lead = fc.constantFrom('', '> ', '- ', '# ', '| h |\n|---|\n| ', '\n\n[^1]: ', 'say ')
+      const around = fc
+        .tuple(lead, fc.constantFrom(['zo', 'rp'], ['z', 'orp'], ['the ', 'mat'], ['the', 'mat'], ['the\n', 'mat']), gap, gap)
+        .map(([before, [one, other], between, after]) => `${before}${one}${between}${other}${after}`)
+      let bothRefusedBySent = 0
+      let compared = 0
+      await fc.assert(
+        fc.asyncProperty(fc.oneof(around, fc.array(pieces, { minLength: 1, maxLength: 14 }).map((list) => list.join(''))), async (source) => {
+          const options = { authorId: U1, siteUrl: 'https://example.test/x' }
+          const made = (form) => toDiscord(source, { ...options, form, replyTo: null, images: [{ ref: 1, name: 'image-1.png' }] })
+          if (made('v2').parts.length !== 1 || made('plain').parts.length !== 1) return
+          compared++
+          const v2 = await via(source, two, { ...options, form: 'v2' })
+          const plain = await via(source, two, { ...options, form: 'plain' })
+          expect(v2, source).toEqual(plain)
+          if (!v2.ok && v2.status === 422 && two(source) === null) bothRefusedBySent++
+        }),
+        { numRuns: 3_000 },
+      )
+      expect(compared).toBeGreaterThan(2_000)
+      // Not a property that holds for want of anything to refuse: a good part of the sources are refused only for what is sent.
+      expect(bothRefusedBySent).toBeGreaterThan(30)
     })
 
     it('refuses the reply when what is sent holds the keyword, for sources that are made of anything (the property)', async () => {
