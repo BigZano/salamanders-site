@@ -520,10 +520,13 @@ logged as `Librarius: ...` (the step's name and what failed, with no token and n
 The "Delete on site" command is made when the gateway says READY, and answers beside the live feed, never in front of it.
 The API gives the live feed and the import the webhook's id, and each reply's parts are stored with theirs, so that a
 catch-up does not read the parts of a reply as messages of their own, whichever webhook sent them. AutoMod's regular
-expressions run in one worker thread, which starts the first time a reply is checked against a rule that has a pattern: it
-is not a step of the start. If it cannot run, the API logs "Librarius: the thread that checks AutoMod patterns failed" once, and
-the reply that needed it is refused ("This reply couldn't be checked against the server's rules. Try a shorter one."), never
-sent unchecked.
+expressions run in one child process (`server/src/librariusRegexWorker.js`, started with the runtime the API runs on and with
+none of its environment), which starts the first time a reply is checked against a rule that has a pattern: it is not a step of
+the start. A pattern gets 250 ms from the moment the child is ready; past that the child is killed (SIGKILL, which stops a
+regular expression that a thread could not be made to stop on Bun) and the reply is refused, and the next reply starts a new
+child. If it cannot run, the API logs "Librarius: the process that checks AutoMod patterns failed" once, and the reply that
+needed it is refused ("This reply couldn't be checked against the server's rules. Try a shorter one."), never sent unchecked.
+`bun server/src/librariusRegexSmoke.js` checks on Bun that a job over the budget leaves no child running (about 2 seconds).
 
 **The repair.** An image from before the replies (see "Rolling back the replies") writes over what the database holds for a
 reply of the site: the author of part 1 becomes the webhook, a `v2` reply loses its text, and parts 2 and 3 are stored as
