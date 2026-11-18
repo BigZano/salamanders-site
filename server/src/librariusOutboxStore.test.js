@@ -897,6 +897,194 @@ describe('blockedSince', () => {
   })
 })
 
+describe('addUpload', () => {
+  const GOOD = { authorId: AUTHOR, name: 'picture.png', contentType: 'image/png', bytes: new Uint8Array([137, 80, 78, 71]) }
+
+  it('holds the picture for its author and answers the id the table gave it', async () => {
+    const { pool, log } = fakePool([['insert into librarius_uploads', [{ id: '41' }]]])
+    expect(await store(pool).addUpload(GOOD)).toEqual({ id: '41' })
+    expect(log).toHaveLength(1)
+    expect(log[0].sql).toBe('insert into librarius_uploads (author_id, name, content_type, bytes) values ($1, $2, $3, $4) returning id')
+    expect(log[0].params).toHaveLength(4)
+    expect(log[0].params.slice(0, 3)).toEqual([AUTHOR, 'picture.png', 'image/png'])
+    // pg takes bytea as a Buffer: the same bytes, in one.
+    expect(Buffer.isBuffer(log[0].params[3])).toBe(true)
+    expect([...log[0].params[3]]).toEqual([137, 80, 78, 71])
+  })
+
+  it('sends the bytes of a view of a bigger buffer, and only those', async () => {
+    const { pool, log } = fakePool([['insert into librarius_uploads', [{ id: '41' }]]])
+    const whole = new Uint8Array([9, 9, 1, 2, 3, 9])
+    await store(pool).addUpload({ ...GOOD, bytes: whole.subarray(2, 5) })
+    expect([...log[0].params[3]]).toEqual([1, 2, 3])
+  })
+
+  it('takes a name of exactly 1 character and of exactly 100, and no other length', async () => {
+    for (const name of ['p', 'p'.repeat(100)]) {
+      const { pool, log } = fakePool([['insert into librarius_uploads', [{ id: '1' }]]])
+      await store(pool).addUpload({ ...GOOD, name })
+      expect(log[0].params[1]).toBe(name)
+    }
+  })
+
+  it('takes each of the four types of picture', async () => {
+    for (const contentType of ['image/png', 'image/jpeg', 'image/webp', 'image/gif']) {
+      const { pool, log } = fakePool([['insert into librarius_uploads', [{ id: '1' }]]])
+      await store(pool).addUpload({ ...GOOD, contentType })
+      expect(log[0].params[2]).toBe(contentType)
+    }
+  })
+
+  it.each([
+    ...labelled(BAD_IDS).map(([name, v]) => [`authorId ${name}`, { ...GOOD, authorId: v }, ID_MSG('authorId')]),
+    ...labelled([undefined, null, '', 7, {}, ['picture.png'], 'x'.repeat(101)]).map(([name, v]) => [`name ${name}`, { ...GOOD, name: v }, 'name must be a text of 1 to 100 characters']),
+    ...labelled(['image/svg+xml', 'IMAGE/PNG', 'image/png ', 'text/html', '', undefined, null, 7, {}]).map(([name, v]) => [`contentType ${name}`, { ...GOOD, contentType: v }, 'contentType must be image/png, image/jpeg, image/webp or image/gif']),
+    ...labelled([undefined, null, '', 'bytes', [1, 2, 3], new ArrayBuffer(4), new Uint8Array(0), Buffer.alloc(0), {}, 7]).map(([name, v]) => [`bytes ${name}`, { ...GOOD, bytes: v }, 'bytes must be a Uint8Array of at least one byte']),
+  ])('refuses %s before any query', async (_, upload, message) => {
+    const rig = fakePool()
+    await refused(rig, () => store(rig.pool).addUpload(upload), message)
+  })
+
+  it.each(labelled([undefined, null, 'x', 7]))('refuses an upload that is %s before any query', async (_, upload) => {
+    const rig = fakePool()
+    await refused(rig, () => store(rig.pool).addUpload(upload), OBJECT_MSG('upload'))
+  })
+
+  it('takes a Buffer for its bytes, which is a Uint8Array', async () => {
+    const { pool, log } = fakePool([['insert into librarius_uploads', [{ id: '2' }]]])
+    await store(pool).addUpload({ ...GOOD, bytes: Buffer.from([1, 2]) })
+    expect([...log[0].params[3]]).toEqual([1, 2])
+  })
+
+  it('lets a failure of the table through, naming nothing it was given', async () => {
+    const { pool } = fakePool([['insert into librarius_uploads', new Error('the table is gone')]])
+    await expect(store(pool).addUpload(GOOD)).rejects.toThrow('the table is gone')
+  })
+})
+
+describe('heldUploadIds', () => {
+  it('answers the ids of those uploads that the author still holds, as a Set', async () => {
+    const { pool, log } = fakePool([['from librarius_uploads', [{ id: '4' }, { id: '3' }]]])
+    const got = await store(pool).heldUploadIds(AUTHOR, ['3', '5', '4'])
+    expect(got).toBeInstanceOf(Set)
+    expect([...got].sort()).toEqual(['3', '4'])
+    expect(log).toHaveLength(1)
+    expect(log[0].sql).toBe('select id from librarius_uploads where author_id = $1 and id = any($2::bigint[])')
+    expect(log[0].params).toEqual([AUTHOR, ['3', '5', '4']])
+  })
+
+  it('never reads the bytes of a picture to say that it is held', async () => {
+    const { pool, log } = fakePool()
+    await store(pool).heldUploadIds(AUTHOR, ['3'])
+    expect(log[0].sql).not.toContain('bytes')
+  })
+
+  it('asks nothing for no uploads', async () => {
+    const { pool, log } = fakePool()
+    expect(await store(pool).heldUploadIds(AUTHOR, [])).toEqual(new Set())
+    expect(log).toEqual([])
+  })
+
+  it('takes 50 ids and refuses 51, before any query', async () => {
+    const ids = Array.from({ length: 51 }, (_, i) => String(i + 1))
+    const ok = fakePool()
+    await store(ok.pool).heldUploadIds(AUTHOR, ids.slice(0, 50))
+    expect(ok.log).toHaveLength(1)
+    const rig = fakePool()
+    await refused(rig, () => store(rig.pool).heldUploadIds(AUTHOR, ids), 'ids must hold at most 50 ids')
+  })
+
+  it.each([
+    ...labelled(BAD_IDS).map(([name, v]) => [`authorId ${name}`, v, ['1'], ID_MSG('authorId')]),
+    ...labelled([undefined, null, 'x', {}]).map(([name, v]) => [`ids ${name}`, AUTHOR, v, LIST_MSG('ids')]),
+    ...labelled(BAD_SERIALS).map(([name, v]) => [`an id ${name}`, AUTHOR, ['1', v], SERIAL_MSG('an upload id')]),
+  ])('refuses %s before any query', async (_, authorId, ids, message) => {
+    const rig = fakePool()
+    await refused(rig, () => store(rig.pool).heldUploadIds(authorId, ids), message)
+  })
+})
+
+describe('outboxFor', () => {
+  const SINCE = '2026-11-17T10:00:00.000Z'
+  const entry = (id, over = {}) => ({
+    id,
+    kind: 'send',
+    message_key: `key-${id}`,
+    state: 'pending',
+    last_error: null,
+    source: 'hello',
+    created_at: new Date('2026-11-18T10:00:00.000Z'),
+    ...over,
+  })
+
+  it("answers the author's entries for that post that are not done, oldest first, as the member sees them", async () => {
+    const rows = [entry('9', { state: 'blocked', last_error: "Blocked by the server's AutoMod." }), entry('8', { kind: 'edit', message_key: MSG, state: 'sending', source: null, created_at: '2026-11-18T09:00:00.000Z' })]
+    const { pool, log } = fakePool([['from librarius_outbox', rows]])
+    expect(await store(pool).outboxFor(AUTHOR, POST, SINCE)).toEqual([
+      { key: MSG, kind: 'edit', state: 'sending', error: null, source: null, createdAt: '2026-11-18T09:00:00.000Z' },
+      { key: 'key-9', kind: 'send', state: 'blocked', error: "Blocked by the server's AutoMod.", source: 'hello', createdAt: '2026-11-18T10:00:00.000Z' },
+    ])
+    expect(log).toHaveLength(1)
+    // The recording pool lowercases what it is given; the real statement reads the key as 'postId' (proven against Postgres).
+    expect(log[0].sql).toBe(
+      "select id, kind, message_key, state, last_error, case when kind = 'send' then payload->>'source' end as source, created_at from librarius_outbox where author_id = $1 and payload->>'postid' = $2 and state <> 'sent' and created_at >= $3::timestamptz order by id desc limit 20",
+    )
+    expect(log[0].params).toEqual([AUTHOR, POST, SINCE])
+  })
+
+  it('takes the time as a Date or epoch milliseconds too', async () => {
+    for (const since of [new Date(SINCE), Date.parse(SINCE)]) {
+      const { pool, log } = fakePool()
+      expect(await store(pool).outboxFor(AUTHOR, POST, since)).toEqual([])
+      expect(log[0].params[2]).toBe(SINCE)
+    }
+  })
+
+  it.each([
+    ...labelled(BAD_IDS).map(([name, v]) => [`authorId ${name}`, v, POST, SINCE, ID_MSG('authorId')]),
+    ...labelled(BAD_IDS).map(([name, v]) => [`postId ${name}`, AUTHOR, v, SINCE, ID_MSG('postId')]),
+    ...labelled([undefined, null, 'soon', {}, Number.NaN]).map(([name, v]) => [`since ${name}`, AUTHOR, POST, v, TIME_MSG('since')]),
+  ])('refuses %s before any query', async (_, authorId, postId, since, message) => {
+    const rig = fakePool()
+    await refused(rig, () => store(rig.pool).outboxFor(authorId, postId, since), message)
+  })
+})
+
+describe('sweepUploads', () => {
+  const OLDER = '2026-11-18T09:00:00.000Z'
+
+  it('deletes what is an hour old unless a reply on its way names it, and what a reply that ended for good named, and says how many', async () => {
+    const { pool, log } = fakePool([['delete from librarius_uploads', [{ id: '3' }, { id: '5' }]]])
+    expect(await store(pool).sweepUploads({ olderThan: new Date(OLDER) })).toBe(2)
+    expect(log).toHaveLength(1)
+    expect(log[0].sql).toBe(
+      "delete from librarius_uploads u where not exists (select 1 from librarius_outbox o where o.kind = 'send' and o.state in ('pending', 'sending') and o.payload->'uploads' @> to_jsonb(u.id::text)) and (u.created_at < $1::timestamptz or exists (select 1 from librarius_outbox o where o.kind = 'send' and o.state in ('failed', 'blocked') and o.payload->'uploads' @> to_jsonb(u.id::text))) returning u.id",
+    )
+    expect(log[0].params).toEqual([OLDER])
+  })
+
+  it('answers 0 when there was nothing to delete', async () => {
+    const { pool } = fakePool()
+    expect(await store(pool).sweepUploads({ olderThan: OLDER })).toBe(0)
+  })
+
+  it('takes the time as epoch milliseconds too', async () => {
+    const { pool, log } = fakePool()
+    await store(pool).sweepUploads({ olderThan: Date.parse(OLDER) })
+    expect(log[0].params).toEqual([OLDER])
+  })
+
+  it.each(labelled([undefined, null, 'soon', {}, Number.NaN]))('refuses the time %s before any query', async (_, olderThan) => {
+    const rig = fakePool()
+    await refused(rig, () => store(rig.pool).sweepUploads({ olderThan }), TIME_MSG('olderThan'))
+  })
+
+  it.each(labelled([undefined, null, 'x', 7]))('refuses options that are %s before any query', async (_, options) => {
+    const rig = fakePool()
+    await refused(rig, () => store(rig.pool).sweepUploads(options), OBJECT_MSG('options'))
+  })
+})
+
 describe('hostile values (property)', () => {
   it('no method reaches the pool with a value that is not what it takes', async () => {
     const wrong = fc.oneof(fc.constant(undefined), fc.constant(null), fc.integer(), fc.string(), fc.boolean(), fc.object())
@@ -912,6 +1100,10 @@ describe('hostile values (property)', () => {
       (s, v) => s.knownPartIds(v),
       (s, v) => s.messageOfPart(v),
       (s, v) => s.siteDeleted(v, v),
+      (s, v) => s.addUpload(v),
+      (s, v) => s.heldUploadIds(v, v),
+      (s, v) => s.outboxFor(v, v, v),
+      (s, v) => s.sweepUploads(v),
     ]
     await fc.assert(
       fc.asyncProperty(wrong, fc.nat(calls.length - 1), async (v, i) => {

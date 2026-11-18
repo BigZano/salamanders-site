@@ -30,11 +30,18 @@ const MINUTE = 60_000
 const BIGINT_MAX = 9223372036854775807n
 
 // Deep-frozen, so a handler that changed a verdict would throw. `perms` is a bigint, which JSON cannot hold.
+const WRITING = { roleIds: [], admin: false, timedOut: false, timeoutUntil: null, reply: true, attach: false, manageMessages: false, manageThreads: false }
 const VERDICTS = {
-  reader: Object.freeze({ user: READER, read: true, perms: 3072n }),
-  outsider: Object.freeze({ user: OUTSIDER, read: false, perms: 0n }),
+  reader: Object.freeze({ user: READER, read: true, perms: 3072n, ...WRITING }),
+  outsider: Object.freeze({ user: OUTSIDER, read: false, perms: 0n, ...WRITING, reply: false }),
+  librarian: Object.freeze({ user: READER, read: true, perms: 3072n, ...WRITING, attach: true, manageMessages: true, manageThreads: true }),
 }
 
+const FRESH_LIMITS = {
+  reply: { limit: 3, windowSeconds: 60, remaining: 3 },
+  edit: { limit: 20, windowSeconds: 60, remaining: 20 },
+  upload: { limit: 30, windowSeconds: 3600, remaining: 30 },
+}
 const NOT_FOUND = { error: 'Not found.' }
 const NOT_CONFIGURED = { error: 'The Librarius is not configured.' }
 const SIGN_IN = { error: 'Sign in with Discord.' }
@@ -128,6 +135,11 @@ function fakeStore(over = {}) {
     quotedMessages: () => [],
     setRead: () => undefined,
     updateAttachmentUrls: () => undefined,
+    outboxMessage: () => null,
+    outboxFor: () => [],
+    heldUploadIds: () => new Set(),
+    addUpload: () => ({ id: '1' }),
+    enqueueOutbox: () => ({ id: '1' }),
   }
   const store = {}
   for (const [name, impl] of Object.entries({ ...base, ...over })) {
@@ -151,9 +163,12 @@ function setup(over = {}) {
   }
   const made = fakeStore(over.store)
   const facts = over.facts ?? (() => structuredClone(FACTS))
-  const guild = { facts: async () => facts(), emoji: async () => (over.emoji ?? (() => []))() }
+  const guild = { facts: async () => facts(), emoji: async () => (over.emoji ?? (() => []))(), automodRules: async () => (over.rules ?? (() => []))() }
   const importer = { status: async () => (over.status ?? (() => ({ importDone: true })))() }
-  const roster = { members: async () => (over.roster ?? (() => null))() }
+  const roster = { members: async (options) => (over.roster ?? (() => null))(options) }
+  const kicks = { count: 0 }
+  // With no outbox (the default here) the webhook is not set up and every write is 503.
+  const outbox = over.outbox === undefined ? null : { kick: () => kicks.count++, sendingPausedUntil: () => over.outbox.pausedUntil ?? null, webhookRefused: () => over.outbox.refused ?? null }
   const refreshed = []
   const links = {
     refresh: async (list) => {
@@ -171,13 +186,16 @@ function setup(over = {}) {
     guildId: GUILD,
     forumId: FORUM,
     configured: over.configured ?? true,
-    now: () => NOW,
+    now: over.now ?? (() => NOW),
+    outbox,
+    ...(over.options ?? {}),
   })
   const call = (method, path, { headers = {}, body } = {}) =>
     handler(new Request(`http://api.test${path}`, { method, headers, body }), new URL(`http://api.test${path}`))
   const get = (path) => call('GET', path)
   const put = (path, text, headers = { 'Content-Type': 'application/json' }) => call('PUT', path, { headers, body: text })
-  return { handler, call, get, put, asked, refreshed, ...made }
+  const send = (method, path, data) => call(method, path, { headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(data) })
+  return { handler, call, get, put, send, asked, refreshed, kicks, ...made }
 }
 
 const body = async (res) => res.json()
@@ -227,8 +245,29 @@ describe('createLibrariusHandler: which requests are its own', () => {
     ['POST', `/librarius/posts/${POST}`],
     ['PUT', `/librarius/posts/${POST}`],
     ['DELETE', `/librarius/posts/${POST}`],
-    ['POST', messagesPath()],
     ['PUT', messagesPath()],
+    ['DELETE', messagesPath()],
+    ['PATCH', messagesPath()],
+    ['POST', `/librarius/posts/${POST}/pending`],
+    ['PUT', `/librarius/posts/${POST}/pending`],
+    ['DELETE', `/librarius/posts/${POST}/pending`],
+    ['PATCH', `/librarius/posts/${POST}`],
+    ['GET', `/librarius/messages/${M1}`],
+    ['POST', `/librarius/messages/${M1}`],
+    ['PUT', `/librarius/messages/${M1}`],
+    ['GET', '/librarius/messages/'],
+    ['PATCH', '/librarius/messages/'],
+    ['DELETE', '/librarius/messages/'],
+    ['PATCH', `/librarius/messages/${M1}/x`],
+    ['DELETE', `/librarius/messages/${M1}/reactions`],
+    ['GET', '/librarius/uploads'],
+    ['PUT', '/librarius/uploads'],
+    ['PATCH', '/librarius/uploads'],
+    ['DELETE', '/librarius/uploads'],
+    ['POST', '/librarius/uploads/1'],
+    ['POST', '/librarius/members'],
+    ['PUT', '/librarius/members'],
+    ['GET', '/librarius/members/x'],
     ['POST', changesPath('?since=0')],
     ['POST', `/librarius/posts/${POST}/read`],
     ['DELETE', `/librarius/posts/${POST}/read`],
@@ -375,6 +414,8 @@ describe('GET /librarius/me', () => {
       ],
       guildId: GUILD,
       forumId: FORUM,
+      can: { reply: false, attach: false, manageMessages: false, manageThreads: false },
+      limits: FRESH_LIMITS,
     })
   })
 
@@ -1770,5 +1811,315 @@ describe('PUT /librarius/posts/:id/read', () => {
       },
     })
     await expect(made.put(path, JSON.stringify({ messageId: M2 }))).rejects.toThrow('write failed')
+  })
+})
+
+// ---- batch 2: the write routes ---------------------------------------------------------------------------------------------
+
+const LIVE = { pausedUntil: null, refused: null }
+const PNG = new Uint8Array([
+  137, 80, 78, 71, 13, 10, 26, 10, // signature
+  0, 0, 0, 13, 73, 72, 68, 82, 0, 0, 0, 1, 0, 0, 0, 1, 8, 2, 0, 0, 0, 0, 0, 0, 0, // IHDR
+  0, 0, 0, 9, 73, 68, 65, 84, 120, 156, 99, 0, 0, 0, 2, 0, 1, 0, 0, 0, 0, // IDAT
+  0, 0, 0, 0, 73, 69, 78, 68, 0, 0, 0, 0, // IEND
+])
+const upload = (bytes = PNG) => {
+  const form = new FormData()
+  form.append('file', new Blob([bytes], { type: 'image/png' }), 'x.png')
+  return form
+}
+
+// Every write route: [label, method, path, how to send it].
+const WRITE_ROUTES = [
+  ['a reply', 'POST', `/librarius/posts/${POST}/messages`, (t) => t.send('POST', `/librarius/posts/${POST}/messages`, { source: 'hello' })],
+  ['an edit', 'PATCH', `/librarius/messages/${M1}`, (t) => t.send('PATCH', `/librarius/messages/${M1}`, { source: 'hello' })],
+  ['a delete', 'DELETE', `/librarius/messages/${M1}`, (t) => t.call('DELETE', `/librarius/messages/${M1}`)],
+  ['an upload', 'POST', '/librarius/uploads', (t) => t.call('POST', '/librarius/uploads', { body: upload() })],
+]
+
+const siteMessage = (over = {}) => ({
+  id: M1,
+  postId: POST,
+  authorId: READER.id,
+  authorName: 'Test Reader',
+  authorAvatar: null,
+  origin: 'site',
+  source: 'Hello **there**',
+  layout: { form: 'v2', replyTo: null, siteUrl: `https://sm2salamanders.site/reliquarium/librarius/${POST}`, username: 'Test Reader', avatarUrl: null, images: [] },
+  state: null,
+  parts: [M1],
+  ...over,
+})
+
+describe.each(WRITE_ROUTES)('%s (%s %s): the gates', (_, method, path, send) => {
+  it('answers 503 when the Librarius is not configured, asking no one', async () => {
+    const t = setup({ configured: false, outbox: LIVE })
+    const res = await send(t)
+    expect(res.status).toBe(503)
+    expect(await body(res)).toEqual(NOT_CONFIGURED)
+    expect(t.asked).toEqual([])
+  })
+
+  it('answers 401 for no identity, and asks for a fresh verdict, not the cached one', async () => {
+    const t = setup({ verdict: null, outbox: LIVE })
+    const res = await send(t)
+    expect(res.status).toBe(401)
+    expect(await body(res)).toEqual(SIGN_IN)
+    expect(t.asked).toEqual([{ fresh: true }])
+    expect(t.log).toEqual([])
+  })
+
+  it('answers 403 to someone who cannot read the forum, and touches nothing', async () => {
+    const t = setup({ verdict: VERDICTS.outsider, outbox: LIVE })
+    const res = await send(t)
+    expect(res.status).toBe(403)
+    expect(await body(res)).toEqual(RESTRICTED)
+    expect(t.log).toEqual([])
+    expect(t.kicks.count).toBe(0)
+  })
+
+  it('answers 503 while there is no webhook, to a reader, and touches nothing', async () => {
+    const t = setup({ verdict: VERDICTS.librarian })
+    const res = await send(t)
+    expect(res.status).toBe(503)
+    expect(await body(res)).toEqual({ error: 'Replying from the site is not set up.' })
+    expect(t.log).toEqual([])
+    expect(t.asked).toEqual([{ fresh: true }])
+  })
+
+  it('answers 503 once Discord has refused the webhook, to a reader, and touches nothing', async () => {
+    const t = setup({ verdict: VERDICTS.librarian, outbox: { ...LIVE, refused: { status: 401, text: 'refused' } } })
+    const res = await send(t)
+    expect(res.status).toBe(503)
+    expect(await body(res)).toEqual({ error: 'Replying from the site is paused. Try again later.' })
+    expect(t.log).toEqual([])
+  })
+
+  it('answers 401 before it says anything of the webhook, and 403 too: no one learns of it who may not use it', async () => {
+    for (const verdict of [null, VERDICTS.outsider]) {
+      const t = setup({ verdict })
+      const res = await send(t)
+      expect([401, 403]).toContain(res.status)
+    }
+  })
+
+  it('answers 503 when Discord cannot be reached while the verdict is worked out, and lets another failure through', async () => {
+    const down = setup({ verdict: new Upstream('down'), outbox: LIVE })
+    const res = await send(down)
+    expect(res.status).toBe(503)
+    expect(await body(res)).toEqual(UNREACHABLE)
+    await expect(send(setup({ verdict: new Error('boom'), outbox: LIVE }))).rejects.toThrow('boom')
+  })
+})
+
+describe('the write routes: what they reach', () => {
+  it('POST /posts/:id/messages queues a reply, tells the outbox, and answers 202', async () => {
+    const t = setup({ verdict: VERDICTS.reader, outbox: LIVE, roster: () => [member(READER.id, 'Test Reader')] })
+    const res = await t.send('POST', `/librarius/posts/${POST}/messages`, { source: 'hello there' })
+    expect(res.status).toBe(202)
+    const out = await body(res)
+    expect(out.pending.state).toBe('sending')
+    const [entry] = t.calls('enqueueOutbox')[0]
+    expect(entry).toMatchObject({ kind: 'send', messageKey: out.pending.key, authorId: READER.id })
+    expect(entry.payload).toMatchObject({ postId: POST, source: 'hello there', username: 'Test Reader', siteUrl: `https://sm2salamanders.site/reliquarium/librarius/${POST}` })
+    expect(t.kicks.count).toBe(1)
+    expect(t.asked).toEqual([{ fresh: true }])
+  })
+
+  it('takes the site, the form and the key from what it was made with', async () => {
+    let n = 0
+    const t = setup({
+      verdict: VERDICTS.reader,
+      outbox: LIVE,
+      options: { siteUrl: 'https://other.example', form: 'plain', newKey: () => `key-${++n}` },
+    })
+    const out = await body(await t.send('POST', `/librarius/posts/${POST}/messages`, { source: 'hello' }))
+    expect(out.pending.key).toBe('key-1')
+    expect(t.calls('enqueueOutbox')[0][0].payload.siteUrl).toBe(`https://other.example/reliquarium/librarius/${POST}`)
+    const long = await t.send('POST', `/librarius/posts/${POST}/messages`, { source: 'x'.repeat(7000) })
+    expect(long.status).toBe(413)
+  })
+
+  it('answers 404 for a post id that is no id, and for one the store does not hold', async () => {
+    const t = setup({ verdict: VERDICTS.reader, outbox: LIVE })
+    for (const id of ['abc', '1', `${POST}x`, '99999999999999999999', '%20']) {
+      const res = await t.send('POST', `/librarius/posts/${id}/messages`, { source: 'hello' })
+      expect(res.status, id).toBe(404)
+      expect(await body(res), id).toEqual(NO_SUCH_POST)
+    }
+    expect(t.names()).toEqual([])
+    const gone = setup({ verdict: VERDICTS.reader, outbox: LIVE, store: { getPost: () => null } })
+    expect((await gone.send('POST', `/librarius/posts/${POST}/messages`, { source: 'hello' })).status).toBe(404)
+  })
+
+  it('PATCH and DELETE /messages/:id answer 404 for an id that is no id', async () => {
+    const t = setup({ verdict: VERDICTS.reader, outbox: LIVE })
+    for (const id of ['abc', '1', `${M1}x`, '99999999999999999999']) {
+      for (const method of ['PATCH', 'DELETE']) {
+        const res = await t.send(method, `/librarius/messages/${id}`, { source: 'x' })
+        expect(res.status, `${method} ${id}`).toBe(404)
+        expect(await body(res)).toEqual({ error: 'No such message.' })
+      }
+    }
+    expect(t.names()).toEqual([])
+  })
+
+  it('PATCH /messages/:id queues an edit of the reader\'s own reply', async () => {
+    const t = setup({ verdict: VERDICTS.reader, outbox: LIVE, store: { outboxMessage: () => siteMessage() } })
+    const res = await t.send('PATCH', `/librarius/messages/${M1}`, { source: 'edited **now**' })
+    expect(res.status).toBe(202)
+    expect(await body(res)).toEqual({ pending: { key: M1, state: 'sending' } })
+    expect(t.calls('enqueueOutbox')).toEqual([[{ kind: 'edit', messageKey: M1, authorId: READER.id, payload: { postId: POST, source: 'edited **now**', mentions: [] } }]])
+    expect(t.kicks.count).toBe(1)
+    expect(t.asked).toEqual([{ fresh: true }])
+  })
+
+  it('DELETE /messages/:id queues the delete of the reader\'s own message', async () => {
+    const t = setup({ verdict: VERDICTS.reader, outbox: LIVE, store: { outboxMessage: () => siteMessage() } })
+    const res = await t.call('DELETE', `/librarius/messages/${M1}`)
+    expect(res.status).toBe(202)
+    expect(await body(res)).toEqual({ pending: { key: M1, state: 'sending' } })
+    expect(t.calls('enqueueOutbox')).toEqual([[{ kind: 'delete', messageKey: M1, authorId: READER.id, payload: { postId: POST } }]])
+    expect(t.kicks.count).toBe(1)
+  })
+
+  it('POST /uploads holds a picture and answers 201 with its id', async () => {
+    const t = setup({ verdict: VERDICTS.librarian, outbox: LIVE, store: { addUpload: () => ({ id: '77' }) } })
+    const res = await t.call('POST', '/librarius/uploads', { body: upload() })
+    expect(res.status).toBe(201)
+    expect(await body(res)).toEqual({ id: '77' })
+    const [held] = t.calls('addUpload')[0]
+    expect(held).toMatchObject({ authorId: READER.id, name: 'picture.png', contentType: 'image/png' })
+  })
+
+  it('answers a write for which the AutoMod rules cannot be read with 503, as it answers any outage, and writes nothing', async () => {
+    const down = () => {
+      throw new Upstream('down')
+    }
+    const t = setup({ verdict: VERDICTS.reader, outbox: LIVE, rules: down })
+    const res = await t.send('POST', `/librarius/posts/${POST}/messages`, { source: 'hello' })
+    expect(res.status).toBe(503)
+    expect(await body(res)).toEqual(UNREACHABLE)
+    expect(t.calls('enqueueOutbox')).toEqual([])
+    expect(t.kicks.count).toBe(0)
+  })
+
+  it('counts its own limits by its own clock when it is given none, so that they run out and come back by it', async () => {
+    const clock = { t: NOW }
+    const t = setup({ verdict: VERDICTS.reader, outbox: LIVE, now: () => clock.t })
+    for (let i = 0; i < 3; i++) expect((await t.send('POST', `/librarius/posts/${POST}/messages`, { source: `r${i}` })).status).toBe(202)
+    clock.t = NOW + 59_999
+    expect((await t.send('POST', `/librarius/posts/${POST}/messages`, { source: 'early' })).status).toBe(429)
+    clock.t = NOW + 60_000
+    expect((await t.send('POST', `/librarius/posts/${POST}/messages`, { source: 'on time' })).status).toBe(202)
+  })
+
+  it('uses the limits it was given: a member over them is 429, and /me says so', async () => {
+    const t = setup({ verdict: VERDICTS.reader, outbox: LIVE })
+    for (let i = 0; i < 3; i++) expect((await t.send('POST', `/librarius/posts/${POST}/messages`, { source: `r${i}` })).status).toBe(202)
+    const res = await t.send('POST', `/librarius/posts/${POST}/messages`, { source: 'a fourth' })
+    expect(res.status).toBe(429)
+    expect(res.headers.get('Retry-After')).toBe('60')
+    expect((await body(await t.get('/librarius/me'))).limits.reply.remaining).toBe(0)
+  })
+})
+
+describe('GET /librarius/posts/:id/pending', () => {
+  it('answers the reader\'s own entries for the post, with a cached verdict', async () => {
+    const rows = [{ key: 'k1', kind: 'send', state: 'blocked', error: 'Blocked.', source: 'text', createdAt: '2026-11-15T11:00:00.000Z' }]
+    const t = setup({ outbox: LIVE, store: { outboxFor: () => rows } })
+    const res = await t.get(`/librarius/posts/${POST}/pending`)
+    expect(res.status).toBe(200)
+    expect(await body(res)).toEqual({ pending: [{ key: 'k1', kind: 'send', state: 'blocked', error: 'Blocked.', source: 'text', createdAt: '2026-11-15T11:00:00.000Z' }] })
+    expect(t.asked).toEqual([{ fresh: false }])
+    expect(t.calls('outboxFor')).toEqual([[READER.id, POST, new Date(NOW - 86_400_000)]])
+  })
+
+  it('works while there is no webhook, and answers 404 for a post id that is no id', async () => {
+    const t = setup()
+    expect((await t.get(`/librarius/posts/${POST}/pending`)).status).toBe(200)
+    expect((await t.get('/librarius/posts/abc/pending')).status).toBe(404)
+  })
+
+  it('answers 403 to someone who cannot read the forum', async () => {
+    const t = setup({ verdict: VERDICTS.outsider })
+    expect((await t.get(`/librarius/posts/${POST}/pending`)).status).toBe(403)
+    expect(t.log).toEqual([])
+  })
+})
+
+describe('GET /librarius/members', () => {
+  const people = () => [{ ...member('200000000000000430', 'Alice Test'), roles: [] }, { ...member('200000000000000431', 'Alicia Other'), roles: [] }]
+
+  it('finds the members who may read the forum, with a cached verdict, and works while there is no webhook', async () => {
+    const t = setup({
+      roster: people,
+      facts: () => ({ ...FACTS, overwrites: [] }),
+    })
+    const res = await t.get('/librarius/members?q=ali')
+    expect(res.status).toBe(200)
+    expect((await body(res)).members.map((m) => m.name)).toEqual(['Alice Test', 'Alicia Other'])
+    expect(t.asked).toEqual([{ fresh: false }])
+  })
+
+  it('answers 400 for a q that is not 1 to 32 characters, and 403 to someone who cannot read the forum', async () => {
+    const t = setup({ roster: people })
+    expect((await t.get('/librarius/members')).status).toBe(400)
+    expect((await setup({ verdict: VERDICTS.outsider, roster: people }).get('/librarius/members?q=ali')).status).toBe(403)
+  })
+
+  it('answers 503 until the roster has loaded', async () => {
+    expect((await setup().get('/librarius/members?q=ali')).status).toBe(503)
+  })
+})
+
+describe('GET /librarius/me: what the member may do, and what they have left', () => {
+  it('says what the verdict says when the webhook is there', async () => {
+    const t = setup({ verdict: VERDICTS.librarian, outbox: LIVE })
+    const out = await body(await t.get('/librarius/me'))
+    expect(out.can).toEqual({ reply: true, attach: true, manageMessages: true, manageThreads: true })
+    const reader = await body(await setup({ outbox: LIVE }).get('/librarius/me'))
+    expect(reader.can).toEqual({ reply: true, attach: false, manageMessages: false, manageThreads: false })
+    const outsider = await body(await setup({ verdict: { ...VERDICTS.reader, reply: false }, outbox: LIVE }).get('/librarius/me'))
+    expect(outsider.can.reply).toBe(false)
+  })
+
+  it('says a member can do nothing while there is no webhook, or Discord has refused it', async () => {
+    for (const outbox of [undefined, { ...LIVE, refused: { status: 404, text: 'gone' } }]) {
+      const out = await body(await setup({ verdict: VERDICTS.librarian, outbox }).get('/librarius/me'))
+      expect(out.can).toEqual({ reply: false, attach: false, manageMessages: false, manageThreads: false })
+    }
+  })
+
+  it('says what is left of each limit, for the member who asks', async () => {
+    const t = setup({ outbox: LIVE, store: { outboxMessage: () => siteMessage() } })
+    await t.send('POST', `/librarius/posts/${POST}/messages`, { source: 'one' })
+    await t.send('PATCH', `/librarius/messages/${M1}`, { source: 'two' })
+    const out = await body(await t.get('/librarius/me'))
+    expect(out.limits).toEqual({
+      reply: { limit: 3, windowSeconds: 60, remaining: 2 },
+      edit: { limit: 20, windowSeconds: 60, remaining: 19 },
+      upload: { limit: 30, windowSeconds: 3600, remaining: 30 },
+    })
+  })
+
+  it('tells a member who manages messages whether sending is paused and whether the webhook is refused, and no one else', async () => {
+    const paused = Date.parse('2026-11-15T13:30:00.000Z')
+    const librarian = await body(await setup({ verdict: VERDICTS.librarian, outbox: { pausedUntil: paused, refused: null } }).get('/librarius/me'))
+    expect(librarian).toMatchObject({ sendingPausedUntil: '2026-11-15T13:30:00.000Z', sendingFatal: false })
+    const calm = await body(await setup({ verdict: VERDICTS.librarian, outbox: LIVE }).get('/librarius/me'))
+    expect(calm).toMatchObject({ sendingPausedUntil: null, sendingFatal: false })
+    const refused = await body(await setup({ verdict: VERDICTS.librarian, outbox: { pausedUntil: null, refused: { status: 401, text: 'refused' } } }).get('/librarius/me'))
+    expect(refused).toMatchObject({ sendingPausedUntil: null, sendingFatal: true })
+    const none = await body(await setup({ verdict: VERDICTS.librarian }).get('/librarius/me'))
+    expect(none).toMatchObject({ sendingPausedUntil: null, sendingFatal: false })
+    const reader = await body(await setup({ outbox: { pausedUntil: paused, refused: { status: 401, text: 'x' } } }).get('/librarius/me'))
+    expect(reader).not.toHaveProperty('sendingPausedUntil')
+    expect(reader).not.toHaveProperty('sendingFatal')
+  })
+
+  it('says nothing of any of it to someone who cannot read the forum', async () => {
+    const out = await body(await setup({ verdict: VERDICTS.outsider, outbox: LIVE }).get('/librarius/me'))
+    expect(out).toEqual({ access: false })
   })
 })

@@ -38,6 +38,18 @@
  *   source, layout, state, parts: [the Discord ids of its parts, in order] }.
  * uploadsFor(authorId, ids) → [{ id, name, contentType, bytes }] for those of the author's uploads that are still held, in the
  *   order of `ids`; one that is gone is left out.
+ * addUpload({ authorId, name, contentType, bytes }) → { id }: holds a picture, already judged and stripped (librariusUploads.js), for
+ *   its author until a reply sends it or the sweep finds it old. `name` is 1 to 100 characters, `contentType` one of the four
+ *   types of picture, `bytes` a Uint8Array of at least one byte.
+ * heldUploadIds(authorId, ids) → the Set of those of `ids` (up to 50) that the author still holds, without reading a picture.
+ * outboxFor(authorId, postId, since) → the author's entries for a post that are not done, made since `since`, the newest 20,
+ *   oldest first, as { key, kind, state, error, source, createdAt }: `key` is the entry's message key (a reply's random key, or
+ *   the id of the message an edit or a delete is for), `state` the entry's ('pending', 'sending', 'blocked' or 'failed'), `error`
+ *   its last error (what the member is told once it is 'blocked' or 'failed', a technical text while it is tried again) and
+ *   `source` the text of a reply (null for an edit or a delete). It is the member's own entries only.
+ * sweepUploads({ olderThan }) → how many pictures it deleted: those held since before `olderThan`, and those that a reply that
+ *   ended for good ('failed' or 'blocked') named, of any age, except any that a reply still on its way ('pending' or 'sending')
+ *   names, of any age: that reply sends them, held up by the breaker's pause or not, and finishSend deletes them after.
  * knownPartIds(ids) → the Set of those ids that are parts of a stored reply.
  * messageOfPart(id) → the id of the reply that a part belongs to, or `id` when it is no part of one: where a reaction lands.
  * siteDeleted(ids, postId) → { plain }: for those of `ids` that are parts of a reply of the site, the whole reply goes: its
@@ -60,6 +72,10 @@ const MAX_ACTION = 40
 const MAX_KEY = 64
 const MAX_PARTS = 3
 const MAX_UPLOADS = 10
+const MAX_HELD_ASKED = 50
+const MAX_NAME = 100
+const MAX_LISTED = 20
+const PICTURE_TYPES = ['image/png', 'image/jpeg', 'image/webp', 'image/gif']
 
 const isObject = (v) => typeof v === 'object' && v !== null && !Array.isArray(v)
 
@@ -353,6 +369,63 @@ export function createOutboxStore(pool) {
       const { rows } = await pool.query('select id, name, content_type, bytes from librarius_uploads where author_id = $1 and id = any($2::bigint[])', [authorId, ids])
       const held = new Map(rows.map((r) => [r.id, { id: r.id, name: r.name, contentType: r.content_type, bytes: r.bytes }]))
       return ids.filter((id) => held.has(id)).map((id) => held.get(id))
+    },
+
+    async addUpload(upload) {
+      needObject(upload, 'upload')
+      const { authorId, name, contentType, bytes } = upload
+      needId(authorId, 'authorId')
+      if (typeof name !== 'string' || name.length < 1 || name.length > MAX_NAME) throw new TypeError(`name must be a text of 1 to ${MAX_NAME} characters`)
+      if (!PICTURE_TYPES.includes(contentType)) throw new TypeError('contentType must be image/png, image/jpeg, image/webp or image/gif')
+      if (!(bytes instanceof Uint8Array) || bytes.length === 0) throw new TypeError('bytes must be a Uint8Array of at least one byte')
+      const { rows } = await pool.query('insert into librarius_uploads (author_id, name, content_type, bytes) values ($1, $2, $3, $4) returning id', [
+        authorId,
+        name,
+        contentType,
+        // bytea goes in as a Buffer; a view of a bigger buffer is only its own bytes.
+        Buffer.from(bytes.buffer, bytes.byteOffset, bytes.byteLength),
+      ])
+      return { id: rows[0].id }
+    },
+
+    async heldUploadIds(authorId, ids) {
+      needId(authorId, 'authorId')
+      needList(ids, 'ids')
+      if (ids.length > MAX_HELD_ASKED) throw new TypeError(`ids must hold at most ${MAX_HELD_ASKED} ids`)
+      for (const id of ids) needSerial(id, 'an upload id')
+      if (ids.length === 0) return new Set()
+      const { rows } = await pool.query('select id from librarius_uploads where author_id = $1 and id = any($2::bigint[])', [authorId, ids])
+      return new Set(rows.map((r) => r.id))
+    },
+
+    async outboxFor(authorId, postId, since) {
+      needId(authorId, 'authorId')
+      needId(postId, 'postId')
+      const from = needTime(since, 'since')
+      const { rows } = await pool.query(
+        `select id, kind, message_key, state, last_error, case when kind = 'send' then payload->>'source' end as source, created_at
+           from librarius_outbox
+          where author_id = $1 and payload->>'postId' = $2 and state <> 'sent' and created_at >= $3::timestamptz
+          order by id desc limit ${MAX_LISTED}`,
+        [authorId, postId, from],
+      )
+      return rows
+        .map((r) => ({ key: r.message_key, kind: r.kind, state: r.state, error: r.last_error, source: r.source, createdAt: new Date(r.created_at).toISOString() }))
+        .reverse()
+    },
+
+    async sweepUploads(options) {
+      needObject(options, 'options')
+      const before = needTime(options.olderThan, 'olderThan')
+      const { rows } = await pool.query(
+        `delete from librarius_uploads u
+          where not exists (select 1 from librarius_outbox o where o.kind = 'send' and o.state in ('pending', 'sending') and o.payload->'uploads' @> to_jsonb(u.id::text))
+            and (u.created_at < $1::timestamptz
+                 or exists (select 1 from librarius_outbox o where o.kind = 'send' and o.state in ('failed', 'blocked') and o.payload->'uploads' @> to_jsonb(u.id::text)))
+          returning u.id`,
+        [before],
+      )
+      return rows.length
     },
 
     async knownPartIds(ids) {

@@ -5,8 +5,23 @@
  * Gates, in order: a path that is not /librarius or under it is none of this handler's (null); an unknown route is 404; an
  * unconfigured Librarius is 503; then librariusAccess.js gives a verdict: none is 401, Discord down is 503. /librarius/me
  * answers any signed-in user, and tells someone who may not read the forum only that (`access: false`); every other route
- * needs a reader (403). Every route uses the short-lived cached verdict, the PUT too: it writes only the caller's own read
- * mark. No route reads its body before those checks, and no error message echoes what was sent. Responses are never cached.
+ * needs a reader (403). The read routes use the short-lived cached verdict, the PUT too: it writes only the caller's own read
+ * mark. The write routes (batch 2: a reply, an edit, a delete, a picture, which librariusWrites.js answers) always ask for a
+ * fresh verdict, so that a role taken away or a timeout that has begun stops a write at once, and they are 503 while there is no
+ * outbox (the webhook is not set up) or the outbox says Discord has refused the webhook for good. No route reads its body before
+ * those checks, and no error message echoes what was sent. Responses are never cached.
+ *
+ * Routes (the GETs are for readers): /me, /emoji, /posts, /posts/:id, /posts/:id/messages, /posts/:id/changes, /posts/:id/pending
+ * (the caller's own queued replies), /members?q= (the member search for a mention); PUT /posts/:id/read; and the writes: POST
+ * /posts/:id/messages (a reply: there is no route that creates a post), PATCH and DELETE /messages/:id (never a whole post), POST
+ * /uploads. A write whose Discord rules cannot be read (the AutoMod rules) is 503 as any Discord outage is, never let through.
+ * The handler takes `outbox` (librariusOutbox.js: kick, sendingPausedUntil, webhookRefused; null while LIBRARIUS_WEBHOOK_URL is
+ * unset), `limits` (a createLimits() by default), `form` ('v2' or 'plain'), `siteUrl` (https://sm2salamanders.site) and `newKey`.
+ *
+ * /librarius/me adds, for a reader, `can: { reply, attach, manageMessages, manageThreads }`, which are what the verdict says and
+ * false for all of them while no write is possible, and `limits` (librariusLimits.js snapshot: what the member has left of each).
+ * For a member who may manage messages it also says `sendingPausedUntil` (ISO time while the outbox's breaker holds all sending,
+ * else null) and `sendingFatal` (Discord has refused the webhook): what a Librarian needs to see why replies are not going.
  *
  * A post or message id that is no snowflake that fits a bigint never reaches the store: a post is 404, a cursor 400. A post
  * the store no longer holds is 404 too, for a poll for its changes as for the post itself: a post deleted in Discord is
@@ -32,13 +47,16 @@
  */
 import { Upstream } from './discordRoles.js'
 import { readJson as readJsonWithin, reply, send } from './httpReply.js'
+import { createLimits } from './librariusLimits.js'
 import { BIGINT_MAX, isStoreId } from './librariusText.js'
+import { createLibrariusWrites } from './librariusWrites.js'
 
 const REV = /^\d{1,19}$/
 // A page's limit: 1 to 100, written without leading zeros.
 const LIMIT = /^([1-9]\d?|100)$/
 const MENTION = /<@!?(\d{17,20})>/g
-const POST_ROUTE = /^\/librarius\/posts\/([^/]+)(?:\/(messages|changes|read))?$/
+const POST_ROUTE = /^\/librarius\/posts\/([^/]+)(?:\/(messages|changes|read|pending))?$/
+const MESSAGE_ROUTE = /^\/librarius\/messages\/([^/]+)$/
 
 const DEFAULT_LIMIT = 50
 const CHANGES_LIMIT = 200
@@ -49,6 +67,11 @@ const QUOTE_LENGTH = 200
 const JSON_MAX_BYTES = 1024
 
 const NO_SUCH_POST = 'No such post.'
+const NO_SUCH_MESSAGE = 'No such message.'
+// Where the site is, for the button of a reply and the link "Delete on site" gives.
+const SITE_URL = 'https://sm2salamanders.site'
+const NO_WEBHOOK = 'Replying from the site is not set up.'
+const WEBHOOK_REFUSED = 'Replying from the site is paused. Try again later.'
 const BAD_CURSOR = 'That page cursor is not valid.'
 const BAD_MESSAGE = 'That message id is not valid.'
 
@@ -91,7 +114,26 @@ function createDirectory(current) {
   }
 }
 
-export function createLibrariusHandler({ access, store, guild, links, importer, roster, guildId, forumId, configured, now = Date.now }) {
+export function createLibrariusHandler({
+  access,
+  store,
+  guild,
+  links,
+  importer,
+  roster,
+  guildId,
+  forumId,
+  configured,
+  now = Date.now,
+  outbox = null,
+  limits = createLimits({ now }),
+  form,
+  siteUrl = SITE_URL,
+  newKey,
+}) {
+  // No outbox is no webhook: every write is 503 before a route is asked, so nothing is queued then.
+  const writes = createLibrariusWrites({ store, guild, roster, outbox, limits, guildId, forumId, form, siteUrl, now, newKey })
+
   /** → the guild's members by id as the roster has them now: empty before it has loaded. */
   async function members() {
     const list = await roster.members()
@@ -175,6 +217,10 @@ export function createLibrariusHandler({ access, store, guild, links, importer, 
   async function me(_request, verdict) {
     if (!verdict.read) return reply(200, { access: false })
     const [facts, status] = await Promise.all([guild.facts(), importer.status()])
+    const refused = outbox !== null && outbox.webhookRefused() !== null
+    // Nothing can be written with no webhook, or one Discord has refused: the site then offers no write.
+    const writable = outbox !== null && !refused
+    const pausedUntil = outbox === null ? null : outbox.sendingPausedUntil()
     return reply(200, {
       access: true,
       ready: status.importDone,
@@ -182,6 +228,14 @@ export function createLibrariusHandler({ access, store, guild, links, importer, 
       roles: facts.roles.map(({ id, name, color }) => ({ id, name, color })),
       guildId,
       forumId,
+      can: {
+        reply: writable && verdict.reply,
+        attach: writable && verdict.attach,
+        manageMessages: writable && verdict.manageMessages,
+        manageThreads: writable && verdict.manageThreads,
+      },
+      limits: limits.snapshot(verdict.user.id),
+      ...(verdict.manageMessages ? { sendingPausedUntil: pausedUntil === null ? null : new Date(pausedUntil).toISOString(), sendingFatal: refused } : {}),
     })
   }
 
@@ -271,17 +325,31 @@ export function createLibrariusHandler({ access, store, guild, links, importer, 
   /** A route on a post: a post id that is no id is 404 before anything else is looked at. */
   const onPost = (id, run) => (request, verdict, url) => (isStoreId(id) ? run(request, verdict, url) : reply(404, { error: NO_SUCH_POST }))
 
-  /** → { me, run } for a known route, else null. `me` true: any signed-in user, a reader or not. */
+  /** As onPost, for a message. */
+  const onMessage = (id, run) => (request, verdict, url) => (isStoreId(id) ? run(request, verdict, url) : reply(404, { error: NO_SUCH_MESSAGE }))
+
+  /** → { me, write, run } for a known route, else null. `me` true: any signed-in user, a reader or not. `write` true: a fresh verdict, and 503 with no webhook. */
   function find(method, pathname) {
     if (method === 'GET' && pathname === '/librarius/me') return { me: true, run: me }
     if (method === 'GET' && pathname === '/librarius/emoji') return { run: emoji }
     if (method === 'GET' && pathname === '/librarius/posts') return { run: posts }
+    if (method === 'GET' && pathname === '/librarius/members') return { run: (_request, verdict, url) => writes.search(url, verdict) }
+    if (method === 'POST' && pathname === '/librarius/uploads') return { write: true, run: (request, verdict) => writes.upload(request, verdict) }
+    const message = MESSAGE_ROUTE.exec(pathname)
+    if (message !== null) {
+      const [, id] = message
+      if (method === 'PATCH') return { write: true, run: onMessage(id, (request, verdict) => writes.edit(id, request, verdict)) }
+      if (method === 'DELETE') return { write: true, run: onMessage(id, (_request, verdict) => writes.remove(id, verdict)) }
+      return null
+    }
     const match = POST_ROUTE.exec(pathname)
     if (match === null) return null
     const [, id, part] = match
     if (method === 'GET' && part === undefined) return { run: onPost(id, (_request, verdict) => openPost(id, verdict)) }
     if (method === 'GET' && part === 'messages') return { run: onPost(id, (_request, _verdict, url) => messages(id, url)) }
+    if (method === 'POST' && part === 'messages') return { write: true, run: onPost(id, (request, verdict) => writes.reply(id, request, verdict)) }
     if (method === 'GET' && part === 'changes') return { run: onPost(id, (_request, verdict, url) => changes(id, url, verdict)) }
+    if (method === 'GET' && part === 'pending') return { run: onPost(id, (_request, verdict) => writes.pending(id, verdict)) }
     if (method === 'PUT' && part === 'read') return { run: onPost(id, (request, verdict) => markRead(id, request, verdict)) }
     return null
   }
@@ -293,9 +361,11 @@ export function createLibrariusHandler({ access, store, guild, links, importer, 
     if (!route) return reply(404, { error: 'Not found.' })
     if (!configured) return reply(503, { error: 'The Librarius is not configured.' })
     try {
-      const verdict = await access.resolve(request, { fresh: false })
+      const verdict = await access.resolve(request, { fresh: route.write === true })
       if (!verdict) return reply(401, { error: 'Sign in with Discord.' })
       if (!verdict.read && !route.me) return reply(403, { error: 'Restricted to those who can read the Librarius in Discord.' })
+      if (route.write && outbox === null) return reply(503, { error: NO_WEBHOOK })
+      if (route.write && outbox.webhookRefused() !== null) return reply(503, { error: WEBHOOK_REFUSED })
       return await route.run(request, verdict, url)
     } catch (err) {
       if (err instanceof Upstream) return reply(503, { error: 'Discord could not be reached. Try again.' })
