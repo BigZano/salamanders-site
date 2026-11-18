@@ -1,4 +1,5 @@
 import { describe, it, expect } from 'vitest'
+import { readFileSync } from 'node:fs'
 import * as fc from 'fast-check'
 import { parse } from './librariusMarkdown.js'
 import {
@@ -49,6 +50,36 @@ const URL_MSG = (what) => `${what} must be an https link of at most 200 characte
 const BASE_MSG = 'the thread link must be https://discord.com/channels/<guild id>/<thread id>'
 // A mark in front of a piece, as split writes it.
 const m = (k, n, body) => `**${k}/${n}** ${body}`
+// The unescaped `||` of a text outside code and links, read on its own so that it can be set against the module's reading.
+const bars = (text) => {
+  let n = 0
+  let fenced = false
+  for (const row of text.split('\n')) {
+    if (/^(?:[ \t]*>)*[ \t]*```/.test(row)) fenced = !fenced
+    else if (!fenced) n += (row.replace(/\\[\s\S]|``[\s\S]+?``|`[^`]+`|<[^>]*>/g, 'x').match(/\|\|/g) ?? []).length
+  }
+  return n
+}
+// The marks of a text that are open at its end (as many as would be needed to close them), read as `bars` reads, and apart from it.
+const unbalanced = (text) => {
+  const open = { '||': 0, '**': 0, '*': 0, __: 0, '~~': 0 }
+  let fenced = false
+  for (const row of text.split('\n')) {
+    if (/^(?:[ \t]*>)*[ \t]*```/.test(row)) fenced = !fenced
+    else if (!fenced) {
+      const bare = row.replace(/^(?:[ \t]*>)*[ \t]*(?:[-*]|\d+\.) /, '').replace(/\\[\s\S]|``[\s\S]+?``|`[^`]+`|<[^>]*>/g, 'x')
+      for (const [, mark] of bare.matchAll(/(\|\||\*+|__|~~)/g)) {
+        if (mark.startsWith('*')) {
+          open['**'] += Math.floor(mark.length / 2)
+          open['*'] += mark.length % 2
+        } else open[mark]++
+      }
+    }
+  }
+  return Object.entries(open).filter(([, n]) => n % 2 === 1).map(([mark]) => mark)
+}
+// The text of a part as the member reads it: its display texts in V2, its content in plain.
+const textOf = (part) => (part.components === null ? part.text : displays(part).join('\n'))
 
 describe('constants', () => {
   it('names the forms, the default and the limits of the plan', () => {
@@ -443,6 +474,13 @@ describe('split: properties', () => {
       }),
       { numRuns: 600 },
     )
+  })
+
+  it('closes and opens nothing again at a cut, whatever marks are open there', () => {
+    const text = `**${'x'.repeat(100)}**`
+    expect(split(text, 40)).toEqual([m(1, 4, text.slice(0, 32)), m(2, 4, text.slice(32, 64)), m(3, 4, text.slice(64, 96)), m(4, 4, text.slice(96))])
+    const bars = `||${'x '.repeat(50)}||`
+    expect(split(bars, 40).map(unmark).join('')).toBe(bars)
   })
 
   it('numbers the parts in order, over the count of them', () => {
@@ -944,6 +982,52 @@ describe('toDiscord: flattening the extended markdown', () => {
   })
 })
 
+describe('toDiscord: the start of a line that a picture was taken out of', () => {
+  const images = [{ ref: 1, name: 'u1.png' }]
+  const firstLine = (src, over) => plain(src, { images, ...over }).parts[0].text.split('\n')[0]
+
+  it('escapes what would start a heading, a quote, a list or subtext after a picture, as at the start of any line', () => {
+    // The picture is shown after the line, so its text is at the start of the line in Discord and no longer follows a picture.
+    const cases = [
+      ['![x](upload:1)# Big', '\\# Big'],
+      ['![x](upload:1)### Big', '\\### Big'],
+      ['![x](upload:1)> quoted', '\\> quoted'],
+      ['![x](upload:1)>x', '\\>x'],
+      ['![x](upload:1)- item', '\\- item'],
+      ['![x](upload:1)-# small', '\\-# small'],
+      ['![x](upload:1)* item', '\\* item'],
+      ['![x](upload:1)1. first', '1\\. first'],
+      ['![x](upload:1)10. tenth', '10\\. tenth'],
+      ['![x](upload:1)  - item', '\\- item'],
+      ['![x](upload:1) # Big', '\\# Big'],
+      ['![x](upload:1)![x](upload:1)# Big', '\\# Big'],
+      ['![x](upload:1)![x](upload:1)> quoted', '\\> quoted'],
+    ]
+    for (const [src, shown] of cases) expect(firstLine(src)).toBe(shown)
+    expect(displays(v2('![x](upload:1)# Big', { images }).parts[0])).toEqual(['\\# Big', FOOTER])
+  })
+
+  it('leaves alone what follows something that stays in the line, and what is no start of a line', () => {
+    const cases = [
+      ['![x](upload:2)# Big', 'x# Big'],
+      ['![x](upload:1)||# a||', '||# a||'],
+      ['![x](upload:1)**a** # b', '**a** # b'],
+      ['![x](upload:1)a # b', 'a # b'],
+      ['![x](upload:1)1.5 is a number', '1.5 is a number'],
+      ['![x](upload:1)1.x', '1.x'],
+      ['![x](upload:1)#hashtag', '#hashtag'],
+      ['![x](upload:1)-dash', '-dash'],
+      ['Hello 1. world', 'Hello 1. world'],
+    ]
+    for (const [src, shown] of cases) expect(firstLine(src)).toBe(shown)
+  })
+
+  it('escapes a number that starts a heading or a list item, which is shown as it is written', () => {
+    expect(firstLine('## 1. one')).toBe('## 1\\. one')
+    expect(firstLine('- 1. one')).toBe('- 1\\. one')
+  })
+})
+
 describe('toDiscord: where a reply is split', () => {
   const para = (ch, n) => ch.repeat(n)
   const paragraphs = (n, size) => Array.from({ length: n }, (_, i) => para(String.fromCharCode(97 + i), size)).join('\n\n')
@@ -1167,10 +1251,74 @@ describe('toDiscord: where a reply is split', () => {
     const whole = run(1774)
     expect(whole[0].text).toBe(`**1/3**\n\`\`\`\n${'k'.repeat(1766)}\n\`\`\``)
     expect(whole[1].text.split('\n')[2]).toBe('k'.repeat(8))
-    // A line of 1769 fits with the opener but not with the fence's closing too: the opener ends the part, with nothing in it.
+    // A line of 1769 fits with the opener but not with the fence's closing too: it is cut at the 1766 that leave room for the
+    // closing, and not left whole to the next part with an empty fence before it.
     const less = run(1769)
-    expect(less[0].text).toBe('**1/4**\n```\n```')
-    expect(less[1].text.split('\n')[2]).toBe('k'.repeat(1769))
+    expect(less).toHaveLength(3)
+    expect(less[0].text).toBe(`**1/3**\n\`\`\`\n${'k'.repeat(1766)}\n\`\`\``)
+    expect(less[1].text.split('\n').slice(0, 4)).toEqual(['**2/3**', '```', 'kkk', 'j'.repeat(1869)])
+  })
+
+  it('never makes part 1 a fence with nothing in it, where the code line fits a part but not with the fence closed', () => {
+    // A fence of one code line of L characters, then text: the line fits the room of part 1 for L up to 3766 (V2), the closing fence
+    // does not, and the windows below are where the line was moved whole to part 2 and part 1 was left an empty fence.
+    const replyTo = { authorId: REPLIED, url: JUMP }
+    const windows = [
+      ['v2', null, 3766, 3000],
+      ['v2', replyTo, 3694, 3000],
+      ['plain', null, 1766, 1500],
+      ['plain', replyTo, 1694, 1500],
+    ]
+    for (const [form, reply, first, tail] of windows) {
+      for (let L = first - 2; L <= first + 5; L++) {
+        const r = toDiscord(`\`\`\`\n${'k'.repeat(L)}\n\`\`\`\n${'y'.repeat(tail)}`, opts({ form, replyTo: reply }))
+        const parts = r.parts.map(textOf)
+        expect(parts[0]).not.toMatch(/```\n```/)
+        expect(parts).toHaveLength(2)
+        for (const part of parts) expect(part.split('\n').filter((l) => l.startsWith('```')).length % 2).toBe(0)
+        expect(parts.join('').split('k').length - 1).toBe(L)
+        expect(r.parts.map((part) => (form === 'v2' ? displayableLength(part) : part.text.length)).every((n) => n <= (form === 'v2' ? 4000 : 2000))).toBe(true)
+      }
+    }
+  })
+
+  it('cuts inside the code line of a fence that the closing fence does not fit after, with room for the fence to close', () => {
+    // 3766 is the room of a code line in part 1 (3774 less the opener's 4 and the closing fence's 4): the line is cut at it.
+    const r = v2(`\`\`\`\n${x(3769)}\n\`\`\`\n${'y'.repeat(3000)}`)
+    expect(displays(r.parts[0])).toEqual([`**1/2**\n\`\`\`\n${x(3766)}\n\`\`\``])
+    expect(displays(r.parts[1])).toEqual([`**2/2**\n\`\`\`\n${x(3)}\n\`\`\`\n${'y'.repeat(3000)}\n${FOOTER}`])
+    const p = plain(`\`\`\`\n${x(1769)}\n\`\`\`\n${'y'.repeat(1500)}`)
+    expect(p.parts[0].text).toBe(`**1/2**\n\`\`\`\n${x(1766)}\n\`\`\``)
+    expect(p.parts[1].text).toBe(`**2/2**\n\`\`\`\n${x(3)}\n\`\`\`\n${'y'.repeat(1500)}\n${PLAIN_FOOTER}`)
+  })
+
+  it('cuts inside the rest of a code line that an earlier part left, where the closing fence does not fit after it either', () => {
+    // 1766 of the line go to part 1; the 1874 left take the 1873 that part 2 has room for (1881 less its fence, opened again and closed).
+    const k = (n) => 'k'.repeat(n)
+    const r = plain(`\`\`\`\n${k(3640)}\n\`\`\`\n${'y'.repeat(1500)}`)
+    expect(r.parts.map((p) => p.text)).toEqual([
+      `**1/3**\n\`\`\`\n${k(1766)}\n\`\`\``,
+      `**2/3**\n\`\`\`\n${k(1873)}\n\`\`\``,
+      `**3/3**\n\`\`\`\n${k(1)}\n\`\`\`\n${'y'.repeat(1500)}\n${PLAIN_FOOTER}`,
+    ])
+  })
+
+  it('counts the notes a line of a table cites against the part when it is cut for the fence to close', () => {
+    // The head line of 1757 fits with its note (12) and the opener (4), but not with the fence closing too: it is cut at 1754.
+    for (let n = 1742; n <= 1747; n++) {
+      const head = `| ${'h'.repeat(n)}[^1] | b |`
+      const r = plain(`${head}\n| - | - |\n| c | d |\n\n[^1]: n`)
+      for (const part of r.parts) expect(part.text.length).toBeLessThanOrEqual(2000)
+      expect(r.parts.map((p) => p.text.split('\n').filter((l) => l.startsWith('```')).length % 2)).toEqual(r.parts.map(() => 0))
+      if (n === 1745) expect(r.parts[0].text).toBe(`**1/3**\n\`\`\`\n${head.slice(0, 1754)}\n\`\`\`\n-# \\[^1]: n`)
+    }
+  })
+
+  it('cuts inside the last code line of a fence that has more lines before it, when the closing fence does not fit after it', () => {
+    // Part 1 holds the opener (4), the line of 100 (101), the code line's piece, and the closing fence (4) in its 1774.
+    const r = plain(`\`\`\`\n${x(100)}\n${x(1666)}\n\`\`\`\n${'y'.repeat(1500)}`)
+    expect(r.parts[0].text).toBe(`**1/2**\n\`\`\`\n${x(100)}\n${x(1665)}\n\`\`\``)
+    expect(r.parts[1].text).toBe(`**2/2**\n\`\`\`\n${x(1)}\n\`\`\`\n${'y'.repeat(1500)}\n${PLAIN_FOOTER}`)
   })
 
   it('makes no part of the first sentence of a long reply, in either form', () => {
@@ -1317,6 +1465,245 @@ describe('toDiscord: where a reply is split', () => {
   })
 })
 
+// What a spoiler or a mark that a cut falls in does: Discord shows the bars of an unpaired one as text and hides nothing,
+// so a part closes what is open at its end and opens it again at its start.
+describe('toDiscord: a spoiler that a cut falls in', () => {
+  const lines = (n, size) => Array.from({ length: n }, (_, i) => `${String(i).padStart(2, '0')}${'a'.repeat(size - 2)}`)
+  const spaced = (n) => Array(n).fill('a').join(' ')
+
+  it('closes the spoiler at a cut between its lines and opens it again at the start of the next part', () => {
+    // Rows of 98 characters, 99 with the line end: part 1 takes 17 rows (1685 of its 1774) and the closing bars (2) fit, 18 do not.
+    const rows = lines(40, 98)
+    const r = plain(`||${rows.join('\n')}||`)
+    expect(r.parts.map((p) => p.text)).toEqual([m(1, 3, `||${rows.slice(0, 17).join('\n')}||`), m(2, 3, `||${rows.slice(17, 35).join('\n')}||`), `${m(3, 3, `||${rows.slice(35).join('\n')}||`)}\n${PLAIN_FOOTER}`])
+  })
+
+  it('does the same in the V2 form', () => {
+    const rows = lines(100, 98)
+    const r = v2(`||${rows.join('\n')}||`)
+    expect(r.parts).toHaveLength(3)
+    for (const part of r.parts) {
+      expect(bars(textOf(part)) % 2).toBe(0)
+      expect(displayableLength(part)).toBeLessThanOrEqual(4000)
+    }
+    expect(displays(r.parts[0]).at(-1).endsWith('||')).toBe(true)
+    expect(displays(r.parts[1])[0].startsWith('**2/3** ||')).toBe(true)
+  })
+
+  it('keeps an intro, a long spoiler and an outro from showing a spoiler cut in two', () => {
+    const rows = Array.from({ length: 70 }, (_, i) => `In chapter five the Chapter Master falls at the gate, line ${i}.`)
+    const r = v2(`Spoilers for the campaign finale below.\n\n||${rows.join('\n')}||\n\nWhat did you all think?`)
+    expect(r.parts).toHaveLength(2)
+    for (const part of r.parts) expect(bars(textOf(part)) % 2).toBe(0)
+    expect(textOf(r.parts[0])).toMatch(/^\*\*1\/2\*\* Spoilers for the campaign finale below\.\n\n\|\|In chapter five/)
+    const end = /line (\d+)\.\|\|$/.exec(textOf(r.parts[0]))
+    const start = /^\*\*2\/2\*\* \|\|In chapter five the Chapter Master falls at the gate, line (\d+)\./.exec(textOf(r.parts[1]))
+    expect(Number(start[1])).toBe(Number(end[1]) + 1)
+    expect(textOf(r.parts[1])).toContain('line 69.||\n\nWhat did you all think?')
+  })
+
+  it('cuts a spoiler of one long line at a sentence end, closing and opening it round the cut', () => {
+    // A part of 1774 holds `||` and 354 sentences of 5 (1772) and the 2 of the closing bars; part 2 holds 375 of them.
+    const text = Array(900).fill('abc.').join(' ')
+    const r = plain(`||${text}||`)
+    const sentences = (n) => Array(n).fill('abc.').join(' ')
+    expect(r.parts.map((p) => p.text)).toEqual([m(1, 3, `||${sentences(354)}||`), m(2, 3, `||${sentences(375)}||`), `${m(3, 3, `||${sentences(171)}||`)}\n${PLAIN_FOOTER}`])
+  })
+
+  it('cuts a spoiler of one long line at a space, closing and opening it round the cut', () => {
+    const r = plain(`||${spaced(2001)}||`)
+    expect(r.parts.map((p) => p.text)).toEqual([m(1, 3, `||${spaced(885)}||`), m(2, 3, `||${spaced(938)}||`), `${m(3, 3, `||${spaced(178)}||`)}\n${PLAIN_FOOTER}`])
+  })
+
+  it('cuts a spoiler that is one long word anywhere, with room for the bars it closes with', () => {
+    const r = plain(`||${'a'.repeat(4000)}||`)
+    expect(r.parts.map((p) => p.text)).toEqual([m(1, 3, `||${'a'.repeat(1770)}||`), m(2, 3, `||${'a'.repeat(1877)}||`), `${m(3, 3, `||${'a'.repeat(353)}||`)}\n${PLAIN_FOOTER}`])
+  })
+
+  it('cuts the first line of a spoiler when the second has one character of room, and the closing bars would not fit in it', () => {
+    // The first line and its line end are 1773 of the 1774 of part 1: the closing bars (2) fit after neither it nor one character of the next.
+    const r = plain(`||${'a'.repeat(1770)}\n${'b'.repeat(300)}||`)
+    expect(r.parts.map((p) => p.text)).toEqual([m(1, 2, `||${'a'.repeat(1769)}||`), `${m(2, 2, `||a\n${'b'.repeat(300)}||`)}\n${PLAIN_FOOTER}`])
+  })
+
+  it('prefers a line end outside a spoiler to a later one inside it, as with a fence', () => {
+    const rows = lines(10, 98)
+    const r = plain(`${x(1000)}\n||${rows.join('\n')}||`)
+    expect(r.parts.map((p) => p.text)).toEqual([m(1, 2, x(1000)), `${m(2, 2, `||${rows.join('\n')}||`)}\n${PLAIN_FOOTER}`])
+  })
+
+  it('opens a spoiler of a quote after the quote mark, and keeps the mark on its own line', () => {
+    // Rows of 98 with the quote mark, as the rows of 98 in the first test: 17, 18 and 5 of them in the parts.
+    const q = lines(40, 96)
+    const block = (from, to) => q.slice(from, to).map((row, i) => `> ${i === 0 ? '||' : ''}${row}${from + i === to - 1 ? '||' : ''}`).join('\n')
+    const r = plain(`> ||${q.join('\n> ')}||`)
+    expect(r.parts.map((p) => p.text)).toEqual([`**1/3**\n${block(0, 17)}`, `**2/3**\n${block(17, 35)}`, `**3/3**\n${block(35, 40)}\n${PLAIN_FOOTER}`])
+  })
+
+  it('leaves a spoiler that no cut falls in as it is written', () => {
+    const rows = lines(10, 98)
+    const r = plain(`${x(1700)}\n\n||${rows.join('\n')}||`)
+    expect(r.parts.map((p) => p.text)).toEqual([m(1, 2, x(1700)), `${m(2, 2, `||${rows.join('\n')}||`)}\n${PLAIN_FOOTER}`])
+  })
+
+  it('does not count bars in code, in a link, in a fence or escaped, and so closes none of them', () => {
+    const unit = 'an `a||b` and <https://x.example/a||b> and \\|\\| and word '
+    const r = plain(`||${unit.repeat(80)}||`)
+    expect(r.parts.length).toBeGreaterThan(1)
+    for (const part of r.parts) expect(bars(part.text) % 2).toBe(0)
+    const fenced = plain(`${x(1700)}\n\n\`\`\`\n||\n\`\`\`\n\n${x(1700)}`)
+    expect(fenced.parts[0].text).toBe(m(1, 2, `${x(1700)}\n\n\`\`\`\n||\n\`\`\``))
+  })
+
+  it('never cuts the bars it closes with off a half, nor an escape from its mark', () => {
+    for (const form of ['v2', 'plain']) {
+      // The closing bars of the first spoiler fall on the end of the room of part 1, to either side of it.
+      const room = form === 'v2' ? 3774 : 1774
+      for (let k = room - 34; k <= room + 16; k++) {
+        const r = toDiscord(`||${'a'.repeat(k)}||${'b'.repeat(2500 + room)}`, opts({ form }))
+        for (const part of r.parts) expect(bars(textOf(part)) % 2).toBe(0)
+      }
+    }
+    const piped = plain(`||${'a|'.repeat(2000)}||`)
+    expect(piped.parts.length).toBeGreaterThan(2)
+    for (const part of piped.parts) expect(bars(part.text) % 2).toBe(0)
+  })
+
+  it('puts the text back together once the bars of the cuts are off', () => {
+    const rows = lines(60, 80)
+    for (const form of ['v2', 'plain']) {
+      const r = toDiscord(`||${rows.join('\n')}||`, opts({ form }))
+      const last = r.parts.length - 1
+      expect(last).toBeGreaterThan(0)
+      const body = r.parts.map((part, i) => {
+        let text = unmark(textOf(part))
+        if (i === last) text = text.replace(form === 'v2' ? FOOTER : PLAIN_FOOTER, '')
+        text = text.trim()
+        // The bars at the start of the first part and the end of the last are the writer's, the others the cuts'.
+        if (i > 0) {
+          expect(text.startsWith('||')).toBe(true)
+          text = text.slice(2)
+        }
+        if (i < last) {
+          expect(text.endsWith('||')).toBe(true)
+          text = text.slice(0, -2)
+        }
+        return text
+      })
+      expect(body.join('\n')).toBe(`||${rows.join('\n')}||`)
+    }
+  })
+})
+
+describe('toDiscord: a mark that a cut falls in', () => {
+  const spaced = (n) => Array(n).fill('a').join(' ')
+  // 2001 words of one letter: the cuts fall after a space, and these are the words that each part holds, for marks of 2, 1, 4 and 3
+  // characters (a part of 1774 holds the opening mark, the words and the closing mark, the part after it 1881 less the mark it
+  // opens again, and so on).
+  const split3 = (open, shut, counts) => [m(1, 3, `${open}${spaced(counts[0])}${shut}`), m(2, 3, `${open}${spaced(counts[1])}${shut}`), `${m(3, 3, `${open}${spaced(counts[2])}${shut}`)}\n${PLAIN_FOOTER}`]
+  const cases = [
+    ['bold', '**', '**', [885, 938, 178]],
+    ['italic', '*', '*', [886, 939, 176]],
+    ['underline', '__', '__', [885, 938, 178]],
+    ['strike', '~~', '~~', [885, 938, 178]],
+    ['code', '`', '`', [886, 939, 176]],
+    ['a spoiler of bold', '||**', '**||', [883, 936, 182]],
+    ['bold italic', '***', '***', [884, 937, 180]],
+    ['a heading of level 4', '**', '**', [885, 938, 178]],
+  ]
+
+  for (const [name, open, shut, counts] of cases) {
+    it(`closes ${name} at a cut inside a line, and opens it again after the mark of the next part`, () => {
+      const src = name === 'a heading of level 4' ? `#### ${spaced(2001)}` : `${open}${spaced(2001)}${shut}`
+      expect(plain(src).parts.map((p) => p.text)).toEqual(split3(open, shut, counts))
+    })
+  }
+
+  it('closes code of double ticks round a cut, and opens it again', () => {
+    const unit = 'x`y '
+    const r = plain(`\`\`${unit.repeat(1000)}x\`y\`\``)
+    expect(r.parts.map((p) => p.text.replace(`\n${PLAIN_FOOTER}`, ''))).toEqual([m(1, 3, `\`\`${unit.repeat(442).trimEnd()}\`\``), m(2, 3, `\`\`${unit.repeat(469).trimEnd()}\`\``), m(3, 3, `\`\`${unit.repeat(1000 - 442 - 469)}x\`y\`\``)])
+  })
+
+  it('keeps the space a cut falls at out of the mark it closes and the one it opens again', () => {
+    const r = plain(`**${'a  '.repeat(1500)}a**`)
+    expect(r.parts.length).toBeGreaterThan(1)
+    r.parts.forEach((part, i) => {
+      expect(part.text).not.toMatch(/ \*\*(\n|$)/)
+      if (i > 0) expect(part.text).toMatch(/^\*\*\d\/\d\*\* \*\*a/)
+    })
+  })
+
+  it('does not take the marker of a list item for a mark', () => {
+    const r = plain(`* ${spaced(2001)}`)
+    expect(r.parts[0].text).toBe(`**1/3**\n* ${spaced(886)}`)
+    expect(r.parts[1].text.startsWith('**2/3** a')).toBe(true)
+    expect(r.parts.map((p) => (p.text.match(/\*/g) ?? []).length)).toEqual([5, 4, 4])
+  })
+
+  it('reads the marks of a list item after its marker, wherever its marker is a mark itself', () => {
+    const r = plain(`* **${spaced(2001)}**`)
+    expect(r.parts.map((p) => p.text)).toEqual([`**1/3**\n* **${spaced(884)}**`, m(2, 3, `**${spaced(938)}**`), `${m(3, 3, `**${spaced(179)}**`)}\n${PLAIN_FOOTER}`])
+    const quoted = plain(`> - **${spaced(2001)}**`)
+    expect(quoted.parts[1].text.startsWith('**2/3** **')).toBe(true)
+  })
+
+  it('cuts at a space in front of a mark, the mark staying whole in the next part', () => {
+    const r = plain(`${spaced(886)} **${spaced(800)}**`)
+    expect(r.parts.map((p) => p.text)).toEqual([m(1, 2, spaced(886)), `${m(2, 2, `**${spaced(800)}**`)}\n${PLAIN_FOOTER}`])
+  })
+
+  it('never cuts between the ticks that open code, nor between those that close it', () => {
+    // The ticks start at 1771, where the room of part 1 (1774), less the 2 of the ticks it would close with, ends one place on.
+    const r = plain(`${'a'.repeat(1771)}\`\`b\`c\`\`${'d'.repeat(500)}`)
+    expect(r.parts.map((p) => p.text)).toEqual([m(1, 2, 'a'.repeat(1771)), `${m(2, 2, `\`\`b\`c\`\`${'d'.repeat(500)}`)}\n${PLAIN_FOOTER}`])
+  })
+
+  it('cuts after the space that follows a span of code, which is no longer in the code', () => {
+    const r = plain(`${spaced(885)} \`c\` ${spaced(850)}`)
+    expect(r.parts.map((p) => p.text)).toEqual([m(1, 2, `${spaced(885)} \`c\``), `${m(2, 2, spaced(850))}\n${PLAIN_FOOTER}`])
+  })
+
+  it('cuts right after the mark that closes a span, when that is where the room ends', () => {
+    const r = plain(`**${'a'.repeat(1770)}**${'b'.repeat(500)}`)
+    expect(r.parts.map((p) => p.text)).toEqual([m(1, 2, `**${'a'.repeat(1770)}**`), `${m(2, 2, 'b'.repeat(500))}\n${PLAIN_FOOTER}`])
+  })
+
+  it('opens a mark again before what a cut left of a link, and not after it, as it is no mark of a quote', () => {
+    // The cut falls inside the link, before its closing bracket, which is no quote mark however it looks at the start of the part.
+    const r = plain(`**<https://a.example/${'x'.repeat(1751)}>** ${'b'.repeat(300)}`)
+    expect(r.parts.map((p) => p.text)).toEqual([m(1, 2, `**<https://a.example/${'x'.repeat(1751)}**`), `${m(2, 2, `**>** ${'b'.repeat(300)}`)}\n${PLAIN_FOOTER}`])
+  })
+
+  it('reads the marks of a line of code of a fence as no marks, and leaves the fence as it was', () => {
+    for (const size of [93, 94, 95, 96, 97]) {
+      const rows = Array.from({ length: 40 }, (_, i) => `${i % 2 === 0 ? '**' : '||'}${'a'.repeat(size)}`)
+      const r = plain(`\`\`\`\n${rows.join('\n')}\n\`\`\``)
+      expect(r.parts.length).toBeGreaterThan(1)
+      for (const part of r.parts) {
+        const body = part.text.replace(`\n${PLAIN_FOOTER}`, '').split('\n')
+        expect(body.slice(1, 2)).toEqual(['```'])
+        expect(body.at(-1)).toBe('```')
+        expect(body.slice(2, -1).every((row) => /^(\*\*|\|\|)a+$/.test(row))).toBe(true)
+      }
+    }
+  })
+
+  it('does not close what a link, an escape or a mention in angle brackets holds', () => {
+    const unit = 'see <https://a.example/x*y__z~~w> and \\* \\_ \\~ and <@123456789012345678> and word '
+    const r = plain(unit.repeat(60))
+    expect(r.parts.length).toBeGreaterThan(1)
+    for (const part of r.parts) expect(part.text.replace(/\n-# <@.*$/, '')).not.toMatch(/\*\*$|__$|~~$/)
+  })
+
+  it('carries a mark of a line across a cut between the lines of a spoiler it is in', () => {
+    const rows = Array.from({ length: 40 }, (_, i) => `**${String(i).padStart(2, '0')}${'a'.repeat(94)}**`)
+    const r = plain(`||${rows.join('\n')}||`)
+    expect(r.parts.length).toBeGreaterThan(1)
+    for (const part of r.parts) expect(unbalanced(part.text)).toEqual([])
+  })
+})
+
 describe('budget', () => {
   it('answers the characters used, the room of three parts and the number of parts', () => {
     expect(budget('Hello', opts())).toEqual({ used: 5, limit: 3 * 3950, parts: 1 })
@@ -1343,6 +1730,15 @@ describe('toDiscord: properties over hostile replies', () => {
   const sentence = fc.array(word, { minLength: 1, maxLength: 14 }).map((w) => `${w.join(' ')}.`)
   const prose = fc.array(sentence, { minLength: 1, maxLength: 40 }).map((s) => s.join(' '))
   const lines = fc.array(sentence, { minLength: 1, maxLength: 12 }).map((s) => s.join('\n'))
+  // A spoiler of one line, of many, or in a quote, long enough that a cut falls in it, with what hides a bar (code, a link, an escape).
+  const hiders = fc.constantFrom('`a||b`', '<https://a.example/x||y>', '\\|\\|', '``c`d||e``', 'plain', '[t](<https://a.example/z>)')
+  const spoilerText = fc.array(fc.oneof({ weight: 8, arbitrary: sentence }, { weight: 1, arbitrary: hiders }), { minLength: 1, maxLength: 160 })
+  const spoiler = fc.oneof(
+    spoilerText.map((t) => `||${t.join(' ')}||`),
+    spoilerText.map((t) => `||${t.join('\n')}||`),
+    spoilerText.map((t) => `> ||${t.join('\n> ')}||`),
+    spoilerText.map((t) => `intro ||${t.join(' ')}|| outro`),
+  )
   const block = fc.oneof(
     { weight: 6, arbitrary: prose },
     { weight: 3, arbitrary: lines },
@@ -1351,6 +1747,7 @@ describe('toDiscord: properties over hostile replies', () => {
     { weight: 2, arbitrary: fc.array(word, { minLength: 1, maxLength: 12 }).map((w) => `| a | b |\n| - | - |\n${w.map((t) => `| ${t} | ${t}${t} |`).join('\n')}`) },
     { weight: 2, arbitrary: fc.constantFrom('---', '# H', '#### Four', '-# small', '> quote', '![a](upload:1)', '![b](upload:2)', '![c](upload:3)\n![c](upload:3)', '```', '| a |', '[^a]: note a', '[^b]: ' + 'n'.repeat(300)) },
     { weight: 2, arbitrary: prose.map((p) => `${p}[^a] and${p.slice(0, 20)}[^b]`) },
+    { weight: 2, arbitrary: spoiler },
     { weight: 1, arbitrary: fc.integer({ min: 1, max: 6000 }).map((n) => x(n)) },
     { weight: 1, arbitrary: fc.string({ unit: 'binary', maxLength: 80 }) },
     { weight: 1, arbitrary: fc.array(fc.constantFrom('😀', '𝒳', 'a', ' ', '|', '*', '_', '\\', '`', '<', '[', '>'), { maxLength: 400 }).map((a) => a.join('')) },
@@ -1410,7 +1807,7 @@ describe('toDiscord: properties over hostile replies', () => {
   // The half is of the room for the text: the part holds that and its marker, reply line and links, all of which count to
   // the limit. The links are in a part only when its message ids are given, at their longest here, and for no more than 3 parts.
   it('leaves every part but the last at least half the limit, as long as no divider or image breaks it', () => {
-    const body = fc.oneof(prose, lines, fc.integer({ min: 1, max: 4000 }).map((n) => x(n)), fc.array(word, { minLength: 1, maxLength: 70 }).map((w) => `\`\`\`\n${w.join('\n')}\n\`\`\``), fc.array(word, { minLength: 1, maxLength: 40 }).map((w) => w.map((t) => `- ${t} item`).join('\n')))
+    const body = fc.oneof(prose, lines, spoiler, fc.integer({ min: 1, max: 4000 }).map((n) => x(n)), fc.array(word, { minLength: 1, maxLength: 70 }).map((w) => `\`\`\`\n${w.join('\n')}\n\`\`\``), fc.array(word, { minLength: 1, maxLength: 40 }).map((w) => w.map((t) => `- ${t} item`).join('\n')))
     const plainDoc = fc.array(body, { maxLength: 4 }).chain((blocks) => fc.constantFrom('\n\n', '\n').map((sep) => blocks.join(sep)))
     const thread = { urlBase: WORST_BASE, partIds: [WORST_ID, WORST_ID, WORST_ID] }
     fc.assert(
@@ -1420,6 +1817,82 @@ describe('toDiscord: properties over hostile replies', () => {
         for (const part of r.parts.slice(0, -1)) expect(displayableLength(part)).toBeGreaterThanOrEqual((form === 'v2' ? 4000 : 2000) / 2)
       }),
       { numRuns: 200 },
+    )
+  })
+
+  const spoilered = fc.array(fc.oneof(spoiler, block), { minLength: 1, maxLength: 5 }).chain((blocks) => fc.constantFrom('\n\n', '\n').map((sep) => blocks.join(sep)))
+  const garbage = fc
+    .array(fc.constantFrom('||', '|', '*', '**', '_', '__', '~~', '`', '``', '<', '>', '\\', ' ', 'word', 'end. ', '\n', '\n\n', '```\n', '> ', '- ', '# '), { maxLength: 500 })
+    .map((a) => a.join('').repeat(4))
+
+  // Long lines of marked text, to be cut in the middle of a mark: the marks nest, and are one of the form's own.
+  const marked = fc.oneof(
+    sentence,
+    word.map((w) => `**${w} ${w}**`),
+    word.map((w) => `*${w} ${w}*`),
+    word.map((w) => `__${w} ${w}__`),
+    word.map((w) => `~~${w} ${w}~~`),
+    word.map((w) => `\`${w} ${w}\``),
+    word.map((w) => `||${w} ${w}||`),
+    word.map((w) => `**${w} *${w} ${w}* ${w}**`),
+    word.map((w) => `***${w} ${w}***`),
+    word.map((w) => `||**${w}** ~~${w} *${w}*~~||`),
+    fc.constantFrom('[a link](<https://a.example/z>)', '<@123456789012345678>', '\\* \\_ \\~ \\| \\`', '`a*b**c||d`', '<https://a.example/x*y_z>'),
+  )
+  const markedLine = fc.array(marked, { minLength: 40, maxLength: 700 }).map((items) => items.join(' '))
+  const markedDoc = fc.array(fc.oneof(markedLine, markedLine.map((l) => `#### ${l}`), markedLine.map((l) => `- ${l}`), markedLine.map((l) => `> ${l}`), markedLine.map((l) => `-# ${l}`), spoiler), { minLength: 1, maxLength: 3 }).map((b) => b.join('\n\n'))
+
+  it('leaves no mark open at the end of any part: every bar, bold, italic, underline and strike a cut falls in is closed', () => {
+    fc.assert(
+      fc.property(fc.oneof(markedDoc, spoilered), options, (src, o) => {
+        const r = toDiscord(src, build(o))
+        for (const part of r.parts) expect(unbalanced(textOf(part))).toEqual([])
+      }),
+      { numRuns: 300 },
+    )
+  })
+
+  // Two marks in a row, as `*a**b*`, are not told from a pair of other marks, so hostile text is held to bars alone.
+  it('leaves no bars open at the end of any part, whatever hostile text is made of', () => {
+    fc.assert(
+      fc.property(garbage, options, (src, o) => {
+        for (const part of toDiscord(src, build(o)).parts) expect(bars(textOf(part)) % 2).toBe(0)
+      }),
+      { numRuns: 300 },
+    )
+  })
+
+  it('keeps every limit and every word of a reply of marked lines', () => {
+    const words = (text) => text.replace(/[*_~|`\s]/g, '')
+    fc.assert(
+      fc.property(markedLine, fc.constantFrom('v2', 'plain'), (src, form) => {
+        const r = toDiscord(src, build({ form }))
+        const body = r.parts.map((part, i) => {
+          const text = textOf(part)
+          expect(form === 'v2' ? displayableLength(part) : text.length).toBeLessThanOrEqual(form === 'v2' ? 4000 : 2000)
+          return unmark(i === r.parts.length - 1 ? text.replace(form === 'v2' ? FOOTER : PLAIN_FOOTER, '') : text)
+        })
+        expect(words(body.join(''))).toBe(words(src))
+      }),
+      { numRuns: 150 },
+    )
+  })
+
+  it('loses nothing and repeats nothing of a reply with spoilers, but for the bars of its cuts', () => {
+    const words = (text) => text.replace(/\|\||\s+/g, '')
+    // The parser pairs a `||` with the next one even inside code, so what hides a bar is left out: only words are compared.
+    const said = fc.array(sentence, { minLength: 1, maxLength: 160 })
+    const written = fc.array(fc.oneof(said.map((t) => `||${t.join(' ')}||`), said.map((t) => `||${t.join('\n')}||`), said.map((t) => `intro ||${t.join(' ')}|| outro`), prose), { minLength: 1, maxLength: 4 }).map((b) => b.join('\n\n'))
+    fc.assert(
+      fc.property(written, fc.constantFrom('v2', 'plain'), (src, form) => {
+        const r = toDiscord(src, build({ form }))
+        const body = r.parts.map((part, i) => {
+          const text = textOf(part)
+          return unmark(i === r.parts.length - 1 ? text.replace(form === 'v2' ? FOOTER : PLAIN_FOOTER, '') : text)
+        })
+        expect(words(body.join(''))).toBe(words(src))
+      }),
+      { numRuns: 150 },
     )
   })
 
@@ -1610,5 +2083,20 @@ describe('placement: which pictures are attached to which part', () => {
       }),
       { numRuns: 150 },
     )
+  })
+})
+
+// The site bundles this module (the composer's meter and its Discord view run it in the browser), so an import there would drag
+// a server module into the browser bundle, or break the build: the parser is the one import it may have.
+describe('the form the site shares with the server', () => {
+  const source = readFileSync(new URL('./librariusForm.js', import.meta.url), 'utf8')
+
+  it('imports the markdown parser and nothing else', () => {
+    // (The mutation run reads an instrumented copy, which ends its lines with a semicolon.)
+    const lines = source.split(/\r?\n/).map((line) => line.replace(/;$/, ''))
+    expect(lines.filter((line) => /^\s*import[\s{*'"(]/.test(line))).toEqual(["import { parse } from './librariusMarkdown.js'"])
+    expect(lines.filter((line) => /\bfrom\s+['"]/.test(line))).toEqual(["import { parse } from './librariusMarkdown.js'"])
+    expect(lines.filter((line) => line.includes('require('))).toEqual([])
+    expect(source).not.toMatch(/\bimport\(/)
   })
 })
