@@ -16,6 +16,7 @@ const GATED = [
   'server/src/librariusBody.js',
   'server/src/librariusSweeper.js',
   'server/src/librariusWrites.js',
+  'server/src/librariusCommand.js',
   'src/lib/archive/audit.js',
   'src/lib/archive/prune.js',
   'src/lib/archive/legacy.js',

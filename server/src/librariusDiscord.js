@@ -18,6 +18,13 @@
  *   deletes a post.
  * message(channelId, id) → the raw message, or null (404 Unknown Message, code 10008; any other 404 is Upstream).
  * emojis() → the guild's raw emoji.
+ * applicationCommands(applicationId) → the raw commands the application has in the guild (`GET /applications/<app>/guilds/<id>/commands`).
+ * createMessageCommand(applicationId, name) → true once the guild has a message command (type 3) of that name, false when Discord
+ *   refuses with 403 (the bot may not make commands in this server); any other failure is Upstream. It creates one command and never
+ *   overwrites the list, since other commands may be there ("Delete on site" is made this way, librariusCommand.js).
+ * interactionCallback(interactionId, token, body) → undefined once Discord took the reply to an interaction (`POST /interactions/<id>/
+ *   <token>/callback`, which must come within 3 seconds of the interaction). `token` is the interaction's, and goes only in the address:
+ *   no error says it. The callback needs no authority of the bot's, and is counted by the limits as the route of that interaction.
  * autoModRules() → the guild's raw AutoMod rules (`GET /guilds/<id>/auto-moderation/rules`, which the bot may read with Manage Server).
  *   A site reply is checked against them before it is sent (librariusSend.js automodMatcher).
  * setArchived(threadId, archived) → true when the thread was set (`PATCH /channels/<id>` with `{ archived }`), false when
@@ -77,6 +84,9 @@ const MAX_WAIT_S = 30
 const WINDOW_MS = 1000
 const MAX_PAGE = 100
 const MAX_REFRESH = 50
+const MAX_COMMAND_NAME = 32
+const MESSAGE_COMMAND = 3 // the type of a command that shows in the Apps menu of a message
+const INTERACTION_TOKEN = /^[A-Za-z0-9._-]{1,512}$/
 const UNKNOWN_MESSAGE = 10008 // Discord's JSON error code for a message that does not exist
 const UNKNOWN_CHANNEL = 10003 // and for a channel, a thread included
 
@@ -309,6 +319,38 @@ export function createLibrariusDiscord({
       emojis: () => getList(`${guildPath}/emojis`, 'the emoji'),
 
       autoModRules: () => getList(`${guildPath}/auto-moderation/rules`, 'the AutoMod rules'),
+
+      async applicationCommands(applicationId) {
+        needId(applicationId, 'applicationId')
+        return getList(`/v10/applications/${applicationId}/guilds/${guildId}/commands`, "the application's commands")
+      },
+
+      async createMessageCommand(applicationId, name) {
+        needId(applicationId, 'applicationId')
+        if (typeof name !== 'string' || name.length < 1 || name.length > MAX_COMMAND_NAME) throw new TypeError(`name must be a text of 1 to ${MAX_COMMAND_NAME} characters.`)
+        const { status } = await send('POST', `/v10/applications/${applicationId}/guilds/${guildId}/commands`, {
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ name, type: MESSAGE_COMMAND }),
+        })
+        if (status === 200 || status === 201) return true
+        // The bot may not make commands in this server: a thing for the owner to put right, not a failure of Discord's.
+        if (status === 403) return false
+        throw refused(status, 'a command')
+      },
+
+      async interactionCallback(interactionId, token, body) {
+        needId(interactionId, 'interactionId')
+        if (typeof token !== 'string' || !INTERACTION_TOKEN.test(token)) throw new TypeError('token must be an interaction token.')
+        if (!isObject(body)) throw new TypeError('body must be an object.')
+        // The token is the credential of this one interaction: it goes in the address and nowhere else, and not into the route, which is
+        // what the limits are counted by. A callback has a bucket of its own for each interaction, so each interaction is its own route.
+        const { status } = await send('POST', `/v10/interactions/${interactionId}/${token}/callback`, {
+          route: `/v10/interactions/${interactionId}/:token/callback`,
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(body),
+        })
+        if (status !== 204 && status !== 200) throw refused(status, 'an interaction reply')
+      },
 
       async setArchived(threadId, archived) {
         needId(threadId, 'threadId')

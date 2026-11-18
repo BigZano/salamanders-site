@@ -16,6 +16,9 @@ const MSG_2 = '200000000000000431'
 const MSG_3 = '200000000000000432'
 const AFTER = '200000000000000429'
 const EMOJI = '200000000000000460'
+const APP = '200000000000000480'
+const INTERACTION = '200000000000000490'
+const IToken = 'aW50ZXJhY3Rpb246_Invented-token.0123456789'
 
 const CDN = 'https://cdn.discordapp.com/attachments/200000000000000410/200000000000000440/map.png?ex=6540a0b3&is=653e2bb3&hm=0a1b2c'
 const CDN_2 = 'https://cdn.discordapp.com/attachments/200000000000000410/200000000000000441/key.png?ex=6540a0b3&is=653e2bb3&hm=3d4e5f'
@@ -240,6 +243,16 @@ const ROWS = [
     path: `/v10/guilds/${GUILD}/auto-moderation/rules`,
     reply: [{ id: '200000000000000470', name: 'invented rule', enabled: true, trigger_type: 1, trigger_metadata: { keyword_filter: ['zorp'] } }],
     result: [{ id: '200000000000000470', name: 'invented rule', enabled: true, trigger_type: 1, trigger_metadata: { keyword_filter: ['zorp'] } }],
+    bad: ARRAY_BAD,
+  },
+  {
+    name: 'applicationCommands',
+    what: "the application's commands",
+    call: (d) => d.applicationCommands(APP),
+    method: 'GET',
+    path: `/v10/applications/${APP}/guilds/${GUILD}/commands`,
+    reply: [{ id: '200000000000000481', application_id: APP, name: 'Delete on site', type: 3 }],
+    result: [{ id: '200000000000000481', application_id: APP, name: 'Delete on site', type: 3 }],
     bad: ARRAY_BAD,
   },
   {
@@ -2043,5 +2056,147 @@ describe('on the real clock', () => {
     } finally {
       globalThis.fetch = real
     }
+  })
+})
+
+describe('applicationCommands', () => {
+  it('refuses an application that is no id, before any request', async () => {
+    const r = rig([ok([]), ok([])])
+    for (const bad of ['', '123', 'x'.repeat(18), 7, null, undefined, `${APP}/x`]) await expect(r.discord.applicationCommands(bad)).rejects.toThrow(new TypeError('applicationId must be a Discord id.'))
+    expect(r.seen).toEqual([])
+  })
+})
+
+describe('createMessageCommand', () => {
+  it('sends the guild a POST of the command as JSON, a message command (type 3), with the bot token, and answers true for a 201', async () => {
+    const r = rig([{ status: 201, body: { id: '200000000000000481', name: 'Delete on site', type: 3 } }])
+    expect(await r.discord.createMessageCommand(APP, 'Delete on site')).toBe(true)
+    expect(r.seen).toHaveLength(1)
+    expect(r.seen[0].url).toBe(`${API}/v10/applications/${APP}/guilds/${GUILD}/commands`)
+    expect(r.seen[0].method).toBe('POST')
+    expect(r.seen[0].headers).toEqual({ Authorization: 'Bot secret-bot-token', 'Content-Type': 'application/json' })
+    expect(JSON.parse(r.seen[0].body)).toEqual({ name: 'Delete on site', type: 3 })
+    expect(r.seen[0].signal).toBeInstanceOf(AbortSignal)
+  })
+
+  it('answers true for a 200 too, which is a command of that name that was already there and is now this one', async () => {
+    const r = rig([ok({ id: '200000000000000481' })])
+    expect(await r.discord.createMessageCommand(APP, 'Delete on site')).toBe(true)
+  })
+
+  it('answers false for a 403, which is a bot that may not make commands in this server, and does not retry', async () => {
+    for (const body of [{ code: 50001, message: 'Missing Access' }, { code: 50013 }, {}, null]) {
+      const r = rig([{ status: 403, body }])
+      expect(await r.discord.createMessageCommand(APP, 'Delete on site')).toBe(false)
+      expect(r.seen).toHaveLength(1)
+    }
+  })
+
+  it.each([400, 401, 404, 500, 502, 204, 202])('throws Upstream, naming the status and nothing else, for a %s', async (status) => {
+    const r = rig([{ status, body: { code: 50035, message: 'https://secret.example/x' } }])
+    const err = await r.discord.createMessageCommand(APP, 'Delete on site').catch((e) => e)
+    expect(err).toBeInstanceOf(Upstream)
+    expect(err.message).toBe(`Discord answered ${status} for a command.`)
+  })
+
+  it('refuses an application that is no id and a name that is not 1 to 32 characters, before any request', async () => {
+    const r = rig([ok({}), ok({})])
+    for (const bad of ['', '123', 'x'.repeat(18), 7, null, undefined, `${APP}/x`]) await expect(r.discord.createMessageCommand(bad, 'Delete on site')).rejects.toThrow(new TypeError('applicationId must be a Discord id.'))
+    for (const bad of ['', 'x'.repeat(33), 7, null, undefined, {}, ['Delete on site']]) await expect(r.discord.createMessageCommand(APP, bad)).rejects.toThrow(new TypeError('name must be a text of 1 to 32 characters.'))
+    expect(r.seen).toEqual([])
+  })
+
+  it('takes a name of 1 and one of 32 characters', async () => {
+    const r = rig([ok({}), ok({})])
+    expect(await r.discord.createMessageCommand(APP, 'x')).toBe(true)
+    expect(await r.discord.createMessageCommand(APP, 'x'.repeat(32))).toBe(true)
+  })
+
+  it('goes by the same limits as every other call: a 429 waits and tries once more', async () => {
+    const r = rig([{ status: 429, headers: { 'Retry-After': '2' }, body: {} }, { status: 201, body: {} }])
+    expect(await r.discord.createMessageCommand(APP, 'Delete on site')).toBe(true)
+    expect(r.slept).toEqual([2000])
+  })
+
+  it('is Upstream, with no request, when the client is not configured, and Upstream when Discord cannot be reached', async () => {
+    const off = rig([], { botToken: '' })
+    await expect(off.discord.createMessageCommand(APP, 'Delete on site')).rejects.toThrow(Upstream)
+    expect(off.seen).toEqual([])
+    const down = rig([new Error(`connect to ${API} with ${TOKEN}`)])
+    const err = await down.discord.createMessageCommand(APP, 'Delete on site').catch((e) => e)
+    expect(err).toBeInstanceOf(Upstream)
+    expect(err.message).toBe('Discord is unreachable.')
+  })
+})
+
+describe('interactionCallback', () => {
+  const REPLY = { type: 4, data: { content: 'hello', flags: 64, allowed_mentions: { parse: [] } } }
+
+  it('sends a POST to the interaction callback with the body as JSON and answers nothing for a 204', async () => {
+    const r = rig([{ status: 204, raw: '' }])
+    expect(await r.discord.interactionCallback(INTERACTION, IToken, REPLY)).toBeUndefined()
+    expect(r.seen).toHaveLength(1)
+    expect(r.seen[0].url).toBe(`${API}/v10/interactions/${INTERACTION}/${IToken}/callback`)
+    expect(r.seen[0].method).toBe('POST')
+    expect(r.seen[0].headers['Content-Type']).toBe('application/json')
+    expect(JSON.parse(r.seen[0].body)).toEqual(REPLY)
+    expect(r.seen[0].signal).toBeInstanceOf(AbortSignal)
+  })
+
+  it('takes a 200 as done too', async () => {
+    const r = rig([ok({ interaction: {} })])
+    expect(await r.discord.interactionCallback(INTERACTION, IToken, REPLY)).toBeUndefined()
+  })
+
+  it.each([400, 401, 403, 404, 500, 502, 201, 202])('throws Upstream for a %s, naming the status and neither the token nor anything Discord said', async (status) => {
+    const r = rig([{ status, body: { code: 40060, message: `Interaction has already been acknowledged ${IToken}` } }])
+    const err = await r.discord.interactionCallback(INTERACTION, IToken, REPLY).catch((e) => e)
+    expect(err).toBeInstanceOf(Upstream)
+    expect(err.message).toBe(`Discord answered ${status} for an interaction reply.`)
+    expect(err.message).not.toContain(IToken)
+  })
+
+  it('refuses an interaction that is no id, a token that is not an interaction token and a body that is no object, before any request', async () => {
+    const r = rig([ok({}), ok({})])
+    for (const bad of ['', '123', 'x'.repeat(18), 7, null, undefined, `${INTERACTION}/x`]) await expect(r.discord.interactionCallback(bad, IToken, REPLY)).rejects.toThrow(new TypeError('interactionId must be a Discord id.'))
+    for (const bad of ['', 'a/b', 'a b', 'a?b', 'a#b', '../x', 'a'.repeat(513), 7, null, undefined, 'tok\n']) {
+      await expect(r.discord.interactionCallback(INTERACTION, bad, REPLY), String(bad)).rejects.toThrow(new TypeError('token must be an interaction token.'))
+    }
+    for (const bad of [null, undefined, 'x', 7, []]) await expect(r.discord.interactionCallback(INTERACTION, IToken, bad)).rejects.toThrow(new TypeError('body must be an object.'))
+    expect(r.seen).toEqual([])
+  })
+
+  it('takes a token of 1 and one of 512 characters', async () => {
+    const r = rig([ok({}), ok({})])
+    await r.discord.interactionCallback(INTERACTION, 'a', REPLY)
+    await r.discord.interactionCallback(INTERACTION, 'a'.repeat(512), REPLY)
+    expect(r.seen).toHaveLength(2)
+  })
+
+  it('keeps what a bucket says to its own interaction: the callback of another is not held up by it', async () => {
+    const r = rig([{ status: 204, raw: '', headers: bucket('cb', 0, 3) }, { status: 204, raw: '' }, { status: 204, raw: '' }])
+    await r.discord.interactionCallback(INTERACTION, IToken, REPLY)
+    await r.discord.interactionCallback('200000000000000491', 'another-token', REPLY)
+    expect(r.slept).toEqual([])
+    // The same interaction answered again waits for its own bucket, whatever token it comes with: that is its route.
+    await r.discord.interactionCallback(INTERACTION, 'a-second-token', REPLY)
+    expect(r.slept).toEqual([3000])
+  })
+
+  it('is Upstream, with no request, when the client is not configured, and Upstream when Discord cannot be reached, without the token', async () => {
+    const off = rig([], { apiBase: '' })
+    await expect(off.discord.interactionCallback(INTERACTION, IToken, REPLY)).rejects.toThrow(Upstream)
+    expect(off.seen).toEqual([])
+    const down = rig([new Error(`connect to ${API}/${IToken}`)])
+    const err = await down.discord.interactionCallback(INTERACTION, IToken, REPLY).catch((e) => e)
+    expect(err).toBeInstanceOf(Upstream)
+    expect(err.message).toBe('Discord is unreachable.')
+  })
+
+  it('is sent on a client that waits only as long as it was told to: withMaxWait carries it too', async () => {
+    const r = rig([{ status: 204, raw: '' }])
+    expect(await r.discord.withMaxWait(1000).interactionCallback(INTERACTION, IToken, REPLY)).toBeUndefined()
+    expect(typeof r.discord.withMaxWait(1000).createMessageCommand).toBe('function')
+    expect(typeof r.discord.withMaxWait(1000).applicationCommands).toBe('function')
   })
 })

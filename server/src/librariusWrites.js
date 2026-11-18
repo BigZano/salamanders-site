@@ -97,7 +97,7 @@ const isSerial = (v) => typeof v === 'string' && SERIAL.test(v) && BigInt(v) <= 
 const SITE_MESSAGE = `siteUrl must be an https address with no path, short enough for a button (${MAX_URL} characters with a post's path).`
 
 /** → the site's address without a trailing slash, or a RangeError for one a button cannot carry. */
-function siteBase(url) {
+export function siteBase(url) {
   if (typeof url !== 'string') throw new RangeError(SITE_MESSAGE)
   const base = url.replace(/\/+$/, '')
   if (!/^https:\/\/[^\s<>/]+$/.test(base) || `${base}/reliquarium/librarius/${WORST_ID}`.length > MAX_URL) throw new RangeError(SITE_MESSAGE)
