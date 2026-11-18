@@ -245,6 +245,8 @@ export function createLibrariusWrites({ store, guild, roster, outbox, limits, gu
     const may = mayNotWrite(verdict, COPY.cantEdit) ?? lockedFor(post, verdict)
     if (may !== null) return may
     if (message.state === 'sending') return reply(409, { error: COPY.busy })
+    // Discord lets a webhook edit only its own messages: a reply of another one (the address was made again) is deleted and posted again, not edited.
+    if (outbox != null && message.webhookId !== outbox.webhookId) return reply(409, { error: OUTBOX_COPY.olderWebhook })
     const early = limits.check('edit', verdict.user.id)
     if (!early.ok) return slowDown(early)
 

@@ -175,6 +175,31 @@ describe.skipIf(!runnable)('the outbox store on a real Postgres 16, as the data-
       expect(indexes).toHaveLength(1)
     })
 
+    it('applies on top of a database that has only batch 1’s Librarius tables, with its messages kept as they are, and again after that', async () => {
+      const text = readFileSync(new URL('../schema.sql', import.meta.url), 'utf8')
+      const batch1 = text.slice(0, text.indexOf('-- What the site sends to Discord (batch 2'))
+      expect(batch1).toContain('create table if not exists librarius_sync')
+      expect(batch1).not.toContain('librarius_outbox')
+      await sql('create database live_like')
+      const live = await connectOwner('live_like')
+      live.on('error', () => {})
+      try {
+        await live.query(batch1)
+        await live.query("insert into librarius_posts (id, title, created_at) values ($1, 'An invented post', now())", [POST])
+        await live.query("insert into librarius_messages (id, post_id, author_id, author_name, kind, content, created_at) values ($1, $2, $3, 'A Person', 0, 'written in Discord', now())", [A, POST, MEMBER])
+        await live.query(text)
+        await live.query(text)
+        const kept = (await live.query('select origin, content, source, state, layout from librarius_messages where id = $1', [A])).rows[0]
+        expect(kept).toEqual({ origin: 'discord', content: 'written in Discord', source: null, state: null, layout: null })
+        const names = (await live.query("select conname from pg_constraint where conrelid = 'librarius_parts'::regclass")).rows.map((r) => r.conname)
+        expect(names).toEqual(expect.arrayContaining(['librarius_parts_message_fk', 'librarius_parts_index_check']))
+        expect((await live.query('select count(*)::int as n from librarius_outbox_state')).rows[0].n).toBe(0)
+      } finally {
+        await live.end()
+        await sql('drop database live_like')
+      }
+    })
+
     it('has one row of state at most, and the data-only role can write and read it', async () => {
       await sql("insert into librarius_outbox_state (id, paused_until) values (1, now())")
       await expect(sql('insert into librarius_outbox_state (id) values (2)')).rejects.toThrow(/check/)

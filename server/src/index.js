@@ -257,11 +257,7 @@ if (librariusConfigured) {
     let command = null
     if (replies.webhookUrl !== null) {
       try {
-        webhook = createWebhookClient({
-          url: replies.webhookUrl,
-          apiBase: DISCORD_API_BASE,
-          newest: (channelId, limit) => discord.newest(channelId, limit),
-        })
+        webhook = createWebhookClient({ url: replies.webhookUrl, apiBase: DISCORD_API_BASE })
         outbox = createOutbox({ store, webhook, discord, form: replies.form, guildId: GUILD_ID })
         sweeper = createUploadSweeper({ store })
         command = createCommand({ discord, store, guildId: GUILD_ID })
@@ -319,12 +315,19 @@ if (librariusConfigured) {
       outbox,
       form: replies.form,
     })
-    // Run once the server is listening, and in this order: the posts it listens to, the import (not waited for: it can
+    // Run once the server is listening, and in this order: the repair of the replies of the site, the posts it listens to, the import (not waited for: it can
     // take minutes), the import's timer (its first run is the one just started), the link timer, the gateway, and, with a
     // webhook, the outbox (it takes up what a stop left half-done) and the upload sweeper. A step that fails is logged and
     // the rest go on: the catch-up that follows READY loads the posts again, so a failed load only delays the live feed, and
     // the import's timer tries a failed import again.
     startLibrarius = async () => {
+      // What an image that did not know the replies, or a webhook that was replaced, let the import write over them is put right before
+      // anything reads or writes the forum, and once is enough (it does nothing when there is nothing to put right). It runs with the
+      // replies off too: the damage is there whether or not they are on.
+      await librariusStep('the replies of the site could not be repaired', async () => {
+        const fixed = await store.repairSiteMessages()
+        if (fixed.removed + fixed.restored > 0) console.warn(`Librarius: repaired the replies of the site: ${fixed.restored} put right, ${fixed.removed} parts that had been stored as messages removed.`)
+      })
       // The roster supplies the names and avatars on a page: warm it now (not waited for), so that a reader's first
       // request does not wait on it.
       librariusStep('the roster could not be warmed', () => roster.current())

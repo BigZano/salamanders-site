@@ -19,7 +19,7 @@ function rig(options = {}) {
       timers.waiting = timers.waiting.filter((h) => h !== handle)
     },
   }
-  const store = { sweepUploads: vi.fn(async () => 0) }
+  const store = { sweepUploads: vi.fn(async () => 0), pruneOutbox: vi.fn(async () => ({ entries: 0, events: 0 })) }
   const calls = { get all() { return store.sweepUploads.mock.calls.map(([arg]) => arg) } }
   const logged = []
   const sweeper = createUploadSweeper({ store, now: () => clock.t, timers: fakeTimers, log: (line) => logged.push(line), ...options })
@@ -82,6 +82,79 @@ describe('sweep', () => {
     expect(store.sweepUploads).toHaveBeenCalledTimes(1)
     await sweeper.sweep()
     expect(store.sweepUploads).toHaveBeenCalledTimes(2)
+  })
+})
+
+describe('the prune of the outbox, on the same timer', () => {
+  const DAY = 86_400_000
+
+  it('prunes the entries done more than a day ago and the events more than 90 days old, at the first sweep', async () => {
+    const { sweeper, store, clock } = rig()
+    await sweeper.sweep()
+    expect(store.pruneOutbox.mock.calls).toStrictEqual([[{ sentBefore: clock.t - DAY, eventsBefore: clock.t - 90 * DAY }]])
+  })
+
+  it('prunes once an hour, not at every sweep, reading the clock when it does', async () => {
+    const { sweeper, store, clock } = rig()
+    const first = clock.t
+    await sweeper.sweep()
+    clock.t += HOUR - 1
+    await sweeper.sweep()
+    expect(store.pruneOutbox).toHaveBeenCalledTimes(1)
+    clock.t += 1
+    await sweeper.sweep()
+    expect(store.pruneOutbox.mock.calls).toStrictEqual([[{ sentBefore: first - DAY, eventsBefore: first - 90 * DAY }], [{ sentBefore: first + HOUR - DAY, eventsBefore: first + HOUR - 90 * DAY }]])
+  })
+
+  it('prunes on every sweep that the timer makes, an hour apart', async () => {
+    const { sweeper, store, clock, fire } = rig()
+    sweeper.start()
+    await flush()
+    expect(store.pruneOutbox).toHaveBeenCalledTimes(1)
+    clock.t += 60_000
+    await fire()
+    expect(store.pruneOutbox).toHaveBeenCalledTimes(1)
+    clock.t += HOUR
+    await fire()
+    expect(store.pruneOutbox).toHaveBeenCalledTimes(2)
+  })
+
+  it('never fails the sweep, and tries again at the next one, with nothing of the error but its words', async () => {
+    const { sweeper, store, logged, clock } = rig()
+    store.pruneOutbox.mockRejectedValueOnce(new Error('the database is down at https://db.example/x?token=secret'))
+    store.sweepUploads.mockResolvedValueOnce(4)
+    expect(await sweeper.sweep()).toBe(4)
+    expect(logged).toHaveLength(1)
+    expect(logged[0]).not.toContain('secret')
+    clock.t += 1
+    await sweeper.sweep()
+    expect(store.pruneOutbox).toHaveBeenCalledTimes(2)
+  })
+
+  it('prunes though the sweep of the pictures failed, and still answers 0 for it', async () => {
+    const { sweeper, store } = rig()
+    store.sweepUploads.mockRejectedValueOnce(new Error('down'))
+    expect(await sweeper.sweep()).toBe(0)
+    expect(store.pruneOutbox).toHaveBeenCalledTimes(1)
+  })
+
+  it('is one trip with the sweep: sweeps asked for together share the prune', async () => {
+    const { sweeper, store } = rig()
+    await Promise.all([sweeper.sweep(), sweeper.sweep(), sweeper.sweep()])
+    expect(store.pruneOutbox).toHaveBeenCalledTimes(1)
+  })
+
+  it('does not hold the next sweep up for ever when the prune never answers: the sweep waits for it, as it does for its own work', async () => {
+    const { sweeper, store } = rig()
+    let release
+    store.pruneOutbox.mockImplementationOnce(() => new Promise((resolve) => (release = () => resolve({ entries: 0, events: 0 }))))
+    let done = false
+    const sweeping = sweeper.sweep().then(() => (done = true))
+    await flush()
+    expect(done).toBe(false)
+    release()
+    await sweeping
+    expect(done).toBe(true)
   })
 })
 
@@ -205,7 +278,7 @@ describe('start and stop', () => {
     vi.useFakeTimers()
     try {
       const asked = []
-      const store = { sweepUploads: async (arg) => asked.push(arg) && 0 }
+      const store = { sweepUploads: async (arg) => asked.push(arg) && 0, pruneOutbox: async () => ({ entries: 0, events: 0 }) }
       const sweeper = createUploadSweeper({ store, log: () => {} })
       await sweeper.sweep()
       expect(asked[0].olderThan).toBe(Date.now() - HOUR)
@@ -241,11 +314,17 @@ describe('start and stop', () => {
 })
 
 describe('what it refuses', () => {
-  const store = { sweepUploads: async () => 0 }
+  const store = { sweepUploads: async () => 0, pruneOutbox: async () => ({ entries: 0, events: 0 }) }
 
   it('needs a store with sweepUploads', () => {
     for (const bad of [undefined, null, {}, { sweepUploads: 1 }, 'store']) {
       expect(() => createUploadSweeper({ store: bad }), String(bad)).toThrow(new TypeError('store.sweepUploads must be a function.'))
+    }
+  })
+
+  it('needs a store with pruneOutbox too', () => {
+    for (const bad of [undefined, null, 1, 'prune', {}]) {
+      expect(() => createUploadSweeper({ store: { sweepUploads: async () => 0, pruneOutbox: bad } }), String(bad)).toThrow(new TypeError('store.pruneOutbox must be a function.'))
     }
   })
 

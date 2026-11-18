@@ -8,6 +8,10 @@
  * outbox's one-hour pause (the breaker) would otherwise lose its pictures, and fail, in the middle of being sent. The outbox deletes
  * them after sending. All of that is one statement of the store (sweepUploads), which this module only times.
  *
+ * The same timer prunes the outbox (store.pruneOutbox), once an hour (and at the first sweep): the entries that are done ('sent') and
+ * more than a day old, which hold the full text of replies that may have been deleted since, and the events more than 90 days old.
+ * A prune that fails is logged and tried again at the next sweep; it never fails the sweep.
+ *
  * createUploadSweeper({ store, now = Date.now, timers = { setTimeout, clearTimeout }, intervalMs = 60000, maxAgeMs = 3600000,
  *   log = console.error }) → { start(), stop() → Promise, sweep() → Promise<number> }
  *   sweep() deletes at once and answers how many it deleted. It never rejects: a store that fails is logged (without a link or a
@@ -20,9 +24,15 @@
 import { describe } from './librariusText.js'
 
 const MAX_TIMER_MS = 2 ** 31 - 1
+const DAY_MS = 86_400_000
+// What the prune keeps: a done entry for a day, an event for 90 days; and how often it looks.
+const SENT_KEEP_MS = DAY_MS
+const EVENTS_KEEP_MS = 90 * DAY_MS
+const PRUNE_EVERY_MS = 3_600_000
 
 export function createUploadSweeper({ store, now = Date.now, timers = { setTimeout, clearTimeout }, intervalMs = 60_000, maxAgeMs = 3_600_000, log = console.error }) {
   if (typeof store?.sweepUploads !== 'function') throw new TypeError('store.sweepUploads must be a function.')
+  if (typeof store.pruneOutbox !== 'function') throw new TypeError('store.pruneOutbox must be a function.')
   if (!Number.isSafeInteger(intervalMs) || intervalMs < 1 || intervalMs > MAX_TIMER_MS) throw new RangeError(`intervalMs must be a whole number of milliseconds from 1 to ${MAX_TIMER_MS}.`)
   if (!Number.isSafeInteger(maxAgeMs) || maxAgeMs < 1) throw new RangeError('maxAgeMs must be a whole number of milliseconds of at least 1.')
 
@@ -30,15 +40,31 @@ export function createUploadSweeper({ store, now = Date.now, timers = { setTimeo
   let stopped = false
   let timer = null
   let running = null // the sweep in progress
+  let prunedAt = -Infinity // when the last prune that worked was
+
+  /** Prunes the outbox when it is time, and never fails: what could not be pruned now is found at the next sweep. */
+  async function prune() {
+    const t = now()
+    if (t - prunedAt < PRUNE_EVERY_MS) return
+    try {
+      await store.pruneOutbox({ sentBefore: t - SENT_KEEP_MS, eventsBefore: t - EVENTS_KEEP_MS })
+      prunedAt = t
+    } catch (err) {
+      // Stryker disable next-line StringLiteral: what is logged is for the owner to read, and no test asserts it
+      log(`Librarius outbox prune failed: ${describe(err)}`)
+    }
+  }
 
   async function once() {
+    let swept = 0
     try {
-      return await store.sweepUploads({ olderThan: now() - maxAgeMs })
+      swept = await store.sweepUploads({ olderThan: now() - maxAgeMs })
     } catch (err) {
       // Stryker disable next-line StringLiteral: what is logged is for the owner to read, and no test asserts it
       log(`Librarius upload sweep failed: ${describe(err)}`)
-      return 0
     }
+    await prune()
+    return swept
   }
 
   function sweep() {

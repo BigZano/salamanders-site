@@ -22,6 +22,8 @@ const M_OTHER_SITE = '200000000000000434' // a reply of the site, by OTHER
 const M_LOCKED = '200000000000000435' // a reply of the site, by ME, in the locked post
 const M_ORPHAN = '200000000000000436' // a message whose post is gone
 const M_BAD_LAYOUT = '200000000000000437' // a reply of the site with no layout
+const HOOK = '200000000000000450' // the webhook the outbox sends through now
+const OLD_HOOK = '200000000000000451' // one that was replaced
 const ME = '300000000000000101'
 const OTHER = '300000000000000102'
 const OUTSIDER = '300000000000000103' // a member who may not read the forum
@@ -73,6 +75,7 @@ const stored = (id, over = {}) => ({
   authorId: ME,
   authorName: 'Mira Invented',
   authorAvatar: AVATAR,
+  webhookId: HOOK,
   origin: 'site',
   source: 'Hello **there**',
   layout: layoutOf(),
@@ -160,7 +163,7 @@ function world(over = {}) {
       return w.people === null ? null : structuredClone(w.people)
     },
   }
-  const outbox = { kick: () => w.kicks++ }
+  const outbox = { kick: () => w.kicks++, webhookId: HOOK }
   const limits = createLimits({ now: () => w.clock.t })
   const writes = createLibrariusWrites({
     store,
@@ -883,6 +886,35 @@ describe('edit', () => {
     t.w.messages.set('200000000000000443', stored('200000000000000443', { state: 'blocked' }))
     expect(await out(await t.writes.edit('200000000000000442', json({ source: 'x' }), verdictOf()))).toMatchObject({ status: 409, body: { error: 'This message is already being changed. Try again in a moment.' } })
     expect((await t.writes.edit('200000000000000443', json({ source: 'x' }), verdictOf())).status).toBe(202)
+  })
+
+  it('is 409 for a reply of another webhook, which the webhook of the outbox cannot edit, before the body is read or a try is counted', async () => {
+    const t = world()
+    t.w.messages.set('200000000000000444', stored('200000000000000444', { webhookId: OLD_HOOK }))
+    t.w.messages.set('200000000000000445', stored('200000000000000445', { webhookId: null }))
+    const copy = "This reply was sent through an older webhook, so it can't be edited from the site. Delete it and post it again."
+    for (const id of ['200000000000000444', '200000000000000445']) {
+      const { request, seen } = streamed([new TextEncoder().encode('{"source":"x"}')], { 'Content-Type': 'application/json' })
+      expect(await out(await t.writes.edit(id, request, verdictOf()))).toMatchObject({ status: 409, body: { error: copy } })
+      expect(seen.pulled).toBe(0)
+    }
+    expect(t.queue).toStrictEqual([])
+    expect(t.w.kicks).toBe(0)
+    // Nothing was counted against the member: twenty edits of a reply of the current webhook still go.
+    for (let i = 0; i < 20; i++) expect((await t.writes.edit(M_SITE, json({ source: `edit ${i}` }), verdictOf())).status).toBe(202)
+  })
+
+  it('may delete a reply of another webhook, which the outbox removes through the bot', async () => {
+    const t = world()
+    t.w.messages.set('200000000000000444', stored('200000000000000444', { webhookId: OLD_HOOK }))
+    expect((await t.writes.remove('200000000000000444', verdictOf())).status).toBe(202)
+    expect(t.queue.map((e) => e.kind)).toStrictEqual(['delete'])
+  })
+
+  it('looks at the author, the kind and the lock before the webhook: another webhook\'s reply of someone else is 403', async () => {
+    const t = world()
+    t.w.messages.set('200000000000000444', stored('200000000000000444', { webhookId: OLD_HOOK, authorId: OTHER }))
+    expect((await t.writes.edit('200000000000000444', json({ source: 'x' }), verdictOf())).status).toBe(403)
   })
 
   it('is 429 over 20 edits a minute, looked at before the body is read, and counts only an edit that is queued', async () => {
