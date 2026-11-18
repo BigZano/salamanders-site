@@ -46,6 +46,7 @@ describe('the permission bits', () => {
     expect(P).toStrictEqual({
       ADMINISTRATOR: 1n << 3n,
       MANAGE_CHANNELS: 1n << 4n,
+      MANAGE_GUILD: 1n << 5n,
       ADD_REACTIONS: 1n << 6n,
       VIEW_CHANNEL: 1n << 10n,
       SEND_MESSAGES: 1n << 11n,
@@ -56,6 +57,7 @@ describe('the permission bits', () => {
       SEND_MESSAGES_IN_THREADS: 1n << 38n,
     })
     expect(P.ADMINISTRATOR).toBe(8n)
+    expect(P.MANAGE_GUILD).toBe(32n)
     expect(P.VIEW_CHANNEL).toBe(1024n)
     expect(P.READ_MESSAGE_HISTORY).toBe(65536n)
   })

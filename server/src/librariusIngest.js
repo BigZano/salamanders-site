@@ -47,6 +47,9 @@
  *   GUILD_ROLE_UPDATE and GUILD_ROLE_DELETE: forget the guild, and the verdicts. The guild goes first, so that no verdict
  *   is read from the old roles after the verdicts are dropped.
  * - GUILD_EMOJIS_UPDATE: gives the guild the new list of emoji.
+ * - AUTO_MODERATION_RULE_CREATE, AUTO_MODERATION_RULE_UPDATE and AUTO_MODERATION_RULE_DELETE (which the gateway sends for the
+ *   AUTO_MODERATION_CONFIGURATION intent): forget the AutoMod rules a reply from the site is checked against, and nothing else.
+ *   No verdict is drawn from them, so the verdicts stay.
  * - Anything else is ignored.
  *
  * Everything an event carries is untrusted. An event that names an id that is no snowflake, or one a bigint cannot hold,
@@ -204,6 +207,8 @@ export function createIngest({ store, guild, access, forumId, fetchMessage, onRe
     access.forget()
   }
 
+  const rulesChange = () => guild.invalidate('rules')
+
   const handlers = new Map([
     ['READY', ready],
     ['THREAD_CREATE', keepThread],
@@ -223,6 +228,9 @@ export function createIngest({ store, guild, access, forumId, fetchMessage, onRe
     ['GUILD_ROLE_UPDATE', rolesChange],
     ['GUILD_ROLE_DELETE', rolesChange],
     ['GUILD_EMOJIS_UPDATE', (d) => guild.setEmoji(d.emojis)],
+    ['AUTO_MODERATION_RULE_CREATE', rulesChange],
+    ['AUTO_MODERATION_RULE_UPDATE', rulesChange],
+    ['AUTO_MODERATION_RULE_DELETE', rulesChange],
   ])
 
   return {

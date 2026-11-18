@@ -230,8 +230,21 @@ describe('memberOf', () => {
 
   it('returns the roles and when they joined, with the bot token', async () => {
     const { roles, d } = make({ [`/v10/guilds/${GUILD}/members/${USER}`]: { status: 200, body: { roles: [PLAIN_ROLE], joined_at: '2025-01-01T00:00:00.000000+00:00' } } })
-    expect(await roles.memberOf(USER)).toEqual({ roles: [PLAIN_ROLE], joinedAt: '2025-01-01T00:00:00.000000+00:00' })
+    expect(await roles.memberOf(USER)).toEqual({ roles: [PLAIN_ROLE], joinedAt: '2025-01-01T00:00:00.000000+00:00', timeoutUntil: null })
     expect(d.seen[0][1]).toBe('Bot bot')
+  })
+
+  it('says until when a member is timed out, as Discord gives it', async () => {
+    const until = '2030-05-01T10:20:30.000000+00:00'
+    const body = { roles: [], joined_at: '2025-01-01T00:00:00.000000+00:00', communication_disabled_until: until }
+    expect(await at({ status: 200, body })).toEqual({ roles: [], joinedAt: '2025-01-01T00:00:00.000000+00:00', timeoutUntil: until })
+  })
+
+  it('has no timeout unless the answer is a time', async () => {
+    for (const communication_disabled_until of [undefined, null, '', 'soon', 'not a time', 1893456000000, {}, [], true]) {
+      const found = await at({ status: 200, body: { roles: [], communication_disabled_until } })
+      expect(found.timeoutUntil, String(communication_disabled_until)).toBeNull()
+    }
   })
 
   it('is null for someone not in the guild', async () => {
@@ -240,7 +253,7 @@ describe('memberOf', () => {
 
   it('has no join date unless it is a string', async () => {
     for (const joined_at of [undefined, null, 1735689600000, {}]) {
-      await expect(at({ status: 200, body: { roles: [], joined_at } })).resolves.toEqual({ roles: [], joinedAt: null })
+      await expect(at({ status: 200, body: { roles: [], joined_at } })).resolves.toEqual({ roles: [], joinedAt: null, timeoutUntil: null })
     }
   })
 

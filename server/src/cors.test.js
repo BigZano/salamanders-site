@@ -10,13 +10,18 @@ describe('applyCors', () => {
   })
 
   it('allows the methods the API uses', () => {
-    expect(run().headers.get('Access-Control-Allow-Methods')).toBe('GET, POST, PUT, DELETE, OPTIONS')
+    expect(run().headers.get('Access-Control-Allow-Methods')).toBe('GET, POST, PUT, PATCH, DELETE, OPTIONS')
   })
 
   it('allows PUT, which the Librarius read marker is sent with: a preflight that omits it blocks the request in the browser', () => {
     const methods = run().headers.get('Access-Control-Allow-Methods').split(',').map((m) => m.trim())
     expect(methods).toContain('PUT')
     expect(methods).toEqual(expect.arrayContaining(['GET', 'POST', 'DELETE', 'OPTIONS']))
+  })
+
+  it('allows PATCH, which editing a reply on the Librarius is sent with: a preflight that omits it blocks the request in the browser', () => {
+    const methods = run().headers.get('Access-Control-Allow-Methods').split(',').map((m) => m.trim())
+    expect(methods).toContain('PATCH')
   })
 
   it('allows the headers the client sends', () => {

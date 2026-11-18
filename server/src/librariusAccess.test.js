@@ -52,7 +52,7 @@ const req = (token) => new Request('https://api.test/librarius/me', { headers: t
 function setup(options = {}) {
   const clock = { t: 1_000 }
   const fail = { identify: false, memberOf: false, facts: false }
-  const world = { users: { ...USERS }, facts: live() }
+  const world = { users: structuredClone(USERS), facts: live() }
   const tokens = { ...Object.fromEntries(Object.keys(USERS).map((k) => [k, k])), 'tok-a': 'reader', 'tok-b': 'reader' }
   const roles = {
     identify: vi.fn(async (request) => {
@@ -64,7 +64,7 @@ function setup(options = {}) {
     memberOf: vi.fn(async (id) => {
       if (fail.memberOf) throw new Upstream()
       const user = Object.values(world.users).find((u) => u?.id === id)
-      return user.roles === null ? null : { roles: user.roles, joinedAt: '2024-01-01T00:00:00.000000+00:00' }
+      return user.roles === null ? null : { roles: user.roles, joinedAt: '2024-01-01T00:00:00.000000+00:00', timeoutUntil: user.timeoutUntil ?? null }
     }),
   }
   const guild = {
@@ -82,27 +82,27 @@ const asked = (who) => ({ id: USERS[who].id, username: USERS[who].username })
 describe('the verdict', () => {
   it('lets in a member who holds the role the forum is opened to', async () => {
     const { access } = setup()
-    expect(await access.resolve(req('reader'))).toStrictEqual({ user: asked('reader'), read: true, perms: BASE })
+    expect(await access.resolve(req('reader'))).toMatchObject({ user: asked('reader'), read: true, perms: BASE })
   })
 
   it('refuses a member of the Legion who does not hold it', async () => {
     const { access } = setup()
-    expect(await access.resolve(req('legion'))).toStrictEqual({ user: asked('legion'), read: false, perms: 0n })
+    expect(await access.resolve(req('legion'))).toMatchObject({ user: asked('legion'), read: false, perms: 0n })
   })
 
   it('refuses a member with no role', async () => {
     const { access } = setup()
-    expect(await access.resolve(req('plain'))).toStrictEqual({ user: asked('plain'), read: false, perms: 0n })
+    expect(await access.resolve(req('plain'))).toMatchObject({ user: asked('plain'), read: false, perms: 0n })
   })
 
   it('lets in the guild owner, who holds nothing and whom the forum shuts out like everyone', async () => {
     const { access } = setup()
-    expect(await access.resolve(req('owner'))).toStrictEqual({ user: asked('owner'), read: true, perms: ALL })
+    expect(await access.resolve(req('owner'))).toMatchObject({ user: asked('owner'), read: true, perms: ALL })
   })
 
   it('lets in an Administrator, whatever the forum says', async () => {
     const { access } = setup()
-    expect(await access.resolve(req('admin'))).toStrictEqual({ user: asked('admin'), read: true, perms: ALL })
+    expect(await access.resolve(req('admin'))).toMatchObject({ user: asked('admin'), read: true, perms: ALL })
   })
 
   it('lets in a member who holds both', async () => {
@@ -113,7 +113,7 @@ describe('the verdict', () => {
   it('refuses someone who is not in the guild, with no permissions, and does not need the guild facts for it', async () => {
     const { access, fail } = setup()
     fail.facts = true
-    expect(await access.resolve(req('stranger'))).toStrictEqual({ user: asked('stranger'), read: false, perms: 0n })
+    expect(await access.resolve(req('stranger'))).toMatchObject({ user: asked('stranger'), read: false, perms: 0n })
   })
 
   it('is null for a request with no identity, even when the member lookup and the guild facts are down', async () => {
@@ -143,7 +143,7 @@ describe('the verdict', () => {
     const { access, world } = setup()
     world.facts.roles[0].permissions = String(P.VIEW_CHANNEL)
     world.facts.overwrites = []
-    expect(await access.resolve(req('plain'))).toStrictEqual({ user: asked('plain'), read: false, perms: P.VIEW_CHANNEL })
+    expect(await access.resolve(req('plain'))).toMatchObject({ user: asked('plain'), read: false, perms: P.VIEW_CHANNEL })
   })
 
   it('refuses everyone, the owner and an Administrator too, when the guild id is not an id', async () => {
@@ -151,7 +151,7 @@ describe('the verdict', () => {
     for (const guildId of ids) {
       const { access } = setup({ guildId })
       for (const who of ['reader', 'owner', 'admin']) {
-        expect(await access.resolve(req(who)), `${String(guildId)} ${who}`).toStrictEqual({ user: asked(who), read: false, perms: 0n })
+        expect(await access.resolve(req(who)), `${String(guildId)} ${who}`).toMatchObject({ user: asked(who), read: false, perms: 0n })
       }
     }
   })
@@ -162,7 +162,7 @@ describe('the verdict', () => {
       world.users.odd = { id, username: 'odd', roles: [READER] }
       world.facts.ownerId = id
       const verdict = await access.resolve(req('odd'))
-      expect(verdict, id).toStrictEqual({ user: { id, username: 'odd' }, read: false, perms: 0n })
+      expect(verdict, id).toMatchObject({ user: { id, username: 'odd' }, read: false, perms: 0n })
     }
   })
 
@@ -173,6 +173,7 @@ describe('the verdict', () => {
       const verdict = await access.resolve(req('odd'))
       expect(verdict.read, String(roles)).toBe(false)
       expect(verdict.perms).toBe(0n)
+      expect(verdict.roleIds, String(roles)).toStrictEqual([])
     }
   })
 
@@ -192,6 +193,169 @@ describe('the verdict', () => {
     guild.facts.mockImplementation(async () => frozen)
     for (const who of ['reader', 'legion', 'owner', 'admin']) await access.resolve(req(who))
     expect(frozen).toStrictEqual(live())
+  })
+})
+
+const iso = (ms) => new Date(ms).toISOString()
+// What a verdict says a member may do, the five things the write routes and /librarius/me ask.
+const abilities = (v) => ({
+  reply: v.reply,
+  attach: v.attach,
+  manageMessages: v.manageMessages,
+  manageThreads: v.manageThreads,
+  timedOut: v.timedOut,
+  admin: v.admin,
+})
+const NONE = { reply: false, attach: false, manageMessages: false, manageThreads: false, timedOut: false, admin: false }
+const EVERYTHING = { reply: true, attach: true, manageMessages: true, manageThreads: true, timedOut: false, admin: true }
+
+describe('the verdict: what a member may do', () => {
+  // The role of the reader gets exactly `bits` on top of the @everyone's (view, send in threads and so on).
+  const give = (world, bits) => {
+    world.facts.roles.find((r) => r.id === READER).permissions = String(bits)
+  }
+
+  it('lets a reader reply, and not attach, manage messages or manage threads, as the forum is set', async () => {
+    const { access } = setup()
+    expect(abilities(await access.resolve(req('reader')))).toStrictEqual({ ...NONE, reply: true })
+  })
+
+  it('lets a member with Attach Files attach', async () => {
+    const { access, world } = setup()
+    give(world, P.ATTACH_FILES)
+    expect(abilities(await access.resolve(req('reader')))).toStrictEqual({ ...NONE, reply: true, attach: true })
+  })
+
+  it('gives Manage Messages and Manage Threads to those who hold them, each on its own', async () => {
+    const { access, world } = setup()
+    give(world, P.MANAGE_MESSAGES)
+    expect(abilities(await access.resolve(req('reader')))).toStrictEqual({ ...NONE, reply: true, manageMessages: true })
+    give(world, P.MANAGE_THREADS)
+    expect(abilities(await access.resolve(req('reader'), { fresh: true }))).toStrictEqual({ ...NONE, reply: true, manageThreads: true })
+  })
+
+  it('gives the guild owner and an Administrator everything', async () => {
+    const { access } = setup()
+    expect(abilities(await access.resolve(req('owner')))).toStrictEqual(EVERYTHING)
+    expect(abilities(await access.resolve(req('admin')))).toStrictEqual(EVERYTHING)
+  })
+
+  it('counts Manage Server as an admin, for whom the AutoMod rules do not apply, and as nothing else', async () => {
+    const { access, world } = setup()
+    give(world, P.MANAGE_GUILD)
+    expect(abilities(await access.resolve(req('reader')))).toStrictEqual({ ...NONE, reply: true, admin: true })
+  })
+
+  it('refuses a reply to a member without Send Messages in Threads, however much else they hold', async () => {
+    const { access, world } = setup()
+    world.facts.roles[0].permissions = String(P.VIEW_CHANNEL | P.READ_MESSAGE_HISTORY | P.SEND_MESSAGES | P.ADD_REACTIONS)
+    give(world, P.ATTACH_FILES | P.MANAGE_MESSAGES | P.MANAGE_THREADS)
+    expect(abilities(await access.resolve(req('reader')))).toStrictEqual({ ...NONE, manageMessages: true, manageThreads: true })
+  })
+
+  it('refuses everything to those who may not read the forum, whatever their roles carry', async () => {
+    const { access, world } = setup()
+    world.facts.roles.find((r) => r.id === LEGION).permissions = String(BASE | P.ATTACH_FILES | P.MANAGE_MESSAGES | P.MANAGE_THREADS | P.MANAGE_GUILD)
+    expect(abilities(await access.resolve(req('legion')))).toStrictEqual(NONE)
+  })
+
+  it('refuses everything to someone who is not in the guild, who holds no roles', async () => {
+    const { access } = setup()
+    const verdict = await access.resolve(req('stranger'))
+    expect(abilities(verdict)).toStrictEqual(NONE)
+    expect(verdict.roleIds).toStrictEqual([])
+    expect(verdict.timeoutUntil).toBeNull()
+  })
+
+  it("names the roles the member holds, as a copy of the lookup's", async () => {
+    const { access, world } = setup()
+    const verdict = await access.resolve(req('both'))
+    expect(verdict.roleIds).toStrictEqual([LEGION, READER])
+    verdict.roleIds.push('x')
+    expect(world.users.both.roles).toStrictEqual([LEGION, READER])
+  })
+
+  describe('a timeout', () => {
+    it('takes every right but reading from a member who is timed out, and says until when', async () => {
+      const { access, world, clock } = setup()
+      give(world, P.ATTACH_FILES | P.MANAGE_MESSAGES | P.MANAGE_THREADS)
+      world.users.reader.timeoutUntil = iso(clock.t + 60_000)
+      const verdict = await access.resolve(req('reader'))
+      expect(verdict.read).toBe(true)
+      expect(abilities(verdict)).toStrictEqual({ ...NONE, timedOut: true })
+      expect(verdict.timeoutUntil).toBe(iso(clock.t + 60_000))
+    })
+
+    it('ends exactly when it says it does: at that millisecond the member may write again, one before it they may not', async () => {
+      const { access, world, clock } = setup()
+      world.users.reader.timeoutUntil = iso(clock.t + 1)
+      expect((await access.resolve(req('reader'), { fresh: true })).timedOut).toBe(true)
+      world.users.reader.timeoutUntil = iso(clock.t)
+      const over = await access.resolve(req('reader'), { fresh: true })
+      expect(over.timedOut).toBe(false)
+      expect(over.reply).toBe(true)
+      expect(over.timeoutUntil).toBeNull()
+    })
+
+    it('ignores a timeout that is over, and any value that is no time', async () => {
+      const { access, world, clock } = setup()
+      for (const timeoutUntil of [iso(clock.t - 86_400_000), null, undefined, 'soon', '', iso(0)]) {
+        world.users.reader.timeoutUntil = timeoutUntil
+        const verdict = await access.resolve(req('reader'), { fresh: true })
+        expect(abilities(verdict), String(timeoutUntil)).toStrictEqual({ ...NONE, reply: true })
+        expect(verdict.timeoutUntil, String(timeoutUntil)).toBeNull()
+      }
+    })
+
+    it('reads the timeout again for a fresh verdict: a member whose timeout was lifted may write at once', async () => {
+      const { access, world, clock } = setup()
+      world.users.reader.timeoutUntil = iso(clock.t + 3_600_000)
+      expect((await access.resolve(req('reader'))).reply).toBe(false)
+      world.users.reader.timeoutUntil = null
+      expect((await access.resolve(req('reader'), { fresh: true })).reply).toBe(true)
+    })
+
+    it('takes a lookup that says nothing of a timeout as no timeout', async () => {
+      const { access, roles } = setup()
+      roles.memberOf.mockImplementation(async () => ({ roles: [READER], joinedAt: null }))
+      const verdict = await access.resolve(req('reader'))
+      expect(abilities(verdict)).toStrictEqual({ ...NONE, reply: true })
+      expect(verdict.timeoutUntil).toBeNull()
+    })
+
+    it('leaves a timed-out owner timed out, as Discord reports it', async () => {
+      const { access, world, clock } = setup()
+      world.users.owner.timeoutUntil = iso(clock.t + 60_000)
+      expect(abilities(await access.resolve(req('owner')))).toStrictEqual({ ...NONE, timedOut: true, admin: true })
+    })
+  })
+
+  it('answers the same as the rules, for any bits the role carries, timed out or not', async () => {
+    const EVERYONE = BASE
+    await fc.assert(
+      fc.asyncProperty(fc.bigInt({ min: 0n, max: (1n << 48n) - 1n }), fc.boolean(), async (bits, timedOut) => {
+        const { access, world, clock } = setup()
+        give(world, bits)
+        if (timedOut) world.users.reader.timeoutUntil = iso(clock.t + 5_000)
+        const verdict = await access.resolve(req('reader'))
+        const all = EVERYONE | bits
+        const has = (bit) => (all & bit) === bit
+        if (has(P.ADMINISTRATOR)) {
+          expect(abilities(verdict)).toStrictEqual({ ...EVERYTHING, ...(timedOut ? { reply: false, attach: false, manageMessages: false, manageThreads: false, timedOut: true } : {}) })
+          return
+        }
+        const reply = has(P.SEND_MESSAGES_IN_THREADS) && !timedOut
+        expect(abilities(verdict)).toStrictEqual({
+          reply,
+          attach: reply && has(P.ATTACH_FILES),
+          manageMessages: !timedOut && has(P.MANAGE_MESSAGES),
+          manageThreads: !timedOut && has(P.MANAGE_THREADS),
+          timedOut,
+          admin: has(P.MANAGE_GUILD),
+        })
+      }),
+      { numRuns: 150 },
+    )
   })
 })
 
@@ -235,7 +399,7 @@ describe('the verdict: whatever the roles held and the forum says', () => {
           { id: USERS.stranger.id, type: 1, allow: String(ALL), deny: '0' },
         ]
         expect((await access.resolve(req('stranger'))).read).toBe(false)
-        expect(await access.resolve(req('owner'))).toStrictEqual({ user: asked('owner'), read: true, perms: ALL })
+        expect(await access.resolve(req('owner'))).toMatchObject({ user: asked('owner'), read: true, perms: ALL })
       }),
     )
   })
@@ -250,7 +414,7 @@ describe('the cache', () => {
     expect(await access.resolve(req('reader'))).toBe(first)
     expect(roles.memberOf).toHaveBeenCalledTimes(1)
     clock.t = 1_000 + 30_000
-    expect(await access.resolve(req('reader'))).toStrictEqual({ user: asked('reader'), read: false, perms: 0n })
+    expect(await access.resolve(req('reader'))).toMatchObject({ user: asked('reader'), read: false, perms: 0n })
     expect(roles.memberOf).toHaveBeenCalledTimes(2)
   })
 
@@ -346,7 +510,7 @@ describe('a failure', () => {
       fail[which] = true
       await expect(access.resolve(req('reader'))).rejects.toBeInstanceOf(Upstream)
       fail[which] = false
-      expect(await access.resolve(req('reader'))).toStrictEqual({ user: asked('reader'), read: true, perms: BASE })
+      expect(await access.resolve(req('reader'))).toMatchObject({ user: asked('reader'), read: true, perms: BASE })
     })
 
     it(`propagates Upstream from ${what} for a fresh verdict too`, async () => {

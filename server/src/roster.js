@@ -106,10 +106,17 @@ export function createRoster({
       .sort((a, b) => a.name.localeCompare(b.name))
   }
 
-  /** → [{ id, name, avatar, joinedAt }] of every member but bots, a fresh copy; null if no roster has ever loaded. */
-  async function members() {
+  /**
+   * → [{ id, name, avatar, joinedAt }] of every member but bots, a fresh copy; null if no roster has ever loaded. With
+   * `{ roles: true }` each also has `roles`, the ids of the roles they hold: the Librarius's member search needs them to
+   * ask who may read the forum.
+   */
+  async function members({ roles = false } = {}) {
     if (!(await current())) return null
-    return view.people.map(({ id, name, avatar, joinedAt }) => ({ id, name, avatar, joinedAt }))
+    return view.people.map((p) => {
+      const out = { id: p.id, name: p.name, avatar: p.avatar, joinedAt: p.joinedAt }
+      return roles ? { ...out, roles: [...p.roles] } : out
+    })
   }
 
   return { current, holding, members }

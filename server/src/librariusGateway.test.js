@@ -146,9 +146,15 @@ afterEach(() => {
 })
 
 describe('the constants', () => {
-  it('asks for guilds, emoji, messages, reactions and message content, and nothing else', () => {
-    expect(INTENTS).toBe(34313)
-    expect(INTENTS).toBe(1 + 8 + 512 + 1024 + 32768)
+  it('asks for guilds, emoji, messages, reactions, message content and AutoMod configuration, and nothing else', () => {
+    expect(INTENTS).toBe(1082889)
+    expect(INTENTS).toBe(1 + 8 + 512 + 1024 + 32768 + 1048576)
+  })
+
+  it('asks for no privileged intent but message content: neither members nor presences', () => {
+    const GUILD_MEMBERS = 1 << 1
+    const GUILD_PRESENCES = 1 << 8
+    expect(INTENTS & (GUILD_MEMBERS | GUILD_PRESENCES)).toBe(0)
   })
 
   it('treats exactly the codes that retrying cannot fix as fatal', () => {
@@ -691,7 +697,7 @@ describe('identifying and resuming', () => {
         op: 2,
         d: {
           token: TOKEN,
-          intents: 34313,
+          intents: 1082889,
           properties: { os: 'linux', browser: 'salamanders-site', device: 'salamanders-site' },
         },
       },
@@ -863,7 +869,7 @@ describe('op 7, op 9 and READY', () => {
         op: 2,
         d: {
           token: TOKEN,
-          intents: 34313,
+          intents: 1082889,
           properties: { os: 'linux', browser: 'salamanders-site', device: 'salamanders-site' },
         },
       },
@@ -2323,7 +2329,7 @@ describe('the options it is given, and the ones it defaults', () => {
     expect(sockets.map((s) => s.url)).toEqual([`${GATEWAY}${QUERY}`])
     sockets[0].open()
     hello(sockets[0])
-    expect(identifies(sockets[0])[0].d.intents).toBe(34313)
+    expect(identifies(sockets[0])[0].d.intents).toBe(1082889)
     await tick(INTERVAL / 4 - 1)
     expect(heartbeats(sockets[0])).toHaveLength(0)
     await tick(1)

@@ -84,6 +84,14 @@ const EMOJI = [
   { id: EMOJI_B, name: 'invented_b', animated: true },
 ]
 
+// The guild's AutoMod rules as Discord gives them (invented), which the guild keeps whole: the matcher reads what it needs.
+const RULE_A = '200000000000000470'
+const RULE_B = '200000000000000471'
+const rawRules = () => [
+  { id: RULE_A, name: 'invented keywords', enabled: true, event_type: 1, trigger_type: 1, trigger_metadata: { keyword_filter: ['zorp'], allow_list: [] }, actions: [{ type: 1 }], exempt_roles: [OTHER], exempt_channels: [] },
+  { id: RULE_B, name: 'invented mentions', enabled: false, event_type: 1, trigger_type: 5, trigger_metadata: { mention_total_limit: 40 }, actions: [{ type: 1 }], exempt_roles: [], exempt_channels: [] },
+]
+
 const deferred = () => {
   let resolve
   let reject
@@ -99,7 +107,7 @@ const failure = (promise) => promise.then(() => null, (e) => e)
 
 const NO_GUILD = 'Discord answered 200 for the guild, but not with what the Librarius expected.'
 // A TypeError with this message: a bare TypeError is also what a lookup of nothing would throw.
-const NOT_A_KIND = "kind must be 'guild', 'forum' or 'emoji'."
+const NOT_A_KIND = "kind must be 'guild', 'forum', 'emoji' or 'rules'."
 function expectNotAKind(guild, kind, label = String(kind)) {
   let error = null
   try {
@@ -121,11 +129,12 @@ const flush = () => new Promise((resolve) => setImmediate(resolve))
  */
 function setup(options = {}) {
   const clock = { t: 1_000 }
-  const world = { guild: rawGuild(), forum: rawForum(), emojis: rawEmojis() }
+  const world = { guild: rawGuild(), forum: rawForum(), emojis: rawEmojis(), rules: rawRules() }
   const discord = {
     guild: vi.fn(async () => structuredClone(world.guild)),
     channel: vi.fn(async () => structuredClone(world.forum)),
     emojis: vi.fn(async () => structuredClone(world.emojis)),
+    autoModRules: vi.fn(async () => structuredClone(world.rules)),
   }
   const guild = createLibrariusGuild({ discord, forumId: FORUM, now: () => clock.t, ...options })
   return { guild, discord, clock, world }
@@ -754,7 +763,7 @@ describe('invalidate', () => {
     world.guild.owner_id = NEW_OWNER
     world.emojis = []
     const hostile = [
-      'Guild', 'GUILD', 'guilds', ' guild', 'guild ', 'guild\n', 'roles', 'forum,emoji', 'all', '',
+      'Guild', 'GUILD', 'guilds', ' guild', 'guild ', 'guild\n', 'roles', 'rule', 'Rules', 'rules ', 'automod', 'forum,emoji', 'all', '',
       'constructor', '__proto__', 'toString', 'hasOwnProperty', 'valueOf', 'prototype',
       undefined, null, 0, 1, true, NaN, ['guild'], ['forum'], { toString: () => 'guild' }, { kind: 'guild' }, Symbol('guild'), () => 'guild',
     ]
@@ -766,11 +775,11 @@ describe('invalidate', () => {
     expect(discord.emojis).toHaveBeenCalledTimes(1)
   })
 
-  it('throws TypeError for any text that is not one of the three kinds', () => {
+  it('throws TypeError for any text that is not one of the four kinds', () => {
     const { guild } = setup()
     fc.assert(
       fc.property(fc.string(), (kind) => {
-        fc.pre(!['guild', 'forum', 'emoji'].includes(kind))
+        fc.pre(!['guild', 'forum', 'emoji', 'rules'].includes(kind))
         expectNotAKind(guild, kind)
       }),
     )
@@ -1002,5 +1011,165 @@ describe('setEmoji', () => {
     raw[0].name = 'changed'
     raw.length = 0
     expect(await guild.emoji()).toStrictEqual(EMOJI)
+  })
+})
+
+describe('automodRules', () => {
+  it("is the guild's AutoMod rules as Discord gave them, whole", async () => {
+    const { guild } = setup()
+    expect(await guild.automodRules()).toStrictEqual(rawRules())
+  })
+
+  it('is a copy: changing what a caller got changes nothing the next one gets', async () => {
+    const { guild } = setup()
+    const first = await guild.automodRules()
+    first[0].trigger_metadata.keyword_filter.push('changed')
+    first.pop()
+    expect(await guild.automodRules()).toStrictEqual(rawRules())
+  })
+
+  it('serves the rules for ttlMs from when it read them, and reads again at that millisecond', async () => {
+    const { guild, discord, clock, world } = setup({ ttlMs: 70 })
+    await guild.automodRules()
+    world.rules = [rawRules()[1]]
+    clock.t = 1_069
+    expect(await guild.automodRules()).toStrictEqual(rawRules())
+    expect(discord.autoModRules).toHaveBeenCalledTimes(1)
+    clock.t = 1_070
+    expect(await guild.automodRules()).toStrictEqual([rawRules()[1]])
+    expect(discord.autoModRules).toHaveBeenCalledTimes(2)
+  })
+
+  it('keeps them five minutes unless told otherwise', async () => {
+    const { guild, discord, clock } = setup()
+    await guild.automodRules()
+    clock.t = 1_000 + 299_999
+    await guild.automodRules()
+    expect(discord.autoModRules).toHaveBeenCalledTimes(1)
+    clock.t = 1_000 + 300_000
+    await guild.automodRules()
+    expect(discord.autoModRules).toHaveBeenCalledTimes(2)
+  })
+
+  it('reads the rules apart from the facts and the emoji: none of them warms another', async () => {
+    const { guild, discord } = setup()
+    await guild.automodRules()
+    expect(discord.guild).not.toHaveBeenCalled()
+    expect(discord.channel).not.toHaveBeenCalled()
+    expect(discord.emojis).not.toHaveBeenCalled()
+    await guild.facts()
+    await guild.emoji()
+    expect(discord.autoModRules).toHaveBeenCalledTimes(1)
+  })
+
+  it('does not fail the facts when the rules cannot be read, which the bot may be unable to', async () => {
+    const { guild, discord } = setup()
+    discord.autoModRules.mockRejectedValue(new Upstream('Discord answered 403 for the AutoMod rules.'))
+    expect(await guild.facts()).toStrictEqual(FACTS)
+    expect(await failure(guild.automodRules())).toBeInstanceOf(Upstream)
+  })
+
+  it('has callers who come while it is read share the one read', async () => {
+    const { guild, discord } = setup()
+    const [a, b] = await Promise.all([guild.automodRules(), guild.automodRules()])
+    expect(a).toStrictEqual(rawRules())
+    expect(b).toStrictEqual(rawRules())
+    expect(discord.autoModRules).toHaveBeenCalledTimes(1)
+  })
+
+  it('fails with Upstream, and keeps nothing, when Discord cannot be asked or answers something else', async () => {
+    const { guild, discord } = setup()
+    discord.autoModRules.mockRejectedValueOnce(new Upstream('Discord is unreachable.'))
+    expect(await failure(guild.automodRules())).toBeInstanceOf(Upstream)
+    expect(await guild.automodRules()).toStrictEqual(rawRules())
+    expect(discord.autoModRules).toHaveBeenCalledTimes(2)
+  })
+
+  it('never serves rules that have gone stale in place of a failed read', async () => {
+    const { guild, discord, clock } = setup({ ttlMs: 10 })
+    await guild.automodRules()
+    clock.t = 1_010
+    discord.autoModRules.mockRejectedValueOnce(new Upstream('Discord is unreachable.'))
+    expect(await failure(guild.automodRules())).toBeInstanceOf(Upstream)
+  })
+
+  it.each([
+    ['nothing', undefined],
+    ['null', null],
+    ['an object', {}],
+    ['text', 'rules'],
+    ['a list with something that is no rule', [{ id: RULE_A }, 7]],
+    ['a list with a list in it', [[]]],
+    ['a list with null in it', [null]],
+  ])('is Upstream, naming nothing of what it read, for %s', async (_, answer) => {
+    const { guild, discord } = setup()
+    discord.autoModRules.mockResolvedValue(answer)
+    const error = await failure(guild.automodRules())
+    expect(error).toBeInstanceOf(Upstream)
+    expect(error.message).toBe('Discord answered 200 for the AutoMod rules, but not with what the Librarius expected.')
+  })
+
+  it('reads an empty list as no rules: a guild may have none', async () => {
+    const { guild, world } = setup()
+    world.rules = []
+    expect(await guild.automodRules()).toStrictEqual([])
+  })
+
+  describe('invalidate', () => {
+    it("'rules' reads the rules again and leaves the guild, the forum and the emoji", async () => {
+      const { guild, discord, world } = setup()
+      await guild.facts()
+      await guild.emoji()
+      await guild.automodRules()
+      world.rules = []
+      world.guild.owner_id = NEW_OWNER
+      world.emojis = []
+      guild.invalidate('rules')
+      expect(await guild.automodRules()).toStrictEqual([])
+      expect((await guild.facts()).ownerId).toBe(OWNER)
+      expect(await guild.emoji()).toStrictEqual(EMOJI)
+      expect(discord.autoModRules).toHaveBeenCalledTimes(2)
+      expect(discord.guild).toHaveBeenCalledTimes(1)
+      expect(discord.channel).toHaveBeenCalledTimes(1)
+      expect(discord.emojis).toHaveBeenCalledTimes(1)
+    })
+
+    it('leaves the rules alone when the guild, the forum or the emoji are forgotten', async () => {
+      const { guild, discord, world } = setup()
+      await guild.automodRules()
+      world.rules = []
+      for (const kind of ['guild', 'forum', 'emoji']) guild.invalidate(kind)
+      expect(await guild.automodRules()).toStrictEqual(rawRules())
+      expect(discord.autoModRules).toHaveBeenCalledTimes(1)
+    })
+
+    it('is not stored when it comes during a read: the caller has what it asked for, the next call reads again', async () => {
+      const { guild, discord, world } = setup()
+      const gate = deferred()
+      discord.autoModRules.mockImplementationOnce(() => gate.promise)
+      const first = guild.automodRules()
+      await flush()
+      guild.invalidate('rules')
+      world.rules = [rawRules()[1]]
+      gate.resolve([])
+      expect(await first).toStrictEqual([])
+      expect(await guild.automodRules()).toStrictEqual([rawRules()[1]])
+      expect(discord.autoModRules).toHaveBeenCalledTimes(2)
+    })
+
+    it('does not stop a read of the rules from being stored when another kind is forgotten', async () => {
+      const { guild, discord } = setup()
+      const gate = deferred()
+      discord.autoModRules.mockImplementationOnce(() => gate.promise)
+      const first = guild.automodRules()
+      await flush()
+      guild.invalidate('guild')
+      guild.invalidate('forum')
+      guild.invalidate('emoji')
+      gate.resolve(rawRules())
+      await first
+      await guild.automodRules()
+      expect(discord.autoModRules).toHaveBeenCalledTimes(1)
+    })
   })
 })

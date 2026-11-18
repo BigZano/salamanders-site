@@ -57,14 +57,17 @@
 
 import { describe, scrub } from './librariusText.js'
 
-// The gateway intents the Librarius needs: guilds, guild emoji, guild messages, guild message reactions and message
-// content. Nothing else is asked for, so Discord sends nothing else.
+// The gateway intents the Librarius needs: guilds, guild emoji, guild messages, guild message reactions, message content
+// and AutoMod configuration (which brings the AUTO_MODERATION_RULE_* events, so that a rule changed in Discord reaches the
+// rules a reply is checked against; it is not a privileged intent). Nothing else is asked for, so Discord sends nothing
+// else. Interactions ("Delete on site") need no intent.
 const GUILDS = 1 << 0
 const GUILD_EMOJIS_AND_STICKERS = 1 << 3
 const GUILD_MESSAGES = 1 << 9
 const GUILD_MESSAGE_REACTIONS = 1 << 10
 const MESSAGE_CONTENT = 1 << 15
-export const INTENTS = GUILDS | GUILD_EMOJIS_AND_STICKERS | GUILD_MESSAGES | GUILD_MESSAGE_REACTIONS | MESSAGE_CONTENT
+const AUTO_MODERATION_CONFIGURATION = 1 << 20
+export const INTENTS = GUILDS | GUILD_EMOJIS_AND_STICKERS | GUILD_MESSAGES | GUILD_MESSAGE_REACTIONS | MESSAGE_CONTENT | AUTO_MODERATION_CONFIGURATION
 
 // Close codes after which connecting again cannot work: a bad token, bad shard or version, or intents Discord refuses.
 export const FATAL_CLOSE = new Set([4004, 4010, 4011, 4012, 4013, 4014])

@@ -18,6 +18,8 @@
  *   deletes a post.
  * message(channelId, id) → the raw message, or null (404 Unknown Message, code 10008; any other 404 is Upstream).
  * emojis() → the guild's raw emoji.
+ * autoModRules() → the guild's raw AutoMod rules (`GET /guilds/<id>/auto-moderation/rules`, which the bot may read with Manage Server).
+ *   A site reply is checked against them before it is sent (librariusSend.js automodMatcher).
  * setArchived(threadId, archived) → true when the thread was set (`PATCH /channels/<id>` with `{ archived }`), false when
  *   Discord refused with 403 (the thread is locked, or the bot may not manage it); any other failure is Upstream. The outbox
  *   unarchives a thread to edit in it, and archives it again.
@@ -305,6 +307,8 @@ export function createLibrariusDiscord({
       },
 
       emojis: () => getList(`${guildPath}/emojis`, 'the emoji'),
+
+      autoModRules: () => getList(`${guildPath}/auto-moderation/rules`, 'the AutoMod rules'),
 
       async setArchived(threadId, archived) {
         needId(threadId, 'threadId')

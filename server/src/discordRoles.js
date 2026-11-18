@@ -5,7 +5,8 @@
  *
  * identify()  → {id, username} | null (no/invalid token). Throws Upstream.
  * rolesOf()   → role id[] | null (not in the guild). Throws Upstream.
- * memberOf()  → { roles, joinedAt } | null: the same lookup, with when the present membership began (or null).
+ * memberOf()  → { roles, joinedAt, timeoutUntil } | null: the same lookup, with when the present membership began (or null)
+ *               and until when the member is timed out (`communication_disabled_until`, as Discord's ISO time; null for none).
  * guildAdmins() → { ownerId, adminRoleIds, everyoneAdmin }: whom the guild makes an admin. Throws Upstream.
  * isAdmin()   → guild owner, or a held role (incl. @everyone) grants
  *               Administrator. Throws Upstream.
@@ -69,7 +70,13 @@ export function createDiscordRoles({ fetchImpl = fetch, apiBase, guildId, botTok
     const member = await bot(`/v10/guilds/${guildId}/members/${userId}`)
     if (member.status === 404) return null
     if (member.status !== 200 || !Array.isArray(member.body?.roles)) throw new Upstream()
-    return { roles: member.body.roles, joinedAt: typeof member.body.joined_at === 'string' ? member.body.joined_at : null }
+    const until = member.body.communication_disabled_until
+    return {
+      roles: member.body.roles,
+      joinedAt: typeof member.body.joined_at === 'string' ? member.body.joined_at : null,
+      // A time Discord gave, or none: a value that is no time is no timeout, since Discord only sends a time or null.
+      timeoutUntil: typeof until === 'string' && !Number.isNaN(Date.parse(until)) ? until : null,
+    }
   }
 
   async function guildAdmins() {

@@ -324,6 +324,28 @@ describe('members', () => {
     expect(await roster.members()).toEqual([{ id: A, name: 'Zed', avatar: null, joinedAt: null }])
   })
 
+  it('lists the role ids of each member too, for the caller who asks for them, and only then', async () => {
+    const { roster } = make(discord([member(A, ['R1', 'R2'], 'Zed'), member(B, [], 'Abe')]))
+    expect(await roster.members({ roles: true })).toEqual([
+      { id: A, name: 'Zed', avatar: null, joinedAt: null, roles: ['R1', 'R2'] },
+      { id: B, name: 'Abe', avatar: null, joinedAt: null, roles: [] },
+    ])
+    for (const m of await roster.members({ roles: false })) expect(m).not.toHaveProperty('roles')
+    for (const m of await roster.members({})) expect(m).not.toHaveProperty('roles')
+    for (const m of await roster.members()) expect(m).not.toHaveProperty('roles')
+  })
+
+  it('hands out the roles as a copy too', async () => {
+    const { roster } = make(discord([member(A, ['R1'], 'Zed')]))
+    const first = await roster.members({ roles: true })
+    first[0].roles.push('R2')
+    expect((await roster.members({ roles: true }))[0].roles).toEqual(['R1'])
+  })
+
+  it('is null with roles asked for too, while no roster has loaded', async () => {
+    expect(await make(discord({ status: 500, body: '' })).roster.members({ roles: true })).toBeNull()
+  })
+
   it('holding() still answers id, name and avatar only', async () => {
     const { roster } = make(discord([joined(member(A, ['R1'], 'Zed'), '2025-01-01T00:00:00.000Z')]))
     expect(await roster.holding(['R1'])).toEqual([{ id: A, name: 'Zed', avatar: null }])

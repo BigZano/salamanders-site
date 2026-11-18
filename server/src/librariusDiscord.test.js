@@ -233,6 +233,16 @@ const ROWS = [
     bad: ARRAY_BAD,
   },
   {
+    name: 'autoModRules',
+    what: 'the AutoMod rules',
+    call: (d) => d.autoModRules(),
+    method: 'GET',
+    path: `/v10/guilds/${GUILD}/auto-moderation/rules`,
+    reply: [{ id: '200000000000000470', name: 'invented rule', enabled: true, trigger_type: 1, trigger_metadata: { keyword_filter: ['zorp'] } }],
+    result: [{ id: '200000000000000470', name: 'invented rule', enabled: true, trigger_type: 1, trigger_metadata: { keyword_filter: ['zorp'] } }],
+    bad: ARRAY_BAD,
+  },
+  {
     name: 'refreshUrls',
     what: 'an attachment refresh',
     call: (d) => d.refreshUrls([CDN]),

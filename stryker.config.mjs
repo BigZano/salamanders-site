@@ -13,6 +13,7 @@ export default {
     'server/src/librariusOutboxStore.js',
     'server/src/librariusOutbox.js',
     'server/src/librariusUploads.js',
+    'server/src/librariusLimits.js',
     'src/lib/archive/audit.js',
   'src/lib/archive/prune.js',
     'src/lib/archive/legacy.js',

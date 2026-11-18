@@ -27,7 +27,7 @@ const CUSTOM = '200000000000000440'
 const OUT_OF_RANGE = '99999999999999999999' // a snowflake by shape, but larger than a bigint
 const SNOWFLAKE = /^\d{17,20}$/
 const BIGINT_MAX = 9223372036854775807n
-const KINDS = ['guild', 'forum', 'emoji']
+const KINDS = ['guild', 'forum', 'emoji', 'rules']
 
 const FIRE = { id: null, name: '🔥' }
 const FIRE_KEY = 'u:🔥'
@@ -179,7 +179,7 @@ function fakeStore({ posts = [], messages = [], parts = [] } = {}) {
 function fakeGuild() {
   const g = { held: new Set(KINDS), emoji: null }
   g.invalidate = (kind) => {
-    if (!KINDS.includes(kind)) throw new TypeError("kind must be 'guild', 'forum' or 'emoji'.")
+    if (!KINDS.includes(kind)) throw new TypeError("kind must be 'guild', 'forum', 'emoji' or 'rules'.")
     g.held.delete(kind)
   }
   g.setEmoji = (list) => {
@@ -1449,7 +1449,7 @@ describe('the guild and the forum', () => {
   it('CHANNEL_UPDATE of the forum drops what is held of the forum, and the verdicts', async () => {
     const w = await rig()
     expect(await w.send('CHANNEL_UPDATE', { id: FORUM, type: 15, name: 'invented-forum', permission_overwrites: [] })).toBeUndefined()
-    expect([...w.guild.held].sort()).toEqual(['emoji', 'guild'])
+    expect([...w.guild.held].sort()).toEqual(['emoji', 'guild', 'rules'])
     expect(w.access.verdicts.size).toBe(0)
   })
 
@@ -1469,7 +1469,7 @@ describe('the guild and the forum', () => {
   it.each(['GUILD_ROLE_CREATE', 'GUILD_ROLE_UPDATE', 'GUILD_ROLE_DELETE'])('%s drops what is held of the guild, and the verdicts', async (type) => {
     const w = await rig()
     expect(await w.send(type, { guild_id: OWNER, role: { id: MEMBER } })).toBeUndefined()
-    expect([...w.guild.held].sort()).toEqual(['emoji', 'forum'])
+    expect([...w.guild.held].sort()).toEqual(['emoji', 'forum', 'rules'])
     expect(w.access.verdicts.size).toBe(0)
   })
 
@@ -1479,6 +1479,28 @@ describe('the guild and the forum', () => {
       await expect(w.send(type, d)).resolves.toBeUndefined()
       expect(w.guild.held.has('emoji')).toBe(true)
     }
+  })
+
+  it.each(['AUTO_MODERATION_RULE_CREATE', 'AUTO_MODERATION_RULE_UPDATE', 'AUTO_MODERATION_RULE_DELETE'])('%s drops only what is held of the AutoMod rules', async (type) => {
+    const w = await rig()
+    expect(await w.send(type, { id: MEMBER, guild_id: OWNER, name: 'invented rule', trigger_type: 1 })).toBeUndefined()
+    expect([...w.guild.held].sort()).toEqual(['emoji', 'forum', 'guild'])
+    // The verdicts are drawn from the roles and the forum, never from the rules: none of them is dropped.
+    expect(w.access.verdicts.size).toBe(2)
+  })
+
+  it.each(['AUTO_MODERATION_RULE_CREATE', 'AUTO_MODERATION_RULE_UPDATE', 'AUTO_MODERATION_RULE_DELETE'])('%s with data that is no object, or none, does not break', async (type) => {
+    for (const d of [undefined, null, 'x', 5, [], {}]) {
+      const w = await rig()
+      await expect(w.send(type, d)).resolves.toBeUndefined()
+      expect([...w.guild.held].sort()).toEqual(['emoji', 'forum', 'guild'])
+    }
+  })
+
+  it('AUTO_MODERATION_ACTION_EXECUTION, which says only that a rule acted, drops nothing', async () => {
+    const w = await rig()
+    await w.send('AUTO_MODERATION_ACTION_EXECUTION', { guild_id: OWNER, rule_id: MEMBER })
+    expect(w.guild.held.size).toBe(4)
   })
 
   it('GUILD_EMOJIS_UPDATE gives the guild the new emoji as Discord lists them', async () => {
@@ -1519,7 +1541,7 @@ describe('what it does not handle', () => {
     const before = w.store.snapshot()
     expect(await w.send(type, gw({ id: MSG_2, content: 'x', emojis: [], role: {}, threads: [rawThread(POST_2)], ids: [MSG] }))).toBeUndefined()
     expect(w.store.snapshot()).toBe(before)
-    expect(w.guild.held.size).toBe(3)
+    expect(w.guild.held.size).toBe(4)
     expect(w.access.verdicts.size).toBe(2)
     expect(w.fetch.calls).toEqual([])
     expect(w.readies.count).toBe(0)
@@ -1566,6 +1588,9 @@ describe('hostile events (property)', () => {
     'GUILD_ROLE_UPDATE',
     'GUILD_ROLE_DELETE',
     'GUILD_EMOJIS_UPDATE',
+    'AUTO_MODERATION_RULE_CREATE',
+    'AUTO_MODERATION_RULE_UPDATE',
+    'AUTO_MODERATION_RULE_DELETE',
   ]
   const KEYS = ['id', 'channel_id', 'message_id', 'user_id', 'parent_id', 'ids', 'threads', 'emoji', 'emojis', 'author', 'user', 'type', 'content', 'owner_id', 'name']
   const value = fc.oneof(

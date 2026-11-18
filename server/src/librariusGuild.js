@@ -7,12 +7,16 @@
  *   tags: [{ id, name }] }. `ownerId` is null when Discord names none that is an id; `permissions`, `allow` and `deny`
  *   are strings of digits, and `color` is `#rrggbb`, or null for a role with none. What a caller gets is its own copy.
  * emoji() → [{ id, name, animated }], the guild's custom emoji (librariusParse.js parseEmoji).
- * invalidate(kind) forgets what is held of 'guild', 'forum' or 'emoji', so that the next call reads it again. Any other
- *   kind is a TypeError, and forgets nothing.
+ * automodRules() → the guild's AutoMod rules as Discord gives them (a list of objects), which a reply from the site is checked
+ *   against (librariusSend.js automodMatcher). Held as a slot of its own, and not with the facts: reading them needs a right
+ *   the facts do not (the bot's Manage Server), and a read that fails must fail the writes that need the rules, never the reads
+ *   that only need the facts. Something that is not a list of objects is Upstream, as anything else that is not usable.
+ * invalidate(kind) forgets what is held of 'guild', 'forum', 'emoji' or 'rules', so that the next call reads it again. Any other
+ *   kind is a TypeError, and forgets nothing. An AutoMod event forgets only the 'rules'.
  * setEmoji(rawList) replaces the emoji with Discord's own list of them, as a live event carries it. Something that is
  *   not a list says nothing about the emoji, so it only forgets them, as invalidate('emoji') does.
  *
- * The guild and the forum are two reads, each kept for `ttlMs` from when it was made, and the emoji a third, for
+ * The guild, the forum and the rules are three reads, each kept for `ttlMs` from when it was made, and the emoji a fourth, for
  * `emojiTtlMs`. Callers who come while a read is in flight share it. A failed read is Upstream, whether Discord could
  * not be reached or answered with something the Librarius cannot use, and nothing is kept: a copy that has gone stale
  * is never served in its place, since a role taken away must not still open the forum. A forum id that is not an id is
@@ -61,6 +65,11 @@ function roleOf(r) {
 function overwriteOf(o) {
   if (!isObject(o) || !isId(o.id) || !KINDS.includes(o.type) || !isPermission(o.allow) || !isPermission(o.deny)) throw unusable('the forum')
   return { id: o.id, type: o.type, allow: digits(o.allow), deny: digits(o.deny) }
+}
+
+function parseRules(raw) {
+  if (!Array.isArray(raw) || !raw.every(isObject)) throw unusable('the AutoMod rules')
+  return raw
 }
 
 function tagOf(t) {
@@ -139,11 +148,12 @@ export function createLibrariusGuild({ discord, forumId, ttlMs = 300_000, emojiT
       }),
     ],
     ['emoji', createSlot({ read: async () => parseEmoji(await discord.emojis()), ttlMs: emojiTtlMs, now })],
+    ['rules', createSlot({ read: async () => parseRules(await discord.autoModRules()), ttlMs, now })],
   ])
 
   function invalidate(kind) {
     const slot = slots.get(kind)
-    if (slot === undefined) throw new TypeError("kind must be 'guild', 'forum' or 'emoji'.")
+    if (slot === undefined) throw new TypeError("kind must be 'guild', 'forum', 'emoji' or 'rules'.")
     slot.forget()
   }
 
@@ -155,6 +165,10 @@ export function createLibrariusGuild({ discord, forumId, ttlMs = 300_000, emojiT
 
     async emoji() {
       return structuredClone(await slots.get('emoji').get())
+    },
+
+    async automodRules() {
+      return structuredClone(await slots.get('rules').get())
     },
 
     invalidate,
