@@ -21,7 +21,9 @@
  * /librarius/me adds, for a reader, `can: { reply, attach, manageMessages, manageThreads }`, which are what the verdict says and
  * false for all of them while no write is possible, and `limits` (librariusLimits.js snapshot: what the member has left of each).
  * For a member who may manage messages it also says `sendingPausedUntil` (ISO time while the outbox's breaker holds all sending,
- * else null) and `sendingFatal` (Discord has refused the webhook): what a Librarian needs to see why replies are not going.
+ * else null), `sendingFatal` (Discord has refused the webhook) and `automodUnchecked` (the names of the server's AutoMod rules with a
+ * regular expression the site cannot run, so that it cannot check a reply against them; [] for none, null when the rules cannot be read
+ * just now): what a Librarian needs to see why replies are not going, and what the site does not stand guard over.
  *
  * A post or message id that is no snowflake that fits a bigint never reaches the store: a post is 404, a cursor 400. A post
  * the store no longer holds is 404 too, for a poll for its changes as for the post itself: a post deleted in Discord is
@@ -48,6 +50,7 @@
 import { Upstream } from './discordRoles.js'
 import { readJson as readJsonWithin, reply, send } from './httpReply.js'
 import { createLimits } from './librariusLimits.js'
+import { automodUnchecked } from './librariusSend.js'
 import { BIGINT_MAX, isStoreId } from './librariusText.js'
 import { createLibrariusWrites } from './librariusWrites.js'
 
@@ -214,9 +217,20 @@ export function createLibrariusHandler({
     return { messages, people: directory.people() }
   }
 
+  /** → the names of the AutoMod rules the site cannot check (librariusSend.js automodUnchecked), or null when the rules cannot be read just now. */
+  async function uncheckedRules() {
+    try {
+      return automodUnchecked(await guild.automodRules())
+    } catch (err) {
+      // For the people who manage the server to read: a failure to read the rules is theirs to be told of, not a reason to answer nothing.
+      if (err instanceof Upstream) return null
+      throw err
+    }
+  }
+
   async function me(_request, verdict) {
     if (!verdict.read) return reply(200, { access: false })
-    const [facts, status] = await Promise.all([guild.facts(), importer.status()])
+    const [facts, status, unchecked] = await Promise.all([guild.facts(), importer.status(), verdict.manageMessages ? uncheckedRules() : null])
     const refused = outbox !== null && outbox.webhookRefused() !== null
     // Nothing can be written with no webhook, or one Discord has refused: the site then offers no write.
     const writable = outbox !== null && !refused
@@ -235,7 +249,7 @@ export function createLibrariusHandler({
         manageThreads: writable && verdict.manageThreads,
       },
       limits: limits.snapshot(verdict.user.id),
-      ...(verdict.manageMessages ? { sendingPausedUntil: pausedUntil === null ? null : new Date(pausedUntil).toISOString(), sendingFatal: refused } : {}),
+      ...(verdict.manageMessages ? { sendingPausedUntil: pausedUntil === null ? null : new Date(pausedUntil).toISOString(), sendingFatal: refused, automodUnchecked: unchecked } : {}),
     })
   }
 

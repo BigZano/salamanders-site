@@ -2122,4 +2122,65 @@ describe('GET /librarius/me: what the member may do, and what they have left', (
     const out = await body(await setup({ verdict: VERDICTS.outsider, outbox: LIVE }).get('/librarius/me'))
     expect(out).toEqual({ access: false })
   })
+
+  describe('the AutoMod rules the site cannot check', () => {
+    // A rule with a pattern the site cannot run (a word boundary), one it can, and one that is off.
+    const rule = (id, name, patterns, over = {}) => ({ id, name, enabled: true, trigger_type: 1, trigger_metadata: { keyword_filter: [], regex_patterns: patterns }, exempt_roles: [], exempt_channels: [], ...over })
+    const RULES = () => [rule('200000000000000472', 'Invented word boundary', ['\\bcat\\b']), rule('200000000000000473', 'Invented plain', ['zorp']), rule('200000000000000474', 'Invented off', ['\\bdog\\b'], { enabled: false }), rule('200000000000000475', 'Invented second', ['\\wcow'])]
+
+    it('names them to a member who manages messages, in the order of the rules, each once', async () => {
+      const out = await body(await setup({ verdict: VERDICTS.librarian, outbox: LIVE, rules: RULES }).get('/librarius/me'))
+      expect(out.automodUnchecked).toEqual(['Invented word boundary', 'Invented second'])
+    })
+
+    it('gives an empty list when the site can check every rule there is', async () => {
+      for (const rules of [() => [], () => [rule('200000000000000473', 'Invented plain', ['zorp'])]]) {
+        const out = await body(await setup({ verdict: VERDICTS.librarian, outbox: LIVE, rules }).get('/librarius/me'))
+        expect(out.automodUnchecked).toEqual([])
+      }
+    })
+
+    it('says it to a member who manages messages while there is no webhook too, as it says whether sending is paused', async () => {
+      const out = await body(await setup({ verdict: VERDICTS.librarian, rules: RULES }).get('/librarius/me'))
+      expect(out.automodUnchecked).toEqual(['Invented word boundary', 'Invented second'])
+    })
+
+    it('says nothing of it to a reader, or to someone who cannot read the forum, and does not ask for the rules', async () => {
+      let asked = 0
+      const rules = () => {
+        asked++
+        return RULES()
+      }
+      expect(await body(await setup({ outbox: LIVE, rules }).get('/librarius/me'))).not.toHaveProperty('automodUnchecked')
+      expect(await body(await setup({ verdict: { ...VERDICTS.reader, manageThreads: true, attach: true }, outbox: LIVE, rules }).get('/librarius/me'))).not.toHaveProperty('automodUnchecked')
+      expect(await body(await setup({ verdict: VERDICTS.outsider, outbox: LIVE, rules }).get('/librarius/me'))).toEqual({ access: false })
+      expect(asked).toBe(0)
+    })
+
+    it('says null, and answers the rest of /librarius/me all the same, when the rules cannot be read', async () => {
+      const t = setup({
+        verdict: VERDICTS.librarian,
+        outbox: LIVE,
+        rules: () => {
+          throw new Upstream('Discord answered 403 for the AutoMod rules.')
+        },
+      })
+      const res = await t.get('/librarius/me')
+      expect(res.status).toBe(200)
+      const out = await body(res)
+      expect(out.automodUnchecked).toBeNull()
+      expect(out).toMatchObject({ access: true, can: { manageMessages: true }, sendingFatal: false })
+    })
+
+    it('does not hide a failure that is not Discord being unreachable', async () => {
+      const t = setup({
+        verdict: VERDICTS.librarian,
+        outbox: LIVE,
+        rules: () => {
+          throw new TypeError('a bug')
+        },
+      })
+      await expect(t.get('/librarius/me')).rejects.toBeInstanceOf(TypeError)
+    })
+  })
 })
