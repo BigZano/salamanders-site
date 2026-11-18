@@ -80,14 +80,18 @@ const needIdOrNull = (value, what) => {
  * bigint are a TypeError before any write, a message is only stored with its post, keepReactions leaves the stored
  * reactions as they are (and a new message gets the row's), and every write to a stored message takes the next rev.
  */
-function fakeStore({ posts = [], messages = [] } = {}) {
+function fakeStore({ posts = [], messages = [], parts = [] } = {}) {
   const plans = []
   let rev = 100
   const s = {
     posts: new Map(posts.map((p) => [p.id, p])),
     messages: new Map(messages.map((m) => [m.id, m])),
+    // The Discord id of each part of a reply of the site, and the id of the reply it belongs to.
+    parts: new Map(parts),
+    // What the store queued for the outbox: the parts of a reply that are left to delete, as { messageKey, postId, partIds }.
+    queued: [],
     failWhen: (method, when, error) => plans.push({ method, when, error }),
-    snapshot: () => JSON.stringify([[...s.posts], [...s.messages]]),
+    snapshot: () => JSON.stringify([[...s.posts], [...s.messages], [...s.parts], s.queued]),
   }
   const enter = (method, ...args) => {
     for (const p of plans) if (p.method === method && p.when(...args)) throw p.error
@@ -135,6 +139,26 @@ function fakeStore({ posts = [], messages = [] } = {}) {
       if (!Array.isArray(ids)) throw new TypeError('ids must be a list')
       for (const id of ids) needId(id, 'messageId')
       for (const id of ids) s.messages.delete(id)
+    },
+    async siteDeleted(ids, postId) {
+      enter('siteDeleted', ids, postId)
+      if (!Array.isArray(ids)) throw new TypeError('ids must be a list')
+      for (const id of ids) needId(id, 'a part id')
+      needId(postId, 'postId')
+      const plain = ids.filter((id) => !s.parts.has(id))
+      for (const messageId of new Set(ids.filter((id) => s.parts.has(id)).map((id) => s.parts.get(id)))) {
+        const all = [...s.parts].filter(([, m]) => m === messageId).map(([part]) => part)
+        const left = all.filter((part) => !ids.includes(part))
+        s.messages.delete(messageId)
+        for (const part of all) s.parts.delete(part)
+        if (left.length > 0) s.queued.push({ messageKey: messageId, postId, partIds: left })
+      }
+      return { plain }
+    },
+    async messageOfPart(id) {
+      enter('messageOfPart', id)
+      needId(id, 'id')
+      return s.parts.get(id) ?? id
     },
     async adjustReaction(messageId, emoji, delta) {
       enter('adjustReaction', messageId, emoji, delta)
@@ -185,8 +209,8 @@ function fakeFetch(answers = new Map()) {
 }
 
 /** A world: the store with `posts` and `messages` in it, a loaded ingest, and the edges it writes to. */
-async function rig({ posts = [POST], messages = [], load = true, answers, ...over } = {}) {
-  const store = fakeStore({ posts: posts.map((p) => storedPost(p)), messages })
+async function rig({ posts = [POST], messages = [], parts = [], load = true, answers, ...over } = {}) {
+  const store = fakeStore({ posts: posts.map((p) => storedPost(p)), messages, parts })
   const guild = fakeGuild()
   const access = fakeAccess()
   const fetch = fakeFetch(answers)
@@ -213,7 +237,7 @@ const bare = ({ rev, ...rest }) => rest
 const mapOf = (reactions) => new Map(reactions.map((r) => [r.key, r.count]))
 
 describe('createIngest options', () => {
-  const STORE = ['knownPostIds', 'upsertPost', 'deletePost', 'upsertMessages', 'deleteMessages', 'adjustReaction', 'clearReactions']
+  const STORE = ['knownPostIds', 'upsertPost', 'deletePost', 'upsertMessages', 'deleteMessages', 'adjustReaction', 'clearReactions', 'siteDeleted', 'messageOfPart']
   const options = () => ({
     store: fakeStore(),
     guild: fakeGuild(),
@@ -267,6 +291,18 @@ describe('createIngest options', () => {
     for (const forumId of ['12345678901234567', '12345678901234567890']) {
       expect(() => createIngest({ ...options(), forumId })).not.toThrow()
     }
+  })
+
+  it.each([undefined, null, '1234567890123456', '123456789012345678901', '20000000000000045a', 200000000000000450, {}, ''])(
+    'takes a webhookId that is a Discord id or null, and refuses %j',
+    (webhookId) => {
+      if (webhookId === undefined || webhookId === null) expect(() => createIngest({ ...options(), webhookId })).not.toThrow()
+      else expect(() => createIngest({ ...options(), webhookId })).toThrow(new TypeError('webhookId must be a Discord id or null.'))
+    },
+  )
+
+  it('takes a webhookId of 17 and of 20 digits', () => {
+    for (const webhookId of ['12345678901234567', '12345678901234567890']) expect(() => createIngest({ ...options(), webhookId })).not.toThrow()
   })
 
   it('needs no log: it logs to console.error when none is given', async () => {
@@ -947,6 +983,178 @@ describe('MESSAGE_UPDATE', () => {
     const w = await rig()
     await expect(w.send('MESSAGE_UPDATE', d)).resolves.toBeUndefined()
     expect(w.fetch.calls).toEqual([])
+  })
+})
+
+const HOOK = '200000000000000450'
+const PART_2 = '200000000000000434'
+const PART_3 = '200000000000000435'
+// A reply of the site of three parts: its message is MSG, which is its first part's id, and the parts are MSG, PART_2 and PART_3.
+const siteReply = () => ({
+  messages: [storedMessage({ webhookId: HOOK, authorId: MEMBER, content: 'a reply of the site' }), storedMessage({ id: MSG_2 })],
+  parts: [
+    [MSG, MSG],
+    [PART_2, MSG],
+    [PART_3, MSG],
+  ],
+})
+
+describe('our own webhook: what it posts is the outbox\'s to store', () => {
+  const hooked = (over = {}) => gw({ webhook_id: HOOK, author: { id: HOOK, username: 'Invented Name', bot: true }, ...over })
+
+  it('stores no MESSAGE_CREATE of its own, and stores one of any other webhook, and of a person', async () => {
+    const w = await rig({ webhookId: HOOK })
+    await w.send('MESSAGE_CREATE', hooked())
+    expect(w.store.messages.size).toBe(0)
+    await w.send('MESSAGE_CREATE', gw({ id: MSG_2, webhook_id: '200000000000000451', author: { id: '200000000000000451', username: 'other hook' } }))
+    await w.send('MESSAGE_CREATE', gw({ id: MSG_3 }))
+    expect([...w.store.messages.keys()]).toEqual([MSG_2, MSG_3])
+  })
+
+  it('stores no MESSAGE_UPDATE of its own, whether the event has the author or not, and does not ask Discord for it when it says whose it is', async () => {
+    const w = await rig({ webhookId: HOOK, messages: [storedMessage({ content: 'as it was' })], answers: new Map([[MSG, hooked({ content: 'as read again' })]]) })
+    await w.send('MESSAGE_UPDATE', hooked({ content: 'edited' }))
+    await w.send('MESSAGE_UPDATE', { id: MSG, channel_id: POST, webhook_id: HOOK, embeds: [] })
+    expect(w.store.messages.get(MSG).content).toBe('as it was')
+    expect(w.fetch.calls).toEqual([])
+  })
+
+  it('stores no message it read again that turns out to be its own, which a partial update did not say', async () => {
+    const w = await rig({ webhookId: HOOK, messages: [storedMessage({ content: 'as it was' })], answers: new Map([[MSG, hooked({ content: 'as read again' })]]) })
+    await w.send('MESSAGE_UPDATE', { id: MSG, channel_id: POST, embeds: [] })
+    expect(w.fetch.calls).toEqual([[POST, MSG]])
+    expect(w.store.messages.get(MSG).content).toBe('as it was')
+  })
+
+  it('stores what is not its own as before, an update included, whatever webhook the ingest was given', async () => {
+    const w = await rig({ webhookId: HOOK, messages: [storedMessage({ content: 'as it was' })] })
+    await w.send('MESSAGE_UPDATE', gw({ content: 'edited' }))
+    expect(w.store.messages.get(MSG).content).toBe('edited')
+    await w.send('MESSAGE_UPDATE', gw({ webhook_id: '200000000000000451', author: { id: '200000000000000451', username: 'other hook' }, content: 'edited by another' }))
+    expect(w.store.messages.get(MSG).content).toBe('edited by another')
+  })
+
+  it.each([undefined, null])('has no webhook of its own to ignore when it is given %j: every message is stored', async (webhookId) => {
+    const w = await rig({ webhookId })
+    await w.send('MESSAGE_CREATE', hooked())
+    await w.send('MESSAGE_CREATE', gw({ id: MSG_2, webhook_id: null }))
+    expect([...w.store.messages.keys()]).toEqual([MSG, MSG_2])
+  })
+})
+
+describe('a part of a reply of the site, deleted in Discord', () => {
+  it.each([
+    ['the first part', MSG],
+    ['a part after it', PART_2],
+    ['the last part', PART_3],
+  ])('takes the whole reply with %s: the message goes, and the deletion of the other parts is queued', async (_, part) => {
+    const w = await rig({ ...siteReply() })
+    expect(await w.send('MESSAGE_DELETE', { id: part, channel_id: POST })).toBeUndefined()
+    expect([...w.store.messages.keys()]).toEqual([MSG_2])
+    expect(w.store.parts.size).toBe(0)
+    expect(w.store.queued).toEqual([{ messageKey: MSG, postId: POST, partIds: [MSG, PART_2, PART_3].filter((p) => p !== part) }])
+  })
+
+  it('still deletes a message of Discord as before, and does not queue anything for it', async () => {
+    const w = await rig({ ...siteReply() })
+    await w.send('MESSAGE_DELETE', { id: MSG_2, channel_id: POST })
+    expect([...w.store.messages.keys()]).toEqual([MSG])
+    expect(w.store.queued).toEqual([])
+    expect(w.store.parts.size).toBe(3)
+  })
+
+  it('takes the reply in a bulk delete, with the plain messages of it', async () => {
+    const w = await rig({ ...siteReply() })
+    await w.send('MESSAGE_DELETE_BULK', { ids: [PART_2, MSG_2, 'nope', MSG_4], channel_id: POST })
+    expect(w.store.messages.size).toBe(0)
+    expect(w.store.queued).toEqual([{ messageKey: MSG, postId: POST, partIds: [MSG, PART_3] }])
+  })
+
+  it('queues no second delete when every part of the reply is deleted together', async () => {
+    const w = await rig({ ...siteReply() })
+    await w.send('MESSAGE_DELETE_BULK', { ids: [MSG, PART_2, PART_3], channel_id: POST })
+    expect(w.store.messages.size).toBe(1)
+    expect(w.store.queued).toEqual([])
+  })
+
+  it('takes the reply when a re-read finds a part gone, as it deletes any other message Discord no longer has', async () => {
+    const w = await rig({ ...siteReply(), answers: new Map() })
+    await w.send('MESSAGE_UPDATE', { id: PART_2, channel_id: POST, embeds: [] })
+    expect([...w.store.messages.keys()]).toEqual([MSG_2])
+    expect(w.store.queued).toEqual([{ messageKey: MSG, postId: POST, partIds: [MSG, PART_3] }])
+  })
+
+  it('does nothing for a delete in a channel it does not listen to, and none for an id the store cannot take', async () => {
+    const w = await rig({ ...siteReply() })
+    const before = w.store.snapshot()
+    await w.send('MESSAGE_DELETE', { id: PART_2, channel_id: STRANGER })
+    await w.send('MESSAGE_DELETE', { id: OUT_OF_RANGE, channel_id: POST })
+    await w.send('MESSAGE_DELETE_BULK', { ids: [OUT_OF_RANGE, 'x'], channel_id: POST })
+    await w.send('MESSAGE_DELETE_BULK', { ids: [], channel_id: POST })
+    expect(w.store.snapshot()).toBe(before)
+  })
+
+  it('gives the post the delete was in, which is where the parts left are', async () => {
+    const w = await rig({ ...siteReply(), posts: [POST, POST_2] })
+    await w.send('MESSAGE_DELETE', { id: PART_2, channel_id: POST_2 })
+    // The store's own check is what ties a part to its post; the ingest says which post the event named.
+    expect(w.store.queued[0].postId).toBe(POST_2)
+  })
+
+  it('goes on with the next event when the store fails', async () => {
+    const w = await rig({ ...siteReply() })
+    w.store.failWhen('siteDeleted', () => true, new Error('connection lost'))
+    await expect(w.send('MESSAGE_DELETE', { id: PART_2, channel_id: POST })).rejects.toThrow('connection lost')
+    expect(w.store.messages.size).toBe(2)
+  })
+})
+
+describe('reactions to the parts of a reply of the site', () => {
+  const on = (emoji, over = {}) => ({ user_id: MEMBER, channel_id: POST, message_id: MSG, guild_id: OWNER, emoji, ...over })
+  const reply = () => ({ ...siteReply(), messages: [storedMessage({ webhookId: HOOK, reactions: [reaction(FIRE, FIRE_KEY, 2), reaction(BLOB, BLOB_KEY, 1)] })] })
+
+  it.each([
+    ['the first part', MSG],
+    ['the second part', PART_2],
+    ['the last part', PART_3],
+  ])('counts a reaction added to %s on the reply, and takes one off it too', async (_, part) => {
+    const w = await rig(reply())
+    await w.send('MESSAGE_REACTION_ADD', on(FIRE, { message_id: part }))
+    await w.send('MESSAGE_REACTION_ADD', on(WAVE, { message_id: part }))
+    expect(mapOf(reactionsOf(w))).toEqual(new Map([[FIRE_KEY, 3], [BLOB_KEY, 1], [WAVE_KEY, 1]]))
+    await w.send('MESSAGE_REACTION_REMOVE', on(FIRE, { message_id: part }))
+    expect(mapOf(reactionsOf(w)).get(FIRE_KEY)).toBe(2)
+  })
+
+  it('clears every reaction of the reply when they are cleared from a part, and one emoji of them when one is', async () => {
+    const w = await rig(reply())
+    await w.send('MESSAGE_REACTION_REMOVE_EMOJI', { channel_id: POST, message_id: PART_2, guild_id: OWNER, emoji: FIRE })
+    expect(mapOf(reactionsOf(w))).toEqual(new Map([[BLOB_KEY, 1]]))
+    await w.send('MESSAGE_REACTION_REMOVE_ALL', { channel_id: POST, message_id: PART_3, guild_id: OWNER })
+    expect(reactionsOf(w)).toEqual([])
+  })
+
+  it('leaves the reactions of a message that is no part as it did, and counts nothing for a message the store does not hold', async () => {
+    const w = await rig({ ...reply(), messages: [...reply().messages, storedMessage({ id: MSG_2, reactions: [] })] })
+    await w.send('MESSAGE_REACTION_ADD', on(FIRE, { message_id: MSG_2 }))
+    expect(mapOf(reactionsOf(w, MSG_2))).toEqual(new Map([[FIRE_KEY, 1]]))
+    expect(mapOf(reactionsOf(w))).toEqual(new Map([[FIRE_KEY, 2], [BLOB_KEY, 1]]))
+    await w.send('MESSAGE_REACTION_ADD', on(FIRE, { message_id: MSG_4 }))
+    expect(w.store.messages.has(MSG_4)).toBe(false)
+  })
+
+  it('does not look a part up for what it ignores: the bot, an emoji that cannot be keyed, another channel', async () => {
+    const w = await rig(reply())
+    const asked = []
+    const real = w.store.messageOfPart
+    w.store.messageOfPart = async (id) => {
+      asked.push(id)
+      return real(id)
+    }
+    await w.send('MESSAGE_REACTION_ADD', { ...on(FIRE, { message_id: PART_2 }), channel_id: STRANGER })
+    await w.send('MESSAGE_REACTION_ADD', on({ id: null, name: null }, { message_id: PART_2 }))
+    await w.send('MESSAGE_REACTION_REMOVE_EMOJI', { channel_id: POST, message_id: PART_2, emoji: { id: null, name: null } })
+    expect(asked).toEqual([])
   })
 })
 

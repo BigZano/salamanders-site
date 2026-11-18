@@ -1,12 +1,15 @@
 /**
  * The Librarius's live feed into the store: each event the gateway dispatches (librariusGateway.js) becomes a write to
  * the store, or a note to the guild and access caches that something they hold has changed. Like the import, it only
- * reads Discord and writes the store: the Librarius never writes to Discord.
+ * reads Discord and writes the store: it never writes to Discord (the outbox does, and it has its own store methods).
  *
- * createIngest({ store, guild, access, forumId, fetchMessage, onReady, log = console.error })
+ * createIngest({ store, guild, access, forumId, fetchMessage, onReady, webhookId = null, log = console.error })
  *   → { load() → Promise<void>, dispatch(type, data) → Promise<void>, botUserId() → string | null }
  *
- * `fetchMessage` is discord.message, and `onReady` starts the catch-up (the importer's run). The gateway calls
+ * `fetchMessage` is discord.message, and `onReady` starts the catch-up (the importer's run). `webhookId` is the id of the
+ * Librarius's own webhook (batch 2), or null when there is none: what that webhook posts, the parts of a reply of the site, is
+ * the outbox's to store (a reply is one message to the site, however many it is to Discord), so a message of it is never
+ * stored from an event. The gateway calls
  * dispatch(t, d) for one event at a time and gives up on one that has not settled after 15 seconds, so every handler
  * writes with upserts and deletes that do no harm when they repeat or overlap with the next event's, and none waits for
  * anything long. The one slow thing, the catch-up, is started and not waited for.
@@ -25,13 +28,16 @@
  * - THREAD_CREATE, THREAD_UPDATE: stores the thread when its parent is the forum, and listens to it.
  * - THREAD_LIST_SYNC: the same for each thread it lists.
  * - THREAD_DELETE: deletes the post when its parent is the forum, and stops listening to it.
- * - MESSAGE_CREATE, MESSAGE_UPDATE: stores the message. A live update can leave out most of the message (an embed that
+ * - MESSAGE_CREATE, MESSAGE_UPDATE: stores the message, unless it is one of our webhook's (see above). A live update can leave out most of the message (an embed that
  *   was only unfurled), and so a message with no author is read again with fetchMessage: what it answers is stored, and
  *   null, for a message Discord no longer has, deletes it. Neither event touches the reactions of a message that is
  *   stored, since the payload may leave them out, and the counts are the reaction events' to keep. A message that is new
  *   is stored with the reactions it came with.
- * - MESSAGE_DELETE, MESSAGE_DELETE_BULK: delete the messages.
- * - MESSAGE_REACTION_ADD, MESSAGE_REACTION_REMOVE: change one emoji's count by one. The bot's own reaction is skipped,
+ * - MESSAGE_DELETE, MESSAGE_DELETE_BULK: delete the messages. A part of a reply of the site takes the whole reply with it
+ *   (store.siteDeleted): the reply goes from the store, and the deletion of the parts that are left is queued for the outbox.
+ *   A message that a re-read finds gone is deleted the same way.
+ * - MESSAGE_REACTION_ADD, MESSAGE_REACTION_REMOVE: change one emoji's count by one. A reaction to any part of a reply of
+ *   the site counts on the reply (store.messageOfPart), and so does a clear of them. The bot's own reaction is skipped,
  *   since the stored counts leave it out (parseMessage drops the `me` of each one), and so is an emoji that cannot be
  *   keyed, since it would change nothing and still move the message's rev.
  * - MESSAGE_REACTION_REMOVE_ALL: clears every reaction of a message. MESSAGE_REACTION_REMOVE_EMOJI: clears one emoji's,
@@ -56,17 +62,28 @@
 import { emojiKey, parseMessage, parseThread } from './librariusParse.js'
 import { attempt as attemptWrite, describe, isId, isStoreId } from './librariusText.js'
 
-const STORE_METHODS = ['knownPostIds', 'upsertPost', 'deletePost', 'upsertMessages', 'deleteMessages', 'adjustReaction', 'clearReactions']
+const STORE_METHODS = [
+  'knownPostIds',
+  'upsertPost',
+  'deletePost',
+  'upsertMessages',
+  'deleteMessages',
+  'adjustReaction',
+  'clearReactions',
+  'siteDeleted',
+  'messageOfPart',
+]
 
 const isObj = (v) => typeof v === 'object' && v !== null && !Array.isArray(v)
 
-export function createIngest({ store, guild, access, forumId, fetchMessage, onReady, log = console.error }) {
+export function createIngest({ store, guild, access, forumId, fetchMessage, onReady, webhookId = null, log = console.error }) {
   for (const name of STORE_METHODS) if (typeof store?.[name] !== 'function') throw new TypeError(`store.${name} must be a function.`)
   for (const name of ['invalidate', 'setEmoji']) if (typeof guild?.[name] !== 'function') throw new TypeError(`guild.${name} must be a function.`)
   if (typeof access?.forget !== 'function') throw new TypeError('access.forget must be a function.')
   if (typeof fetchMessage !== 'function') throw new TypeError('fetchMessage must be a function.')
   if (typeof onReady !== 'function') throw new TypeError('onReady must be a function.')
   if (!isId(forumId)) throw new TypeError('forumId must be a Discord id.')
+  if (webhookId !== null && !isId(webhookId)) throw new TypeError('webhookId must be a Discord id or null.')
 
   // The ids of the forum's threads.
   const known = new Set()
@@ -119,10 +136,19 @@ export function createIngest({ store, guild, access, forumId, fetchMessage, onRe
     known.delete(d.id)
   }
 
-  /** Store a message of the gateway or of a re-read, when parseMessage makes a row of it. */
+  /** Whether a message is one that our webhook posted: the outbox's, which no event stores. */
+  const isOurs = (id) => webhookId !== null && id === webhookId
+
+  /** Delete messages: the ones that are parts of a reply of the site take the whole reply, and the others go as they are. */
+  async function forget(ids, postId) {
+    const { plain } = await store.siteDeleted(ids, postId)
+    await store.deleteMessages(plain)
+  }
+
+  /** Store a message of the gateway or of a re-read, when parseMessage makes a row of it, and it is not our webhook's. */
   async function keepMessage(raw) {
     const row = parseMessage(raw)
-    if (row === null) return
+    if (row === null || isOurs(row.webhookId)) return
     // Stryker disable next-line StringLiteral: what is logged is for the owner to read, and no test asserts it
     await attempt(() => store.upsertMessages([row], { keepReactions: true }), `message ${row.id}`)
   }
@@ -132,22 +158,22 @@ export function createIngest({ store, guild, access, forumId, fetchMessage, onRe
   }
 
   async function messageUpdate(d) {
-    if (!known.has(d.channel_id)) return
+    if (!known.has(d.channel_id) || isOurs(d.webhook_id)) return
     if (isObj(d.author)) return keepMessage(d)
     if (!isStoreId(d.id)) return
     const whole = await fetchMessage(d.channel_id, d.id)
     // Only null means Discord no longer has it.
-    if (whole === null) await store.deleteMessages([d.id])
+    if (whole === null) await forget([d.id], d.channel_id)
     else await keepMessage(whole)
   }
 
   async function messageDelete(d) {
-    if (known.has(d.channel_id) && isStoreId(d.id)) await store.deleteMessages([d.id])
+    if (known.has(d.channel_id) && isStoreId(d.id)) await forget([d.id], d.channel_id)
   }
 
   async function messageDeleteBulk(d) {
     if (!known.has(d.channel_id) || !Array.isArray(d.ids)) return
-    await store.deleteMessages(d.ids.filter(isStoreId))
+    await forget(d.ids.filter(isStoreId), d.channel_id)
   }
 
   /** Whether a reaction event is about a message of a post it listens to, with an id the store can take. */
@@ -155,16 +181,16 @@ export function createIngest({ store, guild, access, forumId, fetchMessage, onRe
 
   const reactionChange = (delta) => async (d) => {
     if (!aboutKnown(d) || d.user_id === botId || emojiKey(d.emoji) === null) return
-    await store.adjustReaction(d.message_id, d.emoji, delta)
+    await store.adjustReaction(await store.messageOfPart(d.message_id), d.emoji, delta)
   }
 
   async function reactionsClear(d) {
-    if (aboutKnown(d)) await store.clearReactions(d.message_id, null)
+    if (aboutKnown(d)) await store.clearReactions(await store.messageOfPart(d.message_id), null)
   }
 
   async function reactionsClearEmoji(d) {
     const key = emojiKey(d.emoji)
-    if (aboutKnown(d) && key !== null) await store.clearReactions(d.message_id, key)
+    if (aboutKnown(d) && key !== null) await store.clearReactions(await store.messageOfPart(d.message_id), key)
   }
 
   function channelUpdate(d) {

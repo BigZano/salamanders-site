@@ -4,8 +4,10 @@
  *
  * createImport({ discord, store, forumId, windowSize = 100, log = console.error, now = Date.now,
  *   timers = { setTimeout, clearTimeout }, everyMs = 21_600_000, retryMs = [300_000, 600_000, 1_200_000, 1_800_000],
- *   onPostsListed = () => {} })
+ *   onPostsListed = () => {}, webhookId = null })
  *   → { run() → Promise<void>, start(), stop(), status() → what store.syncStatus() says }
+ *
+ * `webhookId` is the id of the Librarius's own webhook (batch 2), or null: a message of it is not stored by a run (see write()).
  *
  * run() never rejects, and what it logs can never fail it: a log that throws is ignored. Everything a run writes is an upsert, a delete of what Discord no longer holds, or a cursor that
  * only moves forward, so one that repeats or is cut short does no harm. Only one run goes at a time: a run asked for while
@@ -115,6 +117,7 @@ export function createImport({
   everyMs = 21_600_000,
   retryMs = [300_000, 600_000, 1_200_000, 1_800_000],
   onPostsListed = () => {},
+  webhookId = null,
 }) {
   for (const name of DISCORD_METHODS) if (typeof discord?.[name] !== 'function') throw new TypeError(`discord.${name} must be a function.`)
   for (const name of STORE_METHODS) if (typeof store?.[name] !== 'function') throw new TypeError(`store.${name} must be a function.`)
@@ -128,6 +131,7 @@ export function createImport({
     throw new RangeError(`retryMs must be a non-empty list of whole numbers of milliseconds from 1 to ${MAX_TIMER_MS}.`)
   }
   if (typeof onPostsListed !== 'function') throw new TypeError('onPostsListed must be a function.')
+  if (webhookId !== null && !isId(webhookId)) throw new TypeError('webhookId must be a Discord id or null.')
 
   const stamp = () => new Date(now()).toISOString()
   // What the log does can never fail the run: a log that throws (a closed stderr, say) must not skip what follows it, the
@@ -157,8 +161,14 @@ export function createImport({
     // Stryker disable next-line ArrowFunction,StringLiteral: what is logged is for the owner to read, and no test asserts it
     attemptWrite(write, (err) => report(`the store refused ${what}: ${describe(err)}`))
 
-  /** Store the rows of a page. One the store refuses fails the whole batch, so the rows then go one at a time. */
-  async function write(rows) {
+  /**
+   * Store the rows of a page, but those of our own webhook's messages: the parts of a reply of the site are the outbox's, which
+   * stores the reply as one message, so an import that stored each part would show a reply in pieces, and one that stored the
+   * first over the reply would put the webhook where the member is. One the store refuses fails the whole batch, so the rows
+   * then go one at a time.
+   */
+  async function write(all) {
+    const rows = webhookId === null ? all : all.filter((row) => row.webhookId !== webhookId)
     // Stryker disable next-line StringLiteral: what is logged is for the owner to read, and no test asserts it
     if (await attempt(() => store.upsertMessages(rows), 'a batch of messages')) return
     // Stryker disable next-line StringLiteral: as above

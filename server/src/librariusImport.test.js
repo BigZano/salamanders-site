@@ -347,6 +347,57 @@ describe('createImport options', () => {
   })
 })
 
+describe('our own webhook: the parts of a reply of the site are the outbox\'s, not the import\'s', () => {
+  const HOOK = '200000000000000450'
+  const OTHER_HOOK = '200000000000000451'
+  const hooked = (n, over = {}) => raw(1, n, { webhook_id: HOOK, author: { id: HOOK, username: 'Invented Name', bot: true }, ...over })
+  const channelWith = (...ours) => channel(1, 1, 6).map((m, i) => (ours.includes(i + 1) ? hooked(i + 1) : m))
+
+  it.each([undefined, null])('has no webhook to leave out when it is given %j', (webhookId) => {
+    const w = setup({ active: [thread(1)], channels: { [postId(1)]: channelWith(2, 4) }, webhookId })
+    return w.imp.run().then(() => expect(idsOf(w, 1)).toHaveLength(6))
+  })
+
+  it('stores every message of a page but those of its webhook, whatever the page, and stores those of another webhook', async () => {
+    const page = channelWith(2, 4).map((m) => (m.id === mid(1, 5) ? { ...m, webhook_id: OTHER_HOOK, author: { id: OTHER_HOOK, username: 'other' } } : m))
+    const w = setup({ active: [thread(1)], channels: { [postId(1)]: page }, webhookId: HOOK })
+    await w.imp.run()
+    expect(idsOf(w, 1)).toEqual([1, 3, 5, 6].map((n) => mid(1, n)))
+    // The cursor goes past them all: what is left out is not read again.
+    expect(w.store.posts.get(postId(1)).cursor).toBe(mid(1, 6))
+  })
+
+  it('stores nothing, and writes nothing, for a page that is all its own', async () => {
+    const w = setup({ active: [thread(1)], channels: { [postId(1)]: [hooked(1), hooked(2)] }, webhookId: HOOK })
+    await w.imp.run()
+    expect(idsOf(w, 1)).toEqual([])
+    expect(w.store.writes).toEqual([])
+    expect(w.store.posts.get(postId(1)).cursor).toBe(mid(1, 2))
+  })
+
+  it('does not write a message of its webhook over the reply of the site that is stored for it, when its edit time differs', async () => {
+    const reply = { ...parseMessage(raw(1, 2, { content: 'the reply of the site' })), webhookId: HOOK, authorName: 'Invented Name' }
+    const w = setup({
+      active: [thread(1)],
+      channels: { [postId(1)]: [raw(1, 1), hooked(2, { content: '', edited_timestamp: '2026-11-01T10:00:00.123456+00:00' })] },
+      store: { posts: [known(1)], messages: [parseMessage(raw(1, 1)), reply], cursors: { [postId(1)]: mid(1, 100) } },
+      webhookId: HOOK,
+    })
+    await w.imp.run()
+    expect(w.store.messages.get(mid(1, 2)).content).toBe('the reply of the site')
+    expect(w.store.writes).toEqual([])
+  })
+
+  it('refuses a webhookId that is neither a Discord id nor null', () => {
+    for (const webhookId of ['', '1234567890123456', '123456789012345678901', '20000000000000045a', 200000000000000450, {}]) {
+      expect(() => createImport({ discord: fakeDiscord(), store: fakeStore(), forumId: FORUM, webhookId })).toThrow(new TypeError('webhookId must be a Discord id or null.'))
+    }
+    for (const webhookId of ['12345678901234567', '12345678901234567890', null, undefined]) {
+      expect(() => createImport({ discord: fakeDiscord(), store: fakeStore(), forumId: FORUM, webhookId })).not.toThrow()
+    }
+  })
+})
+
 describe('the import', () => {
   it('imports a fresh forum: every message, each cursor at the newest id, the sync row done', async () => {
     const w = setup({
