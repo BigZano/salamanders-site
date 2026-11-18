@@ -272,7 +272,8 @@ post page shows it from `GET /librarius/posts/:id/pending` (Task 8).
 - `start` / `stop` / `kick`. It runs one entry at a time, oldest `next_at` first.
 - **Send:**
   - build the parts with `toDiscord`;
-  - send part 1, then wait ≥1500 ms, then part 2, and so on;
+  - send part 1, then wait ≥1500 ms, then part 2, and so on. EVERY webhook send, across all entries, is at least
+    1500 ms after the previous one (Ruling B3);
   - after the last part, edit part 1's markers;
   - store the parts and upsert the message (`origin 'site'`, `source`);
   - delete its uploads;

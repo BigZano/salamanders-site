@@ -375,3 +375,71 @@ bot's permissions on that thread (or on the forum) let it see the thread again.
 **Rolling back.** Before the merge, the rollback tag above is the whole of it. After the merge, rolling back the API alone
 leaves the new site against the old API, and every Legion member sees "The Librarius couldn't be reached." A full rollback
 also needs a revert of the merge on `main`, so that the site goes back too.
+
+## Batch 2 probe (`src/librariusProbeRun.js`)
+
+An owner-run check of how Discord treats the replies the site will send to the Librarius, run before batch 2 is
+rolled out. It posts a short series of test messages, through a webhook of its own, into a private test forum that is
+never the Librarius, and prints what Discord answered to each. It is not part of the API and nothing starts it.
+
+Run it on the host, from the `server/` folder of the checkout that holds `server/.env` (Bun reads `.env` from the
+working directory, and a worktree has none), with the path of the probe after it. While batch 2 is still in its worktree,
+first a dry run, which prints what it would send and calls nothing:
+
+```sh
+cd /home/artellus/Documents/salamanders-site/server && ../node_modules/.bin/bun /home/artellus/Documents/salamanders-librarius-replies/server/src/librariusProbeRun.js --dry-run
+```
+
+then the real run, which is the same without `--dry-run`:
+
+```sh
+cd /home/artellus/Documents/salamanders-site/server && ../node_modules/.bin/bun /home/artellus/Documents/salamanders-librarius-replies/server/src/librariusProbeRun.js
+```
+
+and add ` --automod` to it for step 7 as well (a keyword that your moderators' AutoMod alert channel may show). Once batch 2
+has landed on `main`, use the merged path, `cd /home/artellus/Documents/salamanders-site/server && ../node_modules/.bin/bun src/librariusProbeRun.js`,
+with the same arguments.
+
+| Variable | Value |
+|---|---|
+| `LIBRARIUS_PROBE_CHANNEL_ID` | the id of the private test forum (type 15). Required |
+| `DISCORD_BOT_TOKEN`, `DISCORD_GUILD_ID`, `LIBRARIUS_CHANNEL_ID` | as for the API |
+
+It refuses to start (exit 2, before it makes or sends anything) when the probe forum's id is missing, is not a channel id
+or is `LIBRARIUS_CHANNEL_ID`; when `LIBRARIUS_CHANNEL_ID` is set but is not a channel id (a stray space, say: the check
+against it would pass for nothing); when the channel is not a forum, is not in `DISCORD_GUILD_ID`, or can be seen by
+everyone (its permission overwrites must deny View Channel to @everyone); and on an argument it does not know.
+
+The bot needs Manage Webhooks in the test forum, and Manage Server for `--automod` (Discord lists AutoMod rules only to
+it; without it, step 7 is skipped and says so). The probe makes a webhook called "Librarius probe" there and one post by
+it, sends into the post 1500 ms or more apart, and deletes the webhook at the end. The post stays, for you to look at.
+The sends are:
+
+1. a Components V2 message: a 3988-character text (with the 12 characters of the button's label, exactly 4000, whether
+   or not Discord counts labels), a separator, a picture inside the box and a link button;
+2. a V2 message of 4001 characters, which Discord should refuse (the row gives what it says);
+3. a V2 message that mentions the guild's owner (`allowed_mentions: { parse: [] }`), which should show a name and ping nobody;
+4. a reply of three V2 messages, 11,500 characters in all, then an edit of the first to add jump links to the others;
+5. a plain message of exactly 2000 characters with embeds suppressed;
+6. three more replies, 1500 ms apart like every other send. The site's outbox will space every webhook send at least
+   1500 ms apart, not only the parts of one reply, so this is the fastest the site goes;
+7. with `--automod`: the first keyword of the first AutoMod KEYWORD rule that is enabled, blocks messages and does not
+   exempt the probe forum, sent twice about 2 seconds apart, as V2 text (7a) and as plain content (7b). Discord's code
+   200000 is a block. Neither blocked, by a rule that blocks and does not exempt the forum: AutoMod does not filter
+   webhook posts, and the site's own check is the only filter for both forms. 7b blocked and 7a not: AutoMod does not
+   read V2 text, and the site's own check is the only filter on a V2 reply. Both blocked: it reads both. It also prints
+   whether that rule exempts the Librarius forum; a rule that does makes a block here say nothing about the Librarius.
+
+It prints the post's address, a table with one row for each call (status, Discord's code and text, milliseconds and the
+message id), the word to search for in (d) (Discord's search index can lag a few minutes) and then a checklist, a to f, to
+answer by eye. (b) assumes the person running the probe is the guild's owner: it mentions the owner, and the owner is who
+should see the name and no ping. A message that Discord refuses is the result, not a failure: the run goes on and exits 0.
+
+A 429 is never resent. The next send waits the longer of 1500 ms and what Discord asked (`retry_after`, or the
+`Retry-After` header), at most 60 seconds. Asked for more, or told the limit is global, the probe sends nothing more, says
+so in the rows it did not send, still deletes its webhook and exits 1: run it again later.
+
+Exit 1 also means it could not make its webhook or post, or could not delete the webhook (it says so). Ctrl-C deletes the
+webhook, if it has made one, and exits 130. If the webhook could not be made or its answer was lost, it may exist
+anyway: if a webhook named "Librarius probe" exists in the probe forum, delete it under Edit Channel → Integrations →
+Webhooks. A token or a webhook url is never printed, and what Discord says is cut of links.
