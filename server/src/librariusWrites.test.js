@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest'
 import * as fc from 'fast-check'
 import { createLibrariusWrites } from './librariusWrites.js'
-import { createLimits } from './librariusLimits.js'
+import { createLimits, tooFast } from './librariusLimits.js'
 import { COPY as OUTBOX_COPY } from './librariusOutbox.js'
 import { Upstream } from './discordRoles.js'
 import { P } from './librariusPerms.js'
@@ -113,7 +113,7 @@ function world(over = {}) {
     people: roster(),
     queue: [],
     kicks: 0,
-    asked: { quoted: [], held: [], outboxFor: [], rules: 0, people: [] },
+    asked: { quoted: [], held: [], outboxFor: [], rules: 0, people: [], added: [], facts: 0 },
     outboxRows: [],
     failures: {},
     keys: [KEY],
@@ -135,6 +135,10 @@ function world(over = {}) {
     },
     addUpload: async (upload) => {
       if (w.failures.addUpload) throw new Error('the table is gone')
+      w.asked.added.push({ authorId: upload.authorId, maxHeldBytes: upload.maxHeldBytes })
+      // `extraHeld` is what an author is taken to hold already, so that a test need not make 100 MB of pictures.
+      const held = [...w.uploads.values()].filter((u) => u.authorId === upload.authorId).reduce((sum, u) => sum + u.bytes.length, w.extraHeld?.[upload.authorId] ?? 0)
+      if (held + upload.bytes.length > upload.maxHeldBytes) return null
       const id = String(w.uploads.size + 1)
       w.uploads.set(id, upload)
       return { id }
@@ -150,7 +154,10 @@ function world(over = {}) {
     },
   }
   const guild = {
-    facts: async () => structuredClone(w.facts),
+    facts: async () => {
+      w.asked.facts++
+      return structuredClone(w.facts)
+    },
     automodRules: async () => {
       w.asked.rules++
       if (w.failures.rules) throw new Upstream('Discord answered 403 for the AutoMod rules.')
@@ -474,6 +481,36 @@ describe('reply: the request', () => {
   })
 })
 
+describe('reply: a regular expression that could not be checked', () => {
+  const COPY_UNCHECKED = "This reply couldn't be checked against the server's rules. Try a shorter one."
+  // A rule with a pattern the site can run, and a reply over the 10,000 characters that a pattern is run over: it cannot be checked.
+  const regexRule = () => ({ id: '200000000000000472', name: 'invented patterns', enabled: true, trigger_type: 1, trigger_metadata: { keyword_filter: [], regex_patterns: ['zorp'] }, exempt_roles: [], exempt_channels: [] })
+  const long = () => json({ source: 'x'.repeat(10_001) })
+
+  it('is 422 with that copy, and no rule or match, as validateReply says it, and queues nothing', async () => {
+    const t = world({ rules: [regexRule()] })
+    const got = await out(await t.writes.reply(POST, long(), verdictOf()))
+    expect(got.status).toBe(422)
+    expect(got.body).toStrictEqual({ error: COPY_UNCHECKED })
+    expect(t.queue).toStrictEqual([])
+  })
+
+  it('is a try of the 20 writes a minute, like any other refusal, and no reply of the 3', async () => {
+    const t = world({ rules: [regexRule()] })
+    for (let i = 0; i < 20; i++) expect((await t.writes.reply(POST, long(), verdictOf())).status).toBe(422)
+    expect(t.limits.snapshot(ME).reply.remaining).toBe(3)
+    const got = await out(await t.writes.reply(POST, long(), verdictOf()))
+    expect(got).toMatchObject({ status: 429, body: { error: 'Slow down a little: try again in 60 seconds.' } })
+  })
+
+  it('is the same 422 for an edit', async () => {
+    const t = world({ rules: [regexRule()] })
+    const got = await out(await t.writes.edit(M_SITE, json({ source: 'x'.repeat(10_001), mentions: [] }), verdictOf()))
+    expect(got.status).toBe(422)
+    expect(got.body).toStrictEqual({ error: COPY_UNCHECKED })
+  })
+})
+
 describe('reply: the AutoMod rules', () => {
   const keyword = (extra = {}) => ({ id: '200000000000000470', name: 'invented keywords', enabled: true, trigger_type: 1, trigger_metadata: { keyword_filter: ['zorp'], allow_list: [] }, exempt_roles: [], exempt_channels: [], ...extra })
 
@@ -583,6 +620,48 @@ describe('reply: who it replies to', () => {
     t.w.clock.t += 60_000
     await t.writes.reply(POST, json({ source: `hi <@${OTHER}>`, mentions: [OTHER], replyTo: M_OTHER, pingReply: true }), verdictOf())
     expect(t.queue[1].payload.mentions).toStrictEqual([OTHER])
+  })
+
+  it('pings the author of the message only if they are a member of the roster who may read the forum, as for every other mention: else the ping is dropped and the reply still goes', async () => {
+    const GONE = '300000000000000140' // wrote a message here, is not in the roster now
+    const SHUT = '300000000000000141' // in the roster, but the forum is shut to them
+    const t = world({ people: [...roster(), member(SHUT, 'Shut Out', [])] })
+    for (const id of [GONE, SHUT, OUTSIDER]) t.w.messages.set(`2000000000000004${id.slice(-2)}`, stored(`2000000000000004${id.slice(-2)}`, { authorId: id, origin: 'discord', source: null, layout: null }))
+    for (const [i, id] of [GONE, SHUT, OUTSIDER].entries()) {
+      t.w.clock.t += 60_000
+      const got = await t.writes.reply(POST, json({ source: 'hello', replyTo: `2000000000000004${id.slice(-2)}`, pingReply: true }), verdictOf())
+      expect(got.status, id).toBe(202)
+      expect(t.queue[i].payload.mentions, id).toStrictEqual([])
+      expect(t.queue[i].payload.replyTo.authorId, id).toBe(id) // the reply still quotes them
+    }
+    t.w.clock.t += 60_000
+    await t.writes.reply(POST, json({ source: 'hello', replyTo: M_OTHER, pingReply: true }), verdictOf())
+    expect(t.queue[3].payload.mentions).toStrictEqual([OTHER])
+  })
+
+  it('drops the ping, and the reply still goes, while the roster has not loaded', async () => {
+    const t = world({ people: null })
+    const got = await t.writes.reply(POST, json({ source: 'hello', replyTo: M_OTHER, pingReply: true }), verdictOf())
+    expect(got.status).toBe(202)
+    expect(t.queue[0].payload.mentions).toStrictEqual([])
+  })
+
+  it('follows the guild for the ping: when the forum shuts the reader role out, no one is pinged', async () => {
+    const t = world()
+    t.w.facts.overwrites = t.w.facts.overwrites.filter((o) => o.id !== READER)
+    expect((await t.writes.reply(POST, json({ source: 'hello', replyTo: M_OTHER, pingReply: true }), verdictOf())).status).toBe(202)
+    expect(t.queue[0].payload.mentions).toStrictEqual([])
+  })
+
+  it('asks the guild what the forum allows for the ping only when there is a ping to check', async () => {
+    const t = world()
+    await t.writes.reply(POST, json({ source: 'a', replyTo: M_OTHER }), verdictOf())
+    await t.writes.reply(POST, json({ source: 'b', pingReply: true }), verdictOf())
+    await t.writes.reply(POST, json({ source: 'c', replyTo: M_OTHER, pingReply: false }), verdictOf())
+    expect(t.asked.facts).toBe(0)
+    t.w.clock.t += 60_000
+    await t.writes.reply(POST, json({ source: 'd', replyTo: M_OTHER, pingReply: true }), verdictOf())
+    expect(t.asked.facts).toBe(1)
   })
 
   it('keeps the author out of the pings when a mention-spam rule leaves no room for them, and lets them in when it does', async () => {
@@ -770,6 +849,74 @@ describe('reply: the pictures', () => {
   })
 })
 
+describe('reply: pictures need the right to attach', () => {
+  const COPY_ATTACH = "You can't attach pictures here."
+  const held = (t, ...ids) => ids.forEach((id) => t.w.uploads.set(id, { authorId: ME, bytes: new Uint8Array(1) }))
+
+  it('is 403 for a member who has lost Attach Files but may still reply, and holds pictures from before: they are not sent', async () => {
+    const t = world()
+    held(t, '7')
+    const got = await out(await t.writes.reply(POST, json({ source: 'look ![a](upload:1)', uploads: ['7'] }), verdictOf({ attach: false })))
+    expect(got).toMatchObject({ status: 403, body: { error: COPY_ATTACH } })
+    expect(t.queue).toStrictEqual([])
+    expect(t.w.kicks).toBe(0)
+  })
+
+  it('says so before it looks anything up: the pictures, the people, the rules, the message replied to, the roster', async () => {
+    const t = world()
+    held(t, '7')
+    await t.writes.reply(POST, json({ source: 'hi', uploads: ['7'], mentions: [OTHER], replyTo: M_OTHER }), verdictOf({ attach: false }))
+    expect(t.asked.held).toStrictEqual([])
+    expect(t.asked.quoted).toStrictEqual([])
+    expect(t.asked.people).toStrictEqual([])
+    expect(t.asked.rules).toBe(0)
+  })
+
+  it('takes a reply with no pictures from a member who may not attach: no uploads, an empty list, or none that is a list', async () => {
+    const t = world()
+    const noAttach = verdictOf({ attach: false })
+    for (const body of [{ source: 'a' }, { source: 'b', uploads: [] }, { source: 'c', uploads: null }]) {
+      t.w.clock.t += 60_000
+      expect((await t.writes.reply(POST, json(body), noAttach)).status, JSON.stringify(body)).toBe(202)
+    }
+  })
+
+  it('leaves what is not a list of pictures to the reply check, as for a member who may attach', async () => {
+    const t = world()
+    const noAttach = verdictOf({ attach: false })
+    const allowed = verdictOf()
+    for (const uploads of ['x', {}, 7, true, 'abc']) {
+      const without = await out(await t.writes.reply(POST, json({ source: 'hello', uploads }), noAttach))
+      const attached = await out(await t.writes.reply(POST, json({ source: 'hello', uploads }), allowed))
+      expect(without.body, JSON.stringify(uploads)).toStrictEqual(attached.body)
+      expect(without.status, JSON.stringify(uploads)).toBe(attached.status)
+    }
+  })
+
+  it('is 403 for one picture of any kind of id: the member may not attach, and what they send is not looked at', async () => {
+    const t = world()
+    for (const uploads of [['1'], ['x'], [7], [null], ['7', '7'], Array.from({ length: 30 }, (_, i) => String(i))]) {
+      t.w.clock.t += 60_000
+      expect((await out(await t.writes.reply(POST, json({ source: 'hello', uploads }), verdictOf({ attach: false })))).body.error, JSON.stringify(uploads)).toBe(COPY_ATTACH)
+    }
+  })
+
+  it('still tells a member who is timed out, or may not reply, of that first', async () => {
+    const t = world()
+    const timed = await out(await t.writes.reply(POST, json({ source: 'x', uploads: ['7'] }), verdictOf({ attach: false, reply: false, timedOut: true, timeoutUntil: '2026-11-19T00:00:00.000Z' })))
+    expect(timed.body.error).toBe("You're timed out in the server until 2026-11-19T00:00:00.000Z.")
+    const barred = await out(await t.writes.reply(POST, json({ source: 'x', uploads: ['7'] }), verdictOf({ attach: false, reply: false })))
+    expect(barred.body.error).toBe("You can't reply in this post.")
+  })
+
+  it('does not take a place of the 3 replies a minute for the one it refuses', async () => {
+    const t = world()
+    held(t, '7')
+    for (let i = 0; i < 5; i++) await t.writes.reply(POST, json({ source: 'x', uploads: ['7'] }), verdictOf({ attach: false }))
+    for (let i = 0; i < 3; i++) expect((await t.writes.reply(POST, json({ source: `ok ${i}` }), verdictOf())).status).toBe(202)
+  })
+})
+
 // ---- pending ---------------------------------------------------------------------------------------------------------------
 
 describe('pending', () => {
@@ -888,7 +1035,7 @@ describe('edit', () => {
     expect((await t.writes.edit('200000000000000443', json({ source: 'x' }), verdictOf())).status).toBe(202)
   })
 
-  it('is 409 for a reply of another webhook, which the webhook of the outbox cannot edit, before the body is read or a try is counted', async () => {
+  it('is 409 for a reply of another webhook, which the webhook of the outbox cannot edit, before the body is read, and is no edit that was let through', async () => {
     const t = world()
     t.w.messages.set('200000000000000444', stored('200000000000000444', { webhookId: OLD_HOOK }))
     t.w.messages.set('200000000000000445', stored('200000000000000445', { webhookId: null }))
@@ -900,8 +1047,9 @@ describe('edit', () => {
     }
     expect(t.queue).toStrictEqual([])
     expect(t.w.kicks).toBe(0)
-    // Nothing was counted against the member: twenty edits of a reply of the current webhook still go.
-    for (let i = 0; i < 20; i++) expect((await t.writes.edit(M_SITE, json({ source: `edit ${i}` }), verdictOf())).status).toBe(202)
+    // The two were tries (of the 20 writes a minute), and no edit that was let through: the other 18 tries go, and the 20 edits are as they were.
+    expect(t.limits.snapshot(ME).edit.remaining).toBe(20)
+    for (let i = 0; i < 18; i++) expect((await t.writes.edit(M_SITE, json({ source: `edit ${i}` }), verdictOf())).status).toBe(202)
   })
 
   it('may delete a reply of another webhook, which the outbox removes through the bot', async () => {
@@ -917,10 +1065,13 @@ describe('edit', () => {
     expect((await t.writes.edit('200000000000000444', json({ source: 'x' }), verdictOf())).status).toBe(403)
   })
 
-  it('is 429 over 20 edits a minute, looked at before the body is read, and counts only an edit that is queued', async () => {
+  it('is 429 over 20 edits a minute, looked at before the body is read, and counts only an edit that is queued among the 20', async () => {
     const t = world()
-    for (let i = 0; i < 25; i++) await t.writes.edit(M_SITE, json({ source: '' }), verdictOf())
-    for (let i = 0; i < 20; i++) expect((await t.writes.edit(M_SITE, json({ source: `edit ${i}` }), verdictOf())).status).toBe(202)
+    for (let i = 0; i < 10; i++) await t.writes.edit(M_SITE, json({ source: '' }), verdictOf())
+    expect(t.limits.snapshot(ME).edit.remaining).toBe(20)
+    // Ten more edits are all that the 20 tries of the minute leave; the 20 edits themselves are the limit of the edits that go through.
+    for (let i = 0; i < 10; i++) expect((await t.writes.edit(M_SITE, json({ source: `edit ${i}` }), verdictOf())).status).toBe(202)
+    expect(t.limits.snapshot(ME).edit.remaining).toBe(10)
     const { request, seen } = streamed([new TextEncoder().encode('{"source":"x"}')], { 'Content-Type': 'application/json' })
     const got = await out(await t.writes.edit(M_SITE, request, verdictOf()))
     expect(got).toMatchObject({ status: 429, body: { error: 'Slow down a little: try again in 60 seconds.' } })
@@ -930,11 +1081,25 @@ describe('edit', () => {
     expect((await t.writes.edit(M_SITE, json({ source: 'again' }), verdictOf())).status).toBe(202)
   })
 
-  it('shares the 20 a minute with deletes and with the member search', async () => {
+  it('is 429 when the 20 edits of the minute are used up, whatever the tries are, and before the body is read', async () => {
+    const t = world()
+    for (let i = 0; i < 20; i++) t.limits.take('edit', ME)
+    const { request, seen } = streamed([new TextEncoder().encode('{"source":"x"}')], { 'Content-Type': 'application/json' })
+    const got = await out(await t.writes.edit(M_SITE, request, verdictOf()))
+    expect(got).toMatchObject({ status: 429, body: { error: 'Slow down a little: try again in 60 seconds.' } })
+    expect(got.headers.get('Retry-After')).toBe('60')
+    expect(seen.pulled).toBe(0)
+    expect(t.queue).toStrictEqual([])
+  })
+
+  it('shares the 20 edits with deletes, and not with the member search, which has a window of its own', async () => {
     const t = world()
     for (let i = 0; i < 10; i++) await t.writes.remove(M_SITE, verdictOf())
-    for (let i = 0; i < 10; i++) await t.writes.search(new URL('https://api.test/librarius/members?q=Or'), verdictOf())
-    expect((await t.writes.edit(M_SITE, json({ source: 'x' }), verdictOf())).status).toBe(429)
+    for (let i = 0; i < 30; i++) await t.writes.search(new URL('https://api.test/librarius/members?q=Or'), verdictOf())
+    expect(t.limits.snapshot(ME).edit.remaining).toBe(10)
+    expect((await t.writes.edit(M_SITE, json({ source: 'x' }), verdictOf())).status).toBe(202)
+    for (let i = 0; i < 9; i++) t.limits.take('edit', ME)
+    expect((await t.writes.edit(M_SITE, json({ source: 'y' }), verdictOf())).status).toBe(429)
   })
 
   it('takes the place just before it queues the edit, so two edits sent together are not both let through', async () => {
@@ -1043,10 +1208,12 @@ describe('edit', () => {
       expect(got).toMatchObject({ status: 400, body: { error: "That picture isn't one of yours." } })
     })
 
-    it('does not count a refused edit toward the 20 a minute', async () => {
+    it('counts a refused edit as a try, and not toward the 20 edits that are let through', async () => {
       const t = world()
-      for (let i = 0; i < 30; i++) await t.writes.edit(M_PICS, json({ source: 'A\n\nB' }), verdictOf())
-      for (let i = 0; i < 20; i++) expect((await t.writes.edit(M_SITE, json({ source: `ok ${i}` }), verdictOf())).status).toBe(202)
+      for (let i = 0; i < 10; i++) expect((await t.writes.edit(M_PICS, json({ source: 'A\n\nB' }), verdictOf())).status).toBe(400)
+      expect(t.limits.snapshot(ME).edit.remaining).toBe(20)
+      for (let i = 0; i < 10; i++) expect((await t.writes.edit(M_SITE, json({ source: `ok ${i}` }), verdictOf())).status).toBe(202)
+      expect((await t.writes.edit(M_SITE, json({ source: 'one too many' }), verdictOf())).status).toBe(429)
     })
   })
 
@@ -1102,6 +1269,36 @@ describe('remove', () => {
     expect((await t.writes.remove(M_SITE, verdictOf({ reply: false, timedOut: true, timeoutUntil: '2026-11-19T00:00:00.000Z' }))).status).toBe(202)
   })
 
+  it('is 403 "This post is locked." in a locked post for anyone who cannot manage threads, the author of the message and one who manages messages included', async () => {
+    const t = world()
+    t.w.messages.set('200000000000000448', stored('200000000000000448', { postId: LOCKED_POST, authorId: OTHER, origin: 'discord', source: null, layout: null }))
+    for (const [id, verdict] of [
+      [M_LOCKED, verdictOf()],
+      [M_LOCKED, verdictOf({ manageMessages: true })],
+      ['200000000000000448', verdictOf({ manageMessages: true, admin: true })],
+    ]) {
+      t.w.clock.t += 60_000
+      expect(await out(await t.writes.remove(id, verdict)), id).toMatchObject({ status: 403, body: { error: 'This post is locked.' } })
+    }
+    expect(t.queue).toStrictEqual([])
+    expect(t.w.kicks).toBe(0)
+  })
+
+  it('lets a member who manages threads delete in a locked post: their own message, and another\'s if they manage messages too', async () => {
+    const t = world()
+    t.w.messages.set('200000000000000448', stored('200000000000000448', { postId: LOCKED_POST, authorId: OTHER, origin: 'discord', source: null, layout: null }))
+    expect((await t.writes.remove(M_LOCKED, verdictOf({ manageThreads: true }))).status).toBe(202)
+    expect((await t.writes.remove('200000000000000448', verdictOf({ manageThreads: true, manageMessages: true }))).status).toBe(202)
+    expect((await out(await t.writes.remove('200000000000000448', verdictOf({ manageThreads: true })))).body.error).toBe('Only the author, or someone who can manage messages, can delete this.')
+    expect(t.queue.map((e) => e.messageKey)).toStrictEqual([M_LOCKED, '200000000000000448'])
+  })
+
+  it('tells someone who may not delete a message of that, before it tells them the post is locked', async () => {
+    const t = world()
+    t.w.messages.set('200000000000000448', stored('200000000000000448', { postId: LOCKED_POST, authorId: OTHER }))
+    expect((await out(await t.writes.remove('200000000000000448', verdictOf()))).body.error).toBe('Only the author, or someone who can manage messages, can delete this.')
+  })
+
   it('never deletes a whole post: the message that opens it is 403, for its author and for a librarian', async () => {
     const t = world()
     t.w.messages.set(POST, stored(POST, { authorId: ME, origin: 'discord', source: null, layout: null }))
@@ -1133,10 +1330,303 @@ describe('remove', () => {
     expect(t.queue).toHaveLength(20)
   })
 
-  it('does not count a refused delete', async () => {
+  it('is 429 when the 20 edits and deletes of the minute are used up, whoever used them, and queues nothing', async () => {
     const t = world()
-    for (let i = 0; i < 40; i++) await t.writes.remove(M_OTHER, verdictOf())
+    for (let i = 0; i < 20; i++) t.limits.take('edit', ME)
+    const got = await out(await t.writes.remove(M_SITE, verdictOf()))
+    expect(got).toMatchObject({ status: 429, body: { error: 'Slow down a little: try again in 60 seconds.' } })
+    expect(got.headers.get('Retry-After')).toBe('60')
+    expect(t.queue).toStrictEqual([])
+    expect(t.w.kicks).toBe(0)
+    t.w.clock.t += 60_000
+    expect((await t.writes.remove(M_SITE, verdictOf())).status).toBe(202)
+  })
+
+  it('does not count a refused delete among the 20 deletes and edits that are let through, though it is a try (see "every write try")', async () => {
+    const t = world()
+    for (let i = 0; i < 10; i++) await t.writes.remove(M_OTHER, verdictOf())
+    expect(t.limits.snapshot(ME).edit.remaining).toBe(20)
+    t.w.clock.t += 60_000
     for (let i = 0; i < 20; i++) expect((await t.writes.remove(M_SITE, verdictOf())).status).toBe(202)
+  })
+})
+
+describe('every write try takes a place before its body is read (20 writes a minute, 10 upload tries a minute)', () => {
+  const COPY_SLOW = 'Slow down a little: try again in 60 seconds.'
+  const type = { 'Content-Type': 'application/json' }
+
+  it('refuses the 21st write of a minute with 429, the wait in Retry-After and in the copy, whatever the first 20 came to', async () => {
+    const t = world()
+    for (let i = 0; i < 20; i++) expect((await t.writes.reply(GONE_POST, json({ source: 'hello' }), verdictOf())).status).toBe(404)
+    const got = await out(await t.writes.reply(POST, json({ source: 'hello' }), verdictOf()))
+    expect(got).toMatchObject({ status: 429, body: { error: COPY_SLOW } })
+    expect(got.headers.get('Retry-After')).toBe('60')
+    expect(t.queue).toStrictEqual([])
+  })
+
+  it('counts the writes that were refused for their body, their rules and their rights, as it counts those that went through', async () => {
+    const refusals = [
+      (t) => t.writes.reply(POST, json({ source: '' }), verdictOf()), // no source: 400
+      (t) => t.writes.reply(POST, json('{nope'), verdictOf()),
+      (t) => t.writes.reply(POST, json({ source: 'x'.repeat(16_001) }), verdictOf()), // 413
+      (t) => t.writes.reply(POST, json({ source: 'a [link](ftp://x)' }), verdictOf()), // 400, validateReply
+      (t) => t.writes.reply(POST, json({ source: 'hello' }), verdictOf({ reply: false })), // 403
+      (t) => t.writes.reply(LOCKED_POST, json({ source: 'hello' }), verdictOf()), // 403
+      (t) => t.writes.edit(M_OTHER_SITE, json({ source: 'x', mentions: [] }), verdictOf()), // 403
+      (t) => t.writes.remove(M_OTHER, verdictOf()), // 403
+      (t) => t.writes.remove(M_ORPHAN, verdictOf()), // 404
+    ]
+    for (const [i, refuse] of refusals.entries()) {
+      const t = world()
+      for (let n = 0; n < 20; n++) expect((await refuse(t)).status, `${i} ${n}`).toBeGreaterThanOrEqual(400)
+      const got = await out(await t.writes.reply(POST, json({ source: 'hello' }), verdictOf()))
+      expect(got, String(i)).toMatchObject({ status: 429, body: { error: COPY_SLOW } })
+    }
+  })
+
+  it('shares the 20 among replies, edits and deletes', async () => {
+    const t = world()
+    for (let i = 0; i < 8; i++) await t.writes.reply(GONE_POST, json({ source: 'x' }), verdictOf())
+    for (let i = 0; i < 6; i++) await t.writes.remove(M_ORPHAN, verdictOf())
+    for (let i = 0; i < 6; i++) await t.writes.edit(M_ORPHAN, json({ source: 'x', mentions: [] }), verdictOf())
+    for (const call of [
+      () => t.writes.reply(POST, json({ source: 'hello' }), verdictOf()),
+      () => t.writes.edit(M_SITE, json({ source: 'hello', mentions: [] }), verdictOf()),
+      () => t.writes.remove(M_SITE, verdictOf()),
+    ]) {
+      expect((await call()).status).toBe(429)
+    }
+  })
+
+  it('looks at the try first, before it says anything of the post, the right to write, or the 3 replies a minute', async () => {
+    const t = world()
+    for (let i = 0; i < 20; i++) await t.writes.reply(GONE_POST, json({ source: 'x' }), verdictOf())
+    for (const [postId, verdict] of [[GONE_POST, verdictOf()], [POST, verdictOf({ reply: false })], [LOCKED_POST, verdictOf()], [POST, verdictOf({ reply: false, timedOut: true, timeoutUntil: '2026-11-19T00:00:00.000Z' })]]) {
+      expect((await t.writes.reply(postId, json({ source: 'x' }), verdict)).status, postId).toBe(429)
+    }
+    expect((await t.writes.remove(M_OTHER, verdictOf())).status).toBe(429)
+    expect((await t.writes.edit(GONE_POST, json({ source: 'x' }), verdictOf())).status).toBe(429)
+  })
+
+  it('reads no body for a try that is over: the request is left unread', async () => {
+    const t = world()
+    for (let i = 0; i < 20; i++) await t.writes.reply(POST, json({ source: '' }), verdictOf())
+    const reply = streamed([new TextEncoder().encode('{"source":"hello"}')], type)
+    expect((await t.writes.reply(POST, reply.request, verdictOf())).status).toBe(429)
+    expect(reply.seen.pulled).toBe(0)
+    const edit = streamed([new TextEncoder().encode('{"source":"hello","mentions":[]}')], type)
+    expect((await t.writes.edit(M_SITE, edit.request, verdictOf())).status).toBe(429)
+    expect(edit.seen.pulled).toBe(0)
+  })
+
+  it('lets a member write again a minute after the first of the 20, to the millisecond, and keeps each member apart', async () => {
+    const t = world()
+    for (let i = 0; i < 20; i++) await t.writes.reply(GONE_POST, json({ source: 'x' }), verdictOf())
+    expect((await t.writes.reply(POST, json({ source: 'x' }), verdictOf({ user: { id: OTHER, username: 'orin' } }))).status).toBe(202)
+    t.w.clock.t += 59_999
+    expect((await out(await t.writes.reply(POST, json({ source: 'hello' }), verdictOf()))).body.error).toBe(tooFast(1))
+    t.w.clock.t += 1
+    expect((await t.writes.reply(POST, json({ source: 'hello' }), verdictOf())).status).toBe(202)
+  })
+
+  it('tells nothing of them to /librarius/me: they are not among the limits a member has left', async () => {
+    const t = world()
+    for (let i = 0; i < 5; i++) await t.writes.reply(GONE_POST, json({ source: 'x' }), verdictOf())
+    expect(t.limits.snapshot(ME)).toStrictEqual({
+      reply: { limit: 3, windowSeconds: 60, remaining: 3 },
+      edit: { limit: 20, windowSeconds: 60, remaining: 20 },
+      upload: { limit: 30, windowSeconds: 3600, remaining: 30 },
+    })
+  })
+
+  it('does not change what is counted of the 3 replies and the 20 edits a minute: those are the writes that were let through', async () => {
+    const t = world()
+    for (let i = 0; i < 10; i++) await t.writes.reply(POST, json({ source: '' }), verdictOf())
+    for (let i = 0; i < 3; i++) expect((await t.writes.reply(POST, json({ source: `ok ${i}` }), verdictOf())).status).toBe(202)
+    expect((await out(await t.writes.reply(POST, json({ source: 'a fourth' }), verdictOf()))).body.error).toMatch(/^Slow down a little/)
+  })
+
+  describe('an upload', () => {
+    const png = () => formOf([{ bytes: PNG_CLEAN }])
+    const nothing = () => formOf([])
+
+    it('refuses the 11th of a minute with 429, whatever the first 10 came to: a file that is no picture, a form that is empty, a right it lacks', async () => {
+      const t = world()
+      for (let i = 0; i < 4; i++) expect((await t.writes.upload(nothing(), verdictOf())).status).toBe(400)
+      for (let i = 0; i < 3; i++) expect((await t.writes.upload(formOf([{ bytes: new Uint8Array([1, 2, 3]) }]), verdictOf())).status).toBe(400)
+      for (let i = 0; i < 3; i++) expect((await t.writes.upload(png(), verdictOf({ attach: false }))).status).toBe(403)
+      const got = await out(await t.writes.upload(png(), verdictOf()))
+      expect(got).toMatchObject({ status: 429, body: { error: COPY_SLOW } })
+      expect(got.headers.get('Retry-After')).toBe('60')
+      expect(t.uploads.size).toBe(0)
+    })
+
+    it('looks at the try before the member\'s rights, and reads no body for one that is over', async () => {
+      const t = world()
+      for (let i = 0; i < 10; i++) await t.writes.upload(nothing(), verdictOf())
+      expect((await t.writes.upload(png(), verdictOf({ attach: false }))).status).toBe(429)
+      expect((await t.writes.upload(png(), verdictOf({ reply: false, attach: false, timedOut: true, timeoutUntil: '2026-11-19T00:00:00.000Z' }))).status).toBe(429)
+      const over = streamed([new Uint8Array(5)], { 'Content-Type': 'multipart/form-data; boundary=x' })
+      expect((await t.writes.upload(over.request, verdictOf())).status).toBe(429)
+      expect(over.seen.pulled).toBe(0)
+    })
+
+    it('lets the member in again a minute after the first of the 10, to the millisecond, and keeps each member apart', async () => {
+      const t = world()
+      for (let i = 0; i < 10; i++) await t.writes.upload(nothing(), verdictOf())
+      expect((await t.writes.upload(png(), verdictOf({ user: { id: OTHER, username: 'orin' } }))).status).toBe(201)
+      t.w.clock.t += 59_999
+      expect((await t.writes.upload(png(), verdictOf())).status).toBe(429)
+      t.w.clock.t += 1
+      expect((await t.writes.upload(png(), verdictOf())).status).toBe(201)
+    })
+
+    it('is not the window of the writes: 20 writes leave the uploads as they were, and 10 upload tries leave the writes', async () => {
+      const t = world()
+      for (let i = 0; i < 20; i++) await t.writes.reply(GONE_POST, json({ source: 'x' }), verdictOf())
+      for (let i = 0; i < 10; i++) expect((await t.writes.upload(png(), verdictOf())).status, String(i)).toBe(201)
+      const u = world()
+      for (let i = 0; i < 10; i++) await u.writes.upload(nothing(), verdictOf())
+      for (let i = 0; i < 3; i++) expect((await u.writes.reply(POST, json({ source: `ok ${i}` }), verdictOf())).status).toBe(202)
+    })
+
+    it('holds a picture only for the pictures it takes: the 30 an hour that count what was held are as they were', async () => {
+      const t = world()
+      for (let i = 0; i < 10; i++) await t.writes.upload(nothing(), verdictOf())
+      expect(t.limits.snapshot(ME).upload.remaining).toBe(30)
+    })
+  })
+})
+
+describe('upload: the pictures in flight (2 for a member, 4 in all)', () => {
+  // A request whose body is not all sent until the test says: a picture that is still arriving.
+  function arriving() {
+    let control
+    const body = new ReadableStream({ start: (c) => (control = c) }, { highWaterMark: 0 })
+    const request = new Request(URL_, { method: 'POST', body, headers: { 'Content-Type': 'multipart/form-data; boundary=x' }, duplex: 'half' })
+    return { request, done: () => control.close() }
+  }
+  const turns = async () => {
+    for (let i = 0; i < 5; i++) await new Promise((resolve) => setImmediate(resolve))
+  }
+  const png = () => formOf([{ bytes: PNG_CLEAN }])
+  const by = (id) => verdictOf({ user: { id, username: 'invented' } })
+  const COPY_ONE = 'One picture at a time, please.'
+  const COPY_BUSY = 'The site is busy with pictures; try again in a moment.'
+
+  it('refuses a member\'s 3rd picture at once with 429 and "One picture at a time, please.", and takes it when one of the two is done', async () => {
+    const t = world()
+    const first = arriving()
+    const second = arriving()
+    const a = t.writes.upload(first.request, verdictOf())
+    const b = t.writes.upload(second.request, verdictOf())
+    await turns()
+    expect(await out(await t.writes.upload(png(), verdictOf()))).toMatchObject({ status: 429, body: { error: COPY_ONE } })
+    first.done()
+    expect((await a).status).toBe(400) // an empty form, but it is done
+    expect((await t.writes.upload(png(), verdictOf())).status).toBe(201)
+    second.done()
+    await b
+  })
+
+  it('refuses a 5th picture, of anyone, with 503 and "The site is busy with pictures; try again in a moment."', async () => {
+    const t = world()
+    const people = ['300000000000000111', '300000000000000112', '300000000000000113', '300000000000000114']
+    const waiting = people.map((id) => ({ id, ...arriving() }))
+    const running = waiting.map((w) => t.writes.upload(w.request, by(w.id)))
+    await turns()
+    expect(await out(await t.writes.upload(png(), by('300000000000000115')))).toMatchObject({ status: 503, body: { error: COPY_BUSY } })
+    waiting[0].done()
+    await running[0]
+    expect((await t.writes.upload(png(), by('300000000000000115'))).status).toBe(201)
+    for (const w of waiting.slice(1)) w.done()
+    await Promise.all(running)
+  })
+
+  it('tells a member who has two in flight of that, not of the site being busy, whoever else is busy', async () => {
+    const t = world()
+    const waiting = [verdictOf(), verdictOf(), by('300000000000000111'), by('300000000000000111')].map((verdict) => ({ verdict, ...arriving() }))
+    const running = waiting.map((w) => t.writes.upload(w.request, w.verdict))
+    await turns()
+    expect((await out(await t.writes.upload(png(), verdictOf()))).body.error).toBe(COPY_ONE)
+    expect((await out(await t.writes.upload(png(), by('300000000000000111')))).body.error).toBe(COPY_ONE)
+    expect((await out(await t.writes.upload(png(), by('300000000000000112')))).body.error).toBe(COPY_BUSY)
+    for (const w of waiting) w.done()
+    await Promise.all(running)
+  })
+
+  it('takes a place for a refused picture too: the try of the minute is taken before the place in flight', async () => {
+    const t = world()
+    const waiting = [arriving(), arriving()]
+    const running = waiting.map((w) => t.writes.upload(w.request, verdictOf()))
+    await turns()
+    for (let i = 0; i < 8; i++) expect((await t.writes.upload(png(), verdictOf())).status).toBe(429)
+    const got = await out(await t.writes.upload(png(), verdictOf()))
+    expect(got.body.error).toBe('Slow down a little: try again in 60 seconds.') // the 11th try of the minute, not "one at a time"
+    for (const w of waiting) w.done()
+    await Promise.all(running)
+  })
+
+  it('does not take the place of a picture that is refused for a right, a limit, or an hour of uploads', async () => {
+    const t = world()
+    const waiting = [arriving(), arriving()]
+    const running = waiting.map((w) => t.writes.upload(w.request, by('300000000000000111')))
+    await turns()
+    // Four are in flight at most; these are refused before they take a place, so the other members are let in.
+    expect((await t.writes.upload(png(), verdictOf({ attach: false }))).status).toBe(403)
+    for (let i = 0; i < 30; i++) t.limits.take('upload', OTHER)
+    expect((await t.writes.upload(png(), verdictOf({ user: { id: OTHER, username: 'o' } }))).status).toBe(429)
+    expect((await t.writes.upload(png(), verdictOf())).status).toBe(201)
+    expect((await t.writes.upload(png(), verdictOf())).status).toBe(201)
+    for (const w of waiting) w.done()
+    await Promise.all(running)
+  })
+
+  it('frees its place whatever the picture comes to: refused for what it is, not a form, too large, a failure of the store, a body that breaks', async () => {
+    const t = world()
+    const big = new Uint8Array(MAX_PICTURE_BYTES + 1)
+    big.set(PNG_SIGNATURE)
+    const broken = () => new Request(URL_, { method: 'POST', body: new ReadableStream({ start: (c) => c.error(new Error('the connection dropped')) }), headers: { 'Content-Type': 'multipart/form-data; boundary=x' }, duplex: 'half' })
+    const ends = [
+      [() => t.writes.upload(formOf([{ bytes: new Uint8Array([1, 2, 3]) }]), verdictOf()), 400],
+      [() => t.writes.upload(formOf([]), verdictOf()), 400],
+      [() => t.writes.upload(json({ file: 'x' }), verdictOf()), 415],
+      [() => t.writes.upload(formOf([{ bytes: big }]), verdictOf()), 413],
+      [() => t.writes.upload(png(), verdictOf()), 201],
+    ]
+    // Each of these, three times over, with nothing in flight at the end: a place that was kept would be a 429 by the third.
+    for (let round = 0; round < 3; round++) {
+      for (const [send, status] of ends) {
+        t.w.clock.t += 7_000
+        expect((await send()).status).toBe(status)
+      }
+    }
+    t.w.failures.addUpload = true
+    for (let i = 0; i < 3; i++) {
+      t.w.clock.t += 7_000
+      await expect(t.writes.upload(png(), verdictOf())).rejects.toThrow('the table is gone')
+    }
+    t.w.failures.addUpload = false
+    for (let i = 0; i < 3; i++) {
+      t.w.clock.t += 7_000
+      await expect(t.writes.upload(broken(), verdictOf())).rejects.toThrow('the connection dropped')
+    }
+    // Nothing is left in flight: the member can have two at once, and not a third.
+    t.w.clock.t += 60_000
+    const [a, b] = [arriving(), arriving()]
+    const held = [t.writes.upload(a.request, verdictOf()), t.writes.upload(b.request, verdictOf())]
+    await turns()
+    expect((await out(await t.writes.upload(png(), verdictOf()))).body.error).toBe(COPY_ONE)
+    a.done()
+    b.done()
+    await Promise.all(held)
+  })
+
+  it('judges and holds two pictures of one member at the same time, both let through', async () => {
+    const t = world()
+    const results = await Promise.all([t.writes.upload(png(), verdictOf()), t.writes.upload(png(), verdictOf())])
+    expect(results.map((r) => r.status)).toStrictEqual([201, 201])
+    expect(t.uploads.size).toBe(2)
   })
 })
 
@@ -1228,11 +1718,17 @@ describe('upload', () => {
     expect(t.uploads.size).toBe(1)
   })
 
-  it('lets 30 an hour through and refuses the 31st, and a picture that is refused is not counted', async () => {
+  it('lets 30 an hour through and refuses the 31st, and a picture that is refused is not one of the 30', async () => {
     const t = world()
-    for (let i = 0; i < 40; i++) await t.writes.upload(formOf([{ bytes: new Uint8Array([1, 2, 3]) }]), verdictOf())
+    // Seven seconds apart, so that the 10 tries a minute (below) are never in the way of the 30 an hour.
+    const apart = () => (t.w.clock.t += 7_000)
+    for (let i = 0; i < 40; i++) {
+      await t.writes.upload(formOf([{ bytes: new Uint8Array([1, 2, 3]) }]), verdictOf())
+      apart()
+    }
     for (let i = 0; i < 30; i++) {
       expect((await t.writes.upload(formOf([{ bytes: PNG_CLEAN }]), verdictOf())).status, String(i)).toBe(201)
+      apart()
     }
     expect((await t.writes.upload(formOf([{ bytes: PNG_CLEAN }]), verdictOf())).status).toBe(429)
     expect(t.uploads.size).toBe(30)
@@ -1273,11 +1769,34 @@ describe('upload', () => {
     ]
     for (const bytes of hostile) {
       for (const [filename, type] of [['x.png', 'image/png'], ['x.svg', 'image/svg+xml'], ['x.exe', 'application/octet-stream']]) {
+        t.w.clock.t += 7_000 // so that the 10 tries a minute are not what refuses
         const got = await out(await t.writes.upload(formOf([{ bytes: new Uint8Array(bytes), filename, type }]), verdictOf()))
         expect(got, `${bytes.slice(0, 8)} ${filename}`).toMatchObject({ status: 400, body: { error: copy } })
       }
     }
     expect(t.uploads.size).toBe(0)
+  })
+
+  it('asks the store to hold the picture only if the member would then hold at most 100 MiB of pictures, and says what it is told', async () => {
+    const t = world()
+    expect((await t.writes.upload(formOf([{ bytes: PNG_CLEAN }]), verdictOf())).status).toBe(201)
+    expect(t.asked.added).toStrictEqual([{ authorId: ME, maxHeldBytes: 104_857_600 }])
+  })
+
+  it('is 413 "You\'re holding too many pictures; send or remove some first." when the member holds too much already, and holds nothing', async () => {
+    const t = world({ extraHeld: { [ME]: 104_857_600 - PNG_CLEAN.length + 1 } })
+    const got = await out(await t.writes.upload(formOf([{ bytes: PNG_CLEAN }]), verdictOf()))
+    expect(got).toMatchObject({ status: 413, body: { error: "You're holding too many pictures; send or remove some first." } })
+    expect(t.uploads.size).toBe(0)
+    // One byte less held, and the same picture goes: the cap is the member's whole hold, this picture included, up to the last byte.
+    const edge = world({ extraHeld: { [ME]: 104_857_600 - PNG_CLEAN.length } })
+    expect((await edge.writes.upload(formOf([{ bytes: PNG_CLEAN }]), verdictOf())).status).toBe(201)
+  })
+
+  it('counts the cap for each member apart', async () => {
+    const t = world({ extraHeld: { [ME]: 104_857_600 } })
+    expect((await t.writes.upload(formOf([{ bytes: PNG_CLEAN }]), verdictOf())).status).toBe(413)
+    expect((await t.writes.upload(formOf([{ bytes: PNG_CLEAN }]), verdictOf({ user: { id: OTHER, username: 'orin' } }))).status).toBe(201)
   })
 
   it('lets a failure of the store through', async () => {
@@ -1359,20 +1878,38 @@ describe('search', () => {
     }
   })
 
-  it('takes a place of the 20 a minute for each search, refuses the 21st, and is looked at before the roster is read', async () => {
+  it('takes a place of a window of its own, 30 a minute, for each search, and refuses the 31st before the guild is asked what the forum allows', async () => {
     const t = world()
-    for (let i = 0; i < 20; i++) expect((await t.writes.search(searchUrl('or'), verdictOf())).status).toBe(200)
-    const reads = t.asked.people.length
+    for (let i = 0; i < 30; i++) expect((await t.writes.search(searchUrl('or'), verdictOf())).status, String(i)).toBe(200)
+    const asked = t.asked.facts
     const got = await out(await t.writes.search(searchUrl('or'), verdictOf()))
     expect(got).toMatchObject({ status: 429, body: { error: 'Slow down a little: try again in 60 seconds.' } })
     expect(got.headers.get('Retry-After')).toBe('60')
-    expect(t.asked.people).toHaveLength(reads)
+    expect(t.asked.facts).toBe(asked)
+    t.w.clock.t += 60_000
+    expect((await t.writes.search(searchUrl('or'), verdictOf())).status).toBe(200)
   })
 
-  it('does not take a place for a q that is refused', async () => {
+  it('is not the window of the edits and deletes, nor of the tries of a write: each leaves the other as it was', async () => {
     const t = world()
-    for (let i = 0; i < 30; i++) await t.writes.search(searchUrl(''), verdictOf())
-    for (let i = 0; i < 20; i++) expect((await t.writes.search(searchUrl('or'), verdictOf())).status).toBe(200)
+    for (let i = 0; i < 20; i++) t.limits.take('edit', ME)
+    for (let i = 0; i < 20; i++) t.limits.take('writeTry', ME)
+    for (let i = 0; i < 30; i++) expect((await t.writes.search(searchUrl('or'), verdictOf())).status, String(i)).toBe(200)
+    expect(t.limits.snapshot(ME).edit.remaining).toBe(0)
+    const other = world()
+    for (let i = 0; i < 30; i++) other.limits.take('search', ME)
+    expect((await other.writes.remove(M_SITE, verdictOf())).status).toBe(202)
+    expect((await other.writes.reply(POST, json({ source: 'hello' }), verdictOf())).status).toBe(202)
+  })
+
+  it('does not take a place for a q that is refused, or while the roster has not loaded: they are looked at first', async () => {
+    const t = world()
+    for (let i = 0; i < 40; i++) await t.writes.search(searchUrl(''), verdictOf())
+    const waiting = world({ people: null })
+    for (let i = 0; i < 40; i++) await waiting.writes.search(searchUrl('or'), verdictOf())
+    waiting.w.people = roster()
+    for (let i = 0; i < 30; i++) expect((await waiting.writes.search(searchUrl('or'), verdictOf())).status).toBe(200)
+    for (let i = 0; i < 30; i++) expect((await t.writes.search(searchUrl('or'), verdictOf())).status).toBe(200)
   })
 
   it('is 503 until the roster has loaded', async () => {

@@ -1076,32 +1076,53 @@ describe('blockedSince', () => {
 })
 
 describe('addUpload', () => {
-  const GOOD = { authorId: AUTHOR, name: 'picture.png', contentType: 'image/png', bytes: new Uint8Array([137, 80, 78, 71]) }
+  const CAP = 104_857_600
+  const GOOD = { authorId: AUTHOR, name: 'picture.png', contentType: 'image/png', bytes: new Uint8Array([137, 80, 78, 71]), maxHeldBytes: CAP }
+  // One member's pictures one at a time (the two numbers are a family of locks of its own and the member's id as a number Postgres hashes),
+  // so that pictures sent together cannot each find room that another is taking: a statement sees the rows committed when it began.
+  const LOCK_SQL = 'select pg_advisory_xact_lock(19000003, hashtext($1::text))'
+  const HOLD_SQL =
+    'insert into librarius_uploads (author_id, name, content_type, bytes) select $1::bigint, $2::text, $3::text, $4::bytea where coalesce((select sum(octet_length(bytes)) from librarius_uploads where author_id = $1::bigint), 0) + octet_length($4::bytea) <= $5::bigint returning id'
 
-  it('holds the picture for its author and answers the id the table gave it', async () => {
-    const { pool, log } = fakePool([['insert into librarius_uploads', [{ id: '41' }]]])
+  it('holds the picture for its author, only if the author would then hold at most the cap, and answers the id the table gave it, in one transaction that takes the author\'s lock first', async () => {
+    const { pool, log, release } = fakePool([['insert into librarius_uploads', [{ id: '41' }]]])
     expect(await store(pool).addUpload(GOOD)).toEqual({ id: '41' })
-    expect(log).toHaveLength(1)
-    expect(log[0].sql).toBe('insert into librarius_uploads (author_id, name, content_type, bytes) values ($1, $2, $3, $4) returning id')
-    expect(log[0].params).toHaveLength(4)
-    expect(log[0].params.slice(0, 3)).toEqual([AUTHOR, 'picture.png', 'image/png'])
+    expect(log.map((l) => l.sql)).toEqual(['begin', LOCK_SQL, HOLD_SQL, 'commit'])
+    expect(log[1].params).toEqual([AUTHOR])
+    expect(log[2].params).toHaveLength(5)
+    expect(log[2].params.slice(0, 3)).toEqual([AUTHOR, 'picture.png', 'image/png'])
     // pg takes bytea as a Buffer: the same bytes, in one.
-    expect(Buffer.isBuffer(log[0].params[3])).toBe(true)
-    expect([...log[0].params[3]]).toEqual([137, 80, 78, 71])
+    expect(Buffer.isBuffer(log[2].params[3])).toBe(true)
+    expect([...log[2].params[3]]).toEqual([137, 80, 78, 71])
+    expect(log[2].params[4]).toBe(CAP)
+    expect(release).toHaveBeenCalledTimes(1)
+  })
+
+  it('answers null, and holds nothing, when the table gave no row: the author would hold more than the cap', async () => {
+    const { pool } = fakePool([['insert into librarius_uploads', []]])
+    expect(await store(pool).addUpload(GOOD)).toBeNull()
+  })
+
+  it('sends the cap it was given, whole', async () => {
+    for (const maxHeldBytes of [1, 4, 10_485_760, 9_007_199_254_740_991]) {
+      const { pool, log } = fakePool([['insert into librarius_uploads', [{ id: '1' }]]])
+      await store(pool).addUpload({ ...GOOD, maxHeldBytes })
+      expect(log[2].params[4]).toBe(maxHeldBytes)
+    }
   })
 
   it('sends the bytes of a view of a bigger buffer, and only those', async () => {
     const { pool, log } = fakePool([['insert into librarius_uploads', [{ id: '41' }]]])
     const whole = new Uint8Array([9, 9, 1, 2, 3, 9])
     await store(pool).addUpload({ ...GOOD, bytes: whole.subarray(2, 5) })
-    expect([...log[0].params[3]]).toEqual([1, 2, 3])
+    expect([...log[2].params[3]]).toEqual([1, 2, 3])
   })
 
   it('takes a name of exactly 1 character and of exactly 100, and no other length', async () => {
     for (const name of ['p', 'p'.repeat(100)]) {
       const { pool, log } = fakePool([['insert into librarius_uploads', [{ id: '1' }]]])
       await store(pool).addUpload({ ...GOOD, name })
-      expect(log[0].params[1]).toBe(name)
+      expect(log[2].params[1]).toBe(name)
     }
   })
 
@@ -1109,7 +1130,7 @@ describe('addUpload', () => {
     for (const contentType of ['image/png', 'image/jpeg', 'image/webp', 'image/gif']) {
       const { pool, log } = fakePool([['insert into librarius_uploads', [{ id: '1' }]]])
       await store(pool).addUpload({ ...GOOD, contentType })
-      expect(log[0].params[2]).toBe(contentType)
+      expect(log[2].params[2]).toBe(contentType)
     }
   })
 
@@ -1118,6 +1139,7 @@ describe('addUpload', () => {
     ...labelled([undefined, null, '', 7, {}, ['picture.png'], 'x'.repeat(101)]).map(([name, v]) => [`name ${name}`, { ...GOOD, name: v }, 'name must be a text of 1 to 100 characters']),
     ...labelled(['image/svg+xml', 'IMAGE/PNG', 'image/png ', 'text/html', '', undefined, null, 7, {}]).map(([name, v]) => [`contentType ${name}`, { ...GOOD, contentType: v }, 'contentType must be image/png, image/jpeg, image/webp or image/gif']),
     ...labelled([undefined, null, '', 'bytes', [1, 2, 3], new ArrayBuffer(4), new Uint8Array(0), Buffer.alloc(0), {}, 7]).map(([name, v]) => [`bytes ${name}`, { ...GOOD, bytes: v }, 'bytes must be a Uint8Array of at least one byte']),
+    ...labelled([undefined, null, '', '100', 0, -1, 1.5, Number.NaN, Infinity, 2 ** 53, {}, [1], true]).map(([name, v]) => [`maxHeldBytes ${name}`, { ...GOOD, maxHeldBytes: v }, 'maxHeldBytes must be a whole number of bytes, at least 1']),
   ])('refuses %s before any query', async (_, upload, message) => {
     const rig = fakePool()
     await refused(rig, () => store(rig.pool).addUpload(upload), message)
@@ -1131,12 +1153,14 @@ describe('addUpload', () => {
   it('takes a Buffer for its bytes, which is a Uint8Array', async () => {
     const { pool, log } = fakePool([['insert into librarius_uploads', [{ id: '2' }]]])
     await store(pool).addUpload({ ...GOOD, bytes: Buffer.from([1, 2]) })
-    expect([...log[0].params[3]]).toEqual([1, 2])
+    expect([...log[2].params[3]]).toEqual([1, 2])
   })
 
-  it('lets a failure of the table through, naming nothing it was given', async () => {
-    const { pool } = fakePool([['insert into librarius_uploads', new Error('the table is gone')]])
+  it('lets a failure of the table through, naming nothing it was given, after a rollback that releases the client', async () => {
+    const { pool, sqls, release } = fakePool([['insert into librarius_uploads', new Error('the table is gone')]])
     await expect(store(pool).addUpload(GOOD)).rejects.toThrow('the table is gone')
+    expect(sqls()).toEqual(['begin', LOCK_SQL, HOLD_SQL, 'rollback'])
+    expect(release).toHaveBeenCalledTimes(1)
   })
 })
 

@@ -64,9 +64,11 @@
  *   (null for a message nobody told), which the worker compares with its own: a reply of another webhook cannot be edited.
  * uploadsFor(authorId, ids) → [{ id, name, contentType, bytes }] for those of the author's uploads that are still held, in the
  *   order of `ids`; one that is gone is left out.
- * addUpload({ authorId, name, contentType, bytes }) → { id }: holds a picture, already judged and stripped (librariusUploads.js), for
- *   its author until a reply sends it or the sweep finds it old. `name` is 1 to 100 characters, `contentType` one of the four
- *   types of picture, `bytes` a Uint8Array of at least one byte.
+ * addUpload({ authorId, name, contentType, bytes, maxHeldBytes }) → { id } | null: holds a picture, already judged and stripped
+ *   (librariusUploads.js), for its author until a reply sends it or the sweep finds it old, but only if the author would then hold
+ *   `maxHeldBytes` of pictures at most, this one included: past that nothing is held and the answer is null. The check and the
+ *   insert are one statement, so pictures sent together cannot each pass it. `name` is 1 to 100 characters, `contentType` one of the
+ *   four types of picture, `bytes` a Uint8Array of at least one byte, `maxHeldBytes` a whole number of at least 1.
  * heldUploadIds(authorId, ids) → the Set of those of `ids` (up to 50) that the author still holds, without reading a picture.
  * outboxFor(authorId, postId, since) → the author's entries for a post that are not done, made since `since`, the newest 20,
  *   oldest first, as { key, kind, state, error, source, createdAt }: `key` is the entry's message key (a reply's random key, or
@@ -598,19 +600,32 @@ export function createOutboxStore(pool) {
 
     async addUpload(upload) {
       needObject(upload, 'upload')
-      const { authorId, name, contentType, bytes } = upload
+      const { authorId, name, contentType, bytes, maxHeldBytes } = upload
       needId(authorId, 'authorId')
       if (typeof name !== 'string' || name.length < 1 || name.length > MAX_NAME) throw new TypeError(`name must be a text of 1 to ${MAX_NAME} characters`)
       if (!PICTURE_TYPES.includes(contentType)) throw new TypeError('contentType must be image/png, image/jpeg, image/webp or image/gif')
       if (!(bytes instanceof Uint8Array) || bytes.length === 0) throw new TypeError('bytes must be a Uint8Array of at least one byte')
-      const { rows } = await pool.query('insert into librarius_uploads (author_id, name, content_type, bytes) values ($1, $2, $3, $4) returning id', [
-        authorId,
-        name,
-        contentType,
-        // bytea goes in as a Buffer; a view of a bigger buffer is only its own bytes.
-        Buffer.from(bytes.buffer, bytes.byteOffset, bytes.byteLength),
-      ])
-      return { id: rows[0].id }
+      if (!Number.isSafeInteger(maxHeldBytes) || maxHeldBytes < 1) throw new TypeError('maxHeldBytes must be a whole number of bytes, at least 1')
+      // One author's pictures at a time: a statement sees the rows committed when it began, so without the lock pictures sent together
+      // would each find the room that another is taking. The first number names this family of locks (the worker's is another), the second is the author.
+      return inTx(async (q) => {
+        await q.query('select pg_advisory_xact_lock(19000003, hashtext($1::text))', [authorId])
+        const { rows } = await q.query(
+          'insert into librarius_uploads (author_id, name, content_type, bytes) ' +
+            'select $1::bigint, $2::text, $3::text, $4::bytea ' +
+            'where coalesce((select sum(octet_length(bytes)) from librarius_uploads where author_id = $1::bigint), 0) + octet_length($4::bytea) <= $5::bigint ' +
+            'returning id',
+          [
+            authorId,
+            name,
+            contentType,
+            // bytea goes in as a Buffer; a view of a bigger buffer is only its own bytes.
+            Buffer.from(bytes.buffer, bytes.byteOffset, bytes.byteLength),
+            maxHeldBytes,
+          ],
+        )
+        return rows.length === 0 ? null : { id: rows[0].id }
+      })
     },
 
     async heldUploadIds(authorId, ids) {

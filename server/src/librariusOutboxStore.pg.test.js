@@ -350,8 +350,8 @@ describe.skipIf(!runnable)('the outbox store on a real Postgres 16, as the data-
     })
 
     it('lists the author’s entries that are not done, sweeps old uploads and spares those a live reply names', async () => {
-      const held = await store.addUpload({ authorId: MEMBER, name: 'picture.png', contentType: 'image/png', bytes: new Uint8Array([137, 80, 78, 71]) })
-      const used = await store.addUpload({ authorId: MEMBER, name: 'picture.png', contentType: 'image/png', bytes: new Uint8Array([137, 80, 78, 71]) })
+      const held = await store.addUpload({ authorId: MEMBER, name: 'picture.png', contentType: 'image/png', bytes: new Uint8Array([137, 80, 78, 71]), maxHeldBytes: 1_000_000 })
+      const used = await store.addUpload({ authorId: MEMBER, name: 'picture.png', contentType: 'image/png', bytes: new Uint8Array([137, 80, 78, 71]), maxHeldBytes: 1_000_000 })
       await store.enqueueOutbox({ kind: 'send', messageKey: keyOf(), authorId: MEMBER, payload: { postId: POST, source: 'with a picture', uploads: [used.id] } })
       await sql("update librarius_uploads set created_at = now() - interval '2 hours'")
       expect(await store.sweepUploads({ olderThan: new Date(Date.now() - 3_600_000) })).toBe(1)
@@ -360,6 +360,33 @@ describe.skipIf(!runnable)('the outbox store on a real Postgres 16, as the data-
       expect(listed).toHaveLength(1)
       expect(listed[0]).toMatchObject({ kind: 'send', state: 'pending', source: 'with a picture' })
     })
+  })
+
+  it('holds a picture only while its author holds at most the cap of bytes, this one included, each author apart, and frees the room when one goes', async () => {
+    const picture = (authorId, length) => ({ authorId, name: 'picture.png', contentType: 'image/png', bytes: new Uint8Array(length).fill(7) })
+    const first = await store.addUpload({ ...picture(MEMBER, 600), maxHeldBytes: 1000 })
+    expect(first).toEqual({ id: expect.any(String) })
+    expect(await store.addUpload({ ...picture(MEMBER, 401), maxHeldBytes: 1000 })).toBeNull() // 1001 would be over
+    const exact = await store.addUpload({ ...picture(MEMBER, 400), maxHeldBytes: 1000 }) // 1000 is not
+    expect(exact).toEqual({ id: expect.any(String) })
+    expect(await store.addUpload({ ...picture(MEMBER, 1), maxHeldBytes: 1000 })).toBeNull()
+    expect(await store.addUpload({ ...picture(OTHER, 1000), maxHeldBytes: 1000 })).toEqual({ id: expect.any(String) })
+    expect(await rows('select author_id::text as author, count(*)::int as n, sum(octet_length(bytes))::int as bytes from librarius_uploads group by 1 order by 1')).toEqual([
+      { author: MEMBER, n: 2, bytes: 1000 },
+      { author: OTHER, n: 1, bytes: 1000 },
+    ])
+    await sql('delete from librarius_uploads where id = $1', [first.id])
+    expect(await store.addUpload({ ...picture(MEMBER, 600), maxHeldBytes: 1000 })).toEqual({ id: expect.any(String) })
+  })
+
+  it('holds no more than the cap when pictures are sent together', async () => {
+    const picture = { authorId: MEMBER, name: 'picture.png', contentType: 'image/png', bytes: new Uint8Array(400).fill(7), maxHeldBytes: 1000 }
+    const answers = await Promise.all(Array.from({ length: 6 }, () => store.addUpload(picture)))
+    // Whatever the order, never more than two of 400 bytes in 1000, and at least one of them.
+    const held = await rows('select count(*)::int as n from librarius_uploads')
+    expect(held[0].n).toBeLessThanOrEqual(2)
+    expect(held[0].n).toBeGreaterThanOrEqual(1)
+    expect(answers.filter((a) => a !== null)).toHaveLength(held[0].n)
   })
 
   // ---- what a restart must not lose

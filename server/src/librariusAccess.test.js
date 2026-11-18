@@ -2,7 +2,7 @@ import { describe, it, expect, vi } from 'vitest'
 import * as fc from 'fast-check'
 import { createLibrariusAccess } from './librariusAccess.js'
 import { createLibrariusGuild } from './librariusGuild.js'
-import { Upstream } from './discordRoles.js'
+import { Upstream, createDiscordRoles } from './discordRoles.js'
 import { ALL, P } from './librariusPerms.js'
 
 // Invented ids, all in the 400-499 range. None of them is a real guild, role, user or channel.
@@ -693,6 +693,68 @@ describe('the verdict for a write (fresh)', () => {
       throw new Error('must not be asked')
     })
     expect((await access.resolve(req('reader'), { fresh: true })).read).toBe(false)
+  })
+})
+
+describe('a burst of writes, through the real lookups of Discord', () => {
+  // The calls that reach Discord, with the real discordRoles.js in front of a fake fetch: /users/@me (the member's own token) and the
+  // member lookup (the bot's). Every id is invented.
+  function discordWith(respond) {
+    const calls = []
+    const fetchImpl = async (url, init) => {
+      const path = String(url).replace('https://d.test/api', '')
+      calls.push({ path, authorization: init.headers.Authorization })
+      return respond(path)
+    }
+    const clock = { t: 5_000_000 }
+    const roles = createDiscordRoles({ fetchImpl, apiBase: 'https://d.test/api', guildId: GUILD, botToken: 'bot', now: () => clock.t })
+    const guild = { facts: async () => live() }
+    const access = createLibrariusAccess({ roles, guild, guildId: GUILD, now: () => clock.t })
+    return { access, calls, clock }
+  }
+  const json = (status, body, headers) => new Response(JSON.stringify(body), { status, headers })
+  const good = (path) => (path === '/users/@me' ? json(200, { id: USERS.reader.id, username: 'reader' }) : json(200, { roles: [READER], joined_at: '2024-01-01T00:00:00.000000+00:00' }))
+  const burst = (access, n = 20) => Promise.all(Array.from({ length: n }, () => access.resolve(req('tok'), { fresh: true }).then((v) => v, (e) => e)))
+  const count = (calls, fragment) => calls.filter((c) => c.path.includes(fragment)).length
+
+  it('makes one /users/@me call and one member call for 20 parallel writes of one member, and none for the next ones within 3 seconds', async () => {
+    const { access, calls, clock } = discordWith(good)
+    const verdicts = await burst(access)
+    expect(verdicts.every((v) => v.reply === true)).toBe(true)
+    expect(count(calls, '/users/@me')).toBe(1)
+    expect(count(calls, '/members/')).toBe(1)
+    await burst(access)
+    clock.t += 2_999
+    await burst(access)
+    expect(calls).toHaveLength(2)
+    clock.t += 1
+    await burst(access)
+    expect(calls).toHaveLength(4)
+  })
+
+  it('answers Upstream to all 20, from one call, when Discord says 429, and makes no call at all while Discord says to wait', async () => {
+    const { access, calls, clock } = discordWith((path) => (path === '/users/@me' ? good(path) : json(429, { message: 'You are being rate limited.', retry_after: 4 }, { 'Retry-After': '4' })))
+    const first = await burst(access)
+    expect(first.every((e) => e instanceof Upstream)).toBe(true)
+    expect(calls).toHaveLength(2) // /users/@me and the member lookup, once each
+    clock.t += 3_000 // the 3 seconds of a verdict are over, but Discord's 4 seconds are not
+    const second = await burst(access)
+    expect(second.every((e) => e instanceof Upstream)).toBe(true)
+    expect(count(calls, '/members/')).toBe(1)
+    clock.t += 1_000 // 4 seconds: Discord may be asked again
+    const third = await burst(access)
+    expect(third.every((e) => e instanceof Upstream)).toBe(true)
+    expect(count(calls, '/members/')).toBe(2)
+  })
+
+  it('is looked up again at once after a failure, and answers when Discord has recovered', async () => {
+    let up = false
+    const { access, calls, clock } = discordWith((path) => (path === '/users/@me' ? good(path) : up ? good(path) : json(500, {})))
+    expect((await burst(access, 3)).every((e) => e instanceof Upstream)).toBe(true)
+    up = true
+    clock.t += 1
+    expect((await burst(access, 3)).every((v) => v.reply === true)).toBe(true)
+    expect(count(calls, '/members/')).toBe(2)
   })
 })
 

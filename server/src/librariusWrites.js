@@ -13,16 +13,26 @@
  * Every refusal is { error } in plain words that blame nobody, and no text of Discord's reaches the browser. The request is read
  * after its gates, never before, and never more than 64 KB of JSON or 10 MB and a form of a picture (librariusBody.js).
  *
+ * Refused work is not free. The first thing a reply, an edit, a delete or an upload does is take a place in a window of TRIES of its member
+ * (librariusLimits.js): 20 writes a minute (all three JSON writes share it) and 10 upload tries a minute, 429 over them, whatever the try
+ * comes to (a 403, a 404 or a body that is refused all count). That is before any lookup and before the body is read, and it is on top of
+ * the windows that count what is let through (3 replies and 20 edits a minute, 30 uploads an hour), which a refused try does not use. A
+ * picture is held in memory several times over while it is read, so no more than 2 are in flight for a member (429) and 4 in all (503),
+ * and what a member holds of pictures that are not sent yet is capped at 100 MiB (413).
+ *
  * reply(postId, request, verdict): POST /librarius/posts/:id/messages with { source, replyTo?, pingReply?, mentions[], uploads[] }
  *   → 202 { pending: { key, state: 'sending' } }. In this order: 404 for a post the store does not hold; 403 for a member who is
  *   timed out ("You're timed out in the server until <ISO time>.") or may not reply ("You can't reply in this post."), and for a
  *   locked post without Manage Threads ("This post is locked."); 429 over 3 replies a minute (Retry-After says when); then the
- *   body (415, 413, and `source` that is no text: 400 "Write something first."); `replyTo` is the id of a message of this post
+ *   body (415, 413, and `source` that is no text: 400 "Write something first."); 403 "You can't attach pictures here." for `uploads`
+ *   that holds anything from a member who may not attach (pictures held from before they lost the right are not sent, and nothing is
+ *   looked up for them); `replyTo` is the id of a message of this post
  *   (else 400); the AutoMod rules (an Upstream from guild.automodRules() is the handler's 503: a write is never let through
  *   unchecked); `mentions` are the ids picked through the member search, and only those who are members who may read the forum
  *   count, so that nobody outside it is ever pinged; validateReply(), whose refusals pass through as they are ({ error }, and
  *   `rule` and `match` for AutoMod); and the pictures, which must be the member's own, held and not sent. `pingReply: true` also
- *   pings the author of the message replied to, when that stays within the mention cap. The name and picture it goes under are the
+ *   pings the author of the message replied to, when that stays within the mention cap and the author is a member of the roster who may
+ *   read the forum, as every mention must be (else the ping is dropped, and the reply still goes). The name and picture it goes under are the
  *   roster's (cleanName), else the member's Discord name. The 3-a-minute slot is taken only for a reply that is queued.
  * pending(postId, verdict): GET /librarius/posts/:id/pending → { pending: [{ key, kind, state, error, source, createdAt }] }: the
  *   member's own outbox entries for the post of the last day that are not done, oldest first. `state` is 'sending' (waiting or
@@ -36,14 +46,18 @@
  *   placement() says, is 400 "That edit would move or change a picture...". → 202 { pending: { key: the message id, state } }.
  * remove(messageId, verdict): DELETE /librarius/messages/:id by its author, or anyone with Manage Messages, a message of Discord's
  *   or the site's alike (the outbox deletes it from Discord by the webhook or the bot). A whole post is never deleted here (the
- *   message that opens it is 403). 404, 403, 409 while it is being changed, 429 as for an edit. → 202.
+ *   message that opens it is 403), and nothing in a locked post but by a member who manages threads (403 "This post is locked.",
+ *   as in Discord, the author included). 404, 403, 409 while it is being changed, 429 as for an edit. → 202.
  * upload(request, verdict): POST /librarius/uploads, multipart, one picture of 10 MB at most → 201 { id }. 403 without the right to
- *   attach, 429 over 30 an hour (checked before the body is read, counted when the picture is held), 413, 415, 400 for a form that
- *   is not one picture or a file that is no PNG, JPEG, WebP or GIF by its bytes (librariusUploads.js sniff, then strip: a file
- *   strip refuses is never held). What is held is the stripped bytes, under a name of our own, never the file's.
+ *   attach, 429 over 30 an hour (checked before the body is read, counted when the picture is held) and over 10 tries a minute, 429
+ *   "One picture at a time, please." for a third in flight and 503 for a fifth in all, 413, 415, 400 for a form that is not one
+ *   picture or a file that is no PNG, JPEG, WebP or GIF by its bytes (librariusUploads.js sniff, then strip: a file strip refuses is
+ *   never held), and 413 "You're holding too many pictures; send or remove some first." when the member would hold more than 100 MiB
+ *   of pictures that are not sent. What is held is the stripped bytes, under a name of our own, never the file's.
  * search(url, verdict): GET /librarius/members?q= → { members: [{ id, name, avatar }] }, at most 10 of the roster whose name has `q`
  *   or whose id is `q` (searchMembers of deathwatchPeople.js), who may read the forum by Discord's rules (permissionsIn). `q` is 1 to
- *   32 characters, else 400. It takes a place of the edit limit, so it cannot be used to sweep the roster; 503 until the roster loads.
+ *   32 characters, else 400. It takes a place of a window of its own (30 a minute), once the query is known to be one and the roster is
+ *   loaded (503 until it is), so it cannot be used to sweep the roster.
  */
 import { randomUUID } from 'node:crypto'
 import { searchMembers } from './deathwatchPeople.js'
@@ -57,6 +71,8 @@ import { isStoreId } from './librariusText.js'
 import { sniff, strip } from './librariusUploads.js'
 
 const JSON_MAX_BYTES = 65_536
+// What a member may hold of pictures that are not sent yet, in all: 100 MiB, ten of the biggest there can be.
+const MAX_HELD_BYTES = 100 * 1024 * 1024
 const PENDING_WINDOW_MS = 86_400_000
 const SEARCH_MIN = 1
 const SEARCH_MAX = 32
@@ -83,6 +99,7 @@ const COPY = {
   badReplyTo: "That message can't be replied to.",
   noReplyTo: 'The message you are replying to is no longer there.',
   notAPicture: "That file isn't a picture we can take (PNG, JPEG, WebP or GIF).",
+  tooManyHeld: "You're holding too many pictures; send or remove some first.",
   notAuthor: 'Only the author can edit this reply.',
   cantDelete: 'Only the author, or someone who can manage messages, can delete this.',
   wholePost: "A whole post can't be deleted here.",
@@ -140,6 +157,12 @@ export function createLibrariusWrites({ store, guild, roster, outbox, limits, gu
     return { mentions: people.filter((p) => wanted.has(p.id) && mayRead(facts, p)).map((p) => p.id) }
   }
 
+  /** → whether `id` is a member of the roster (`people`, with their roles; null before it loads) who may read the forum. */
+  async function mayPing(id, people) {
+    const author = people?.find((p) => p.id === id)
+    return author !== undefined && mayRead(await guild.facts(), author)
+  }
+
   /**
    * → { refusal } (the Response) or { clean, matcher }: `input` through validateReply() for this member, against the guild's AutoMod
    * rules as they apply to them. The rules cannot be read: Upstream, which the handler answers with 503, never a reply let through.
@@ -154,7 +177,15 @@ export function createLibrariusWrites({ store, guild, roster, outbox, limits, gu
     return { clean: result.clean, matcher }
   }
 
+  /** → the 429 for a member who has used their tries of a kind (`writeTry` or `uploadTry`), or null: taken before anything else is done, refused or not. */
+  function triedTooOften(kind, verdict) {
+    const tried = limits.take(kind, verdict.user.id)
+    return tried.ok ? null : slowDown(tried)
+  }
+
   async function replyTo(postId, request, verdict) {
+    const tooOften = triedTooOften('writeTry', verdict)
+    if (tooOften !== null) return tooOften
     const found = await store.getPost(postId, verdict.user.id)
     if (found === null) return reply(404, { error: COPY.noPost })
     const refusal = mayNotWrite(verdict, COPY.cantReply) ?? lockedFor(found.post, verdict)
@@ -166,6 +197,8 @@ export function createLibrariusWrites({ store, guild, roster, outbox, limits, gu
     if (read.error) return reply(read.status, { error: read.error })
     // Anything that is not an object has no source: validateReply refuses it as it refuses an empty one.
     const body = isObject(read.body) ? read.body : {}
+    // Pictures held from before a member lost Attach Files are not sent: the right is asked for each reply, not only for each upload.
+    if (Array.isArray(body.uploads) && body.uploads.length > 0 && !verdict.attach) return reply(403, { error: COPY.cantAttach })
 
     let target = null
     if (body.replyTo !== undefined && body.replyTo !== null) {
@@ -189,9 +222,11 @@ export function createLibrariusWrites({ store, guild, roster, outbox, limits, gu
     if (outcome.refusal) return outcome.refusal
     const { clean, matcher } = outcome
 
-    // The author of the message replied to is pinged only if the member asks, and only if that keeps the reply within the cap.
+    // The author of the message replied to is pinged only if the member asks, if that keeps the reply within the cap, and if the author
+    // is someone a mention may ping (a member of the roster who may read the forum): else the ping is dropped and the reply still goes.
     const cap = Math.min(MENTION_CAP, matcher.mentionCap)
-    const pinged = body.pingReply === true && target !== null && !clean.mentions.includes(target.authorId) && clean.mentions.length + 1 <= cap
+    const wanted = body.pingReply === true && target !== null && !clean.mentions.includes(target.authorId) && clean.mentions.length + 1 <= cap
+    const pinged = wanted && (await mayPing(target.authorId, people))
     const pings = pinged ? [...clean.mentions, target.authorId] : clean.mentions
 
     const taken = limits.take('reply', verdict.user.id)
@@ -237,6 +272,8 @@ export function createLibrariusWrites({ store, guild, roster, outbox, limits, gu
   }
 
   async function edit(messageId, request, verdict) {
+    const tooOften = triedTooOften('writeTry', verdict)
+    if (tooOften !== null) return tooOften
     const { message, post, refusal } = await messageAndPost(messageId, verdict)
     if (refusal) return refusal
     if (message.authorId !== verdict.user.id) return reply(403, { error: COPY.notAuthor })
@@ -283,10 +320,15 @@ export function createLibrariusWrites({ store, guild, roster, outbox, limits, gu
   }
 
   async function remove(messageId, verdict) {
-    const { message, refusal } = await messageAndPost(messageId, verdict)
+    const tooOften = triedTooOften('writeTry', verdict)
+    if (tooOften !== null) return tooOften
+    const { message, post, refusal } = await messageAndPost(messageId, verdict)
     if (refusal) return refusal
     if (message.id === message.postId) return reply(403, { error: COPY.wholePost })
     if (message.authorId !== verdict.user.id && !verdict.manageMessages) return reply(403, { error: COPY.cantDelete })
+    // As in Discord, nothing is deleted in a locked post but by those who manage threads: the author of a message is no exception.
+    const locked = lockedFor(post, verdict)
+    if (locked !== null) return locked
     if (message.state === 'sending') return reply(409, { error: COPY.busy })
     const taken = limits.take('edit', verdict.user.id)
     if (!taken.ok) return slowDown(taken)
@@ -296,31 +338,43 @@ export function createLibrariusWrites({ store, guild, roster, outbox, limits, gu
   }
 
   async function upload(request, verdict) {
+    const tooOften = triedTooOften('uploadTry', verdict)
+    if (tooOften !== null) return tooOften
     const may = mayNotWrite(verdict, COPY.cantReply)
     if (may !== null) return may
     if (!verdict.attach) return reply(403, { error: COPY.cantAttach })
     const early = limits.check('upload', verdict.user.id)
     if (!early.ok) return slowDown(early)
 
-    const read = await readPicture(request)
-    if (read.error) return reply(read.status, { error: read.error })
-    const type = sniff(read.bytes)
-    const bytes = type === null ? null : strip(read.bytes, type)
-    if (bytes === null) return reply(400, { error: COPY.notAPicture })
+    // A picture is held in memory several times over while it is read, judged and stripped: only a few at a time (a member's two, four in all).
+    const place = limits.hold(verdict.user.id)
+    if (!place.ok) return reply(place.status, { error: place.error })
+    try {
+      const read = await readPicture(request)
+      if (read.error) return reply(read.status, { error: read.error })
+      const type = sniff(read.bytes)
+      const bytes = type === null ? null : strip(read.bytes, type)
+      if (bytes === null) return reply(400, { error: COPY.notAPicture })
 
-    const taken = limits.take('upload', verdict.user.id)
-    if (!taken.ok) return slowDown(taken)
-    const { id } = await store.addUpload({ authorId: verdict.user.id, name: `picture.${EXTENSIONS[type]}`, contentType: type, bytes })
-    return reply(201, { id })
+      const taken = limits.take('upload', verdict.user.id)
+      if (!taken.ok) return slowDown(taken)
+      const added = await store.addUpload({ authorId: verdict.user.id, name: `picture.${EXTENSIONS[type]}`, contentType: type, bytes, maxHeldBytes: MAX_HELD_BYTES })
+      // The store holds nothing past the cap, and says so by giving no id.
+      if (added === null) return reply(413, { error: COPY.tooManyHeld })
+      return reply(201, { id: added.id })
+    } finally {
+      place.release()
+    }
   }
 
   async function search(url, verdict) {
     const given = url.searchParams.getAll('q')
     if (given.length !== 1 || given[0].length < SEARCH_MIN || given[0].length > SEARCH_MAX) return reply(400, { error: COPY.badQuery })
-    const taken = limits.take('edit', verdict.user.id)
-    if (!taken.ok) return slowDown(taken)
     const people = await roster.members({ roles: true })
     if (people === null) return reply(503, { error: COPY.noRoster })
+    // A window of its own, taken once the query is known to be one and the roster is there to be searched.
+    const taken = limits.take('search', verdict.user.id)
+    if (!taken.ok) return slowDown(taken)
     const facts = await guild.facts()
     const roles = new Map(people.map((p) => [p.id, p.roles]))
     const found = []

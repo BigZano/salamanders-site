@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest'
 import * as fc from 'fast-check'
-import { createLimits, LIMITS, tooFast } from './librariusLimits.js'
+import { BUSY, IN_FLIGHT, createLimits, LIMITS, tooFast } from './librariusLimits.js'
 
 // Invented ids, all in the 400-499 range. None of them is a real member.
 const ALICE = '300000000000000401'
@@ -13,12 +13,22 @@ function rig() {
 }
 
 describe('the numbers', () => {
-  it('are the spec: 3 replies and 20 edits a minute, 30 uploads an hour', () => {
+  it('are the spec: 3 replies and 20 edits a minute, 30 uploads an hour; and, counted whether or not they are let through, 20 writes and 10 upload tries a minute and 30 member searches a minute', () => {
     expect(LIMITS).toStrictEqual({
       reply: { limit: 3, windowMs: 60_000 },
       edit: { limit: 20, windowMs: 60_000 },
       upload: { limit: 30, windowMs: 3_600_000 },
+      writeTry: { limit: 20, windowMs: 60_000 },
+      uploadTry: { limit: 10, windowMs: 60_000 },
+      search: { limit: 30, windowMs: 60_000 },
     })
+  })
+
+  it('are, for the pictures in flight, 2 for a member and 4 for all, with the copy a member reads', () => {
+    expect(IN_FLIGHT).toStrictEqual({ perMember: 2, total: 4 })
+    expect(Object.isFrozen(IN_FLIGHT)).toBe(true)
+    expect(BUSY).toStrictEqual({ member: 'One picture at a time, please.', site: 'The site is busy with pictures; try again in a moment.' })
+    expect(Object.isFrozen(BUSY)).toBe(true)
   })
 
   it('cannot be changed at run time', () => {
@@ -26,7 +36,7 @@ describe('the numbers', () => {
     expect(Object.isFrozen(LIMITS.reply)).toBe(true)
   })
 
-  it('are what snapshot() tells a member, with what they have left', () => {
+  it('are what snapshot() tells a member, with what they have left: the three they can be told of, and not the tries that are counted for the server', () => {
     const { limits } = rig()
     expect(limits.snapshot(ALICE)).toStrictEqual({
       reply: { limit: 3, windowSeconds: 60, remaining: 3 },
@@ -117,6 +127,21 @@ describe('take: at the edge', () => {
     expect(limits.take('upload', ALICE)).toMatchObject({ ok: false, retryAfter: 3597 })
     clock.t += 3_600_000
     expect(limits.take('upload', ALICE).ok).toBe(true)
+  })
+
+  it('lets 20 write tries a minute through, and 10 upload tries, and 30 searches, each refused after that and let through a minute later', () => {
+    for (const [kind, limit] of [['writeTry', 20], ['uploadTry', 10], ['search', 30]]) {
+      const { limits, clock } = rig()
+      for (let i = 0; i < limit; i++) {
+        expect(limits.take(kind, ALICE).ok, `${kind} ${i}`).toBe(true)
+        clock.t += 100
+      }
+      const wait = Math.ceil((60_000 - limit * 100) / 1000)
+      expect(limits.take(kind, ALICE), kind).toMatchObject({ ok: false, retryAfter: wait, error: tooFast(wait) })
+      expect(limits.take(kind, BOB).ok, kind).toBe(true)
+      clock.t += wait * 1000
+      expect(limits.take(kind, ALICE).ok, kind).toBe(true)
+    }
   })
 
   it('keeps each kind and each member apart', () => {
@@ -211,8 +236,8 @@ describe('what it refuses', () => {
   it('throws a RangeError for a kind it does not know, among them names an object has', () => {
     const { limits } = rig()
     for (const kind of ['', 'replies', 'REPLY', '__proto__', 'constructor', 'toString', 'hasOwnProperty', undefined, null, 1, {}, ['reply']]) {
-      refuses(() => limits.take(kind, ALICE), RangeError, 'kind must be one of reply, edit, upload.', String(kind))
-      refuses(() => limits.check(kind, ALICE), RangeError, 'kind must be one of reply, edit, upload.', String(kind))
+      refuses(() => limits.take(kind, ALICE), RangeError, 'kind must be one of reply, edit, upload, writeTry, uploadTry, search.', String(kind))
+      refuses(() => limits.check(kind, ALICE), RangeError, 'kind must be one of reply, edit, upload, writeTry, uploadTry, search.', String(kind))
     }
   })
 
@@ -261,6 +286,7 @@ describe('what it refuses', () => {
 
 describe('against a plain model, whatever the order of tries', () => {
   const kinds = Object.keys(LIMITS)
+  const SHOWN = ['reply', 'edit', 'upload']
   const op = fc.record({
     kind: fc.constantFrom(...kinds),
     key: fc.constantFrom(ALICE, BOB),
@@ -281,7 +307,8 @@ describe('against a plain model, whatever the order of tries', () => {
           const should = inside.length < LIMITS[o.kind].limit
           const got = o.take ? limits.take(o.kind, o.key) : limits.check(o.kind, o.key)
           expect(got.ok).toBe(should)
-          expect(limits.snapshot(o.key)[o.kind].remaining).toBe(LIMITS[o.kind].limit - inside.length - (should && o.take ? 1 : 0))
+          if (SHOWN.includes(o.kind)) expect(limits.snapshot(o.key)[o.kind].remaining).toBe(LIMITS[o.kind].limit - inside.length - (should && o.take ? 1 : 0))
+          else expect(limits.snapshot(o.key)[o.kind]).toBeUndefined()
           if (!should) {
             const wait = Math.ceil((inside[0] + LIMITS[o.kind].windowMs - clock.t) / 1000)
             expect(got.retryAfter).toBe(wait)
@@ -292,6 +319,123 @@ describe('against a plain model, whatever the order of tries', () => {
         }
       }),
       { numRuns: 200 },
+    )
+  })
+})
+
+describe('hold: the pictures in flight', () => {
+  const holds = (limits, key, n) => Array.from({ length: n }, () => limits.hold(key))
+
+  it('lets a member have 2 in flight and refuses the 3rd with 429 and the copy for a member', () => {
+    const { limits } = rig()
+    const [a, b] = holds(limits, ALICE, 2)
+    expect([a.ok, b.ok]).toStrictEqual([true, true])
+    expect(limits.hold(ALICE)).toStrictEqual({ ok: false, status: 429, error: 'One picture at a time, please.' })
+  })
+
+  it('lets 4 in flight in all, and refuses the 5th, of anyone, with 503 and the copy for the site', () => {
+    const { limits } = rig()
+    const people = ['300000000000000411', '300000000000000412', '300000000000000413', '300000000000000414', '300000000000000415']
+    expect(people.slice(0, 4).map((p) => limits.hold(p).ok)).toStrictEqual([true, true, true, true])
+    expect(limits.hold(people[4])).toStrictEqual({ ok: false, status: 503, error: 'The site is busy with pictures; try again in a moment.' })
+  })
+
+  it('tells a member who is at their own cap of that, before it tells them the site is busy', () => {
+    const { limits } = rig()
+    holds(limits, ALICE, 2)
+    holds(limits, BOB, 2)
+    expect(limits.hold(ALICE)).toMatchObject({ ok: false, status: 429 })
+    expect(limits.hold(BOB)).toMatchObject({ ok: false, status: 429 })
+    expect(limits.hold('300000000000000416')).toMatchObject({ ok: false, status: 503 })
+  })
+
+  it('counts a refused hold for nothing: refusing again and again takes no place', () => {
+    const { limits } = rig()
+    const [a] = holds(limits, ALICE, 2)
+    for (let i = 0; i < 5; i++) limits.hold(ALICE)
+    a.release()
+    expect(limits.hold(ALICE).ok).toBe(true)
+    expect(limits.hold(ALICE).ok).toBe(false)
+  })
+
+  it('frees the member place and the place in all when a hold is released, and frees it once however often it is released', () => {
+    const { limits } = rig()
+    const [a, b] = holds(limits, ALICE, 2)
+    a.release()
+    a.release()
+    a.release()
+    const c = limits.hold(ALICE)
+    expect(c.ok).toBe(true)
+    expect(limits.hold(ALICE)).toMatchObject({ ok: false, status: 429 }) // b and c: two, not three released
+    b.release()
+    c.release()
+    // Nothing in flight: all four places are free again.
+    expect(['300000000000000411', '300000000000000412', '300000000000000413', '300000000000000414'].map((p) => limits.hold(p).ok)).toStrictEqual([true, true, true, true])
+  })
+
+  it('forgets a member with their last place: holding() counts the members who hold one', () => {
+    const { limits } = rig()
+    expect(limits.holding()).toBe(0)
+    const [a, b] = holds(limits, ALICE, 2)
+    const c = limits.hold(BOB)
+    expect(limits.holding()).toBe(2)
+    a.release()
+    expect(limits.holding()).toBe(2) // Alice still holds one
+    b.release()
+    expect(limits.holding()).toBe(1)
+    c.release()
+    expect(limits.holding()).toBe(0)
+    limits.hold(ALICE).release()
+    expect(limits.holding()).toBe(0)
+  })
+
+  it('keeps each member apart, and the names an object has are members like any other', () => {
+    const { limits } = rig()
+    for (const key of ['__proto__', 'constructor']) {
+      expect(limits.hold(key).ok).toBe(true)
+      expect(limits.hold(key).ok).toBe(true)
+      expect(limits.hold(key)).toMatchObject({ ok: false, status: 429 })
+    }
+  })
+
+  it('is not the window of any limit: holding takes no try, and a try takes no hold', () => {
+    const { limits } = rig()
+    for (let i = 0; i < 3; i++) limits.take('uploadTry', ALICE)
+    holds(limits, ALICE, 2)
+    expect(limits.snapshot(ALICE).upload.remaining).toBe(30)
+    for (let i = 0; i < 7; i++) expect(limits.take('uploadTry', ALICE).ok).toBe(true)
+    expect(limits.take('uploadTry', ALICE).ok).toBe(false)
+    expect(limits.hold(BOB).ok).toBe(true)
+  })
+
+  it('needs a key that is a non-empty string, as a window does', () => {
+    const { limits } = rig()
+    for (const key of ['', undefined, null, 1, {}, [], ['a'], Symbol('x'), true]) refuses(() => limits.hold(key), TypeError, 'key must be a non-empty string.', String(key))
+  })
+
+  it('holds the places the way a plain model counts them, whatever the order of holds and releases (property)', () => {
+    const keys = [ALICE, BOB, '300000000000000403']
+    const op = fc.oneof(fc.record({ do: fc.constant('hold'), who: fc.constantFrom(...keys) }), fc.record({ do: fc.constant('release'), which: fc.nat(30) }))
+    fc.assert(
+      fc.property(fc.array(op, { maxLength: 80 }), (ops) => {
+        const { limits } = rig()
+        const live = [] // { key, release, freed }
+        for (const o of ops) {
+          if (o.do === 'hold') {
+            const mine = live.filter((h) => !h.freed && h.key === o.who).length
+            const all = live.filter((h) => !h.freed).length
+            const got = limits.hold(o.who)
+            const want = mine >= 2 ? { ok: false, status: 429 } : all >= 4 ? { ok: false, status: 503 } : { ok: true }
+            expect(got).toMatchObject(want)
+            if (got.ok) live.push({ key: o.who, release: got.release, freed: false })
+          } else if (live.length > 0) {
+            const h = live[o.which % live.length]
+            h.release()
+            h.freed = true
+          }
+        }
+      }),
+      { numRuns: 300 },
     )
   })
 })
