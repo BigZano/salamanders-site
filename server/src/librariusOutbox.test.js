@@ -2020,6 +2020,28 @@ describe('an edit', () => {
     expect(w.parts.get(id)).toEqual(ids)
   })
 
+  describe('the links forward of an edit, both ways', () => {
+    // The first part is edited in place, and once more to carry the links when the reply grew: an edit that keeps the number of parts, or
+    // shortens the reply, makes no second edit of it, and writes no 'links' note. Example by example, so that each side is taken every run.
+    it.each([
+      ['one part to one', 'Short.', 'Shorter.', 1, false],
+      ['two parts to two', TWO('a', 'b'), TWO('c', 'd'), 1, false],
+      ['three parts to two', THREE('a', 'b', 'c'), TWO('a', 'b'), 1, false],
+      ['two parts to one', TWO('a', 'b'), 'Short.', 1, false],
+      ['one part to two', 'Short.', TWO('a', 'b'), 2, true],
+      ['two parts to three', TWO('a', 'b'), THREE('a', 'b', 'c'), 2, true],
+    ])('from %s: the first part is edited %i time(s), and the links are written down: %s', async (_, before, after, editsOfFirst, linked) => {
+      const id = await sentReply(before)
+      w.calls.length = 0
+      const e = edit(id, after)
+      outbox.kick()
+      await later(30_000)
+      expect(w.entry(e).state).toBe('sent')
+      expect(w.calls.filter((c) => c.kind === 'edit' && c.messageId === id)).toHaveLength(editsOfFirst)
+      expect(w.entry(e).payload.progress.done.includes('links')).toBe(linked)
+    })
+  })
+
   describe('that makes the reply longer', () => {
     it.each([
       ['one part to two', 'Short.', TWO('new', 'more'), ['edit', 'send', 'edit'], 2],
@@ -3445,7 +3467,9 @@ describe('edits and deletes never leave a part twice, nor a reply that is gone h
               // An edit that ended for good, and whose restore went through, left the message as it was: its source, and every part, in Discord.
               const restores = [...w.entries.values()].filter((e) => e.kind === 'edit' && e.payload.restore === true)
               const cleaned = [...w.entries.values()].filter((e) => e.kind === 'delete').every((e) => e.state === 'sent')
-              if (kind === 'edit' && entry.state !== 'sent' && restores.every((e) => e.state === 'sent') && cleaned && row.state === null) {
+              // (A part that may have landed, which no look found, is not known to the worker, so it cannot be removed: an edit that ends for good
+              // with one in doubt, `inflight` set, is left out, as it is in the property above. It is a known limit of the outbox.)
+              if (kind === 'edit' && entry.state !== 'sent' && restores.every((e) => e.state === 'sent') && cleaned && row.state === null && entry.payload.progress?.inflight == null) {
                 expect(row.source).toBe(sourceOf(i, n, 1))
                 for (let k = 1; k <= 3; k++) expect(holders(i, k)).toHaveLength(k <= n ? 1 : 0)
                 for (let k = 1; k <= n; k++) expect(w.textOf(holders(i, k)[0])).toContain(n === 1 ? 'short 1' : x(3000))

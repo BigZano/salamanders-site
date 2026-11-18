@@ -544,7 +544,9 @@ export function createOutbox({ store, webhook, discord, form = DEFAULT_FORM, gui
         await sendPart(entry, ctx, { index, known, built, body: body(built), files: [] })
       }
       for (let i = wanted; i < existing.length; i++) await once(entry, `remove:${existing[i]}`, () => removeCall(ctx, existing[i]))
-      if (wanted > existing.length) await once(entry, 'links', () => editCall(ctx, known[0], body(toDiscord(source, options(known)).parts[0])))
+      // A reply that grew has its first part edited last, to carry the links forward. (A conditional expression, not an `if` with no else: V8 gives
+      // an implicit else no counter of its own, and the coverage report works it out by subtraction from counts that an `await` makes swing.)
+      await (wanted > existing.length ? once(entry, 'links', () => editCall(ctx, known[0], body(toDiscord(source, options(known)).parts[0]))) : undefined)
       done = await store.finishEdit(entry.id, {
         messageId: message.id,
         source,
