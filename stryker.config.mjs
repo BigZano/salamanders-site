@@ -7,6 +7,7 @@ export default {
     'src/lib/archive/crypto.js',
     'src/lib/archive/links.js',
     'server/src/librariusMarkdown.js',
+    'server/src/librariusForm.js',
     'src/lib/archive/audit.js',
   'src/lib/archive/prune.js',
     'src/lib/archive/legacy.js',
