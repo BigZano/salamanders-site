@@ -8,6 +8,7 @@ const GATED = [
   'server/src/librariusMarkdown.js',
   'server/src/librariusForm.js',
   'server/src/librariusSend.js',
+  'server/src/librariusWebhook.js',
   'src/lib/archive/audit.js',
   'src/lib/archive/prune.js',
   'src/lib/archive/legacy.js',
