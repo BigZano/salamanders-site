@@ -11,11 +11,23 @@
  * strip(bytes, type) → a new, plain Uint8Array, or null. `type` is the answer of sniff for those bytes: when it is not,
  * or the bytes are not a whole well-formed picture, the answer is null. The bytes are walked once, by the lengths the
  * format itself gives (never by searching for a name), so metadata-looking bytes inside the image data are image data
- * and stay. What is taken out, and nothing else:
- *   - JPEG: the APP1 segments (EXIF, XMP, whatever their identifier says) and the APP13 segments (Photoshop and IPTC);
- *   - PNG: the tEXt, zTXt, iTXt and eXIf chunks (tIME is harmless and stays);
- *   - WebP: the EXIF and XMP chunks, with the RIFF size and the VP8X flags that announce them put right;
- *   - GIF: the comment extensions (0x21 0xFE).
+ * and stay. What is taken out, and what is kept:
+ *   - JPEG: every APPn segment goes but three, and so does the comment (COM). APP0 (JFIF), APP2 (the ICC colour profile)
+ *     and APP14 (Adobe, which says how the colour channels are to be read) stay, because the picture's colours depend on
+ *     them; all the rest (APP1 with its EXIF and XMP, APP3 to APP13, APP15) is metadata and goes;
+ *   - PNG: the tEXt, zTXt, iTXt and eXIf chunks go (tIME is harmless and stays);
+ *   - WebP: the XMP chunk goes, the EXIF chunk goes, and the RIFF size and the VP8X flags that announce them are put right;
+ *   - GIF: the comment extensions (0x21 0xFE) and the XMP application extension ("XMP DataXMP") go. The looping blocks
+ *     (NETSCAPE2.0, ANIMEXTS1.0), the graphic control extensions and the ICC profile extension stay: they are how the
+ *     picture moves and what colour it is.
+ * What of an EXIF survives is its orientation, because a photo taken upright on a phone is stored sideways with only this
+ * tag saying which way up it goes. When the EXIF of a JPEG (its APP1) or of a WebP (its EXIF chunk) has an Orientation
+ * (tag 0x0112) of 2 to 8 in IFD0, an EXIF of that alone is written back where it stood: the TIFF header in the original's
+ * byte order, IFD0 with the one entry, and no next IFD. Nothing else of the original goes into it: no GPS, no maker note,
+ * no date, no thumbnail. An orientation of 1 (the default), none, a value out of range, or an EXIF that is malformed in
+ * any way writes nothing. The first EXIF that yields an orientation is the one used, and only one is written. A WebP gets
+ * the EXIF flag in its VP8X only when a chunk is written, and a WebP with no VP8X cannot carry one. A PNG's eXIf is
+ * dropped whole.
  * Everything else stays byte for byte, so the image data is identical and an animation stays animated. What follows the
  * end of the picture (the EOI of a JPEG, the IEND of a PNG, the RIFF size of a WebP, the trailer of a GIF) is cut off: it
  * is not part of the picture, and it is where a second picture or a leftover of an editor hides. Checksums are not
@@ -38,7 +50,12 @@ const GIF89A_SIGNATURE = bytesOf('GIF89a')
 const RIFF_SIGNATURE = bytesOf('RIFF')
 const WEBP_SIGNATURE = bytesOf('WEBP')
 
-const JPEG_DROP = new Set([0xe1, 0xed]) // APP1, APP13
+// Every APPn but APP0 (0xE0, JFIF), APP2 (0xE2, ICC profile) and APP14 (0xEE, Adobe), and COM (0xFE).
+const JPEG_DROP = new Set([0xe1, 0xe3, 0xe4, 0xe5, 0xe6, 0xe7, 0xe8, 0xe9, 0xea, 0xeb, 0xec, 0xed, 0xef, 0xfe])
+const APP1 = 0xe1
+const EXIF_ID = bytesOf('Exif\0\0')
+const ORIENTATION_TAG = 0x0112
+const TIFF_SHORT = 3
 
 const IHDR = tag('IHDR')
 const IDAT = tag('IDAT')
@@ -48,17 +65,100 @@ const PNG_DROP = new Set([tag('tEXt'), tag('zTXt'), tag('iTXt'), tag('eXIf')])
 const VP8 = tag('VP8 ')
 const VP8L = tag('VP8L')
 const VP8X = tag('VP8X')
-const WEBP_DROP = new Set([tag('EXIF'), tag('XMP ')])
+const WEBP_EXIF = tag('EXIF')
+const WEBP_DROP = new Set([WEBP_EXIF, tag('XMP ')])
 const WEBP_IMAGE = new Set([VP8, VP8L, tag('ANMF')])
 // In the first byte of a VP8X chunk: the flag of an EXIF chunk (0x08) and of an XMP chunk (0x04).
+const WEBP_EXIF_FLAG = 0x08
 const WEBP_METADATA_FLAGS = 0x0c
+
+const XMP_APPLICATION = bytesOf('XMP DataXMP') // the application identifier and authentication code of a GIF's XMP
+
+/** Whether `signature` sits at `at` in `bytes`, all of it: a file that ends inside the signature does not match. */
+const hasAt = (bytes, signature, at = 0) =>
+  at + signature.length <= bytes.length && signature.every((v, i) => bytes[at + i] === v)
+
+/** What goes in the place of a dropped range: `bytes`, where the dropped range starts at `at`. Never for more than one. */
+const NO_PATCH = { at: NaN, bytes: new Uint8Array(0) }
+
+/**
+ * The orientation (2 to 8) that the TIFF block at b[from, to) holds in IFD0, with the byte order the block is written in:
+ * { little, value }, or null for none, for a 1, and for a block that is malformed in any way. Only IFD0 is read: the next
+ * IFD (the thumbnail's, whose orientation is its own) and every sub-IFD are never followed, so no pointer can loop, and
+ * the first entry with the tag decides. The entries must lie inside the block.
+ */
+function orientationOf(b, from, to) {
+  const length = to - from
+  if (length < 22) return null // the header (8), a count (2) and one entry (12) at the least
+  const view = new DataView(b.buffer, b.byteOffset + from, length)
+  const order = view.getUint16(0)
+  const little = order === 0x4949
+  if (!little && order !== 0x4d4d) return null
+  if (view.getUint16(2, little) !== 42) return null
+  const ifd = view.getUint32(4, little)
+  if (ifd < 8 || ifd + 14 > length) return null // not over the header, and with room for the count and an entry
+  const count = view.getUint16(ifd, little)
+  if (ifd + 2 + count * 12 > length) return null
+  for (let i = 0; i < count; i++) {
+    const entry = ifd + 2 + i * 12
+    if (view.getUint16(entry, little) !== ORIENTATION_TAG) continue
+    if (view.getUint16(entry + 2, little) !== TIFF_SHORT || view.getUint32(entry + 4, little) !== 1) return null
+    const value = view.getUint16(entry + 8, little) // a SHORT sits at the start of the 4 bytes of the value field
+    return value >= 2 && value <= 8 ? { little, value } : null
+  }
+  return null
+}
+
+/** The TIFF block of an EXIF that holds the orientation and nothing else: 26 bytes, IFD0 with one entry, no next IFD. */
+function orientationTiff({ little, value }) {
+  const out = new Uint8Array(26)
+  const view = new DataView(out.buffer)
+  view.setUint16(0, little ? 0x4949 : 0x4d4d)
+  view.setUint16(2, 42, little)
+  view.setUint32(4, 8, little) // IFD0 follows the header
+  view.setUint16(8, 1, little) // one entry
+  view.setUint16(10, ORIENTATION_TAG, little)
+  view.setUint16(12, TIFF_SHORT, little)
+  view.setUint32(14, 1, little)
+  view.setUint16(18, value, little) // the rest of the value field, and the offset of the next IFD, stay zero
+  return out
+}
+
+/** The patch for an APP1 at b[pos, next) if it is an EXIF with a usable orientation, else NO_PATCH. */
+function jpegPatch(b, pos, next) {
+  if (!hasAt(b, EXIF_ID, pos + 4)) return NO_PATCH
+  const found = orientationOf(b, pos + 4 + EXIF_ID.length, next)
+  if (found === null) return NO_PATCH
+  const tiff = orientationTiff(found)
+  const out = new Uint8Array(4 + EXIF_ID.length + tiff.length) // the marker, the length, the identifier and the TIFF
+  out.set([0xff, APP1])
+  new DataView(out.buffer).setUint16(2, out.length - 2)
+  out.set(EXIF_ID, 4)
+  out.set(tiff, 4 + EXIF_ID.length)
+  return { at: pos, bytes: out }
+}
+
+/** The patch for an EXIF chunk at b[pos, end) (end is the end of its data) if it has a usable orientation, else NO_PATCH. */
+function webpPatch(b, pos, end) {
+  // The chunk holds the TIFF block as it is; a writer that puts the JPEG's identifier before it is tolerated.
+  const from = hasAt(b, EXIF_ID, pos + 8) ? pos + 8 + EXIF_ID.length : pos + 8
+  const found = orientationOf(b, from, end)
+  if (found === null) return NO_PATCH
+  const tiff = orientationTiff(found)
+  const out = new Uint8Array(8 + tiff.length) // the name, the size and the TIFF; its size is even, so no padding byte
+  out.set(bytesOf('EXIF'))
+  new DataView(out.buffer).setUint32(4, tiff.length, true)
+  out.set(tiff, 8)
+  return { at: pos, bytes: out }
+}
 
 /**
  * A copy of `b` up to `end` without the ranges in `drops`, a flat list of from, to, from, to... in order. Always a new
- * array: nothing the caller passed in is shared with it or changed.
+ * array: nothing the caller passed in is shared with it or changed. `patch.bytes` go where the dropped range that starts
+ * at `patch.at` was.
  */
-function without(b, end, drops) {
-  let size = end
+function without(b, end, drops, patch) {
+  let size = end + patch.bytes.length
   for (let i = 0; i < drops.length; i += 2) size -= drops[i + 1] - drops[i]
   const out = new Uint8Array(size)
   let from = 0
@@ -66,6 +166,10 @@ function without(b, end, drops) {
   for (let i = 0; i < drops.length; i += 2) {
     out.set(b.subarray(from, drops[i]), at)
     at += drops[i] - from
+    if (drops[i] === patch.at) {
+      out.set(patch.bytes, at)
+      at += patch.bytes.length
+    }
     from = drops[i + 1]
   }
   out.set(b.subarray(from, end), at)
@@ -95,6 +199,7 @@ function stripJpeg(b) {
   const n = b.length
   const view = new DataView(b.buffer, b.byteOffset, b.length)
   const drops = []
+  let patch = NO_PATCH
   let scanned = false
   let pos = 2 // past the SOI
   while (pos + 1 < n) {
@@ -104,7 +209,7 @@ function stripJpeg(b) {
       pos += 1 // a fill byte before a marker
       continue
     }
-    if (code === 0xd9) return scanned ? without(b, pos + 2, drops) : null
+    if (code === 0xd9) return scanned ? without(b, pos + 2, drops, patch) : null
     // Nothing but EOI is a marker without a length here: not a stuffed zero, not TEM, not a restart, not a second SOI.
     if (code === 0x00 || code === 0x01 || (code >= 0xd0 && code <= 0xd8)) return null
     // The marker, its length, and an EOI after them at least: a segment that no EOI can follow is cut short.
@@ -113,7 +218,11 @@ function stripJpeg(b) {
     if (length < 2) return null
     // A segment that claims more than the file holds leaves `pos` at or past the end, and the walk ends in null.
     const next = pos + 2 + length
-    if (JPEG_DROP.has(code)) drops.push(pos, next)
+    if (JPEG_DROP.has(code)) {
+      drops.push(pos, next)
+      // The first EXIF with an orientation to keep is the one that does. It must lie inside the file, with an EOI after it.
+      if (code === APP1 && patch === NO_PATCH && next + 2 <= n) patch = jpegPatch(b, pos, next)
+    }
     if (code !== 0xda) {
       pos = next
       continue
@@ -136,7 +245,7 @@ function stripPng(b) {
     // The length, the type, the data and the CRC: past the end of the file if the chunk lies about its length.
     const end = pos + 12 + size
     if (pos === 8 && (type !== IHDR || size !== 13)) return null
-    if (type === IEND) return size === 0 && data ? without(b, end, drops) : null
+    if (type === IEND) return size === 0 && data ? without(b, end, drops, NO_PATCH) : null
     if (type === IDAT) data = true
     else if (PNG_DROP.has(type)) drops.push(pos, end)
     pos = end // a chunk that claims more than the file holds ends the walk here, in null
@@ -149,6 +258,7 @@ function stripWebp(b) {
   const end = view.getUint32(4, true) + 8 // the RIFF size does not count the 8 bytes before it
   if (end > b.length) return null
   const drops = []
+  let patch = NO_PATCH
   let extended = false
   let image = false
   let pos = 12 // past RIFF, the size and WEBP
@@ -164,14 +274,19 @@ function stripWebp(b) {
         extended = true
       } else if (type !== VP8 && type !== VP8L) return null
     }
-    if (WEBP_DROP.has(type)) drops.push(pos, next)
-    else if (WEBP_IMAGE.has(type)) image = true
+    if (WEBP_DROP.has(type)) {
+      drops.push(pos, next)
+      // Only a VP8X can announce an EXIF chunk, so only a file with one can have one written.
+      if (type === WEBP_EXIF && extended && patch === NO_PATCH) patch = webpPatch(b, pos, pos + 8 + size)
+    } else if (WEBP_IMAGE.has(type)) image = true
     pos = next
   }
   if (!image) return null
-  const out = without(b, end, drops)
+  const out = without(b, end, drops, patch)
   new DataView(out.buffer).setUint32(4, out.length - 8, true)
-  if (extended) out[20] &= ~WEBP_METADATA_FLAGS // the flags are the first byte of the VP8X data, at 12 + 8
+  // The flags are the first byte of the VP8X data, at 12 + 8: neither metadata flag stays, and the EXIF one is set again
+  // when a chunk was written.
+  if (extended) out[20] = (out[20] & ~WEBP_METADATA_FLAGS) | (patch === NO_PATCH ? 0 : WEBP_EXIF_FLAG)
   return out
 }
 
@@ -192,6 +307,9 @@ function endOfSubBlocks(b, from) {
   return b.length
 }
 
+/** Whether the extension at `pos` is the XMP one: an application extension whose first sub-block is the 11-byte id. */
+const isXmpExtension = (b, pos) => b[pos + 1] === 0xff && b[pos + 2] === 11 && hasAt(b, XMP_APPLICATION, pos + 3)
+
 function stripGif(b) {
   const n = b.length
   // The smallest GIF with a picture: the header and screen descriptor (13), an image descriptor, its LZW size and an empty
@@ -202,11 +320,11 @@ function stripGif(b) {
   let pos = 13 + colourTable(b[10])
   while (pos < n) {
     const kind = b[pos]
-    if (kind === 0x3b) return image ? without(b, pos + 1, drops) : null
+    if (kind === 0x3b) return image ? without(b, pos + 1, drops, NO_PATCH) : null
     if (kind === 0x21) {
       if (pos + 4 > n) return null // the introducer, the label, the end of the chain and the trailer must still fit
       const next = endOfSubBlocks(b, pos + 2) // past the introducer and the label
-      if (b[pos + 1] === 0xfe) drops.push(pos, next)
+      if (b[pos + 1] === 0xfe || isXmpExtension(b, pos)) drops.push(pos, next)
       pos = next
     } else if (kind === 0x2c) {
       if (pos + 13 > n) return null // the descriptor, the LZW size, the end of its chain and the trailer must still fit
@@ -224,10 +342,6 @@ const STRIPPERS = new Map([
   ['image/webp', stripWebp],
   ['image/gif', stripGif],
 ])
-
-/** Whether `signature` sits at `at` in `bytes`, all of it: a file that ends inside the signature does not match. */
-const hasAt = (bytes, signature, at = 0) =>
-  at + signature.length <= bytes.length && signature.every((v, i) => bytes[at + i] === v)
 
 /** → 'image/png' | 'image/jpeg' | 'image/webp' | 'image/gif', or null for anything else. Judged by the bytes alone. */
 export function sniff(bytes) {
