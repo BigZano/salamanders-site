@@ -441,7 +441,7 @@ describe('finishSend', () => {
       has('insert into librarius_messages'),
       'delete from librarius_attachments where message_id = $1',
       'delete from librarius_parts where message_id = $1',
-      'insert into librarius_parts (message_id, part_index, discord_id) select $1::bigint, (t.n - 1)::smallint, t.id from unnest($2::bigint[]) with ordinality as t (id, n)',
+      'insert into librarius_parts (message_id, part_index, discord_id, webhook_id) select $1::bigint, (t.n - 1)::smallint, t.id, (select webhook_id from librarius_messages where id = $1::bigint) from unnest($2::bigint[]) with ordinality as t (id, n)',
       'insert into librarius_events (actor_id, action, post_id, message_id, note) values ($1, $2, $3, $4, $5)',
       "update librarius_outbox set state = 'sent', last_error = null where id = $1",
       'commit',
@@ -734,7 +734,7 @@ describe('finishDelete', () => {
 })
 
 describe('outboxMessage', () => {
-  const row = { id: MSG, post_id: POST, author_id: AUTHOR, author_name: 'Invented Name', author_avatar: 'https://cdn.example/a.png', origin: 'site', source: 'hello', layout: { form: 'v2' }, state: 'sending' }
+  const row = { id: MSG, post_id: POST, author_id: AUTHOR, author_name: 'Invented Name', author_avatar: 'https://cdn.example/a.png', webhook_id: HOOK, origin: 'site', source: 'hello', layout: { form: 'v2' }, state: 'sending' }
 
   it('answers the message with its parts, in order, as the worker reads it', async () => {
     const { pool, log } = fakePool([
@@ -747,6 +747,7 @@ describe('outboxMessage', () => {
       authorId: AUTHOR,
       authorName: 'Invented Name',
       authorAvatar: 'https://cdn.example/a.png',
+      webhookId: HOOK,
       origin: 'site',
       source: 'hello',
       layout: { form: 'v2' },
@@ -754,7 +755,7 @@ describe('outboxMessage', () => {
       parts: [MSG, MSG_2],
     })
     expect(log.map((l) => l.sql)).toEqual([
-      'select id, post_id, author_id, author_name, author_avatar, origin, source, layout, state from librarius_messages where id = $1',
+      'select id, post_id, author_id, author_name, author_avatar, webhook_id, origin, source, layout, state from librarius_messages where id = $1',
       'select discord_id from librarius_parts where message_id = $1 order by part_index',
     ])
     expect(log.map((l) => l.params)).toEqual([[MSG], [MSG]])
@@ -868,7 +869,7 @@ describe('siteDeleted', () => {
   const partsOf = (rows) => ['select discord_id, message_id', rows]
   const three = [
     partsOf([{ discord_id: MSG_2, message_id: MSG }]),
-    ['select discord_id from librarius_parts where message_id', [{ discord_id: MSG }, { discord_id: MSG_2 }, { discord_id: MSG_3 }]],
+    ['select discord_id, webhook_id from librarius_parts where message_id', [{ discord_id: MSG, webhook_id: HOOK }, { discord_id: MSG_2, webhook_id: HOOK }, { discord_id: MSG_3, webhook_id: HOOK }]],
     ['select post_id, author_id from librarius_messages', [{ post_id: POST, author_id: AUTHOR }]],
   ]
 
@@ -894,7 +895,7 @@ describe('siteDeleted', () => {
       'select discord_id, message_id from librarius_parts where discord_id = any($1::bigint[])',
       NOTE_SQL,
       "select nextval('librarius_rev') as rev",
-      'select discord_id from librarius_parts where message_id = $1 order by part_index',
+      'select discord_id, webhook_id from librarius_parts where message_id = $1 order by part_index',
       'select post_id, author_id from librarius_messages where id = $1',
       'insert into librarius_tombstones (message_id, post_id, rev) select id, post_id, $2::bigint from librarius_messages where id = any($1::bigint[])',
       'delete from librarius_messages where id = any($1::bigint[])',
@@ -905,14 +906,14 @@ describe('siteDeleted', () => {
       'commit',
     ])
     const at = (sql) => r.log.find((l) => l.sql === sql).params
-    expect(at('select discord_id from librarius_parts where message_id = $1 order by part_index')).toEqual([MSG])
+    expect(at('select discord_id, webhook_id from librarius_parts where message_id = $1 order by part_index')).toEqual([MSG])
     expect(at('select post_id, author_id from librarius_messages where id = $1')).toEqual([MSG])
     expect(at('delete from librarius_parts where message_id = $1')).toEqual([MSG])
     expect(at(QUEUED_SQL)).toEqual([MSG])
     expect(at(NOTE_SQL)).toEqual([[MSG_4]])
     expect(at('delete from librarius_messages where id = any($1::bigint[])')).toEqual([[MSG]])
     expect(r.log[6].params).toEqual([[MSG], '900'])
-    expect(at("insert into librarius_outbox (kind, message_key, author_id, payload) values ('delete', $1, $2, $3::jsonb)")).toEqual([MSG, AUTHOR, JSON.stringify({ postId: POST, partIds: [MSG, MSG_3] })])
+    expect(at("insert into librarius_outbox (kind, message_key, author_id, payload) values ('delete', $1, $2, $3::jsonb)")).toEqual([MSG, AUTHOR, JSON.stringify({ postId: POST, partIds: [MSG, MSG_3], webhookId: HOOK })])
     expect(at('insert into librarius_events (actor_id, action, post_id, message_id, note) values ($1, $2, $3, $4, $5)')).toEqual([AUTHOR, 'deleted-in-discord', POST, MSG, null])
   })
 
@@ -936,7 +937,7 @@ describe('siteDeleted', () => {
     await store(r.pool).siteDeleted([MSG_2], POST)
     const queued = r.log.filter((l) => l.sql.startsWith('insert into librarius_outbox'))
     expect(queued).toHaveLength(1)
-    expect(queued[0].params).toEqual([MSG, AUTHOR, JSON.stringify({ postId: POST, partIds: [MSG, MSG_3] })])
+    expect(queued[0].params).toEqual([MSG, AUTHOR, JSON.stringify({ postId: POST, partIds: [MSG, MSG_3], webhookId: HOOK })])
   })
 
   it('queues nothing when any one of the deletes on its way knows its parts, though the others do not', async () => {
@@ -980,12 +981,34 @@ describe('siteDeleted', () => {
   it('queues nothing when no part is left, as for a reply of one part', async () => {
     const r = revPool([
       partsOf([{ discord_id: MSG, message_id: MSG }]),
-      ['select discord_id from librarius_parts where message_id', [{ discord_id: MSG }]],
+      ['select discord_id, webhook_id from librarius_parts where message_id', [{ discord_id: MSG, webhook_id: HOOK }]],
       ['select post_id, author_id from librarius_messages', [{ post_id: POST, author_id: AUTHOR }]],
     ])
     expect(await store(r.pool).siteDeleted([MSG], POST)).toEqual({ plain: [] })
     expect(r.sqls().some((s) => s.includes('from librarius_outbox'))).toBe(false)
     expect(r.sqls()).toContain('delete from librarius_parts where message_id = $1')
+  })
+
+  it('names the webhook of the first part that has one, when the first has none', async () => {
+    const r = revPool([
+      partsOf([{ discord_id: MSG_2, message_id: MSG }]),
+      ['select discord_id, webhook_id from librarius_parts where message_id', [{ discord_id: MSG, webhook_id: null }, { discord_id: MSG_2, webhook_id: HOOK }, { discord_id: MSG_3, webhook_id: '200000000000000416' }]],
+      ['select post_id, author_id from librarius_messages', [{ post_id: POST, author_id: AUTHOR }]],
+      [QUEUED_SQL, []],
+    ])
+    await store(r.pool).siteDeleted([MSG_2], POST)
+    expect(r.log.find((l) => l.sql.startsWith('insert into librarius_outbox')).params[2]).toBe(JSON.stringify({ postId: POST, partIds: [MSG, MSG_3], webhookId: HOOK }))
+  })
+
+  it('names no webhook when no part has one', async () => {
+    const r = revPool([
+      partsOf([{ discord_id: MSG_2, message_id: MSG }]),
+      ['select discord_id, webhook_id from librarius_parts where message_id', [{ discord_id: MSG, webhook_id: null }, { discord_id: MSG_2, webhook_id: null }]],
+      ['select post_id, author_id from librarius_messages', [{ post_id: POST, author_id: AUTHOR }]],
+      [QUEUED_SQL, []],
+    ])
+    await store(r.pool).siteDeleted([MSG_2], POST)
+    expect(r.log.find((l) => l.sql.startsWith('insert into librarius_outbox')).params[2]).toBe(JSON.stringify({ postId: POST, partIds: [MSG], webhookId: null }))
   })
 
   it('takes each reply once when several of its parts, or several replies, are deleted together, with one rev', async () => {
@@ -995,7 +1018,7 @@ describe('siteDeleted', () => {
         { discord_id: MSG_2, message_id: MSG },
         { discord_id: MSG_4, message_id: MSG_3 },
       ]),
-      ['select discord_id from librarius_parts where message_id', (p) => (p[0] === MSG ? [{ discord_id: MSG }, { discord_id: MSG_2 }] : [{ discord_id: MSG_3 }, { discord_id: MSG_4 }])],
+      ['select discord_id, webhook_id from librarius_parts where message_id', (p) => (p[0] === MSG ? [{ discord_id: MSG, webhook_id: null }, { discord_id: MSG_2, webhook_id: null }] : [{ discord_id: MSG_3, webhook_id: HOOK }, { discord_id: MSG_4, webhook_id: HOOK }])],
       ['select post_id, author_id from librarius_messages', [{ post_id: POST, author_id: AUTHOR }]],
       [QUEUED_SQL, []],
     ])
@@ -1004,19 +1027,19 @@ describe('siteDeleted', () => {
     expect(r.sqls().filter((s) => s.startsWith('delete from librarius_messages'))).toHaveLength(2)
     const queued = r.log.filter((l) => l.sql.startsWith('insert into librarius_outbox'))
     expect(queued).toHaveLength(1)
-    expect(queued[0].params).toEqual([MSG_3, AUTHOR, JSON.stringify({ postId: POST, partIds: [MSG_3] })])
+    expect(queued[0].params).toEqual([MSG_3, AUTHOR, JSON.stringify({ postId: POST, partIds: [MSG_3], webhookId: HOOK })])
     expect(r.log.filter((l) => l.sql.startsWith('insert into librarius_events')).map((l) => l.params[3])).toEqual([MSG, MSG_3])
   })
 
   it('still deletes the remaining parts of a reply whose message is no longer stored, with no author to name', async () => {
     const r = revPool([
       partsOf([{ discord_id: MSG_2, message_id: MSG }]),
-      ['select discord_id from librarius_parts where message_id', [{ discord_id: MSG }, { discord_id: MSG_2 }]],
+      ['select discord_id, webhook_id from librarius_parts where message_id', [{ discord_id: MSG, webhook_id: HOOK }, { discord_id: MSG_2, webhook_id: HOOK }]],
       ['select post_id, author_id from librarius_messages', []],
       [QUEUED_SQL, []],
     ])
     await store(r.pool).siteDeleted([MSG_2], POST)
-    expect(r.log.find((l) => l.sql.startsWith('insert into librarius_outbox')).params).toEqual([MSG, '0', JSON.stringify({ postId: POST, partIds: [MSG] })])
+    expect(r.log.find((l) => l.sql.startsWith('insert into librarius_outbox')).params).toEqual([MSG, '0', JSON.stringify({ postId: POST, partIds: [MSG], webhookId: HOOK })])
     expect(r.log.find((l) => l.sql.startsWith('insert into librarius_events')).params).toEqual(['0', 'deleted-in-discord', POST, MSG, null])
   })
 
@@ -1240,6 +1263,457 @@ describe('sweepUploads', () => {
   })
 })
 
+describe('outboxSet: what the worker holds', () => {
+  const entry = [['update librarius_outbox', [{ kind: 'send', message_key: MSG, author_id: AUTHOR }]]]
+  const HOLD_SQL =
+    "insert into librarius_outbox_state (id, paused_until, global_until) values (1, $1::timestamptz, $2::timestamptz) on conflict (id) do update set paused_until = greatest(librarius_outbox_state.paused_until, excluded.paused_until), global_until = greatest(librarius_outbox_state.global_until, excluded.global_until)"
+  const UNTIL = '2026-11-18T11:00:00.000Z'
+  const LATER = '2026-11-18T10:00:30.000Z'
+
+  it('writes the pause and the global hold in the transaction of the transition, after the event and the queue', async () => {
+    const { pool, log } = fakePool([...entry, ['insert into librarius_outbox', [{ id: '31' }]]])
+    await store(pool).outboxSet('12', {
+      state: 'blocked',
+      event: { action: 'blocked' },
+      queue: [{ kind: 'delete', messageKey: MSG, payload: { postId: POST } }],
+      hold: { pausedUntil: UNTIL, globalUntil: LATER },
+    })
+    expect(log.map((l) => l.sql)).toEqual(['begin', has('update librarius_outbox'), has('insert into librarius_events'), has('insert into librarius_outbox'), has("update librarius_messages set state = 'sending'"), HOLD_SQL, 'commit'])
+    expect(log[5].params).toEqual([UNTIL, LATER])
+  })
+
+  it('writes one of the two, and leaves the other null so that greatest() keeps what is held', async () => {
+    const paused = fakePool(entry)
+    await store(paused.pool).outboxSet('12', { state: 'blocked', hold: { pausedUntil: UNTIL } })
+    expect(paused.log[2].params).toEqual([UNTIL, null])
+    const global = fakePool(entry)
+    await store(global.pool).outboxSet('12', { state: 'pending', hold: { globalUntil: new Date(LATER) } })
+    expect(global.log[2].params).toEqual([null, LATER])
+    const ms = fakePool(entry)
+    await store(ms.pool).outboxSet('12', { state: 'pending', hold: { globalUntil: Date.parse(LATER) } })
+    expect(ms.log[2].params).toEqual([null, LATER])
+  })
+
+  it('writes no hold when it is given none, and none for an entry that is not sending any more', async () => {
+    const none = fakePool(entry)
+    await store(none.pool).outboxSet('12', { state: 'sent' })
+    expect(none.sqls()).toEqual(['begin', has('update librarius_outbox'), 'commit'])
+    const gone = fakePool()
+    await store(gone.pool).outboxSet('12', { state: 'blocked', hold: { pausedUntil: UNTIL } })
+    expect(gone.sqls()).toEqual(['begin', has('update librarius_outbox'), 'commit'])
+  })
+
+  it('rolls back the transition when the hold cannot be written', async () => {
+    const err = boom()
+    const { pool, sqls } = fakePool([...entry, ['insert into librarius_outbox_state', err]])
+    await expect(store(pool).outboxSet('12', { state: 'blocked', hold: { pausedUntil: UNTIL } })).rejects.toBe(err)
+    expect(sqls().at(-1)).toBe('rollback')
+  })
+
+  it.each([
+    ...labelled([null, 'x', 7, [], true]).map(([name, hold]) => [`a hold that is ${name}`, hold, OBJECT_MSG('hold')]),
+    ['a hold that says nothing', {}, 'hold must say pausedUntil or globalUntil'],
+    ['a hold that says undefined', { pausedUntil: undefined, globalUntil: undefined }, 'hold must say pausedUntil or globalUntil'],
+    ['a hold with another key', { pausedUntil: UNTIL, until: UNTIL }, 'hold has no until'],
+    ...labelled(['soon', {}, null, Number.NaN, new Date('x'), true]).map(([name, v]) => [`a pausedUntil ${name}`, { pausedUntil: v }, TIME_MSG('pausedUntil')]),
+    ...labelled(['soon', {}, null, Number.NaN, new Date('x'), true]).map(([name, v]) => [`a globalUntil ${name}`, { pausedUntil: UNTIL, globalUntil: v }, TIME_MSG('globalUntil')]),
+  ])('refuses %s before any query', async (_, hold, message) => {
+    const rig = fakePool()
+    await refused(rig, () => store(rig.pool).outboxSet('12', { state: 'blocked', hold }), message)
+  })
+})
+
+describe('outboxHold', () => {
+  it('answers the two times as ISO text', async () => {
+    const { pool, log } = fakePool([['from librarius_outbox_state', [{ paused_until: new Date('2026-11-18T11:00:00.000Z'), global_until: '2026-11-18T10:00:30.000Z' }]]])
+    expect(await store(pool).outboxHold()).toEqual({ pausedUntil: '2026-11-18T11:00:00.000Z', globalUntil: '2026-11-18T10:00:30.000Z' })
+    expect(log).toHaveLength(1)
+    expect(log[0].sql).toBe('select paused_until, global_until from librarius_outbox_state where id = 1')
+  })
+
+  it('answers null for a time that was never set, and for both when there is no row', async () => {
+    const one = fakePool([['from librarius_outbox_state', [{ paused_until: null, global_until: new Date('2026-11-18T10:00:30.000Z') }]]])
+    expect(await store(one.pool).outboxHold()).toEqual({ pausedUntil: null, globalUntil: '2026-11-18T10:00:30.000Z' })
+    const other = fakePool([['from librarius_outbox_state', [{ paused_until: new Date('2026-11-18T11:00:00.000Z'), global_until: null }]]])
+    expect(await store(other.pool).outboxHold()).toEqual({ pausedUntil: '2026-11-18T11:00:00.000Z', globalUntil: null })
+    expect(await store(fakePool().pool).outboxHold()).toEqual({ pausedUntil: null, globalUntil: null })
+  })
+})
+
+describe('noteBlock', () => {
+  const EVENT_SQL = 'insert into librarius_events (actor_id, action, post_id, message_id, note) values ($1, $2, $3, $4, $5)'
+  const entry = [["from librarius_outbox where id = $1 and state = 'sending'", [{ author_id: AUTHOR }]]]
+  const HOLD = { pausedUntil: '2026-11-18T11:00:00.000Z' }
+
+  it('notes the block by the author of the entry that is at work, and the pause it caused, in one transaction', async () => {
+    const { pool, log } = fakePool(entry)
+    await store(pool).noteBlock('12', { event: { action: 'blocked', postId: POST, messageId: MSG, note: 'links' }, hold: HOLD })
+    expect(log.map((l) => l.sql)).toEqual(['begin', "select author_id from librarius_outbox where id = $1 and state = 'sending'", EVENT_SQL, has('insert into librarius_outbox_state'), 'commit'])
+    expect(log[1].params).toEqual(['12'])
+    expect(log[2].params).toEqual([AUTHOR, 'blocked', POST, MSG, 'links'])
+    expect(log[3].params).toEqual(['2026-11-18T11:00:00.000Z', null])
+  })
+
+  it('writes no pause when it caused none', async () => {
+    const { pool, sqls } = fakePool(entry)
+    await store(pool).noteBlock('12', { event: { action: 'blocked' } })
+    expect(sqls()).toEqual(['begin', has('select author_id'), EVENT_SQL, 'commit'])
+  })
+
+  it('writes nothing for an entry that is not at work any more', async () => {
+    const { pool, sqls } = fakePool()
+    await store(pool).noteBlock('12', { event: { action: 'blocked' }, hold: HOLD })
+    expect(sqls()).toEqual(['begin', has('select author_id'), 'commit'])
+  })
+
+  it('rolls back and throws what failed', async () => {
+    const err = boom()
+    const { pool, sqls } = fakePool([...entry, ['insert into librarius_events', err]])
+    await expect(store(pool).noteBlock('12', { event: { action: 'blocked' } })).rejects.toBe(err)
+    expect(sqls().at(-1)).toBe('rollback')
+  })
+
+  it.each([
+    ...labelled(BAD_SERIALS).map(([name, id]) => [`id ${name}`, id, { event: { action: 'blocked' } }, SERIAL_MSG('id')]),
+    ['no options', '1', undefined, 'event must be an object'],
+    ['no event', '1', {}, 'event must be an object'],
+    ['an event with no action', '1', { event: {} }, 'action must be a text of 1 to 40 characters'],
+    ['a hold that says nothing', '1', { event: { action: 'blocked' }, hold: {} }, 'hold must say pausedUntil or globalUntil'],
+    ['a hold that is null', '1', { event: { action: 'blocked' }, hold: null }, OBJECT_MSG('hold')],
+  ])('refuses %s before any query', async (_, id, options, message) => {
+    const rig = fakePool()
+    await refused(rig, () => store(rig.pool).noteBlock(id, options), message)
+  })
+})
+
+describe('sendTimesSince', () => {
+  it('answers the times at which parts landed since then, oldest first, as ISO text, from the progress of the entries', async () => {
+    const { pool, log } = fakePool([['from librarius_outbox o', [{ at: new Date('2026-11-18T10:00:00.000Z') }, { at: '2026-11-18T10:00:30.500Z' }]]])
+    expect(await store(pool).sendTimesSince(new Date('2026-11-18T09:59:00.000Z'))).toEqual(['2026-11-18T10:00:00.000Z', '2026-11-18T10:00:30.500Z'])
+    expect(log).toHaveLength(1)
+    expect(log[0].sql).toBe(
+      "select at from ( select case when part->>'id' ~ '^[0-9]{17,19}$' then to_timestamp((((part->>'id')::bigint >> 22) + 1420070400000) / 1000.0) end as at from librarius_outbox o, jsonb_array_elements(coalesce(o.payload->'progress'->'parts', '[]'::jsonb)) as part where o.kind in ('send', 'edit') ) landed where at >= $1::timestamptz order by at",
+    )
+    expect(log[0].params).toEqual(['2026-11-18T09:59:00.000Z'])
+  })
+
+  it('answers an empty list when nothing landed, and takes the time as epoch milliseconds', async () => {
+    const { pool, log } = fakePool()
+    expect(await store(pool).sendTimesSince(Date.parse('2026-11-18T09:59:00.000Z'))).toEqual([])
+    expect(log[0].params).toEqual(['2026-11-18T09:59:00.000Z'])
+  })
+
+  it.each(labelled([undefined, null, 'soon', {}, Number.NaN]))('refuses the time %s before any query', async (_, since) => {
+    const rig = fakePool()
+    await refused(rig, () => store(rig.pool).sendTimesSince(since), TIME_MSG('since'))
+  })
+})
+
+describe('the worker lock', () => {
+  /** A pool whose connections are kept, to see which one holds the lock and whether it went back. */
+  function lockPool(answers) {
+    const clients = []
+    const pool = {
+      query: async () => ({ rows: [] }),
+      async connect() {
+        const handlers = {}
+        const client = {
+          queries: [],
+          released: 0,
+          handlers,
+          async query(sql, params) {
+            client.queries.push({ sql, params })
+            const next = answers.shift()
+            if (next instanceof Error) throw next
+            return { rows: [next ?? {}] }
+          },
+          release() {
+            client.released++
+          },
+          on(event, fn) {
+            handlers[event] = fn
+          },
+        }
+        clients.push(client)
+        return client
+      },
+    }
+    return { pool, clients }
+  }
+
+  it('takes the advisory lock on a connection of its own, and keeps that connection out of the pool', async () => {
+    const { pool, clients } = lockPool([{ got: true }])
+    expect(await store(pool).takeWorkerLock()).toBe(true)
+    expect(clients).toHaveLength(1)
+    expect(clients[0].queries).toEqual([{ sql: 'select pg_try_advisory_lock($1::bigint) as got', params: [19_000_001] }])
+    expect(clients[0].released).toBe(0)
+  })
+
+  it('answers true again for the lock it holds, without a new connection or a new ask', async () => {
+    const { pool, clients } = lockPool([{ got: true }])
+    const s = store(pool)
+    await s.takeWorkerLock()
+    expect(await s.takeWorkerLock()).toBe(true)
+    expect(clients).toHaveLength(1)
+    expect(clients[0].queries).toHaveLength(1)
+  })
+
+  it('answers false when another worker holds it, and gives the connection back, and asks again the next time', async () => {
+    const { pool, clients } = lockPool([{ got: false }, { got: false }])
+    const s = store(pool)
+    expect(await s.takeWorkerLock()).toBe(false)
+    expect(clients[0].released).toBe(1)
+    expect(await s.takeWorkerLock()).toBe(false)
+    expect(clients).toHaveLength(2)
+    expect(clients[1].released).toBe(1)
+  })
+
+  it.each([undefined, 't', 1, null])('does not take %s for the lock', async (got) => {
+    const { pool, clients } = lockPool([{ got }])
+    expect(await store(pool).takeWorkerLock()).toBe(false)
+    expect(clients[0].released).toBe(1)
+  })
+
+  it('gives the connection back and throws what failed when the ask fails, and tries again from scratch next time', async () => {
+    const err = boom()
+    const { pool, clients } = lockPool([err, { got: true }])
+    const s = store(pool)
+    await expect(s.takeWorkerLock()).rejects.toBe(err)
+    expect(clients[0].released).toBe(1)
+    expect(await s.takeWorkerLock()).toBe(true)
+    expect(clients).toHaveLength(2)
+  })
+
+  it('lets the lock go: asks to unlock on the same connection and gives it back, and takes it again after', async () => {
+    const { pool, clients } = lockPool([{ got: true }, {}, { got: true }])
+    const s = store(pool)
+    await s.takeWorkerLock()
+    await s.releaseWorkerLock()
+    expect(clients[0].queries[1]).toEqual({ sql: 'select pg_advisory_unlock($1::bigint)', params: [19_000_001] })
+    expect(clients[0].released).toBe(1)
+    expect(await s.takeWorkerLock()).toBe(true)
+    expect(clients).toHaveLength(2)
+  })
+
+  it('gives the connection back even when the unlock fails, and holds no lock after', async () => {
+    const err = boom()
+    const { pool, clients } = lockPool([{ got: true }, err, { got: true }])
+    const s = store(pool)
+    await s.takeWorkerLock()
+    await expect(s.releaseWorkerLock()).rejects.toBe(err)
+    expect(clients[0].released).toBe(1)
+    expect(await s.takeWorkerLock()).toBe(true)
+    expect(clients).toHaveLength(2)
+  })
+
+  it('does nothing to release a lock it does not hold', async () => {
+    const { pool, clients } = lockPool([])
+    await store(pool).releaseWorkerLock()
+    expect(clients).toHaveLength(0)
+  })
+
+  it('takes a lost connection for a lost lock, without throwing, so that the next take asks again', async () => {
+    const { pool, clients } = lockPool([{ got: true }, { got: true }])
+    const s = store(pool)
+    await s.takeWorkerLock()
+    expect(() => clients[0].handlers.error(new Error('Connection terminated unexpectedly'))).not.toThrow()
+    expect(await s.takeWorkerLock()).toBe(true)
+    expect(clients).toHaveLength(2)
+  })
+
+  it('lets a lock that is not the held connection go on: an error of an old connection does not drop the new one', async () => {
+    const { pool, clients } = lockPool([{ got: true }, {}, { got: true }])
+    const s = store(pool)
+    await s.takeWorkerLock()
+    await s.releaseWorkerLock()
+    await s.takeWorkerLock()
+    clients[0].handlers.error(new Error('late'))
+    expect(await s.takeWorkerLock()).toBe(true)
+    expect(clients).toHaveLength(2)
+  })
+
+  it('works with a connection that has no event emitter, as a fake pool gives', async () => {
+    const { pool } = fakePool([['pg_try_advisory_lock', [{ got: true }]]])
+    expect(await store(pool).takeWorkerLock()).toBe(true)
+  })
+
+  it('has a key that no other advisory lock of the server takes, in the same space as the Deathwatch lock', async () => {
+    const { readdirSync, readFileSync } = await import('node:fs')
+    const dir = new URL('./', import.meta.url)
+    const keys = []
+    for (const file of readdirSync(dir)) {
+      if (!file.endsWith('.js') || file.endsWith('.test.js')) continue
+      const text = readFileSync(new URL(file, dir), 'utf8')
+      if (!/pg_(try_)?advisory/.test(text)) continue
+      for (const m of text.matchAll(/const [A-Z_]*LOCK = ([\d_]+)/g)) keys.push([file, Number(m[1].replaceAll('_', ''))])
+    }
+    expect(keys.map(([file]) => file).sort()).toEqual(['deathwatchStore.js', 'librariusOutboxStore.js'])
+    expect(new Set(keys.map(([, key]) => key)).size).toBe(keys.length)
+  })
+})
+
+describe('pruneOutbox', () => {
+  const SENT_SQL = "with gone as (delete from librarius_outbox where state = 'sent' and created_at < $1::timestamptz returning 1) select count(*)::int as n from gone"
+  const EVENTS_SQL = 'with gone as (delete from librarius_events where at < $1::timestamp'
+  const A = '2026-11-17T10:00:00.000Z'
+  const B = '2026-08-20T10:00:00.000Z'
+
+  it('deletes the entries that are done and older than the time, and the events older than theirs, and says how many of each', async () => {
+    const { pool, log } = fakePool([
+      ['from librarius_outbox', [{ n: 3 }]],
+      ['from librarius_events', [{ n: 5 }]],
+    ])
+    expect(await store(pool).pruneOutbox({ sentBefore: new Date(A), eventsBefore: Date.parse(B) })).toEqual({ entries: 3, events: 5 })
+    expect(log.map((l) => l.sql)).toEqual([SENT_SQL, 'with gone as (delete from librarius_events where at < $1::timestamptz returning 1) select count(*)::int as n from gone'])
+    expect(log.map((l) => l.params)).toEqual([[A], [B]])
+    expect(log[1].sql.startsWith(EVENTS_SQL)).toBe(true)
+  })
+
+  it('deletes only entries that are sent: an entry that failed, was blocked or is still on its way stays', async () => {
+    const { pool, log } = fakePool([['from librarius_outbox', [{ n: 0 }]], ['from librarius_events', [{ n: 0 }]]])
+    await store(pool).pruneOutbox({ sentBefore: A, eventsBefore: B })
+    expect(log[0].sql).toContain("state = 'sent'")
+    expect(log[0].sql).not.toMatch(/failed|blocked|pending|sending/)
+  })
+
+  it.each([
+    ...labelled([undefined, null, 'x', 7, []]).map(([name, o]) => [`options ${name}`, o, OBJECT_MSG('options')]),
+    ...labelled([undefined, null, 'soon', {}, Number.NaN]).map(([name, v]) => [`sentBefore ${name}`, { sentBefore: v, eventsBefore: B }, TIME_MSG('sentBefore')]),
+    ...labelled([undefined, null, 'soon', {}, Number.NaN]).map(([name, v]) => [`eventsBefore ${name}`, { sentBefore: A, eventsBefore: v }, TIME_MSG('eventsBefore')]),
+  ])('refuses %s before any query', async (_, options, message) => {
+    const rig = fakePool()
+    await refused(rig, () => store(rig.pool).pruneOutbox(options), message)
+  })
+
+  it('throws what failed, and does not go on to the events when the entries could not be deleted', async () => {
+    const err = boom()
+    const { pool, log } = fakePool([['from librarius_outbox', err]])
+    await expect(store(pool).pruneOutbox({ sentBefore: A, eventsBefore: B })).rejects.toBe(err)
+    expect(log).toHaveLength(1)
+  })
+})
+
+describe('ownWebhookIds', () => {
+  it('answers the webhooks that sent a stored part, or are sending a reply, as a Set', async () => {
+    const { pool, log } = fakePool([['from librarius_parts', [{ id: HOOK }, { id: '200000000000000416' }]]])
+    expect(await store(pool).ownWebhookIds()).toEqual(new Set([HOOK, '200000000000000416']))
+    expect(log).toHaveLength(1)
+    expect(log[0].sql).toBe(
+      "select webhook_id as id from librarius_parts where webhook_id is not null union select (payload->'progress'->>'webhookid')::bigint from librarius_outbox where payload->'progress'->>'webhookid' ~ '^[0-9]{17,19}$'",
+    )
+  })
+
+  it('answers an empty Set when there is none', async () => {
+    expect(await store(fakePool().pool).ownWebhookIds()).toEqual(new Set())
+  })
+})
+
+describe('repairSiteMessages', () => {
+  const PARTS_FIX = 'update librarius_parts p set webhook_id = m.webhook_id from librarius_messages m where m.id = p.message_id and p.webhook_id is null and m.webhook_id is not null'
+  const PHANTOMS = 'select m.id from librarius_messages m join librarius_parts p on p.discord_id = m.id where p.part_index > 0 order by m.id'
+  const rig = (phantoms = [], damaged = []) => revPool([[PHANTOMS, phantoms], ['select i.id from intended', damaged]])
+
+  it('writes nothing, and takes no rev, when nothing is damaged: a second run changes nothing', async () => {
+    const r = rig()
+    expect(await store(r.pool).repairSiteMessages()).toEqual({ removed: 0, restored: 0 })
+    expect(r.sqls()).toEqual(['begin', PARTS_FIX, PHANTOMS, has('select i.id from intended'), 'commit'])
+  })
+
+  it('deletes the messages that are a part after the first, noted for the readers, with one new rev', async () => {
+    const r = rig([{ id: MSG_2 }, { id: MSG_3 }])
+    expect(await store(r.pool).repairSiteMessages()).toEqual({ removed: 2, restored: 0 })
+    expect(r.sqls()).toEqual([
+      'begin',
+      PARTS_FIX,
+      PHANTOMS,
+      has('select i.id from intended'),
+      "select nextval('librarius_rev') as rev",
+      'insert into librarius_tombstones (message_id, post_id, rev) select id, post_id, $2::bigint from librarius_messages where id = any($1::bigint[])',
+      'delete from librarius_messages where id = any($1::bigint[])',
+      'commit',
+    ])
+    expect(r.log[5].params).toEqual([[MSG_2, MSG_3], '900'])
+    expect(r.log[6].params).toEqual([[MSG_2, MSG_3]])
+  })
+
+  it('writes the damaged site messages again, in one statement, with the rev', async () => {
+    const r = rig([], [{ id: MSG }, { id: MSG_4 }])
+    expect(await store(r.pool).repairSiteMessages()).toEqual({ removed: 0, restored: 2 })
+    expect(r.sqls()).toEqual(['begin', PARTS_FIX, PHANTOMS, has('select i.id from intended'), "select nextval('librarius_rev') as rev", has('update librarius_messages m set author_id = i.author_id'), 'commit'])
+    expect(r.log[5].params).toEqual(['900', [MSG, MSG_4]])
+  })
+
+  it('does both with ONE rev, the phantoms first', async () => {
+    const r = rig([{ id: MSG_2 }], [{ id: MSG }])
+    expect(await store(r.pool).repairSiteMessages()).toEqual({ removed: 1, restored: 1 })
+    expect(r.sqls().filter((q) => q.startsWith('select nextval'))).toHaveLength(1)
+    const order = r.sqls().map((q) => (q.startsWith('delete from librarius_messages') ? 'phantoms' : q.includes('update librarius_messages m set') ? 'restore' : null)).filter(Boolean)
+    expect(order).toEqual(['phantoms', 'restore'])
+    expect(r.log.find((l) => l.sql.includes('update librarius_messages m set')).params).toEqual(['900', [MSG]])
+  })
+
+  describe('what a site message is made again from', () => {
+    const sql = async () => {
+      const r = rig([], [{ id: MSG }])
+      await store(r.pool).repairSiteMessages()
+      return r.log.find((l) => l.sql.includes('update librarius_messages m set')).sql
+    }
+    const find = async () => {
+      const r = rig()
+      await store(r.pool).repairSiteMessages()
+      return r.log.find((l) => l.sql.startsWith('with sent as')).sql
+    }
+
+    it('takes the author of the entry that sent the message, first part first, and else of the event noted when it was sent', async () => {
+      for (const text of [await sql(), await find()]) {
+        expect(text).toContain("o.payload->'progress'->'parts'->0->>'id' ~ '^[0-9]{17,19}$'")
+        expect(text).toContain("from librarius_outbox o where o.kind = 'send'")
+        expect(text).toContain("from librarius_events e where e.action = 'send' and e.message_id is not null")
+        expect(text).toContain('order by mid, rank, at desc')
+        expect(text).toContain('coalesce(s.author_id, m.author_id) as author_id')
+      }
+    })
+
+    it('takes the name, the picture, the reply link and the text from the layout and the source, cut to 4000 characters', async () => {
+      const text = await sql()
+      expect(text).toContain("coalesce(m.layout->>'username', m.author_name) as author_name")
+      // (the rig lowercases the statement)
+      expect(text).toContain("case when m.layout->'avatarurl' is not null then m.layout->>'avatarurl' else m.author_avatar end as author_avatar")
+      expect(text).toContain('left(m.source, 4000) as content')
+      expect(text).toContain("case when m.layout->'replyto' is not null then (m.layout->'replyto'->>'messageid')::bigint else m.reply_to end as reply_to")
+    })
+
+    it('looks only at messages of the site that have their source and layout, and only at those that differ', async () => {
+      const text = await find()
+      expect(text).toContain("where m.origin = 'site' and m.source is not null and m.layout is not null")
+      expect(text).toContain('(m.author_id, m.author_name, m.author_avatar, m.content, m.reply_to) is distinct from (i.author_id, i.author_name, i.author_avatar, i.content, i.reply_to)')
+    })
+
+    it('writes only the columns the import overwrote, for the messages found', async () => {
+      const text = await sql()
+      expect(text).toContain('update librarius_messages m set author_id = i.author_id, author_name = i.author_name, author_avatar = i.author_avatar, content = i.content, reply_to = i.reply_to, rev = $1::bigint from intended i where m.id = i.id and m.id = any($2::bigint[])')
+    })
+  })
+
+  it.each([
+    ['the webhook of the parts', 'update librarius_parts'],
+    ['the phantoms', 'select m.id from librarius_messages m join'],
+    ['the damaged', 'select i.id from intended'],
+  ])('rolls back and throws what failed in %s', async (_, fragment) => {
+    const err = boom()
+    const { pool, sqls } = revPool([[fragment, err]])
+    await expect(store(pool).repairSiteMessages()).rejects.toBe(err)
+    expect(sqls().at(-1)).toBe('rollback')
+  })
+
+  it('rolls back the phantoms when the restore fails', async () => {
+    const err = boom()
+    const r = revPool([[PHANTOMS, [{ id: MSG_2 }]], ['select i.id from intended', [{ id: MSG }]], ['update librarius_messages m set', err]])
+    await expect(store(r.pool).repairSiteMessages()).rejects.toBe(err)
+    expect(r.sqls().at(-1)).toBe('rollback')
+  })
+})
+
 describe('hostile values (property)', () => {
   it('no method reaches the pool with a value that is not what it takes', async () => {
     const wrong = fc.oneof(fc.constant(undefined), fc.constant(null), fc.integer(), fc.string(), fc.boolean(), fc.object())
@@ -1259,6 +1733,9 @@ describe('hostile values (property)', () => {
       (s, v) => s.heldUploadIds(v, v),
       (s, v) => s.outboxFor(v, v, v),
       (s, v) => s.sweepUploads(v),
+      (s, v) => s.noteBlock(v, v),
+      (s, v) => s.pruneOutbox(v),
+      (s, v) => s.outboxSet(v, { state: 'sent', hold: v }),
     ]
     await fc.assert(
       fc.asyncProperty(wrong, fc.nat(calls.length - 1), async (v, i) => {

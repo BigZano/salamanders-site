@@ -9,7 +9,10 @@
  * `fetchMessage` is discord.message, and `onReady` starts the catch-up (the importer's run). `webhookId` is the id of the
  * Librarius's own webhook (batch 2), or null when there is none: what that webhook posts, the parts of a reply of the site, is
  * the outbox's to store (a reply is one message to the site, however many it is to Discord), so a message of it is never
- * stored from an event. The gateway calls
+ * stored from an event. A message is the site's own when its webhook is the current one (the echo of a reply that comes before
+ * the outbox has stored it), or one that sent a stored part before (store.ownWebhookIds, read by load(): the webhook may have been
+ * replaced, or the address unset, and the old replies are still there), or when its id is a stored part (store.knownPartIds).
+ * The gateway calls
  * dispatch(t, d) for one event at a time and gives up on one that has not settled after 15 seconds, so every handler
  * writes with upserts and deletes that do no harm when they repeat or overlap with the next event's, and none waits for
  * anything long. The one slow thing, the catch-up, is started and not waited for.
@@ -75,6 +78,8 @@ const STORE_METHODS = [
   'clearReactions',
   'siteDeleted',
   'messageOfPart',
+  'ownWebhookIds',
+  'knownPartIds',
 ]
 
 const isObj = (v) => typeof v === 'object' && v !== null && !Array.isArray(v)
@@ -90,6 +95,8 @@ export function createIngest({ store, guild, access, forumId, fetchMessage, onRe
 
   // The ids of the forum's threads.
   const known = new Set()
+  // The ids of the webhooks that sent a stored part, as load() last read them: the site's own, besides the current one.
+  const hooks = new Set()
   let botId = null
   // Stryker disable next-line ArrowFunction,StringLiteral: what is logged is for the owner to read, and no test asserts it
   const report = (text) => log(`Librarius ingest: ${text}`)
@@ -101,6 +108,7 @@ export function createIngest({ store, guild, access, forumId, fetchMessage, onRe
 
   async function load() {
     for (const id of await store.knownPostIds()) known.add(id)
+    for (const id of await store.ownWebhookIds()) hooks.add(id)
   }
 
   // Calls `step` now, and answers a promise that fails when it throws as much as when it rejects.
@@ -139,8 +147,13 @@ export function createIngest({ store, guild, access, forumId, fetchMessage, onRe
     known.delete(d.id)
   }
 
-  /** Whether a message is one that our webhook posted: the outbox's, which no event stores. */
-  const isOurs = (id) => webhookId !== null && id === webhookId
+  /** Whether a webhook (the id an event says, or nothing) is one of ours: the current one, or one that sent a part that is stored. */
+  const isOurHook = (id) => typeof id === 'string' && (id === webhookId || hooks.has(id))
+
+  /** Whether a message is a part of a reply of the site that is stored: the outbox stored it, and no event stores it again. */
+  async function isStoredPart(id) {
+    return isStoreId(id) && (await store.knownPartIds([id])).has(id)
+  }
 
   /** Delete messages: the ones that are parts of a reply of the site take the whole reply, and the others go as they are. */
   async function forget(ids, postId) {
@@ -148,10 +161,10 @@ export function createIngest({ store, guild, access, forumId, fetchMessage, onRe
     await store.deleteMessages(plain)
   }
 
-  /** Store a message of the gateway or of a re-read, when parseMessage makes a row of it, and it is not our webhook's. */
+  /** Store a message of the gateway or of a re-read, when parseMessage makes a row of it, and it is not one of the site's own. */
   async function keepMessage(raw) {
     const row = parseMessage(raw)
-    if (row === null || isOurs(row.webhookId)) return
+    if (row === null || isOurHook(row.webhookId) || (await isStoredPart(row.id))) return
     // Stryker disable next-line StringLiteral: what is logged is for the owner to read, and no test asserts it
     await attempt(() => store.upsertMessages([row], { keepReactions: true }), `message ${row.id}`)
   }
@@ -161,7 +174,7 @@ export function createIngest({ store, guild, access, forumId, fetchMessage, onRe
   }
 
   async function messageUpdate(d) {
-    if (!known.has(d.channel_id) || isOurs(d.webhook_id)) return
+    if (!known.has(d.channel_id) || isOurHook(d.webhook_id)) return
     if (isObj(d.author)) return keepMessage(d)
     if (!isStoreId(d.id)) return
     const whole = await fetchMessage(d.channel_id, d.id)

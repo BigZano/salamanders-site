@@ -38,6 +38,7 @@ const TABLES = [
   'librarius_parts',
   'librarius_uploads',
   'librarius_events',
+  'librarius_outbox_state',
 ]
 
 describe('schema.sql Librarius section', () => {
@@ -337,8 +338,60 @@ describe('schema.sql Librarius section', () => {
       expect(columns().part_index).toBe('smallint not null')
     })
 
-    it('has no foreign key: its message is only stored when its last part has been sent', () => {
+    it('says no more in its own text than batch 2 first made it: the webhook, the foreign key and the range come as their own statements', () => {
       expect(body()).not.toMatch(/references/)
+      expect(body()).not.toMatch(/check/)
+    })
+  })
+
+  describe('what librarius_parts gains: the webhook that sent a part, its message as a foreign key, and a range', () => {
+    const block = () => /do \$\$([\s\S]*?)\$\$;/.exec(sql)?.[1].replace(/\s+/g, ' ') ?? ''
+
+    it('adds the webhook of a part only when it is missing, empty until a part is written or repaired', () => {
+      expect(sql).toContain('alter table librarius_parts add column if not exists webhook_id bigint;')
+      expect(sql.match(/alter table librarius_parts add column/g)).toHaveLength(1)
+    })
+
+    it('adds the foreign key to the message, with a cascade, only when no constraint of that name is there, after deleting the orphans', () => {
+      const text = block()
+      expect(text).toContain("if not exists (select 1 from pg_constraint where conrelid = 'librarius_parts'::regclass and conname = 'librarius_parts_message_fk') then")
+      expect(text).toContain('delete from librarius_parts p where not exists (select 1 from librarius_messages m where m.id = p.message_id); alter table librarius_parts add constraint librarius_parts_message_fk foreign key (message_id) references librarius_messages (id) on delete cascade; end if;')
+    })
+
+    it('adds the range of a part only when no constraint of that name is there, after deleting the rows outside it', () => {
+      const text = block()
+      expect(text).toContain("if not exists (select 1 from pg_constraint where conrelid = 'librarius_parts'::regclass and conname = 'librarius_parts_index_check') then")
+      expect(text).toContain('delete from librarius_parts where part_index not between 0 and 2; alter table librarius_parts add constraint librarius_parts_index_check check (part_index between 0 and 2); end if;')
+    })
+
+    it('is one block, that begins and ends as a block does, and comes after the table it changes and the one it points to', () => {
+      expect(sql.match(/do \$\$/g)).toHaveLength(1)
+      expect(block().trim()).toMatch(/^begin .* end$/)
+      expect(sql.indexOf('do $$')).toBeGreaterThan(sql.indexOf('create table if not exists librarius_parts ('))
+      expect(sql.indexOf('do $$')).toBeGreaterThan(sql.indexOf('create table if not exists librarius_messages ('))
+    })
+
+    it('does not name a constraint twice, so that a second run finds the first one and does nothing', () => {
+      expect(sql.match(/add constraint librarius_parts_message_fk/g)).toHaveLength(1)
+      expect(sql.match(/add constraint librarius_parts_index_check/g)).toHaveLength(1)
+    })
+  })
+
+  describe('librarius_outbox_state', () => {
+    const body = () => tableBody('librarius_outbox_state')
+    const columns = () => columnsOf(body())
+
+    it('has exactly these columns, in this order', () => {
+      expect(Object.keys(columns())).toEqual(['id', 'paused_until', 'global_until'])
+    })
+
+    it('is a single row: the id is 1 and nothing else is allowed', () => {
+      expect(columns().id).toBe('smallint primary key default 1 check (id = 1)')
+    })
+
+    it('holds the two times as instants, empty until one is set', () => {
+      expect(columns().paused_until).toBe('timestamptz')
+      expect(columns().global_until).toBe('timestamptz')
     })
   })
 
@@ -417,14 +470,15 @@ describe('schema.sql Librarius section', () => {
       ['librarius_outbox_due_idx', "on librarius_outbox (next_at) where state = 'pending'"],
       ['librarius_outbox_key_idx', 'on librarius_outbox (message_key)'],
       ['librarius_events_action_idx', 'on librarius_events (action, at)'],
+      ['librarius_outbox_sending_idx', "on librarius_outbox (state) where state = 'sending'"],
     ])('%s is created only when missing, %s', (name, target) => {
       const statement = indexStatement(name)
       expect(statement).not.toBe('')
       expect(statement).toContain(` ${target};`)
     })
 
-    it('has no other Librarius index than those eight, and none that is unique', () => {
-      expect(sql.match(/create (unique )?index if not exists librarius_\w+/g)).toHaveLength(8)
+    it('has no other Librarius index than those nine, and none that is unique', () => {
+      expect(sql.match(/create (unique )?index if not exists librarius_\w+/g)).toHaveLength(9)
       expect(sql).not.toMatch(/create unique index if not exists librarius_/)
     })
   })

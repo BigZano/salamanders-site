@@ -427,3 +427,35 @@ alter table librarius_messages add column if not exists origin text not null def
 alter table librarius_messages add column if not exists source text;
 alter table librarius_messages add column if not exists state text check (state in ('sending', 'blocked'));
 alter table librarius_messages add column if not exists layout jsonb;
+
+-- Batch 2, the outbox across restarts and webhook changes. Every statement is safe to run again, on a database that has
+-- batch 2's tables or not. A part keeps the id of the webhook that sent it (librarius_parts.webhook_id), so that the import and
+-- the live feed know a message of a webhook that was since replaced as the site's own (and not store the later parts of a reply
+-- as messages of their own). A reply's parts go with their message (the foreign key), and there are three of them at most
+-- (part_index 0 to 2). A constraint is added only when it is missing, after the rows that would break it are deleted: parts
+-- whose message is not stored (nothing reads them), and places outside 0 to 2 (the code never writes one).
+alter table librarius_parts add column if not exists webhook_id bigint;
+
+do $$
+begin
+  if not exists (select 1 from pg_constraint where conrelid = 'librarius_parts'::regclass and conname = 'librarius_parts_message_fk') then
+    delete from librarius_parts p where not exists (select 1 from librarius_messages m where m.id = p.message_id);
+    alter table librarius_parts add constraint librarius_parts_message_fk foreign key (message_id) references librarius_messages (id) on delete cascade;
+  end if;
+  if not exists (select 1 from pg_constraint where conrelid = 'librarius_parts'::regclass and conname = 'librarius_parts_index_check') then
+    delete from librarius_parts where part_index not between 0 and 2;
+    alter table librarius_parts add constraint librarius_parts_index_check check (part_index between 0 and 2);
+  end if;
+end
+$$;
+
+-- The one thing the worker holds in memory that a restart must not lose: until when the breaker has paused all sending (two
+-- Discord blocks within an hour), and until when a global 429 holds every webhook call. One row, and the check keeps it one.
+create table if not exists librarius_outbox_state (
+  id            smallint primary key default 1 check (id = 1),
+  paused_until  timestamptz,
+  global_until  timestamptz
+);
+
+-- The worker looks at the entries it left 'sending' at every start.
+create index if not exists librarius_outbox_sending_idx on librarius_outbox (state) where state = 'sending';

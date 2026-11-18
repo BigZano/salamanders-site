@@ -7,7 +7,9 @@
  *   onPostsListed = () => {}, webhookId = null })
  *   → { run() → Promise<void>, start(), stop(), status() → what store.syncStatus() says }
  *
- * `webhookId` is the id of the Librarius's own webhook (batch 2), or null: a message of it is not stored by a run (see write()).
+ * `webhookId` is the id of the Librarius's own webhook (batch 2), or null: a message of it is not stored by a run (see write()), nor is
+ * one of a webhook that sent a part that is stored (store.ownWebhookIds, read at the start of each run: the webhook may have been
+ * replaced, or the address unset), nor one whose id is a stored part (store.knownPartIds).
  *
  * run() never rejects, and what it logs can never fail it: a log that throws is ignored. Everything a run writes is an upsert, a delete of what Discord no longer holds, or a cursor that
  * only moves forward, so one that repeats or is cut short does no harm. Only one run goes at a time: a run asked for while
@@ -35,7 +37,8 @@
  *    whose edit time (as an instant, whatever its format) differs from Discord's is written again. A stored message
  *    newer than the whole page, or any stored message when the page is empty, may have been deleted while the gateway
  *    was down (the page cannot show that), or may have come in after the page was read, so Discord is asked for that
- *    message itself (discord.message): a message it no longer has is deleted here, one it still has is kept and is
+ *    message itself (discord.message): a message it no longer has is deleted here (a part of a reply of the site takes the whole reply with it,
+ *    and the deletion of the parts that are left is queued: store.siteDeleted), one it still has is kept and is
  *    written again if its edit time differs. That is at most `windowSize` questions for a post. A stored message older
  *    than the whole page is out of view and is left alone, unless the page holds fewer messages than `windowSize`: that
  *    page is the whole post, so anything stored that is not on it is gone, and is deleted here (older ones with no
@@ -87,6 +90,9 @@ const STORE_METHODS = [
   'windowIds',
   'syncStatus',
   'setSync',
+  'ownWebhookIds',
+  'knownPartIds',
+  'siteDeleted',
 ]
 
 const instant = (time) => (time == null ? null : new Date(time).toISOString())
@@ -155,6 +161,8 @@ export function createImport({
   // run that outlives a stop() and a start() does not leave two chains.
   let chain = null
   let timer
+  // The webhooks that sent a stored part, as the run in hand read them, besides the current one.
+  let hooks = new Set()
 
   /** Do one write of one row. The store refusing it with a TypeError skips the row → false; any other error goes on up. */
   const attempt = (write, what) =>
@@ -162,13 +170,29 @@ export function createImport({
     attemptWrite(write, (err) => report(`the store refused ${what}: ${describe(err)}`))
 
   /**
-   * Store the rows of a page, but those of our own webhook's messages: the parts of a reply of the site are the outbox's, which
+   * → the ids of the rows that are the site's own: a message of the current webhook, of a webhook that sent a part that is stored (see
+   * above), or whose id is a stored part. Only a row whose webhook is not known for ours is asked of the store.
+   */
+  async function ownIds(rows) {
+    const own = new Set()
+    const unknown = []
+    for (const row of rows) {
+      if (row.webhookId !== null && (row.webhookId === webhookId || hooks.has(row.webhookId))) own.add(row.id)
+      else if (isStoreId(row.id)) unknown.push(row.id)
+    }
+    if (unknown.length > 0) for (const id of await store.knownPartIds(unknown)) own.add(id)
+    return own
+  }
+
+  /**
+   * Store the rows of a page, but those of the site's own messages: the parts of a reply of the site are the outbox's, which
    * stores the reply as one message, so an import that stored each part would show a reply in pieces, and one that stored the
    * first over the reply would put the webhook where the member is. One the store refuses fails the whole batch, so the rows
    * then go one at a time.
    */
   async function write(all) {
-    const rows = webhookId === null ? all : all.filter((row) => row.webhookId !== webhookId)
+    const own = await ownIds(all)
+    const rows = all.filter((row) => !own.has(row.id))
     // Stryker disable next-line StringLiteral: what is logged is for the owner to read, and no test asserts it
     if (await attempt(() => store.upsertMessages(rows), 'a batch of messages')) return
     // Stryker disable next-line StringLiteral: as above
@@ -257,12 +281,15 @@ export function createImport({
       const row = parseMessage(message)
       if (row !== null && instant(row.editedAt) !== instant(editedAt)) edited.push(row)
     }
-    await store.deleteMessages(gone)
+    // A reply of the site whose first part is gone from Discord goes with all its parts: the others are queued for deletion.
+    const { plain } = await store.siteDeleted(gone, postId)
+    await store.deleteMessages(plain)
     await write(edited)
   }
 
   async function pass() {
     await store.setSync({ last_run_at: stamp() })
+    hooks = await store.ownWebhookIds()
     const posts = await importPosts()
     await onPostsListed()
     for (const id of posts) await importMessages(id)

@@ -132,11 +132,17 @@ const SYNC_FIELDS = { import_done: 'importDone', last_run_at: 'lastRunAt', last_
  * anything is written, a batch is checked whole first, an empty post list deletes nothing, deleting what is not there is
  * fine, and setSync takes the four columns and no undefined.
  */
-function fakeStore({ posts = [], messages = [], cursors = {}, sync } = {}) {
+function fakeStore({ posts = [], messages = [], cursors = {}, sync, parts = [], hooks = [] } = {}) {
   const plans = []
   const s = {
     posts: new Map(),
     messages: new Map(),
+    // The Discord id of each part of a reply of the site, and the id of the reply it belongs to; and the webhooks that sent them.
+    parts: new Map(parts),
+    hooks: new Set(hooks),
+    // What the store was asked: the ids of knownPartIds, in order, and what it queued for the outbox (the parts of a reply left to delete).
+    asked: [],
+    queued: [],
     writes: [],
     received: [],
     windowCalls: [],
@@ -194,6 +200,32 @@ function fakeStore({ posts = [], messages = [], cursors = {}, sync } = {}) {
       needList(ids, 'ids')
       for (const id of ids) needId(id, 'messageId')
       for (const id of ids) s.messages.delete(id)
+    },
+    async ownWebhookIds() {
+      enter('ownWebhookIds')
+      return new Set(s.hooks)
+    },
+    async knownPartIds(ids) {
+      enter('knownPartIds', ids)
+      needList(ids, 'ids')
+      for (const id of ids) needId(id, 'a part id')
+      s.asked.push([...ids])
+      return new Set(ids.filter((id) => s.parts.has(id)))
+    },
+    async siteDeleted(ids, postId) {
+      enter('siteDeleted', ids, postId)
+      needList(ids, 'ids')
+      for (const id of ids) needId(id, 'a part id')
+      needId(postId, 'postId')
+      const plain = ids.filter((id) => !s.parts.has(id))
+      for (const messageId of new Set(ids.filter((id) => s.parts.has(id)).map((id) => s.parts.get(id)))) {
+        const all = [...s.parts].filter(([, m]) => m === messageId).map(([part]) => part)
+        s.messages.delete(messageId)
+        for (const part of all) s.parts.delete(part)
+        const left = all.filter((part) => !ids.includes(part))
+        if (left.length > 0) s.queued.push({ messageKey: messageId, postId, partIds: left })
+      }
+      return { plain }
     },
     async importCursor(id) {
       enter('importCursor', id)
@@ -267,7 +299,7 @@ const known = (p) => parseThread(thread(p), FORUM)
 
 describe('createImport options', () => {
   const DISCORD = ['activeThreads', 'archivedThreads', 'messagesAfter', 'newest', 'message', 'thread']
-  const STORE = ['knownPostIds', 'upsertPost', 'deletePostsNotIn', 'upsertMessages', 'deleteMessages', 'importCursor', 'setImportCursor', 'windowIds', 'syncStatus', 'setSync']
+  const STORE = ['knownPostIds', 'upsertPost', 'deletePostsNotIn', 'upsertMessages', 'deleteMessages', 'importCursor', 'setImportCursor', 'windowIds', 'syncStatus', 'setSync', 'ownWebhookIds', 'knownPartIds', 'siteDeleted']
 
   it.each(DISCORD)('needs discord.%s to be a function', (name) => {
     const store = fakeStore()
@@ -777,6 +809,137 @@ describe('the import', () => {
       }),
       { numRuns: 60 },
     )
+  })
+})
+
+describe('the site\'s own replies, whatever webhook sent them', () => {
+  const HOOK = '200000000000000450'
+  const OLD_HOOK = '200000000000000452'
+  const OTHER_HOOK = '200000000000000451'
+  const hooked = (n, hook, over = {}) => raw(1, n, { webhook_id: hook, author: { id: hook, username: 'Invented Name', bot: true }, ...over })
+  const run = async (page, options = {}, webhookId = HOOK) => {
+    const w = setup({ active: [thread(1)], channels: { [postId(1)]: page }, webhookId, ...options })
+    await w.imp.run()
+    return w
+  }
+
+  it('leaves out the messages of a webhook that sent a stored part, though it is not the current one', async () => {
+    const w = await run([raw(1, 1), hooked(2, OLD_HOOK), hooked(3, HOOK), hooked(4, OTHER_HOOK)], { store: { hooks: [OLD_HOOK] } })
+    expect(idsOf(w, 1)).toEqual([1, 4].map((n) => mid(1, n)))
+  })
+
+  it('leaves out the messages of the old webhooks when there is no webhook now: the address is unset', async () => {
+    const w = await run([raw(1, 1), hooked(2, OLD_HOOK), hooked(3, OTHER_HOOK)], { store: { hooks: [OLD_HOOK] } }, null)
+    expect(idsOf(w, 1)).toEqual([1, 3].map((n) => mid(1, n)))
+  })
+
+  it('leaves out a message whose id is a stored part, whoever sent it', async () => {
+    const w = await run([raw(1, 1), raw(1, 2), hooked(3, OTHER_HOOK), raw(1, 4)], { store: { parts: [[mid(1, 2), mid(1, 1)], [mid(1, 3), mid(1, 1)]] } })
+    expect(idsOf(w, 1)).toEqual([1, 4].map((n) => mid(1, n)))
+  })
+
+  it('asks the store about the rows whose webhook it does not know, and only those, in one question for the page', async () => {
+    const w = await run([raw(1, 1), hooked(2, HOOK), hooked(3, OLD_HOOK), hooked(4, OTHER_HOOK), raw(1, 5)], { store: { hooks: [OLD_HOOK] } })
+    expect(w.store.asked[0]).toEqual([1, 4, 5].map((n) => mid(1, n)))
+  })
+
+  it('asks nothing when every row of a page is of a webhook it knows', async () => {
+    const w = await run([hooked(1, HOOK), hooked(2, OLD_HOOK)], { store: { hooks: [OLD_HOOK] } })
+    expect(w.store.asked).toEqual([])
+    expect(idsOf(w, 1)).toEqual([])
+  })
+
+  it('does not ask about an id the store cannot hold: the row is refused by the write, and skipped', async () => {
+    const big = raw(1, 1, { id: '99999999999999999999' })
+    const w = await run([big, raw(1, 2)])
+    expect(w.store.asked.flat()).toEqual([mid(1, 2)])
+    expect(idsOf(w, 1)).toEqual([2].map((n) => mid(1, n)))
+  })
+
+  it('reads the webhooks again at the start of each run, before anything is written', async () => {
+    const w = setup({ active: [thread(1)], channels: { [postId(1)]: [hooked(1, OLD_HOOK), raw(1, 2)] }, webhookId: HOOK })
+    await w.imp.run()
+    expect(idsOf(w, 1)).toEqual([1, 2].map((n) => mid(1, n)))
+    w.store.messages.clear()
+    w.store.posts.get(postId(1)).cursor = null
+    w.store.hooks.add(OLD_HOOK)
+    await w.imp.run()
+    expect(idsOf(w, 1)).toEqual([2].map((n) => mid(1, n)))
+  })
+
+  it('ends the run, recording why, when the webhooks cannot be read, and writes no message', async () => {
+    const w = setup({ active: [thread(1)], channels: { [postId(1)]: [raw(1, 1)] }, webhookId: HOOK })
+    w.store.failWhen('ownWebhookIds', () => true, new Error('connection lost'))
+    await w.imp.run()
+    expect(w.store.writes).toEqual([])
+    expect(await w.imp.status()).toMatchObject({ importDone: false, lastError: 'Error: connection lost' })
+  })
+
+  it('does not write the site\'s own message over its reply in the catch-up either, of an old webhook', async () => {
+    const reply = { ...parseMessage(raw(1, 2, { content: 'the reply of the site' })), webhookId: OLD_HOOK, authorName: 'Invented Name' }
+    const w = setup({
+      active: [thread(1)],
+      channels: { [postId(1)]: [raw(1, 1), hooked(2, OLD_HOOK, { content: '', edited_timestamp: '2026-11-01T10:00:00.123456+00:00' })] },
+      store: { posts: [known(1)], messages: [parseMessage(raw(1, 1)), reply], cursors: { [postId(1)]: mid(1, 100) }, hooks: [OLD_HOOK], parts: [[mid(1, 2), mid(1, 2)]] },
+      webhookId: HOOK,
+    })
+    await w.imp.run()
+    expect(w.store.messages.get(mid(1, 2)).content).toBe('the reply of the site')
+    expect(w.store.writes).toEqual([])
+  })
+})
+
+describe('the catch-up and a reply of the site whose first part is gone from Discord', () => {
+  const HOOK = '200000000000000450'
+  const world = (parts) =>
+    setup({
+      active: [thread(1)],
+      channels: { [postId(1)]: [raw(1, 1), raw(1, 4)] },
+      store: { posts: [known(1)], messages: [1, 2, 3, 4].map((n) => parseMessage(raw(1, n))), cursors: { [postId(1)]: mid(1, 100) }, parts, hooks: [HOOK] },
+      webhookId: HOOK,
+      windowSize: 5,
+    })
+  const THREE = [
+    [mid(1, 2), mid(1, 2)],
+    [mid(1, 20), mid(1, 2)],
+    [mid(1, 21), mid(1, 2)],
+  ]
+
+  it('takes the reply, and queues the deletion of its other parts, through siteDeleted', async () => {
+    const w = world(THREE)
+    await w.imp.run()
+    // Messages 2 and 3 are both gone from Discord: 2 is the first part of a reply, and 3 a message of a person.
+    expect(idsOf(w, 1)).toEqual([1, 4].map((n) => mid(1, n)))
+    expect(w.store.queued).toEqual([{ messageKey: mid(1, 2), postId: postId(1), partIds: [mid(1, 20), mid(1, 21)] }])
+    expect([...w.store.parts.keys()]).toEqual([])
+  })
+
+  it('deletes a stored message that is no part as before, and queues nothing for a reply of one part', async () => {
+    const w = world(THREE.slice(0, 1))
+    await w.imp.run()
+    expect(idsOf(w, 1)).toEqual([1, 4].map((n) => mid(1, n)))
+    expect(w.store.queued).toEqual([])
+  })
+
+  it('queues nothing, and asks siteDeleted for nothing it can know, when nothing is gone', async () => {
+    const w = setup({
+      active: [thread(1)],
+      channels: { [postId(1)]: [raw(1, 1), raw(1, 2)] },
+      store: { posts: [known(1)], messages: [1, 2].map((n) => parseMessage(raw(1, n))), cursors: { [postId(1)]: mid(1, 100) }, parts: THREE },
+      windowSize: 5,
+    })
+    await w.imp.run()
+    expect(idsOf(w, 1)).toEqual([1, 2].map((n) => mid(1, n)))
+    expect(w.store.queued).toEqual([])
+    expect([...w.store.parts.keys()]).toHaveLength(3)
+  })
+
+  it('ends the run, recording why, when siteDeleted fails: nothing is deleted without it', async () => {
+    const w = world(THREE)
+    w.store.failWhen('siteDeleted', () => true, new Error('connection lost'))
+    await w.imp.run()
+    expect(idsOf(w, 1)).toEqual([1, 2, 3, 4].map((n) => mid(1, n)))
+    expect(await w.imp.status()).toMatchObject({ importDone: false, lastError: 'Error: connection lost' })
   })
 })
 

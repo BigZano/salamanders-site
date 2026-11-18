@@ -80,12 +80,15 @@ const needIdOrNull = (value, what) => {
  * bigint are a TypeError before any write, a message is only stored with its post, keepReactions leaves the stored
  * reactions as they are (and a new message gets the row's), and every write to a stored message takes the next rev.
  */
-function fakeStore({ posts = [], messages = [], parts = [] } = {}) {
+function fakeStore({ posts = [], messages = [], parts = [], hooks = [] } = {}) {
   const plans = []
   let rev = 100
   const s = {
     posts: new Map(posts.map((p) => [p.id, p])),
     messages: new Map(messages.map((m) => [m.id, m])),
+    // The webhooks that sent a stored part (store.ownWebhookIds answers them), and the ids knownPartIds was asked about.
+    hooks: new Set(hooks),
+    asked: [],
     // The Discord id of each part of a reply of the site, and the id of the reply it belongs to.
     parts: new Map(parts),
     // What the store queued for the outbox: the parts of a reply that are left to delete, as { messageKey, postId, partIds }.
@@ -155,6 +158,17 @@ function fakeStore({ posts = [], messages = [], parts = [] } = {}) {
       }
       return { plain }
     },
+    async ownWebhookIds() {
+      enter('ownWebhookIds')
+      return new Set(s.hooks)
+    },
+    async knownPartIds(ids) {
+      enter('knownPartIds', ids)
+      if (!Array.isArray(ids)) throw new TypeError('ids must be a list')
+      for (const id of ids) needId(id, 'a part id')
+      s.asked.push([...ids])
+      return new Set(ids.filter((id) => s.parts.has(id)))
+    },
     async messageOfPart(id) {
       enter('messageOfPart', id)
       needId(id, 'id')
@@ -209,8 +223,8 @@ function fakeFetch(answers = new Map()) {
 }
 
 /** A world: the store with `posts` and `messages` in it, a loaded ingest, and the edges it writes to. */
-async function rig({ posts = [POST], messages = [], parts = [], load = true, answers, ...over } = {}) {
-  const store = fakeStore({ posts: posts.map((p) => storedPost(p)), messages, parts })
+async function rig({ posts = [POST], messages = [], parts = [], hooks = [], load = true, answers, ...over } = {}) {
+  const store = fakeStore({ posts: posts.map((p) => storedPost(p)), messages, parts, hooks })
   const guild = fakeGuild()
   const access = fakeAccess()
   const fetch = fakeFetch(answers)
@@ -237,7 +251,7 @@ const bare = ({ rev, ...rest }) => rest
 const mapOf = (reactions) => new Map(reactions.map((r) => [r.key, r.count]))
 
 describe('createIngest options', () => {
-  const STORE = ['knownPostIds', 'upsertPost', 'deletePost', 'upsertMessages', 'deleteMessages', 'adjustReaction', 'clearReactions', 'siteDeleted', 'messageOfPart']
+  const STORE = ['knownPostIds', 'upsertPost', 'deletePost', 'upsertMessages', 'deleteMessages', 'adjustReaction', 'clearReactions', 'siteDeleted', 'messageOfPart', 'ownWebhookIds', 'knownPartIds']
   const options = () => ({
     store: fakeStore(),
     guild: fakeGuild(),
@@ -1039,6 +1053,101 @@ describe('our own webhook: what it posts is the outbox\'s to store', () => {
     await w.send('MESSAGE_CREATE', hooked())
     await w.send('MESSAGE_CREATE', gw({ id: MSG_2, webhook_id: null }))
     expect([...w.store.messages.keys()]).toEqual([MSG, MSG_2])
+  })
+})
+
+describe('the site\'s own replies, whatever webhook sent them', () => {
+  const OLD_HOOK = '200000000000000452'
+  const OTHER_HOOK = '200000000000000451'
+  const hooked = (hook, over = {}) => gw({ webhook_id: hook, author: { id: hook, username: 'Invented Name', bot: true }, ...over })
+
+  it('stores no message of a webhook that sent a stored part, though it is not the current one, once the ingest has loaded it', async () => {
+    const w = await rig({ webhookId: HOOK, hooks: [OLD_HOOK] })
+    await w.send('MESSAGE_CREATE', hooked(OLD_HOOK))
+    await w.send('MESSAGE_CREATE', hooked(OTHER_HOOK, { id: MSG_2 }))
+    expect([...w.store.messages.keys()]).toEqual([MSG_2])
+  })
+
+  it('knows the old webhooks when there is no webhook now, and the current one when the store knows none', async () => {
+    const none = await rig({ webhookId: null, hooks: [OLD_HOOK] })
+    await none.send('MESSAGE_CREATE', hooked(OLD_HOOK))
+    await none.send('MESSAGE_UPDATE', hooked(OLD_HOOK, { content: 'edited' }))
+    expect(none.store.messages.size).toBe(0)
+    const live = await rig({ webhookId: HOOK, hooks: [] })
+    await live.send('MESSAGE_CREATE', hooked(HOOK))
+    expect(live.store.messages.size).toBe(0)
+  })
+
+  it('reads the webhooks each time it loads, so that one that sent a part since is known', async () => {
+    const w = await rig({ webhookId: HOOK })
+    await w.send('MESSAGE_CREATE', hooked(OLD_HOOK))
+    expect(w.store.messages.size).toBe(1)
+    w.store.messages.clear()
+    w.store.hooks.add(OLD_HOOK)
+    await w.send('MESSAGE_CREATE', hooked(OLD_HOOK))
+    expect(w.store.messages.size).toBe(1)
+    await w.ingest.load()
+    w.store.messages.clear()
+    await w.send('MESSAGE_CREATE', hooked(OLD_HOOK))
+    expect(w.store.messages.size).toBe(0)
+  })
+
+  it('stores no message whose id is a stored part, whoever sent it, as a create, an update with the author, or a re-read', async () => {
+    const w = await rig({ webhookId: HOOK, parts: [[MSG, MSG], [PART_2, MSG]], answers: new Map([[PART_2, gw({ id: PART_2, content: 'as read again' })]]) })
+    await w.send('MESSAGE_CREATE', gw({ id: MSG }))
+    await w.send('MESSAGE_UPDATE', gw({ id: PART_2, content: 'edited' }))
+    await w.send('MESSAGE_UPDATE', { id: PART_2, channel_id: POST, embeds: [] })
+    expect(w.store.messages.size).toBe(0)
+    // The partial update is read again, as it was before (a part that Discord no longer has goes with its reply), and what is read is no one's to store.
+    expect(w.fetch.calls).toEqual([[POST, PART_2]])
+  })
+
+  it('stores a message of a person, and one of a webhook it does not know, after asking the store whether it is a part', async () => {
+    const w = await rig({ webhookId: HOOK, parts: [[MSG, MSG]] })
+    await w.send('MESSAGE_CREATE', gw({ id: MSG_2 }))
+    await w.send('MESSAGE_CREATE', hooked(OTHER_HOOK, { id: MSG_3 }))
+    expect([...w.store.messages.keys()]).toEqual([MSG_2, MSG_3])
+    expect(w.store.asked).toEqual([[MSG_2], [MSG_3]])
+  })
+
+  it('does not ask the store about a message of a webhook it knows', async () => {
+    const w = await rig({ webhookId: HOOK, hooks: [OLD_HOOK] })
+    await w.send('MESSAGE_CREATE', hooked(HOOK))
+    await w.send('MESSAGE_CREATE', hooked(OLD_HOOK, { id: MSG_2 }))
+    await w.send('MESSAGE_UPDATE', hooked(OLD_HOOK, { id: MSG_3 }))
+    expect(w.store.asked).toEqual([])
+  })
+
+  it('does not ask the store about an id it cannot hold, and leaves the write to refuse it', async () => {
+    const w = await rig({ webhookId: HOOK })
+    await w.send('MESSAGE_CREATE', gw({ id: OUT_OF_RANGE }))
+    await w.send('MESSAGE_UPDATE', { id: OUT_OF_RANGE, channel_id: POST, embeds: [] })
+    expect(w.store.asked).toEqual([])
+    expect(w.store.messages.size).toBe(0)
+    expect(w.fetch.calls).toEqual([])
+  })
+
+  it('gives the gateway the failure when the store cannot say whether a message is a part, and stores nothing', async () => {
+    const w = await rig({ webhookId: HOOK })
+    w.store.failWhen('knownPartIds', () => true, new Error('connection lost'))
+    await expect(w.send('MESSAGE_CREATE', gw())).rejects.toThrow('connection lost')
+    await expect(w.send('MESSAGE_UPDATE', gw({ content: 'edited' }))).rejects.toThrow('connection lost')
+    expect(w.store.messages.size).toBe(0)
+  })
+
+  it('does not take null for a webhook of its own when it has none: a person\'s message has no webhook either', async () => {
+    const w = await rig({ webhookId: null })
+    await w.send('MESSAGE_CREATE', gw({ webhook_id: null }))
+    await w.send('MESSAGE_CREATE', gw({ id: MSG_2 }))
+    expect([...w.store.messages.keys()]).toEqual([MSG, MSG_2])
+  })
+
+  it('gives the gateway the failure when the webhooks cannot be read, and goes on listening to the posts it has', async () => {
+    const w = await rig({ webhookId: HOOK, load: false })
+    w.store.failWhen('ownWebhookIds', () => true, new Error('connection lost'))
+    await expect(w.ingest.load()).rejects.toThrow('connection lost')
+    await w.send('MESSAGE_CREATE', gw())
+    expect(w.store.messages.size).toBe(1)
   })
 })
 

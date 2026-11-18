@@ -21,7 +21,7 @@
  * claimOutbox(now) → the oldest entry that is due at `now` (a Date, ISO text or epoch milliseconds), now 'sending', or null.
  * outboxNextAt() → when the next pending entry is due, as ISO text, or null.
  * outboxProgress(id, progress) → writes payload.progress of an entry that is 'sending'.
- * outboxSet(id, { state, attempts, nextAt, error, messageState, event, queue }) → one transition of an entry that is 'sending'
+ * outboxSet(id, { state, attempts, nextAt, error, messageState, event, queue, hold }) → one transition of an entry that is 'sending'
  *   (an entry in any other state is left as it is, and nothing else is written: a write that was made once is not made again),
  *   with what goes with it: `state` is 'pending', 'sent', 'blocked' or 'failed'; `attempts` and `nextAt` are left as they are
  *   when not given; `error` (null for none) is last_error, cut to 500 characters; `messageState` (null, 'sending' or
@@ -29,7 +29,21 @@
  *   noted with the entry's author; `queue` (at most 2) is the entries to queue in the same transaction, as { kind: 'edit' |
  *   'delete', messageKey, payload }, for the entry's author: what puts Discord right after an entry that ended for good (the
  *   parts of a reply that never finished, an edit put back). An edit or a delete queued puts its message in the state
- *   'sending', as enqueueOutbox does.
+ *   'sending', as enqueueOutbox does. `hold` ({ pausedUntil, globalUntil }, either or both, times) is what the worker would
+ *   lose with a restart: until when the breaker has paused all sending, and until when a global 429 holds every webhook call.
+ *   It is written with the transition, and a time that is earlier than the one held is no change (see outboxHold).
+ * outboxHold() → { pausedUntil, globalUntil }: those two times as ISO text, or null for one that was never set. They may be
+ *   in the past: the worker compares them with its clock.
+ * noteBlock(id, { event, hold }) → notes a block (event, noted with the entry's author) that came with no transition of the entry
+ *   (the edit that adds a reply's links forward was blocked), with the `hold` it caused, if any. Nothing is written for an
+ *   entry that is not 'sending'.
+ * sendTimesSince(since) → the times (ISO, oldest first) at which parts landed since `since`, from the parts the entries have
+ *   sent (their progress): the snowflake of a part holds its time. It is what the 20 sends a minute are counted from again after
+ *   a restart.
+ * takeWorkerLock() → true when this process now holds the outbox's lock (a Postgres advisory lock, held by one connection until
+ *   releaseWorkerLock() or the end of the process), false when another worker holds it: only that one sends. releaseWorkerLock() lets it go.
+ * pruneOutbox({ sentBefore, eventsBefore }) → { entries, events }: how many 'sent' entries created before `sentBefore`, and how many
+ *   events noted before `eventsBefore`, it deleted. Nothing else is deleted: an entry that is not done, or ended for good, stays.
  * finishSend(id, { message, partIds, uploadIds, event }) → { stored, gone }. The reply is done, in one transaction: the other
  *   parts of it that an import stored as messages of their own are deleted, the message is stored (origin 'site', with its
  *   attachments), its parts are written, its uploads (the author's) are deleted, the event is noted and the entry is 'sent';
@@ -45,8 +59,9 @@
  * finishDelete(id, { messageId, partIds, event }) → a delete is done, in one transaction: the message is deleted, noted in the
  *   tombstones for the readers, and its parts are forgotten, and the entry is 'sent'. An entry that is not 'sending' is left
  *   alone.
- * outboxMessage(messageId) → the message a worker acts on, or null: { id, postId, authorId, authorName, authorAvatar, origin,
- *   source, layout, state, parts: [the Discord ids of its parts, in order] }.
+ * outboxMessage(messageId) → the message a worker acts on, or null: { id, postId, authorId, authorName, authorAvatar, webhookId, origin,
+ *   source, layout, state, parts: [the Discord ids of its parts, in order] }. `webhookId` is the webhook that sent the message
+ *   (null for a message nobody told), which the worker compares with its own: a reply of another webhook cannot be edited.
  * uploadsFor(authorId, ids) → [{ id, name, contentType, bytes }] for those of the author's uploads that are still held, in the
  *   order of `ids`; one that is gone is left out.
  * addUpload({ authorId, name, contentType, bytes }) → { id }: holds a picture, already judged and stripped (librariusUploads.js), for
@@ -65,13 +80,23 @@
  * messageOfPart(id) → the id of the reply that a part belongs to, or `id` when it is no part of one: where a reaction lands.
  * siteDeleted(ids, postId) → { plain }: for those of `ids` that are parts of a reply of the site, the whole reply goes: its
  *   message is deleted (and noted in the tombstones), its parts are forgotten, and a delete of the parts that are left is
- *   queued, unless a delete that knows what to remove (payload.partIds or progress.partIds) is on its way already. (A delete
+ *   queued (with the webhook that sent the parts: payload.webhookId, null when none is noted), unless a delete that knows what to
+ *   remove (payload.partIds or progress.partIds) is on its way already. (A delete
  *   from the site's own route does not know yet: it reads the parts from the message, which is gone now. So its own delete is
  *   queued beside it: removing a part twice is harmless.) `plain` is the ids that are no part of one, which the caller deletes
  *   as messages of Discord. Of those, the ones that are parts of a reply or an edit still on its way (named in its progress,
  *   not stored yet) are noted in that entry (payload.gone), so that finishSend or finishEdit does not store what Discord lost.
  * blockedSince(since) → the times (ISO) of the blocks noted since `since`, oldest first: what the breaker is built from again
  *   after a restart.
+ * ownWebhookIds() → the Set of the ids of the webhooks that ever sent a stored part (librarius_parts.webhook_id), or are sending a
+ *   reply that is not stored yet (its progress names its webhook): a message of one of them is the site's own, whatever its id.
+ *   The import and the live feed read it.
+ * repairSiteMessages() → { removed, restored }, once at every start, before the import: puts right what an image that did not know
+ *   the replies, or a webhook that was replaced, let the import write over the replies of the site. In one transaction: a part
+ *   with no webhook gets its message's; the message rows whose id is a part after the first (the import stored them as messages of
+ *   their own) are deleted, with their tombstones; the author, the name and picture, the text and the reply link of a site message
+ *   are written again from what the site knew when it made the message (the outbox entry that sent it, or else the event it noted;
+ *   the layout; the source), wherever the row differs, with one new rev. A second run writes nothing, and takes no rev.
  */
 import { createInTx } from './inTx.js'
 import { BIGINT_MAX, isStoreId } from './librariusText.js'
@@ -81,6 +106,8 @@ const KINDS = ['send', 'edit', 'delete']
 const SET_STATES = ['pending', 'sent', 'blocked', 'failed']
 const MESSAGE_STATES = [null, 'sending', 'blocked']
 const MAX_ERROR = 500
+// What a site message keeps of its text in `content` (the outbox's contentOf cuts at the same number).
+const CONTENT_MAX = 4000
 const MAX_NOTE = 200
 const MAX_ACTION = 40
 const MAX_KEY = 64
@@ -92,6 +119,10 @@ const MAX_HELD_ASKED = 50
 const MAX_NAME = 100
 const MAX_LISTED = 20
 const PICTURE_TYPES = ['image/png', 'image/jpeg', 'image/webp', 'image/gif']
+// The key of the Postgres advisory lock the outbox's worker takes, so that only one process sends. It is a number of its own: no other
+// advisory lock of this server uses it (the Deathwatch's access lock is 18000002), and a session lock and a transaction lock of one
+// key are the same lock to Postgres, so the keys must differ.
+const WORKER_LOCK = 19_000_001
 
 const isObject = (v) => typeof v === 'object' && v !== null && !Array.isArray(v)
 
@@ -180,11 +211,32 @@ async function deleteRows(q, ids, rev) {
   await q.query('delete from librarius_messages where id = any($1::bigint[])', [ids])
 }
 
-/** Write the parts of a reply: the places of its Discord ids, in order, under the id of the first. */
+/** Write the parts of a reply: the places of its Discord ids, in order, under the id of the first, each with the webhook of the message. */
 function writeParts(q, messageId, partIds) {
   return q.query(
-    'insert into librarius_parts (message_id, part_index, discord_id) select $1::bigint, (t.n - 1)::smallint, t.id from unnest($2::bigint[]) with ordinality as t (id, n)',
+    'insert into librarius_parts (message_id, part_index, discord_id, webhook_id) select $1::bigint, (t.n - 1)::smallint, t.id, (select webhook_id from librarius_messages where id = $1::bigint) from unnest($2::bigint[]) with ordinality as t (id, n)',
     [messageId, partIds],
+  )
+}
+
+/** → { pausedUntil, globalUntil } as ISO text or null, checked: at least one is given, and nothing else. */
+function needHold(hold) {
+  needObject(hold, 'hold')
+  const out = { pausedUntil: null, globalUntil: null }
+  for (const key of Object.keys(hold)) if (!(key in out)) throw new TypeError(`hold has no ${key}`)
+  for (const key of Object.keys(out)) if (hold[key] !== undefined) out[key] = needTime(hold[key], key)
+  if (out.pausedUntil === null && out.globalUntil === null) throw new TypeError('hold must say pausedUntil or globalUntil')
+  return out
+}
+
+/** Write what the worker holds: a time never moves back, so a late write cannot shorten a pause that another one lengthened. */
+function writeHold(q, hold) {
+  return q.query(
+    `insert into librarius_outbox_state (id, paused_until, global_until) values (1, $1::timestamptz, $2::timestamptz)
+     on conflict (id) do update set
+       paused_until = greatest(librarius_outbox_state.paused_until, excluded.paused_until),
+       global_until = greatest(librarius_outbox_state.global_until, excluded.global_until)`,
+    [hold.pausedUntil, hold.globalUntil],
   )
 }
 
@@ -238,8 +290,36 @@ async function goneOf(q, id, partIds) {
   return rows.length === 0 ? null : rows[0].gone.filter((part) => partIds.includes(part))
 }
 
+// What a message of the site should say, from what the site knew when it made it, for the repair (repairSiteMessages). The author is the
+// member of the outbox entry that sent the message (its first part is the message), or else of the event the site noted when it did
+// (the entries are pruned after a day, the events after ninety); the rest is in the message's own source and layout. The text is cut as the
+// outbox cuts it, to 4000 characters.
+const INTENDED = `with sent as (
+    select distinct on (mid) mid, author_id
+      from (
+        select case when o.payload->'progress'->'parts'->0->>'id' ~ '^[0-9]{17,19}$' then (o.payload->'progress'->'parts'->0->>'id')::bigint end as mid,
+               o.author_id, 1 as rank, o.id as at
+          from librarius_outbox o where o.kind = 'send'
+        union all
+        select e.message_id, e.actor_id, 2, e.id from librarius_events e where e.action = 'send' and e.message_id is not null
+      ) found
+     where mid is not null
+     order by mid, rank, at desc
+  ), intended as (
+    select m.id,
+           coalesce(s.author_id, m.author_id) as author_id,
+           coalesce(m.layout->>'username', m.author_name) as author_name,
+           case when m.layout->'avatarUrl' is not null then m.layout->>'avatarUrl' else m.author_avatar end as author_avatar,
+           left(m.source, ${CONTENT_MAX}) as content,
+           case when m.layout->'replyTo' is not null then (m.layout->'replyTo'->>'messageId')::bigint else m.reply_to end as reply_to
+      from librarius_messages m left join sent s on s.mid = m.id
+     where m.origin = 'site' and m.source is not null and m.layout is not null
+  )`
+
 export function createOutboxStore(pool) {
   const inTx = createInTx(pool)
+  // The connection that holds the worker's advisory lock, or null: a lock belongs to a session, so the connection is kept out of the pool.
+  let lock = null
 
   return {
     async enqueueOutbox({ kind, messageKey, authorId, payload }) {
@@ -279,7 +359,7 @@ export function createOutboxStore(pool) {
       await pool.query("update librarius_outbox set payload = jsonb_set(payload, '{progress}', $2::jsonb, true) where id = $1 and state = 'sending'", [id, JSON.stringify(progress)])
     },
 
-    async outboxSet(id, { state, attempts, nextAt, error = null, messageState, event, queue = [] } = {}) {
+    async outboxSet(id, { state, attempts, nextAt, error = null, messageState, event, queue = [], hold } = {}) {
       needSerial(id, 'id')
       if (!SET_STATES.includes(state)) throw new TypeError(`state must be one of ${SET_STATES.join(', ')}`)
       if (attempts !== undefined && !(Number.isSafeInteger(attempts) && attempts >= 0)) throw new TypeError('attempts must be a whole number of at least 0')
@@ -288,6 +368,7 @@ export function createOutboxStore(pool) {
       if (messageState !== undefined && !MESSAGE_STATES.includes(messageState)) throw new TypeError("messageState must be null, 'sending' or 'blocked'")
       const noted = event === undefined ? null : needEvent(event)
       const queued = needQueue(queue)
+      const held = hold === undefined ? null : needHold(hold)
       await inTx(async (q) => {
         const { rows } = await q.query(
           `update librarius_outbox set state = $2, attempts = coalesce($3::int, attempts), next_at = coalesce($4::timestamptz, next_at), last_error = $5
@@ -301,7 +382,81 @@ export function createOutboxStore(pool) {
         }
         if (noted !== null) await logEvent(q, entry.author_id, noted)
         for (const item of queued) await enqueueIn(q, { ...item, authorId: entry.author_id })
+        if (held !== null) await writeHold(q, held)
       })
+    },
+
+    async outboxHold() {
+      const { rows } = await pool.query('select paused_until, global_until from librarius_outbox_state where id = 1')
+      const iso = (t) => (t === null ? null : new Date(t).toISOString())
+      return rows.length === 0 ? { pausedUntil: null, globalUntil: null } : { pausedUntil: iso(rows[0].paused_until), globalUntil: iso(rows[0].global_until) }
+    },
+
+    async noteBlock(id, { event, hold } = {}) {
+      needSerial(id, 'id')
+      const noted = needEvent(event)
+      const held = hold === undefined ? null : needHold(hold)
+      await inTx(async (q) => {
+        const { rows } = await q.query("select author_id from librarius_outbox where id = $1 and state = 'sending'", [id])
+        if (rows.length === 0) return
+        await logEvent(q, rows[0].author_id, noted)
+        if (held !== null) await writeHold(q, held)
+      })
+    },
+
+    async sendTimesSince(since) {
+      const at = needTime(since, 'since')
+      const { rows } = await pool.query(
+        `select at from (
+           select case when part->>'id' ~ '^[0-9]{17,19}$' then to_timestamp((((part->>'id')::bigint >> 22) + 1420070400000) / 1000.0) end as at
+             from librarius_outbox o, jsonb_array_elements(coalesce(o.payload->'progress'->'parts', '[]'::jsonb)) as part
+            where o.kind in ('send', 'edit')
+         ) landed where at >= $1::timestamptz order by at`,
+        [at],
+      )
+      return rows.map((r) => new Date(r.at).toISOString())
+    },
+
+    async takeWorkerLock() {
+      if (lock !== null) return true
+      const client = await pool.connect()
+      let got = false
+      try {
+        const { rows } = await client.query('select pg_try_advisory_lock($1::bigint) as got', [WORKER_LOCK])
+        got = rows[0].got === true
+      } finally {
+        if (!got) client.release()
+      }
+      if (got) {
+        lock = client
+        // A connection that drops takes the lock with it; an error on a connection nobody listens to would take the server down.
+        client.on?.('error', () => {
+          if (lock === client) lock = null
+        })
+      }
+      return got
+    },
+
+    async releaseWorkerLock() {
+      if (lock === null) return
+      const client = lock
+      lock = null
+      try {
+        await client.query('select pg_advisory_unlock($1::bigint)', [WORKER_LOCK])
+      } finally {
+        client.release()
+      }
+    },
+
+    async pruneOutbox(options) {
+      needObject(options, 'options')
+      const sentBefore = needTime(options.sentBefore, 'sentBefore')
+      const eventsBefore = needTime(options.eventsBefore, 'eventsBefore')
+      const count = async (sql, before) => (await pool.query(sql, [before])).rows[0].n
+      return {
+        entries: await count("with gone as (delete from librarius_outbox where state = 'sent' and created_at < $1::timestamptz returning 1) select count(*)::int as n from gone", sentBefore),
+        events: await count('with gone as (delete from librarius_events where at < $1::timestamptz returning 1) select count(*)::int as n from gone', eventsBefore),
+      }
     },
 
     async finishSend(id, { message, partIds, uploadIds, event }) {
@@ -410,7 +565,7 @@ export function createOutboxStore(pool) {
     async outboxMessage(messageId) {
       needId(messageId, 'messageId')
       const { rows } = await pool.query(
-        'select id, post_id, author_id, author_name, author_avatar, origin, source, layout, state from librarius_messages where id = $1',
+        'select id, post_id, author_id, author_name, author_avatar, webhook_id, origin, source, layout, state from librarius_messages where id = $1',
         [messageId],
       )
       if (rows.length === 0) return null
@@ -422,6 +577,7 @@ export function createOutboxStore(pool) {
         authorId: m.author_id,
         authorName: m.author_name,
         authorAvatar: m.author_avatar,
+        webhookId: m.webhook_id,
         origin: m.origin,
         source: m.source,
         layout: m.layout,
@@ -524,8 +680,9 @@ export function createOutboxStore(pool) {
         if (hit.length === 0) return { plain }
         const rev = await nextRev(q)
         for (const messageId of new Set(hit.map((r) => r.message_id))) {
-          const { rows: all } = await q.query('select discord_id from librarius_parts where message_id = $1 order by part_index', [messageId])
+          const { rows: all } = await q.query('select discord_id, webhook_id from librarius_parts where message_id = $1 order by part_index', [messageId])
           const left = all.map((r) => r.discord_id).filter((part) => !parts.has(part))
+          const sentBy = all.find((r) => r.webhook_id !== null)?.webhook_id ?? null
           const { rows: stored } = await q.query('select post_id, author_id from librarius_messages where id = $1', [messageId])
           await deleteRows(q, [messageId], rev)
           await q.query('delete from librarius_parts where message_id = $1', [messageId])
@@ -538,7 +695,7 @@ export function createOutboxStore(pool) {
               await q.query("insert into librarius_outbox (kind, message_key, author_id, payload) values ('delete', $1, $2, $3::jsonb)", [
                 messageId,
                 author,
-                JSON.stringify({ postId, partIds: left }),
+                JSON.stringify({ postId, partIds: left, webhookId: sentBy }),
               ])
             }
           }
@@ -552,6 +709,40 @@ export function createOutboxStore(pool) {
       const at = needTime(since, 'since')
       const { rows } = await pool.query("select at from librarius_events where action = 'blocked' and at >= $1::timestamptz order by at", [at])
       return rows.map((r) => new Date(r.at).toISOString())
+    },
+
+    async ownWebhookIds() {
+      const { rows } = await pool.query(
+        `select webhook_id as id from librarius_parts where webhook_id is not null
+         union
+         select (payload->'progress'->>'webhookId')::bigint from librarius_outbox where payload->'progress'->>'webhookId' ~ '^[0-9]{17,19}$'`,
+      )
+      return new Set(rows.map((r) => r.id))
+    },
+
+    async repairSiteMessages() {
+      return inTx(async (q) => {
+        // Parts written before a part knew its webhook have their message's.
+        await q.query('update librarius_parts p set webhook_id = m.webhook_id from librarius_messages m where m.id = p.message_id and p.webhook_id is null and m.webhook_id is not null')
+        const { rows: phantoms } = await q.query('select m.id from librarius_messages m join librarius_parts p on p.discord_id = m.id where p.part_index > 0 order by m.id')
+        const { rows: damaged } = await q.query(
+          `${INTENDED} select i.id from intended i join librarius_messages m on m.id = i.id
+            where (m.author_id, m.author_name, m.author_avatar, m.content, m.reply_to) is distinct from (i.author_id, i.author_name, i.author_avatar, i.content, i.reply_to)
+            order by i.id`,
+        )
+        if (phantoms.length === 0 && damaged.length === 0) return { removed: 0, restored: 0 }
+        const rev = await nextRev(q)
+        if (phantoms.length > 0) await deleteRows(q, phantoms.map((r) => r.id), rev)
+        if (damaged.length > 0) {
+          await q.query(
+            `${INTENDED} update librarius_messages m set author_id = i.author_id, author_name = i.author_name, author_avatar = i.author_avatar,
+               content = i.content, reply_to = i.reply_to, rev = $1::bigint
+              from intended i where m.id = i.id and m.id = any($2::bigint[])`,
+            [rev, damaged.map((r) => r.id)],
+          )
+        }
+        return { removed: phantoms.length, restored: damaged.length }
+      })
     },
   }
 }
