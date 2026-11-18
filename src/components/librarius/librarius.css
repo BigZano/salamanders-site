@@ -1,0 +1,770 @@
+/* The Librarius: the Legion's Discord forum, read on the site.
+ *
+ * Phone first. A message is an avatar and a column; a grouped one keeps the column and drops the avatar. Pictures and
+ * embeds never grow wider than the column, every link is at least 44px tall on a touch screen (var(--tap)), and nothing
+ * needs a hover to be found. Everything uses the site's tokens (style.css); class names start with lb- so none reaches
+ * another page. What Discord's text turns into (.md-*) is styled here too, but only inside a message (.lb-msg).
+ * tests: librarius.css.test.js pins these promises, motionPolicy.test.js sweeps the motion rules. */
+
+/* One message. The anchor of a link to it (#m-<id>) lands below the site's bar. */
+.lb-msg {
+  display: grid;
+  grid-template-columns: 2.5rem minmax(0, 1fr);
+  gap: 0 0.75rem;
+  padding: 0.7rem 0 0.2rem;
+  scroll-margin-top: 5rem;
+  color: var(--color-bone);
+}
+/* A grouped message sits close under the one before it, like a line of the same speech. */
+.lb-grouped {
+  padding-top: 0.1rem;
+}
+
+/* The opening message, and any long one or one with a heading or pictures: a panel, with room around it and a larger
+ * body, keeping the avatar beside its name. */
+.lb-article {
+  padding: 1.1rem 1rem;
+  margin: 0.8rem 0;
+  background: rgba(14, 28, 22, 0.5);
+  border: 1px solid var(--color-ash);
+  border-radius: var(--radius-md);
+}
+.lb-article .lb-body {
+  font-size: var(--text-base);
+  line-height: 1.7;
+}
+.lb-article .lb-head {
+  margin-bottom: 0.5rem;
+}
+@media (min-width: 600px) {
+  .lb-article {
+    padding: 1.4rem 1.6rem;
+  }
+}
+
+/* The avatar: a round picture, or the author's initials where there is none. */
+.lb-avatar {
+  display: block;
+  width: 2.5rem;
+  height: 2.5rem;
+  border-radius: var(--radius-pill);
+  object-fit: cover;
+  background: var(--color-ash);
+}
+.lb-initials {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-family: var(--font-display);
+  font-size: var(--text-md);
+  letter-spacing: 0.04em;
+  color: var(--color-pewter);
+}
+.lb-main {
+  min-width: 0;
+}
+
+.lb-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 0.15rem 0.6rem;
+}
+.lb-name {
+  font-weight: 600;
+  color: var(--color-whitehot);
+  /* A name with a right-to-left override in it cannot reorder what is beside it. */
+  unicode-bidi: isolate;
+  overflow-wrap: anywhere;
+}
+.lb-time {
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  color: var(--color-faint);
+}
+
+/* The line above a message that answers another: a link to the message, as tall as a finger on a phone, its words on
+ * one line cut with an ellipsis. */
+.lb-reply {
+  display: flex;
+  align-items: center;
+  min-height: var(--tap);
+  margin-bottom: 0.25rem;
+  padding-left: 0.6rem;
+  font-size: var(--text-sm);
+  color: var(--color-smoke);
+  border-left: 2px solid var(--color-ash-2);
+  text-decoration: none;
+}
+.lb-reply-text {
+  min-width: 0;
+  line-height: 1.5;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  unicode-bidi: isolate;
+}
+.lb-reply-name {
+  color: var(--color-pewter);
+  font-weight: 600;
+}
+
+.lb-body {
+  line-height: 1.55;
+  overflow-wrap: anywhere;
+  /* Text with a right-to-left override in it stays in its own block. */
+  unicode-bidi: isolate;
+}
+.lb-body .md > :first-child {
+  margin-top: 0;
+}
+
+/* Discord's text, in the Librarius's own words for it. */
+.lb-msg .md-h {
+  font-family: var(--font-display);
+  font-weight: 700;
+  line-height: 1.15;
+  margin: 1.2rem 0 0.5rem;
+}
+.lb-msg .md-h1 {
+  font-size: var(--text-xl);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+.lb-msg .md-h2 {
+  font-size: var(--text-lg);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+.lb-msg .md-h3 {
+  font-size: var(--text-base);
+  letter-spacing: 0.02em;
+}
+.lb-msg .md-line {
+  margin: 0.15rem 0;
+}
+.lb-msg .md-blank {
+  height: 0.8rem;
+}
+.lb-msg .md-sub {
+  margin: 0.2rem 0;
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  color: var(--color-smoke);
+}
+.lb-msg strong {
+  color: var(--color-whitehot);
+}
+.lb-msg .md-quote {
+  margin: 0.5rem 0;
+  padding: 0.5rem 0.9rem;
+  border-radius: var(--radius-sm);
+  background: rgba(0, 0, 0, 0.32);
+  border-left: 2px solid var(--color-drake);
+}
+.lb-msg ul.md-list,
+.lb-msg ol.md-list {
+  margin: 0.3rem 0;
+  padding-left: 1.5rem;
+}
+.lb-msg .md-link {
+  color: var(--color-bone);
+  text-decoration: underline;
+  text-decoration-color: var(--color-drake);
+  text-decoration-thickness: 1px;
+  text-underline-offset: 3px;
+}
+.lb-msg .md-ext::after {
+  content: '\2197';
+  margin-left: 0.15em;
+  font-size: 0.75em;
+  color: var(--color-smoke);
+}
+.lb-msg .md-unlinked {
+  overflow-wrap: anywhere;
+}
+.lb-msg .md-code {
+  padding: 0 0.3em;
+  font-family: var(--font-mono);
+  font-size: 0.85em;
+  background: rgba(0, 0, 0, 0.45);
+  border: 1px solid var(--color-ash);
+  border-radius: var(--radius-sm);
+}
+.lb-msg .md-pre {
+  margin: 0.5rem 0;
+  padding: 0.8rem 1rem;
+  overflow-x: auto;
+  font-family: var(--font-mono);
+  font-size: var(--text-sm);
+  background: rgba(0, 0, 0, 0.5);
+  border: 1px solid var(--color-ash);
+  border-radius: var(--radius-sm);
+}
+.lb-msg .md-mention {
+  padding: 0 0.25em;
+  font-weight: 600;
+  color: var(--role, var(--color-cobalt));
+  background: color-mix(in srgb, var(--role, var(--color-cobalt)) 22%, transparent);
+  border-radius: var(--radius-md);
+}
+/* A spoiler is hatched over until it is tapped; its words are hidden from the eye, not from a screen reader. */
+.lb-msg .md-spoiler {
+  color: transparent;
+  cursor: pointer;
+  background: repeating-linear-gradient(135deg, var(--color-basalt-3) 0 5px, var(--color-basalt-2) 5px 10px);
+  border-radius: var(--radius-sm);
+  box-shadow: inset 0 0 0 1px rgba(253, 184, 37, 0.22);
+}
+.lb-msg .md-spoiler * {
+  visibility: hidden;
+}
+.lb-msg .md-spoiler.is-shown {
+  color: inherit;
+  cursor: auto;
+  background: rgba(255, 255, 255, 0.06);
+  box-shadow: none;
+}
+.lb-msg .md-spoiler.is-shown * {
+  visibility: visible;
+}
+
+/* A custom emoji sits in the line of text; in a reaction it is a little larger. */
+.lb-emoji {
+  display: inline-block;
+  width: 1.375em;
+  height: 1.375em;
+  vertical-align: -0.3em;
+  object-fit: contain;
+}
+
+/* Attachments, embeds and stickers sit under the text, each in its own block. */
+.lb-attachment {
+  margin: 0.5rem 0 0;
+}
+.lb-image {
+  display: block;
+  /* The width and height in the markup reserve the room; these keep the picture inside the column at its own shape. */
+  width: auto;
+  height: auto;
+  max-width: 100%;
+  max-height: 32rem;
+  border-radius: var(--radius-md);
+  background: var(--color-basalt-2);
+}
+/* A picture its sender hid (a file named SPOILER_): blurred under the word "Spoiler" until it is clicked or Enter or Space
+ * is pressed. The cover clips the blur at the picture's edge. */
+.lb-spoiler-image {
+  position: relative;
+  display: inline-block;
+  max-width: 100%;
+  overflow: hidden;
+  cursor: pointer;
+  border-radius: var(--radius-md);
+}
+.lb-blurred {
+  filter: blur(1.5rem);
+}
+.lb-spoiler-tag {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-family: var(--font-display);
+  font-size: var(--text-md);
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--color-bone);
+  background: rgba(0, 0, 0, 0.45);
+}
+/* On the topic list the picture is a small tile inside a link, so it is blurred for good, with a smaller blur and word. */
+.lb-spoiler-thumb .lb-blurred {
+  filter: blur(0.5rem);
+}
+.lb-spoiler-thumb .lb-spoiler-tag {
+  font-size: var(--text-xs);
+  letter-spacing: 0.06em;
+}
+/* A picture that would not load, in the place it would have been. */
+.lb-missing {
+  display: inline-block;
+  padding: 0.6rem 1rem;
+  font-size: var(--text-sm);
+  color: var(--color-faint);
+  border: 1px dashed var(--color-ash-2);
+  border-radius: var(--radius-md);
+}
+/* A file, a video included: a link, as tall as a finger. */
+.lb-file {
+  display: inline-flex;
+  align-items: center;
+  max-width: 100%;
+  min-height: var(--tap);
+  padding: 0.35rem 0.9rem;
+  font-size: var(--text-sm);
+  color: var(--color-bone);
+  overflow-wrap: anywhere;
+  background: rgba(14, 28, 22, 0.5);
+  border: 1px solid var(--color-ash);
+  border-radius: var(--radius-sm);
+  text-decoration: none;
+}
+a.lb-file {
+  color: var(--color-drake);
+}
+
+.lb-embed {
+  max-width: 34rem;
+  margin: 0.5rem 0 0;
+  padding: 0.6rem 0.9rem;
+  background: rgba(14, 28, 22, 0.5);
+  border-left: 3px solid var(--color-gold);
+  border-radius: var(--radius-sm);
+  overflow-wrap: anywhere;
+  unicode-bidi: isolate;
+}
+.lb-embed p {
+  margin: 0.1rem 0;
+}
+.lb-embed-provider {
+  font-size: var(--text-xs);
+  color: var(--color-faint);
+}
+.lb-embed-title {
+  font-weight: 600;
+}
+.lb-embed-title a {
+  color: var(--color-drake);
+  text-underline-offset: 3px;
+}
+.lb-embed-description {
+  margin-top: 0.2rem;
+  font-size: var(--text-md);
+  color: var(--color-pewter);
+}
+.lb-embed-thumb,
+.lb-embed-image {
+  display: block;
+  max-width: 100%;
+  height: auto;
+  margin-top: 0.5rem;
+  border-radius: var(--radius-sm);
+}
+.lb-embed-thumb {
+  max-width: 6rem;
+}
+.lb-embed-image {
+  max-height: 24rem;
+}
+.lb-sticker {
+  margin: 0.5rem 0 0;
+  font-family: var(--font-mono);
+  font-size: var(--text-sm);
+  color: var(--color-faint);
+}
+
+/* Reactions: read-only chips, wrapping onto more lines rather than scrolling. */
+.lb-reactions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.35rem;
+  margin: 0.5rem 0 0;
+  padding: 0;
+  list-style: none;
+}
+.lb-reaction {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+  padding: 0.1rem 0.6rem;
+  font-size: var(--text-sm);
+  background: rgba(14, 28, 22, 0.6);
+  border: 1px solid var(--color-ash);
+  border-radius: var(--radius-pill);
+}
+.lb-count {
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  color: var(--color-pewter);
+}
+
+/* The topic list: a bar of filters, then a row for each post. A row is one link, as tall as its words and never narrower
+ * than a finger; the surface is the gallery's own card (panel-forge). */
+.lb-topics {
+  min-width: 0;
+}
+.lb-note {
+  margin: 1rem 0;
+  font-size: var(--text-md);
+  color: var(--color-smoke);
+}
+.lb-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 1rem;
+  padding: 1.5rem 1.25rem;
+  border-radius: var(--radius-md);
+  color: var(--color-pewter);
+}
+.lb-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.6rem 1rem;
+  margin-bottom: 1rem;
+}
+.lb-chips {
+  display: flex;
+  flex-wrap: wrap;
+  flex: 1 1 auto;
+  gap: 0.4rem;
+}
+.lb-chip {
+  min-height: var(--tap);
+  padding: 0.3rem 0.85rem;
+  font-size: var(--text-sm);
+  color: var(--color-smoke);
+  background: rgba(5, 10, 8, 0.6);
+  border: 1px solid var(--color-ash);
+  border-radius: var(--radius-pill);
+  cursor: pointer;
+}
+.lb-chip[aria-pressed='true'] {
+  color: var(--color-drake);
+  background: rgba(89, 214, 108, 0.1);
+  border-color: rgba(89, 214, 108, 0.5);
+}
+.lb-sort {
+  min-height: var(--tap);
+  padding: 0.3rem 0.6rem;
+  font-size: var(--text-sm);
+  color: var(--color-bone);
+  background: rgba(5, 10, 8, 0.6);
+  border: 1px solid var(--color-ash);
+  border-radius: var(--radius-sm);
+}
+.lb-start {
+  margin-left: auto;
+}
+
+.lb-rows {
+  display: flex;
+  flex-direction: column;
+  gap: 0.6rem;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.lb-rows > li {
+  min-width: 0;
+}
+.lb-topic {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 0.9rem;
+  min-height: var(--tap);
+  padding: 0.8rem 1rem;
+  border-radius: var(--radius-md);
+  color: var(--color-bone);
+  text-decoration: none;
+}
+.lb-pinned {
+  border-left: 3px solid var(--color-gold);
+}
+.lb-topic-main {
+  display: flex;
+  flex-direction: column;
+  flex: 1 1 auto;
+  gap: 0.3rem;
+  min-width: 0;
+}
+.lb-topic-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 0.25rem 0.6rem;
+}
+.lb-topic-title {
+  font-family: var(--font-display);
+  font-size: var(--text-base);
+  font-weight: 700;
+  color: var(--color-whitehot);
+  overflow-wrap: anywhere;
+  unicode-bidi: isolate;
+}
+.lb-pin {
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--color-gold);
+}
+.lb-tag {
+  padding: 0 0.5rem;
+  font-size: var(--text-xs);
+  color: var(--color-smoke);
+  border: 1px solid var(--color-ash-2);
+  border-radius: var(--radius-pill);
+  overflow-wrap: anywhere;
+  unicode-bidi: isolate;
+}
+.lb-new {
+  padding: 0 0.5rem;
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  color: var(--color-ember-ink);
+  background: var(--color-ember);
+  border-radius: var(--radius-pill);
+}
+.lb-topic-latest {
+  font-size: var(--text-md);
+  color: var(--color-pewter);
+  overflow-wrap: anywhere;
+  unicode-bidi: isolate;
+}
+.lb-topic-author {
+  font-weight: 600;
+  color: var(--color-bone);
+}
+.lb-topic-meta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.2rem 0.4rem;
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  color: var(--color-faint);
+}
+.lb-posters {
+  display: inline-flex;
+  margin-left: 0.3rem;
+}
+.lb-poster {
+  display: block;
+  width: 1.5rem;
+  height: 1.5rem;
+  margin-left: -0.4rem;
+  border: 2px solid var(--color-basalt);
+  border-radius: var(--radius-pill);
+  object-fit: cover;
+  background: var(--color-ash);
+}
+.lb-poster:first-child {
+  margin-left: 0;
+}
+.lb-poster.lb-initials {
+  font-size: var(--text-xs);
+  letter-spacing: 0;
+}
+.lb-thumb-wrap {
+  position: relative;
+  flex: none;
+  width: 4.5rem;
+  height: 4.5rem;
+  overflow: hidden;
+  border-radius: var(--radius-sm);
+  background: var(--color-basalt-2);
+}
+.lb-thumb {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+.lb-archived {
+  margin-top: 0.8rem;
+}
+
+@media (hover: hover) and (pointer: fine) {
+  .lb-reply:hover {
+    color: var(--color-bone);
+    border-left-color: var(--color-drake);
+  }
+  .lb-msg .md-link:hover {
+    color: var(--color-whitehot);
+    text-decoration-color: var(--color-drake);
+  }
+  .lb-msg .md-spoiler:hover {
+    box-shadow: inset 0 0 0 1px rgba(253, 184, 37, 0.5);
+  }
+  a.lb-file:hover {
+    border-color: var(--color-ash-2);
+  }
+  .lb-topic:hover {
+    border-color: var(--color-ash-2);
+  }
+  .lb-chip:hover {
+    color: var(--color-bone);
+    border-color: var(--color-ash-2);
+  }
+}
+
+/* One post: a breadcrumb, the title with a line of facts under it, then the thread beside a rail of months. On a phone the rail
+ * is a row of chips above the thread that scrolls sideways within itself; from 900px it is a column at the side that stays
+ * in view while the thread scrolls. Nothing here moves, fades or slides. */
+.lb-post {
+  min-width: 0;
+}
+.lb-crumbs {
+  margin-bottom: 0.4rem;
+  font-size: var(--text-sm);
+  color: var(--color-faint);
+}
+.lb-crumbs a {
+  display: inline-flex;
+  align-items: center;
+  min-height: var(--tap);
+  color: var(--color-pewter);
+  text-decoration: none;
+}
+.lb-crumb-here {
+  color: var(--color-smoke);
+  overflow-wrap: anywhere;
+  unicode-bidi: isolate;
+}
+.lb-post-top {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 0.6rem 1rem;
+}
+.lb-post-title {
+  flex: 1 1 16rem;
+  min-width: 0;
+  margin: 0;
+  font-family: var(--font-display);
+  font-size: var(--text-xl);
+  font-weight: 700;
+  line-height: 1.15;
+  color: var(--color-whitehot);
+  overflow-wrap: anywhere;
+  unicode-bidi: isolate;
+}
+.lb-discord {
+  flex: none;
+}
+.lb-post-meta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.3rem 0.5rem;
+  margin: 0.6rem 0 0;
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  color: var(--color-faint);
+}
+
+.lb-post-body {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 0.8rem 1.5rem;
+  margin-top: 1rem;
+}
+.lb-thread {
+  min-width: 0;
+}
+/* "Load older" and "Load newer": one button, the width of a finger or more, in the middle of the column. */
+.lb-more {
+  display: flex;
+  min-height: var(--tap);
+  margin: 0.8rem auto;
+}
+.lb-notice {
+  margin: 0.8rem 0;
+  font-size: var(--text-md);
+  color: var(--color-ember);
+}
+
+/* "Since your last visit": a rule across the column with its words in the middle. The page scrolls here when it opens. */
+.lb-divider {
+  display: flex;
+  align-items: center;
+  gap: 0.8rem;
+  margin: 1rem 0 0.4rem;
+  scroll-margin-top: 5rem;
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  letter-spacing: 0.08em;
+  color: var(--color-ember);
+}
+.lb-divider::before,
+.lb-divider::after {
+  content: '';
+  flex: 1 1 auto;
+  height: 1px;
+  background: var(--color-ember);
+  opacity: 0.5;
+}
+.lb-divider-text {
+  flex: none;
+  max-width: 100%;
+}
+
+/* The date rail: a button for each month. It comes before the thread in the page, so that a keyboard meets it first; on a phone
+ * that is above the thread, and from 900px the grid puts it in the column at the right. */
+.lb-rail {
+  display: flex;
+  gap: 0.4rem;
+  padding-bottom: 0.2rem;
+  overflow-x: auto;
+}
+.lb-month {
+  flex: none;
+  min-height: var(--tap);
+  padding: 0.3rem 0.85rem;
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  color: var(--color-smoke);
+  background: rgba(5, 10, 8, 0.6);
+  border: 1px solid var(--color-ash);
+  border-radius: var(--radius-pill);
+  cursor: pointer;
+}
+.lb-month:disabled,
+.lb-more:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+@media (min-width: 900px) {
+  .lb-post-body {
+    grid-template-columns: minmax(0, 1fr) 7.5rem;
+  }
+  .lb-thread {
+    grid-column: 1;
+    grid-row: 1;
+  }
+  .lb-rail {
+    grid-column: 2;
+    grid-row: 1;
+    flex-direction: column;
+    gap: 0.2rem;
+    align-self: start;
+    position: sticky;
+    top: 5rem;
+    max-height: calc(100vh - 6rem);
+    padding: 0 0 0 0.6rem;
+    overflow-x: visible;
+    overflow-y: auto;
+    border-left: 1px solid var(--color-ash);
+  }
+  .lb-month {
+    text-align: left;
+    background: transparent;
+    border: 0;
+    border-radius: var(--radius-sm);
+  }
+}
+
+@media (hover: hover) and (pointer: fine) {
+  .lb-crumbs a:hover {
+    color: var(--color-bone);
+  }
+  .lb-month:hover:not(:disabled) {
+    color: var(--color-bone);
+    border-color: var(--color-ash-2);
+  }
+}

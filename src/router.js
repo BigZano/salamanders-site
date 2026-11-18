@@ -9,6 +9,9 @@ import { DEATHWATCH_SHOWS_MOUNTAIN } from './lib/deathwatch/mountain'
 // discordAuth.js for why this can't just happen in main.js.
 scrubCallbackHash()
 
+// Loaded on demand, and the one page for both Reliquarium routes, so a tab and a post are never two page loads.
+const reliquarium = () => import('./views/Reliquarium.vue')
+
 const routes = [
   { path: '/', name: 'home', component: Landing, meta: { title: 'Home' } },
   {
@@ -47,12 +50,19 @@ const routes = [
     component: () => import('./views/ReportsReview.vue'),
     meta: { title: 'Report Review' },
   },
-  // The members' galleries of clips and art. The tab is part of the address so a tab can be linked; the page
-  // itself falls back to Clips for a tab the person may not see.
+  // The Librarius and the members' galleries of clips and art. The tab is part of the address so a tab can be linked;
+  // the page itself falls back to the first tab the person may see for one they may not (the Librarius, else Clips).
   {
-    path: '/reliquarium/:tab(clips|art|submit|mine|review)?',
+    path: '/reliquarium/:tab(librarius|clips|art|submit|mine|review)?',
     name: 'reliquarium',
-    component: () => import('./views/Reliquarium.vue'),
+    component: reliquarium,
+    meta: { title: 'Reliquarium' },
+  },
+  // One post of the Librarius, on the same page as the tabs: the page shows the post in place of the list.
+  {
+    path: '/reliquarium/librarius/:postId(\\d{17,20})',
+    name: 'reliquarium-post',
+    component: reliquarium,
     meta: { title: 'Reliquarium' },
   },
   {
@@ -106,6 +116,11 @@ const routes = [
   },
 ]
 
+// The Librarius's two addresses, as they scroll: a post, and the topic list. A trailing slash is the same address. (/reliquarium
+// with no tab is not the list: for someone who may read the galleries only it is the Clips, and that goes to the top as ever.)
+const LIBRARIUS_POST = /^\/reliquarium\/librarius\/\d{17,20}\/?$/
+const LIBRARIUS_LIST = /^\/reliquarium\/librarius\/?$/
+
 export const router = createRouter({
   // Clean URLs now that we're on a real domain. GitHub Pages still has no
   // server-side rewrite, so a direct load of a deep route relies on the
@@ -116,7 +131,13 @@ export const router = createRouter({
   // Legion Archive threads scroll to their own #m-<id> anchors once decrypted
   // content has rendered (see ArchiveThread.vue); same-page hash changes
   // are left to them.
-  scrollBehavior(to, from) {
+  scrollBehavior(to, from, savedPosition) {
+    // A Librarius post (see PostPage.vue) puts the reader where they mean to be once its messages are there: at the message
+    // its address names, else at the divider, else at the newest message, and on Back at the one that was topmost. A jump
+    // to the top here would come first, and a jump to a saved position would be to a page that is not yet tall enough.
+    if (LIBRARIUS_POST.test(to.path)) return false
+    // The topic list, on Back, is where the reader left it: the store still holds its rows, so the page is tall at once.
+    if (savedPosition && LIBRARIUS_LIST.test(to.path)) return savedPosition
     if (to.hash && to.path === from.path) return false
     // /companies#third is scrolled to by the page itself: as soon as its story is there, and again when
     // the roster has changed the layout above it. A jump to the top here would undo the first of those.

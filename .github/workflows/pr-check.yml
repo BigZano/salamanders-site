@@ -37,3 +37,5 @@ jobs:
         run: node scripts/archive-leak-guard.mjs --tracked
       - run: bun run test
       - run: bun run build
+      - name: Check the Content-Security-Policy of the build
+        run: node scripts/check-csp.mjs dist

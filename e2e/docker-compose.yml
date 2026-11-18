@@ -65,6 +65,10 @@ services:
       GALLERY_CURATOR_ROLE_ID: '200000000000000301'
       # Every second, so a clip posted by a spec is stored, or a deleted one gone, within a couple of seconds.
       GALLERY_POLL_MS: '1000'
+      # The Librarius (tests/librarius-api.spec.js, tests/librarius.spec.js). discord-mock stands in for Discord's
+      # forum, its REST routes and its gateway (DISCORD_API_BASE above names it, so the api opens the gateway over ws://).
+      # An invented id, the same as in discord-mock/server.js.
+      LIBRARIUS_CHANNEL_ID: '200000000000000400'
     healthcheck:
       test: ['CMD', 'bun', '-e', "fetch('http://localhost:8787/health').then((r)=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
       interval: 2s
@@ -93,6 +97,34 @@ services:
       timeout: 2s
       retries: 30
 
+  # The site as it is deployed: a production build, served by `vite preview`. The Content-Security-Policy the build writes into
+  # index.html (scripts/csp.mjs) exists only in a built page, and the dev server above is not one, so tests/csp.spec.js loads
+  # this one and counts what the policy refuses. The builds API's address is invented (an https origin, which the policy takes
+  # for its connect-src, and which the spec answers itself), so nothing here reaches the real api or the internet. It builds
+  # into /tmp, leaving the repository as it was, and after `web` has installed the packages they both read.
+  # Like `playwright`, it shares web's network namespace: the browser then loads it as http://localhost:4173, a secure context,
+  # which WebCrypto (the Legion Archive's decryption) needs. It has no name of its own there, and listens on a port web does not.
+  web-prod:
+    image: oven/bun:1.4.4-alpine
+    working_dir: /app
+    network_mode: service:web
+    volumes:
+      - ../:/app
+    command: sh -c "bun run build -- --outDir /tmp/e2e-dist --emptyOutDir && bun run preview -- --outDir /tmp/e2e-dist --host 0.0.0.0 --port 4173 --strictPort"
+    environment:
+      VITE_BUILDS_API_URL: https://api.e2e.invalid
+      # The same throwaway archive as `web`, which sealed it before it came up.
+      ARCHIVE_LOCK: e2e/.archive/lock.json
+      VITE_ARCHIVE_BASE: /archive-e2e/
+    depends_on:
+      web:
+        condition: service_healthy
+    healthcheck:
+      test: ['CMD', 'bun', '-e', "fetch('http://localhost:4173/').then((r)=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      interval: 2s
+      timeout: 2s
+      retries: 90
+
   playwright:
     image: mcr.microsoft.com/playwright:v1.48.0-jammy
     # Share web's network namespace so the browser loads the site as
@@ -109,5 +141,7 @@ services:
       CI: 'true'
     depends_on:
       web:
+        condition: service_healthy
+      web-prod:
         condition: service_healthy
     command: sh -c "npm install && npx playwright test"

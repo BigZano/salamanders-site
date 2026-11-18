@@ -7,6 +7,7 @@
  * Pages Function) once migrated off GitHub Pages.
  */
 import { getMembership } from './buildsApi'
+import { getMe as getLibrariusMe } from './librarius/api'
 
 const CLIENT_ID = '1538255597810483210'
 const STORAGE_KEY = 'salamanders-discord-member'
@@ -18,9 +19,10 @@ const RETURN_PATH_KEY = 'salamanders-discord-return-path'
 const RETURN_FALLBACK_KEY = 'salamanders-discord-return-fallback'
 export const RETURN_FALLBACK_MS = 10 * 60 * 1000
 const RETURN_PATH_MAX = 512
-// How long sign-in waits to learn whether the person is a member. The answer only decides a display hint (nav
-// links, the Join / Open Discord button); the server enforces every real gate itself. So a slow answer is
-// treated like a failed one (not a member) instead of holding sign-in open.
+// How long sign-in waits to learn whether the person is a member, and whether they may read the Librarius (asked
+// together, so the two share this wait). The answers only decide display hints (nav links, the Join / Open Discord
+// button); the server enforces every real gate itself. So a slow answer is treated like a failed one (not a member,
+// no Librarius) instead of holding sign-in open.
 const MEMBERSHIP_WAIT_MS = 3000
 // Overridable so E2E runs can point identify checks at a local fixture
 // instead of the real Discord API — see e2e/discord-mock.
@@ -84,8 +86,10 @@ export function beginSignIn(options) {
 export function currentMember() {
   const raw = readStored()
   if (!raw) return null
-  const { id, username, isMember, checkedAt } = raw
-  return { id, username, isMember, checkedAt }
+  const { id, username, isMember, checkedAt, librarius } = raw
+  // Whether the server let this person read the Librarius when it last was asked. A record from before the Librarius, or
+  // anything but a plain `true`, says no.
+  return { id, username, isMember, checkedAt, librarius: librarius === true }
 }
 
 /**
@@ -111,6 +115,22 @@ function readStored() {
 
 export function signOut() {
   localStorage.removeItem(STORAGE_KEY)
+}
+
+/**
+ * Keeps what the server said about the Librarius (whether this person may read it) in the sign-in record, so that the nav
+ * links know without asking. Only a plain `true` is a yes. It only ever updates a record that is there: with nobody signed
+ * in, or a record that cannot be read, it writes nothing, and a storage that refuses the write is no error (the hint just
+ * stays as it was).
+ */
+export function rememberLibrarius(access) {
+  const raw = readStored()
+  if (raw === null || typeof raw !== 'object' || Array.isArray(raw)) return
+  try {
+    localStorage.setItem(STORAGE_KEY, JSON.stringify({ ...raw, librarius: access === true }))
+  } catch {
+    // Full or blocked storage: the hint is a convenience, and the page that asked still shows what the server said.
+  }
 }
 
 let pendingToken = null
@@ -140,18 +160,17 @@ export function scrubCallbackHash() {
 }
 
 /**
- * Whether the server says this token's owner is a chapter member: true or false, never a throw. A failed answer
- * (refused token, Discord unreachable, network down) and one that takes longer than MEMBERSHIP_WAIT_MS both read
- * as false. A late answer is ignored; Promise.race has already subscribed to the call, so a late failure is
- * handled too.
+ * What `ask()` answers, as a boolean, within MEMBERSHIP_WAIT_MS: a failed answer (refused token, Discord unreachable,
+ * network down) and one that takes longer both read as false, and this never throws. A late answer is ignored;
+ * Promise.race has already subscribed to the call, so a late failure is handled too.
  */
-async function askMembership(token) {
+async function within(ask) {
   let timer
   const tooSlow = new Promise((resolve) => {
     timer = setTimeout(resolve, MEMBERSHIP_WAIT_MS, false)
   })
   try {
-    return await Promise.race([getMembership(token), tooSlow])
+    return await Promise.race([ask(), tooSlow])
   } catch {
     return false
   } finally {
@@ -159,7 +178,13 @@ async function askMembership(token) {
   }
 }
 
-/** Runs after scrubCallbackHash — does the actual identify + membership check. */
+/** Whether the server says this token's owner is a chapter member: true or false, never a throw (see `within`). */
+const askMembership = (token) => within(() => getMembership(token))
+
+/** Whether the server lets this token's owner read the Librarius: only an answer of exactly `access: true` is a yes. */
+const askLibrarius = (token) => within(async () => (await getLibrariusMe(token))?.access === true)
+
+/** Runs after scrubCallbackHash — does the actual identify + membership + Librarius check. */
 export async function finishSignIn() {
   if (!pendingToken) return
   const token = pendingToken
@@ -173,13 +198,15 @@ export async function finishSignIn() {
     })
     if (!res.ok) return
     const user = await res.json()
-    const isMember = await askMembership(token)
+    // Asked together, so that sign-in waits for the slower of the two and not for both.
+    const [isMember, librarius] = await Promise.all([askMembership(token), askLibrarius(token)])
     localStorage.setItem(
       STORAGE_KEY,
       JSON.stringify({
         id: user.id,
         username: user.username,
         isMember,
+        librarius,
         checkedAt: Date.now(),
         accessToken: token,
         // Discord always sends expires_in on an implicit-grant callback; the

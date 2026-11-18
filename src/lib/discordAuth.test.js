@@ -6,6 +6,7 @@ import {
   signOut,
   scrubCallbackHash,
   finishSignIn,
+  rememberLibrarius,
   beginSignIn,
   sanitizeReturnPath,
   RETURN_FALLBACK_MS,
@@ -89,9 +90,101 @@ describe('currentMember', () => {
       }),
     )
     const member = currentMember()
-    expect(member).toEqual({ id: '1', username: 'bob', isMember: true, checkedAt: 1 })
+    expect(member).toEqual({ id: '1', username: 'bob', isMember: true, checkedAt: 1, librarius: false })
     expect(member).not.toHaveProperty('accessToken')
     expect(member).not.toHaveProperty('expiresAt')
+  })
+
+  it('says whether the person may read the Librarius, as stored', () => {
+    for (const librarius of [true, false]) {
+      localStorage.setItem(STORAGE_KEY, JSON.stringify({ id: '1', username: 'bob', isMember: false, checkedAt: 1, librarius }))
+      expect(currentMember().librarius).toBe(librarius)
+    }
+  })
+
+  it('says no for a record signed in before the Librarius existed, and for anything but a plain true', () => {
+    localStorage.setItem(STORAGE_KEY, JSON.stringify({ id: '1', username: 'bob', isMember: true, checkedAt: 1 }))
+    expect(currentMember().librarius).toBe(false)
+    for (const librarius of [null, 0, 1, '', 'true', 'yes', [], {}, [true]]) {
+      localStorage.setItem(STORAGE_KEY, JSON.stringify({ id: '1', username: 'bob', isMember: false, checkedAt: 1, librarius }))
+      expect(currentMember().librarius, JSON.stringify(librarius)).toBe(false)
+    }
+  })
+})
+
+// What the server says about the Librarius is kept beside the rest of the sign-in record, and is only a display hint.
+describe('rememberLibrarius', () => {
+  const record = (extra = {}) => ({
+    id: A_MEMBER_ID,
+    username: 'salamander',
+    isMember: false,
+    checkedAt: 12345,
+    accessToken: 'tok-keep',
+    expiresAt: Date.now() + 60_000,
+    librarius: false,
+    ...extra,
+  })
+  const keep = (value) => localStorage.setItem(STORAGE_KEY, JSON.stringify(value))
+
+  it('records that the person may read the Librarius, and leaves the rest of the record as it was', () => {
+    const before = record()
+    keep(before)
+    rememberLibrarius(true)
+    expect(stored()).toEqual({ ...before, librarius: true })
+    expect(currentMember().librarius).toBe(true)
+    expect(getAccessToken()).toBe('tok-keep')
+  })
+
+  it('records that they may not, over an earlier yes', () => {
+    keep(record({ librarius: true }))
+    rememberLibrarius(false)
+    expect(stored().librarius).toBe(false)
+    expect(currentMember().librarius).toBe(false)
+  })
+
+  it('records only a plain true as a yes', () => {
+    for (const access of [false, undefined, null, 0, 1, '', 'true', 'yes', [], {}, [true], NaN]) {
+      keep(record({ librarius: true }))
+      rememberLibrarius(access)
+      expect(stored().librarius, String(access)).toBe(false)
+    }
+  })
+
+  it('writes nothing when nobody is signed in, so it can never sign anyone in', () => {
+    rememberLibrarius(true)
+    expect(localStorage.getItem(STORAGE_KEY)).toBeNull()
+    expect(currentMember()).toBeNull()
+  })
+
+  it('leaves a record it cannot read alone', () => {
+    for (const raw of ['{not json', 'null', '5', '"text"', '[]', '[{"id":"1"}]', 'true']) {
+      localStorage.setItem(STORAGE_KEY, raw)
+      expect(() => rememberLibrarius(true), raw).not.toThrow()
+      expect(localStorage.getItem(STORAGE_KEY), raw).toBe(raw)
+    }
+  })
+
+  it('does not throw when the storage refuses the write, and the record stays as it was', () => {
+    const before = record()
+    keep(before)
+    vi.spyOn(Storage.prototype, 'setItem').mockImplementation(() => {
+      throw new Error('quota')
+    })
+    try {
+      expect(() => rememberLibrarius(true)).not.toThrow()
+    } finally {
+      vi.restoreAllMocks()
+    }
+    expect(stored()).toEqual(before)
+  })
+
+  it('is forgotten with the rest of the record on sign-out', () => {
+    keep(record())
+    rememberLibrarius(true)
+    signOut()
+    expect(currentMember()).toBeNull()
+    rememberLibrarius(true)
+    expect(localStorage.getItem(STORAGE_KEY)).toBeNull()
   })
 })
 
@@ -159,6 +252,7 @@ describe('beginSignIn', () => {
 
 const USER_URL = 'https://discord.com/api/users/@me'
 const MEMBERSHIP_URL = `${API_BASE}/membership`
+const LIBRARIUS_URL = `${API_BASE}/librarius/me`
 // The longest sign-in waits to learn whether the person is a member: 3 s, spelled out here so a change to it is seen.
 const MEMBERSHIP_WAIT_MS = 3000
 
@@ -166,21 +260,24 @@ const answer = (body, status = 200) => ({ ok: status < 400, status, json: () => 
 
 /**
  * A fetch stub that tells the two servers apart by address. Discord's user lookup answers `user` (or a 401 when
- * `userOk` is false); the membership call answers whatever `membership(options)` returns, a promise of a response.
- * Any other address answers { member: true }, so asking the wrong one can never read as "not a member".
+ * `userOk` is false); the membership call answers whatever `membership(options)` returns, a promise of a response, and
+ * the Librarius call whatever `librarius(options)` does. Any other address answers { member: true, access: true }, so
+ * asking the wrong one can never read as "not a member" or as "may not read the Librarius".
  * `sent[url]` is the options each address was last handed.
  */
 function stubServer({
   user = { id: A_MEMBER_ID, username: 'salamander' },
   userOk = true,
   membership = () => Promise.resolve(answer({ member: false })),
+  librarius = () => Promise.resolve(answer({ access: false })),
 } = {}) {
   const sent = {}
   const fetchMock = vi.fn((url, options) => {
     sent[url] = options
     if (url === USER_URL) return Promise.resolve(answer(user, userOk ? 200 : 401))
     if (url === MEMBERSHIP_URL) return membership(options)
-    return Promise.resolve(answer({ member: true }))
+    if (url === LIBRARIUS_URL) return librarius(options)
+    return Promise.resolve(answer({ member: true, access: true }))
   })
   vi.stubGlobal('fetch', fetchMock)
   return { fetchMock, sent }
@@ -269,6 +366,83 @@ describe('scrubCallbackHash + finishSignIn', () => {
 
     expect(sent[USER_URL].headers.Authorization).toBe('Bearer tok-same')
     expect(sent[MEMBERSHIP_URL].headers.Authorization).toBe('Bearer tok-same')
+  })
+
+  it('stores librarius true when the server says the person may read the Librarius, member or not', async () => {
+    for (const membership of [false, true]) {
+      localStorage.clear()
+      stubServer({
+        membership: () => Promise.resolve(answer({ member: membership })),
+        librarius: () => Promise.resolve(answer({ access: true, ready: true, tags: [], roles: [] })),
+      })
+      await beginFinish('tok-lib')
+      expect(stored().librarius, String(membership)).toBe(true)
+      expect(stored().isMember, String(membership)).toBe(membership)
+      expect(currentMember()).toMatchObject({ id: A_MEMBER_ID, isMember: membership, librarius: true })
+    }
+  })
+
+  it('stores librarius false when the server says the person may not', async () => {
+    stubServer({ librarius: () => Promise.resolve(answer({ access: false })) })
+    await beginFinish('tok-lib')
+    expect(stored().librarius).toBe(false)
+    expect(currentMember().librarius).toBe(false)
+  })
+
+  it('asks the Librarius with the same token, and not from the HTTP cache', async () => {
+    const { sent, fetchMock } = stubServer({ librarius: () => Promise.resolve(answer({ access: true })) })
+    await beginFinish('tok-same')
+    expect(sent[LIBRARIUS_URL].headers.Authorization).toBe('Bearer tok-same')
+    expect(sent[LIBRARIUS_URL].method).toBe('GET')
+    expect(sent[LIBRARIUS_URL].cache).toBe('no-store')
+    expect(fetchMock.mock.calls.filter(([url]) => url === LIBRARIUS_URL)).toHaveLength(1)
+  })
+
+  it('a failed or odd Librarius answer stores false and still signs the person in', async () => {
+    const answers = {
+      'the request is refused (fetch rejects)': () => Promise.reject(new Error('offline')),
+      'a 503 because Discord cannot be reached': () => Promise.resolve(answer({ error: 'Discord is unreachable.' }, 503)),
+      'a 401 because the token was refused': () => Promise.resolve(answer({ error: 'Sign in again.' }, 401)),
+      'a 403 because the reader may not read it': () => Promise.resolve(answer({ error: 'No.' }, 403)),
+      "a string 'true'": () => Promise.resolve(answer({ access: 'true' })),
+      'the number 1': () => Promise.resolve(answer({ access: 1 })),
+      'an array': () => Promise.resolve(answer({ access: [true] })),
+      'a missing key': () => Promise.resolve(answer({})),
+      'null': () => Promise.resolve(answer({ access: null })),
+      'a body that is null': () => Promise.resolve(answer(null)),
+      'a body that is not JSON': () => Promise.resolve({ ok: true, status: 200, json: () => Promise.reject(new Error('bad json')) }),
+    }
+    for (const [label, librarius] of Object.entries(answers)) {
+      localStorage.clear()
+      stubServer({ membership: () => Promise.resolve(answer({ member: true })), librarius })
+      const before = Date.now()
+      await expect(beginFinish('tok-fail'), label).resolves.toBeUndefined()
+
+      // Signed in, as someone who may not (be known to) read the Librarius; everything else as it always was.
+      expect(stored().librarius, label).toBe(false)
+      expect(stored().isMember, label).toBe(true)
+      expect(stored().id, label).toBe(A_MEMBER_ID)
+      expect(stored().accessToken, label).toBe('tok-fail')
+      expect(stored().expiresAt, label).toBeGreaterThanOrEqual(before + 3600 * 1000)
+      expect(getAccessToken(), label).toBe('tok-fail')
+    }
+  })
+
+  it('does not let a failed membership answer take the Librarius answer with it, nor the other way', async () => {
+    stubServer({
+      membership: () => Promise.reject(new Error('offline')),
+      librarius: () => Promise.resolve(answer({ access: true })),
+    })
+    await beginFinish('tok-a')
+    expect(stored()).toMatchObject({ isMember: false, librarius: true })
+
+    localStorage.clear()
+    stubServer({
+      membership: () => Promise.resolve(answer({ member: true })),
+      librarius: () => Promise.reject(new Error('offline')),
+    })
+    await beginFinish('tok-b')
+    expect(stored()).toMatchObject({ isMember: true, librarius: false })
   })
 
   it('falls back to a 1-hour expiry when expires_in is missing from the callback', async () => {
@@ -507,6 +681,93 @@ describe('finishSignIn: a slow membership answer', () => {
       expect(stored().isMember).toBe(false)
       // Unhandled rejections are reported once the microtask queue has drained and a turn of the real
       // event loop has passed.
+      vi.useRealTimers()
+      await new Promise((resolve) => setTimeout(resolve, 20))
+    } finally {
+      process.off('unhandledRejection', onEscape)
+    }
+    expect(escaped).toEqual([])
+  })
+
+  // The same limit for the Librarius, and the two questions are asked together, so sign-in waits 3 s for both and not 6 s.
+  it('waits for the Librarius answer up to the 3 s limit, and not a millisecond beyond it', async () => {
+    stubServer({ membership: () => Promise.resolve(answer({ member: true })), librarius: neverAnswers })
+    const seen = watch(beginFinish('tok-slow'))
+
+    await vi.advanceTimersByTimeAsync(MEMBERSHIP_WAIT_MS - 1)
+    expect(seen.settled).toBe(false)
+    expect(localStorage.getItem(STORAGE_KEY)).toBeNull()
+
+    await vi.advanceTimersByTimeAsync(1)
+    expect(seen.settled).toBe(true)
+    expect(stored().librarius).toBe(false)
+    expect(stored().isMember).toBe(true)
+    expect(getAccessToken()).toBe('tok-slow')
+    expect(timersLeft()).toBe(0)
+  })
+
+  it('counts a Librarius answer that arrives just inside the limit, and leaves no timer behind', async () => {
+    stubServer({ librarius: answersAfter(MEMBERSHIP_WAIT_MS - 100, { access: true }) })
+    const seen = watch(beginFinish())
+
+    await vi.advanceTimersByTimeAsync(MEMBERSHIP_WAIT_MS - 101)
+    expect(seen.settled).toBe(false)
+    await vi.advanceTimersByTimeAsync(1)
+    expect(seen.settled).toBe(true)
+    expect(stored().librarius).toBe(true)
+    expect(timersLeft()).toBe(0)
+  })
+
+  it('asks both questions at once: two slow answers cost one wait, not two', async () => {
+    stubServer({ membership: neverAnswers, librarius: neverAnswers })
+    const seen = watch(beginFinish())
+    await vi.advanceTimersByTimeAsync(MEMBERSHIP_WAIT_MS)
+    expect(seen.settled).toBe(true)
+    expect(stored()).toMatchObject({ isMember: false, librarius: false })
+    expect(timersLeft()).toBe(0)
+  })
+
+  it('a fast Librarius answer, true or false, and a fast failure each leave no timer behind', async () => {
+    for (const librarius of [
+      () => Promise.resolve(answer({ access: true })),
+      () => Promise.resolve(answer({ access: false })),
+      () => Promise.resolve(answer({ error: 'Discord is unreachable.' }, 503)),
+      () => Promise.reject(new Error('offline')),
+    ]) {
+      localStorage.clear()
+      stubServer({ librarius })
+      await beginFinish()
+      expect(timersLeft()).toBe(0)
+    }
+  })
+
+  it('a Librarius answer that comes after the limit changes nothing', async () => {
+    stubServer({ librarius: answersAfter(MEMBERSHIP_WAIT_MS + 2000, { access: true }) })
+    const seen = watch(beginFinish())
+    await vi.advanceTimersByTimeAsync(MEMBERSHIP_WAIT_MS)
+    expect(seen.settled).toBe(true)
+    expect(stored().librarius).toBe(false)
+
+    await vi.advanceTimersByTimeAsync(2000)
+    await vi.runAllTimersAsync()
+    expect(stored().librarius).toBe(false)
+    expect(currentMember()).toMatchObject({ id: A_MEMBER_ID, librarius: false })
+    expect(timersLeft()).toBe(0)
+  })
+
+  it('a Librarius failure that comes after the limit is not an unhandled rejection', async () => {
+    const escaped = []
+    const onEscape = (reason) => escaped.push(reason)
+    process.on('unhandledRejection', onEscape)
+    try {
+      stubServer({ librarius: failsAfter(MEMBERSHIP_WAIT_MS + 2000, new Error('Discord answered too late')) })
+      const seen = watch(beginFinish())
+      await vi.advanceTimersByTimeAsync(MEMBERSHIP_WAIT_MS)
+      expect(seen.settled).toBe(true)
+      expect(stored().librarius).toBe(false)
+
+      await vi.runAllTimersAsync()
+      expect(stored().librarius).toBe(false)
       vi.useRealTimers()
       await new Promise((resolve) => setTimeout(resolve, 20))
     } finally {

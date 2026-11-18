@@ -33,7 +33,7 @@ describe('gallery.css', () => {
     expect(rule('.rq')).toMatch(/padding:[^;]*\b1rem\b/)
   })
 
-  it.each(['.rq-tab', '.rq-open', '.rq-input'])('%s is a full-size tap target', (selector) => {
+  it.each(['.rq-tab', '.rq-open', '.rq-input', '.rq-outage .btn-ghost'])('%s is a full-size tap target', (selector) => {
     expect(rule(selector), selector).toMatch(/min-height:\s*var\(--tap\)/)
   })
 

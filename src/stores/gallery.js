@@ -1,5 +1,6 @@
 import { defineStore } from 'pinia'
 import * as api from '../lib/gallery/api'
+import { STALE, attempt, statusOf, unlessStale } from './asking'
 
 // What the Reliquarium pages show: whether the signed-in user may see it (the answer to GET /gallery/me), whether
 // they are an approver, and the lists the pages fill. It only decides what to show; the server enforces every read
@@ -11,8 +12,6 @@ let seq = 0
 // The same for each list: reset() and refresh() start a new generation of it, and a page asked for under an
 // older one is dropped (answer or failure), so it cannot land in a list that was emptied or started again.
 const gen = { clips: 0, art: 0 }
-
-const statusOf = (err) => (err?.status === 401 ? 'signin' : err?.status === 403 ? 'denied' : 'unavailable')
 
 const initial = () => ({
   status: 'idle',
@@ -36,21 +35,6 @@ function dropItem(store, id) {
   store.art.items = store.art.items.filter((i) => i.id !== id)
 }
 
-const STALE = Symbol('stale')
-
-// → what `ask` answers, or STALE if `now()` (a counter of load()s and reset()s, or of one list's generations) moved
-// while it was asked for. A failure that arrives then is dropped too, not thrown.
-async function unlessStale(now, ask) {
-  const then = now()
-  try {
-    const got = await ask()
-    return then === now() ? got : STALE
-  } catch (err) {
-    if (then === now()) throw err
-    return STALE
-  }
-}
-
 // → { items, next } for one page of a list, or null if the list has moved on while it was asked for. Stops the
 // list's loading flag, unless a newer refresh() owns it now.
 async function fetchPage(store, kind, token, before) {
@@ -66,17 +50,6 @@ async function fetchPage(store, kind, token, before) {
 // The lists are clips and art; anything else (mine, review, a typo) is the caller's mistake, found before any state is touched.
 function checkKind(kind) {
   if (!Object.hasOwn(PAGE, kind)) throw new TypeError(`There is no "${String(kind)}" gallery list.`)
-}
-
-// Runs one action: the message of a failure is kept in `error` for the page to show, and the failure goes on to the caller.
-async function attempt(store, run) {
-  store.error = ''
-  try {
-    return await run()
-  } catch (err) {
-    store.error = err?.message || 'Something went wrong.'
-    throw err
-  }
 }
 
 export const useGallery = defineStore('gallery', {

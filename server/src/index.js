@@ -32,6 +32,17 @@ import { createGalleryHandler } from './galleryHandler.js'
 import { createGalleryPoll } from './galleryPoll.js'
 import { createGalleryStore } from './galleryStore.js'
 import { createHistoryStore } from './historyStore.js'
+import { createLibrariusAccess } from './librariusAccess.js'
+import { librariusConfig } from './librariusConfig.js'
+import { createLibrariusDiscord } from './librariusDiscord.js'
+import { createGateway } from './librariusGateway.js'
+import { createLibrariusGuild } from './librariusGuild.js'
+import { createLibrariusHandler } from './librariusHandler.js'
+import { createImport } from './librariusImport.js'
+import { createIngest } from './librariusIngest.js'
+import { createLinkRefresh } from './librariusLinks.js'
+import { createLibrariusStore } from './librariusStore.js'
+import { describe as describeFailure } from './librariusText.js'
 import { createMembership } from './membership.js'
 import { createMembershipHandler } from './membershipHandler.js'
 import { createPerksHandler } from './perks.js'
@@ -54,6 +65,21 @@ const BOT_TOKEN = process.env.DISCORD_BOT_TOKEN
 // Overridable so E2E runs can point both identity checks at a local fixture
 // instead of the real Discord API — see e2e/discord-mock.
 const DISCORD_API_BASE = process.env.DISCORD_API_BASE || 'https://discord.com/api'
+
+/** What a log may say of a failure: its name and message, with the bot token and every link cut out, in 200 characters. */
+const describeForLog = (err) => describeFailure(err, { secret: BOT_TOKEN })
+
+/**
+ * Log what nothing handled, the way every other failure is logged (no token, no link). The log line itself is guarded: a
+ * handler that throws ends the process all the same.
+ */
+function logUnhandled(kind, err) {
+  try {
+    console.error(`${kind}: ${describeForLog(err)}`)
+  } catch {
+    // The log is gone (a closed stderr, say): there is nowhere left to say it.
+  }
+}
 
 const pool = new Pool({ connectionString: process.env.DATABASE_URL })
 
@@ -182,6 +208,88 @@ const gallery = createGalleryHandler({
   configured: galleryConfigured,
 })
 
+// The Librarius, the guild's Discord forum read on the site — see librariusHandler.js. It is on only when the forum id
+// is a channel id AND the guild id and bot token are set: otherwise every /librarius route answers 503, and nothing of
+// it starts (no gateway connection, no timer, no import). Its roster is the one above.
+const librarius = librariusConfig(process.env)
+const librariusConfigured = librarius.configured && Boolean(GUILD_ID) && Boolean(BOT_TOKEN)
+if (librarius.report) console.warn(librarius.report)
+else if (librarius.configured && !librariusConfigured) {
+  console.warn(
+    'Librarius is not configured, so every /librarius route answers 503 and the gateway stays off: DISCORD_GUILD_ID and DISCORD_BOT_TOKEN are both needed.',
+  )
+}
+
+/** Do one startup step, and log it when it fails: nothing a step throws may reach the server. */
+async function librariusStep(what, run) {
+  try {
+    await run()
+  } catch (err) {
+    console.error(`Librarius: ${what}: ${describeForLog(err)}`)
+  }
+}
+
+// What stays when the Librarius is off, or when building it failed: a handler that answers 503 and touches nothing.
+let librariusRoutes = createLibrariusHandler({ roster, guildId: GUILD_ID, forumId: null, configured: false })
+let startLibrarius = async () => {}
+if (librariusConfigured) {
+  try {
+    const discord = createLibrariusDiscord({ apiBase: DISCORD_API_BASE, botToken: BOT_TOKEN, guildId: GUILD_ID })
+    const guild = createLibrariusGuild({ discord, forumId: librarius.forumId })
+    const access = createLibrariusAccess({ roles, guild, guildId: GUILD_ID })
+    const store = createLibrariusStore(pool)
+    // The import may queue for Discord longer than a reader's request may: it is given a view of the REST client that
+    // waits up to a minute for its turn. Everything else keeps the five seconds.
+    const importer = createImport({
+      discord: discord.withMaxWait(60_000),
+      store,
+      forumId: librarius.forumId,
+      // Once the posts are listed, before the long read of their messages: the live feed takes in the posts it has just
+      // been told of. `ingest` is made below, and is only called once the import runs.
+      onPostsListed: () => ingest.load(),
+    })
+    const links = createLinkRefresh({ discord, store })
+    const ingest = createIngest({
+      store,
+      guild,
+      access,
+      forumId: librarius.forumId,
+      fetchMessage: discord.message,
+      // The gateway's READY starts the catch-up. A run already going is not shared: this queues one follow-up pass, which
+      // starts as the going one ends (librariusImport.js).
+      onReady: () => importer.run(),
+    })
+    const gateway = createGateway({ discord, botToken: BOT_TOKEN, onDispatch: ingest.dispatch })
+    librariusRoutes = createLibrariusHandler({
+      access,
+      store,
+      guild,
+      links,
+      importer,
+      roster,
+      guildId: GUILD_ID,
+      forumId: librarius.forumId,
+      configured: true,
+    })
+    // Run once the server is listening, and in this order: the posts it listens to, the import (not waited for: it can
+    // take minutes), the import's timer (its first run is the one just started), the link timer, the gateway. A step
+    // that fails is logged and the rest go on: the catch-up that follows READY loads the posts again, so a failed load
+    // only delays the live feed, and the import's timer tries a failed import again.
+    startLibrarius = async () => {
+      // The roster supplies the names and avatars on a page: warm it now (not waited for), so that a reader's first
+      // request does not wait on it.
+      librariusStep('the roster could not be warmed', () => roster.current())
+      await librariusStep('the posts could not be loaded', () => ingest.load())
+      librariusStep('the import could not start', () => importer.run())
+      await librariusStep('the import timer could not start', () => importer.start())
+      await librariusStep('the link refresh could not start', () => links.start())
+      await librariusStep('the gateway could not start', () => gateway.start())
+    }
+  } catch (err) {
+    console.error(`Librarius: could not be set up, so every /librarius route answers 503: ${describeForLog(err)}`)
+  }
+}
+
 // Perk corrections, version history, privilege revocation — see perks.js.
 // The webhook is the reports one: leadership watches a single channel.
 const history = createHistoryStore(pool)
@@ -292,6 +400,8 @@ Bun.serve({
       if (deathwatchRes) return cors(deathwatchRes)
       const galleryRes = await gallery(request, url)
       if (galleryRes) return cors(galleryRes)
+      const librariusRes = await librariusRoutes(request, url)
+      if (librariusRes) return cors(librariusRes)
       const perksRes = await perks(request, url)
       if (perksRes) return cors(perksRes)
       const rosterPublicRes = await rosterPublicRoutes(request, url)
@@ -317,3 +427,14 @@ Bun.serve({
 })
 
 console.log(`Builds API listening on :${PORT}`)
+
+// A rejection nobody waited for, or an exception nobody caught, must not take a running API down: Bun exits on either
+// unless something is listening. Both are logged and never thrown again. They are registered only now that the server is
+// listening, and not at the top: a failure while starting (the port taken, a constructor that throws) has to end the
+// process, so that docker's `unless-stopped` starts it again. With the handler already in place that failure would be
+// logged and swallowed, and a timer (the gallery poll's) would keep a process alive with nothing listening.
+process.on('unhandledRejection', (reason) => logUnhandled('Unhandled rejection', reason))
+process.on('uncaughtException', (err) => logUnhandled('Uncaught exception', err))
+
+// Not waited for, and after Bun.serve: a slow database or a failing step must never keep the server from listening.
+startLibrarius().catch((err) => console.error(`Librarius: startup failed: ${describeForLog(err)}`))

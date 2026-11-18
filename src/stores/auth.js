@@ -4,7 +4,9 @@ import { useArchive } from './archive'
 import { useRoster } from './roster'
 import { useDeathwatch } from './deathwatch'
 import { useDeathwatchData } from './deathwatchData'
+import { useLibrarius } from './librarius'
 import { stashAnchor } from '../lib/archive/anchor'
+import { forgetPlaces } from '../lib/librarius/places'
 
 // Thin reactive wrapper around discordAuth.js. Sign-in itself is a full-page
 // redirect (implicit grant), so state is correct at mount time by construction
@@ -40,6 +42,19 @@ export const useAuth = defineStore('auth', {
       // And the Deathwatch clearance: signed out means no access, even for a page that stays open.
       useDeathwatch().reset()
       useDeathwatchData().reset()
+      // The Librarius too: the forum's posts and messages are for the person who was signed in, not the next one.
+      useLibrarius().reset()
+      // And where they were in each post, which is the last reader's own reading and is kept per tab.
+      forgetPlaces()
+    },
+    // Keeps the server's latest answer about whether this person may read the Librarius (see discordAuth.rememberLibrarius),
+    // so that the nav links show the Reliquarium to someone who signed in before they were let in, and stop showing it when
+    // they no longer are. The member is replaced only when the answer is news: the page that asks does so on every visit,
+    // and whatever watches `member` (the nav bar asks for the reader's privileges again) starts over when it is replaced.
+    noteLibrarius(access) {
+      discordAuth.rememberLibrarius(access)
+      const member = discordAuth.currentMember()
+      if (member?.librarius !== this.member?.librarius) this.member = member
     },
   },
 })

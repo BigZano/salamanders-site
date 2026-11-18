@@ -269,3 +269,96 @@ create table if not exists gallery_erasures (
   r2_key       text primary key,
   requested_at timestamptz not null default now()
 );
+
+-- Librarius: the guild's Discord forum, read on the site (see docs/superpowers/specs/2026-11-15-librarius-design.md).
+-- These tables are a copy of what Discord holds, and Discord stays the source: a delete in Discord deletes here, so
+-- the site never keeps what Discord has let go. Every id is a Discord snowflake, held as a bigint (pg hands it back
+-- as a string). The app role's default privileges (app-role.sql) already cover new tables and sequences.
+-- One counter numbers every message write and every delete, so a reader can ask for what changed after a number.
+create sequence if not exists librarius_rev;
+
+-- One row per forum post (a Discord thread). import_cursor is the newest message the import has stored for it;
+-- viewed_at is when a member last opened it, so the link refresh only looks after posts somebody reads.
+create table if not exists librarius_posts (
+  id             bigint primary key,
+  owner_id       bigint,
+  title          text not null,
+  tag_ids        text[] not null default '{}',
+  pinned         boolean not null default false,
+  locked         boolean not null default false,
+  archived       boolean not null default false,
+  created_at     timestamptz not null,
+  import_cursor  bigint,
+  viewed_at      timestamptz,
+  updated_at     timestamptz not null default now()
+);
+
+-- A post's messages, the opening one included (its id is the post's id). A message is not kept without its post.
+-- reply_to names a message that may not be stored, so it has no foreign key. rev is stamped on every write.
+create table if not exists librarius_messages (
+  id             bigint primary key,
+  post_id        bigint not null references librarius_posts (id) on delete cascade,
+  author_id      bigint not null,
+  author_name    text not null,
+  author_avatar  text,
+  webhook_id     bigint,
+  kind           smallint not null,
+  content        text not null,
+  embeds         jsonb not null default '[]',
+  stickers       jsonb not null default '[]',
+  reactions      jsonb not null default '[]',
+  reply_to       bigint,
+  created_at     timestamptz not null,
+  edited_at      timestamptz,
+  rev            bigint not null default nextval('librarius_rev')
+);
+
+create index if not exists librarius_messages_post_idx on librarius_messages (post_id, id);
+create index if not exists librarius_messages_rev_idx on librarius_messages (post_id, rev);
+
+-- A message's files. url is Discord's signed link and expires_at its expiry, which the link refresh keeps ahead of.
+create table if not exists librarius_attachments (
+  id            bigint primary key,
+  message_id    bigint not null references librarius_messages (id) on delete cascade,
+  position      smallint not null,
+  filename      text not null,
+  content_type  text,
+  size          integer not null,
+  width         integer,
+  height        integer,
+  url           text not null,
+  proxy_url     text,
+  expires_at    timestamptz
+);
+
+create index if not exists librarius_attachments_message_idx on librarius_attachments (message_id);
+create index if not exists librarius_attachments_expires_idx on librarius_attachments (expires_at);
+
+-- A deleted message, noted so a reader polling for changes learns of it. The message is gone, so there is no
+-- foreign key; the notes are pruned after a day.
+create table if not exists librarius_tombstones (
+  message_id  bigint not null,
+  post_id     bigint not null,
+  rev         bigint not null default nextval('librarius_rev'),
+  deleted_at  timestamptz not null default now()
+);
+
+create index if not exists librarius_tombstones_rev_idx on librarius_tombstones (post_id, rev);
+
+-- The newest message each member has seen in each post: what "N new" counts from.
+create table if not exists librarius_reads (
+  member_id  bigint not null,
+  post_id    bigint not null references librarius_posts (id) on delete cascade,
+  last_read  bigint not null,
+  primary key (member_id, post_id)
+);
+
+-- One row, and the check keeps it one: whether the full import has finished, and the outcome of the last pass
+-- (last_error is null when it succeeded).
+create table if not exists librarius_sync (
+  id           smallint primary key default 1 check (id = 1),
+  import_done  boolean not null default false,
+  last_run_at  timestamptz,
+  last_ok_at   timestamptz,
+  last_error   text
+);

@@ -241,3 +241,137 @@ Rollout:
    `backup/README.md`). It copies, never syncs: the backup keeps the files the purge takes out.
 
 The one-time import of the channel's back catalogue is a separate job.
+
+## Librarius (`/librarius/*`)
+
+The guild's Discord forum, read on the site: the posts and their messages are copied into Postgres (the import,
+then the gateway's live events), and the site reads that copy. Nothing here writes to Discord. Design:
+`docs/superpowers/specs/2026-11-15-librarius-design.md`. Access follows the forum in Discord: a member may read it
+here exactly when Discord would let them open it, worked out from the guild's roles and the forum's permission
+overwrites (View Channel and Read Message History, `librariusPerms.js`). The guild owner and Administrators read it
+too, as in Discord, and a role the forum shuts out does not. Every route reuses a verdict for 30 seconds, marking a post
+read included: it writes only the caller's own read mark. The guild and the forum that a verdict is drawn from are kept for
+5 minutes, and the gateway's role and channel events drop them at once; if such an event is lost, a change to a role or to
+the forum's overwrites takes effect within about 5.5 minutes (the 5 minutes of the cache and the 30 seconds of the verdict).
+Any Discord failure answers 503, and responses are never cached.
+
+| Endpoint | Who | Notes |
+|---|---|---|
+| `GET /librarius/me` | any signed-in user | `{ access }` for someone who may not read the forum; for a reader also `ready` (the import has finished), `tags`, `roles`, `guildId`, `forumId`; never 403 |
+| `GET /librarius/emoji` | reader | `{ emoji }`: the guild's custom emoji |
+| `GET /librarius/posts` | reader | `{ posts, people }`: every post with its tag ids, its latest message, its posters and the caller's unread count |
+| `GET /librarius/posts/:id` | reader | `{ post, lastRead, rev }`; opening a post marks it viewed, which keeps its attachment links fresh |
+| `GET /librarius/posts/:id/messages` | reader | one page: `?limit=` (1 to 100, default 50) and at most one of `before`, `after` or `around` (a message id); `{ messages, hasOlder, hasNewer, people, rev }` |
+| `GET /librarius/posts/:id/changes?since=<rev>` | reader | what changed after `rev`: `{ messages, deleted, rev, people }`, or `{ reset: true }` when too much did and the page must be read again; 404 once the post is gone (deleted in Discord), which is how a page left open learns it |
+| `PUT /librarius/posts/:id/read` | reader | JSON `{ messageId }` (at most 1 KB): how far the caller has read; 204 |
+
+A route that is not listed answers 404, an unconfigured Librarius 503, no identity 401 and no read permission 403
+(except `/librarius/me`). A post or message id that is not a snowflake never reaches the database: a post is 404, a
+cursor 400. Attachment links are signed by Discord and lapse. The link refresh (every 10 minutes) renews, up to 200 a
+pass, those that lapse within two hours of posts viewed in the last day. A read renews the first 50 links on its page that
+lapse within five minutes; any beyond those wait for the next pass, which is at most 10 minutes away. A link Discord
+cannot be reached to renew stays as it is until it can, so a reader may be shown one that has lapsed for as long as
+Discord is down.
+
+| Variable | Value |
+|---|---|
+| `LIBRARIUS_CHANNEL_ID` | the forum channel's id (17 to 20 digits) — no default, required. Not a secret, but live data: `server/.env` only |
+| `DISCORD_GUILD_ID`, `DISCORD_BOT_TOKEN` | shared with the rest of the API — required |
+
+The Librarius is on only when all three are set (and the forum id is a channel id). Otherwise every `/librarius`
+route answers 503 "not configured" and nothing starts (no gateway connection, no timer, no import), so the image may
+ship first. The API logs one warning at startup saying which, never a value. When it is on, the API starts, after it is
+listening: the roster warm-up, the posts load, the import (in the background), the import's timer, the link refresh
+timer and the gateway connection. The import comes round on its own: once after start, again after every gateway READY,
+and 6 hours after the last run ended whoever started it. A run that fails is tried again after 5, 10 and 20 minutes, then
+every 30 minutes, and a run that finishes starts the steps over. A step that fails to start is logged as `Librarius: ...`
+(never the token or a link) and the rest go on; none of it can keep the API from listening. Once the API is listening, a rejection or
+exception that nothing handles is logged the same way and no longer ends the process; a failure while it is starting (the
+port taken, say) still does, so that docker restarts it.
+
+**Bot permissions:** View Channel and Read Message History on the forum (granted 2026-11-15), and the Message Content
+intent toggle on the bot's page in the Discord Developer Portal, already on for the Reliquarium (without it the gateway
+is refused).
+
+**The port.** `docker-compose.yml` publishes the API as `127.0.0.1:8787:8787`: on the host's loopback only. The Cloudflare
+tunnel runs on the host and reaches it there; nothing else on the LAN can. `src/composePorts.test.js` pins this. The
+tunnel's ingress may still say `localhost`, which can resolve to `::1`, where a bind to `127.0.0.1` does not answer: set
+`http://127.0.0.1:8787` in the cloudflared config. The public `/health` check below proves that the tunnel reaches the API
+either way. Beware of any other checkout of this repository on the host that has an older `server/` compose file (the same
+compose project name, publishing `'8787:8787'`): running `docker compose up` there would replace the live API and open the
+LAN port again. Do not run it from anywhere but the checkout the API is deployed from.
+
+**Rollout order: the API first, the merge to `main` after.** Rebuild and configure the API from the `feat/librarius` branch
+(steps 1 to 4 below), and wait for `import_done`, **before** merging the branch to `main`: the site deploys the moment it
+merges. The new API is additive and safe for the old site, which never asks for it. The new site against the old API is not:
+it shows every Legion member "The Librarius couldn't be reached." until the API is rebuilt.
+
+Rollout:
+
+1. Apply `schema.sql` (idempotent, command in the reports section above) **before** starting the new image: the tables
+   are `librarius_*`.
+2. Set `LIBRARIUS_CHANNEL_ID` in `server/.env`.
+3. Rebuild the API, keeping the rollback tag: `docker tag server-api:latest server-api:pre-librarius` first, then
+   `docker compose up -d --build api`. To go back: `docker tag server-api:pre-librarius server-api:latest && docker
+   compose up -d --no-build --force-recreate api`. Once the site has been merged, going back is not so simple: see
+   "Rolling back" below.
+4. Check, **before the merge**. The site has no Librarius yet, so these go to the API and the database directly. A call
+   that needs a reader takes the Discord token of someone who may read the forum: sign in to the site as that person, and
+   in the browser console run `JSON.parse(localStorage.getItem('salamanders-discord-member')).accessToken`. Put it in
+   `TOKEN` in the shell that runs the checks, and nowhere else (it is as good as the sign-in, until it expires).
+   - `curl -s -o /dev/null -w '%{http_code}' localhost:8787/librarius/me` answers 401;
+   - `curl -s <the API's public address>/health` (the address `VITE_BUILDS_API_URL` names) answers `{"ok":true}`: the tunnel
+     still reaches the API now that the port is bound to the loopback;
+   - `docker compose logs api` shows no "Librarius is not configured";
+   - `docker compose logs api` shows no "The Librarius gateway closed with code" for 4004 or 4010 to 4014. Those stop the
+     gateway for good, and the forum then goes stale until the cause is fixed and the API is restarted: 4014 means the
+     Message Content intent is off for the bot. The other codes (4000 and 4007 to 4009 among them) are reconnects that the
+     client makes by itself, and are normal;
+   - the import finishes: the first command shows `import_done` true and an empty `last_error`, and the second says
+     `"ready":true`:
+
+     ```sh
+     docker compose exec -T db psql -U salamanders salamanders_builds -c 'select import_done, last_error from librarius_sync;'
+     curl -s -H "Authorization: Bearer $TOKEN" localhost:8787/librarius/me
+     ```
+   - the live feed works. In a post of the forum, in Discord, post a message, edit it, react to it, and delete a message
+     (one you posted for this). Then run the query below, with the post's id in place of `<post id>`: within about 10
+     seconds the new message is there, the edit shows in `edited_at` and `content`, the reaction in `reactions`, and the
+     deleted one is gone.
+
+     ```sh
+     docker compose exec -T db psql -U salamanders salamanders_builds -c "select id, left(content, 40), edited_at, reactions from librarius_messages where post_id = <post id> order by id desc limit 5;"
+     ```
+
+   - port 8787 is no longer reachable from another machine on the LAN;
+   - a link refresh moved links forward. Pick one post whose files were imported a day or more ago, so that their links
+     have lapsed or lapse within two hours (a link further off is left alone, by design). Note their `expires_at` with
+     the query below (its post id in place of `<post id>`). Then have the API read that post, as a reader would:
+     `curl -s -H "Authorization: Bearer $TOKEN" localhost:8787/librarius/posts/<post id>` (which opens it, and so marks it
+     viewed) and `curl -s -H "Authorization: Bearer $TOKEN" localhost:8787/librarius/posts/<post id>/messages`. Run the
+     query again 10 minutes or more later: they should be later than before, and more than an hour away. Look at that one
+     post, not at the whole table: a link sits between 1 hour 50 minutes and 2 hours from lapsing for up to one pass before
+     it is renewed, and a link Discord will not renew (its message is gone there) stays in the past.
+
+     ```sh
+     docker compose exec -T db psql -U salamanders salamanders_builds -c "select a.id, a.expires_at from librarius_attachments a join librarius_messages m on m.id = a.message_id where m.post_id = <post id> order by a.expires_at limit 5;"
+     ```
+
+5. Merge the branch to `main`. The site deploys, and the Librarius appears in the Reliquarium.
+6. Check again, **on the site**. Sign in and open Reliquarium, then Librarius: the topic list and a post load. In a post,
+   in Discord, post a message, edit it, react to it and delete one: each shows on the site within about 10 seconds (the
+   page asks for changes every 10), and a post deleted in Discord says "This post was removed in Discord." on a page left
+   open. A post's pictures load.
+7. Share `/reliquarium/librarius` with readers who are not in the Legion but may read the forum: their nav link appears
+   only after they sign in again or visit that page once.
+
+If the import never finishes (`import_done` stays false), read `last_error` in the same table: the import retries by itself
+(after 5, 10 and 20 minutes, then every 30), and `docker compose restart api` forces a run at once. A run that stopped
+resumes from the cursor each post kept, so a long import is not started over. A `last_error` of "Error: Discord answered 403 for
+a thread." means the bot cannot see a post that the Librarius holds and Discord no longer lists: before it deletes
+anything, the import asks Discord about each such post, and that answer ends every run, with nothing deleted, until the
+bot's permissions on that thread (or on the forum) let it see the thread again.
+
+**Rolling back.** Before the merge, the rollback tag above is the whole of it. After the merge, rolling back the API alone
+leaves the new site against the old API, and every Legion member sees "The Librarius couldn't be reached." A full rollback
+also needs a revert of the merge on `main`, so that the site goes back too.
