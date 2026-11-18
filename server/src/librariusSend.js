@@ -421,6 +421,19 @@ const WORKER_FILE = new URL('./librariusRegexWorker.js', import.meta.url)
 let worker = null
 let turn = Promise.resolve()
 
+// Told once for the whole process, for a worker that cannot run is made again by every job, and would be told again each time. What it
+// says is left out: it may hold a path, and a failure of the worker must never carry a pattern or a text into a log. A reply that a pattern
+// applies to is refused (fail closed) while it fails, so the owner is told why, once.
+let workerTold = false
+
+// Stryker disable BlockStatement,ConditionalExpression,BooleanLiteral,StringLiteral: the log, which no test asserts
+function workerFailed() {
+  if (workerTold) return
+  workerTold = true
+  console.error("Librarius: the thread that checks AutoMod patterns failed, so a reply that a rule's pattern applies to is refused until it runs again.")
+}
+// Stryker restore BlockStatement,ConditionalExpression,BooleanLiteral,StringLiteral
+
 function startWorker() {
   const started = new Worker(WORKER_FILE)
   // It never keeps the process alive by itself.
@@ -428,7 +441,7 @@ function startWorker() {
   // A worker that fails does not answer, and the budget ends the wait for it; its error is not an error of the server, which is
   // what an error with no listener would be.
   // Stryker disable next-line StringLiteral: without a listener for it, the next error of the worker is thrown and ends the process, which the runner counts as a crash and not as a kill
-  started.on('error', () => {})
+  started.on('error', workerFailed)
   return started
 }
 
