@@ -42,6 +42,11 @@ describe('librarius.css', () => {
     expect(rule('.lb-msg')).toMatch(/grid-template-columns:\s*2\.5rem minmax\(0,\s*1fr\)/)
   })
 
+  it('keeps a table inside the column, scrolling sideways within its own region', () => {
+    expect(rule('.lb-msg .md-table-wrap')).toMatch(/overflow-x:\s*auto/)
+    expect(rule('.lb-msg .md-table-wrap')).toMatch(/max-width:\s*100%/)
+  })
+
   it.each(['.lb-file', '.lb-reply', '.lb-topic', '.lb-chip', '.lb-sort', '.lb-crumbs a', '.lb-more', '.lb-month'])('%s is a full-size tap target', (selector) => {
     expect(rule(selector), selector).toMatch(/min-height:\s*var\(--tap\)/)
   })

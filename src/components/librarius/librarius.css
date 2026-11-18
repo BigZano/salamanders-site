@@ -140,6 +140,20 @@
   font-size: var(--text-base);
   letter-spacing: 0.02em;
 }
+.lb-msg .md-h4 {
+  font-size: var(--text-base);
+  letter-spacing: 0.02em;
+}
+.lb-msg .md-h5 {
+  font-size: var(--text-md);
+  letter-spacing: 0.02em;
+}
+.lb-msg .md-h6 {
+  font-size: var(--text-sm);
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--color-pewter);
+}
 .lb-msg .md-line {
   margin: 0.15rem 0;
 }
@@ -190,6 +204,56 @@
   background: rgba(0, 0, 0, 0.45);
   border: 1px solid var(--color-ash);
   border-radius: var(--radius-sm);
+}
+/* What only a reply written on the site has: a rule, a table inside a region that scrolls on its own, footnotes, a picture's stand-in. */
+.lb-msg .md-hr {
+  margin: 0.9rem 0;
+  border: 0;
+  border-top: 1px solid var(--color-ash);
+}
+.lb-msg .md-table-wrap {
+  max-width: 100%;
+  margin: 0.5rem 0;
+  overflow-x: auto;
+}
+.lb-msg .md-table {
+  border-collapse: collapse;
+  font-size: var(--text-sm);
+}
+.lb-msg .md-table th,
+.lb-msg .md-table td {
+  padding: 0.35rem 0.7rem;
+  text-align: left;
+  vertical-align: top;
+  border: 1px solid var(--color-ash);
+}
+.lb-msg .md-table th {
+  font-family: var(--font-display);
+  color: var(--color-bone);
+  background: rgba(0, 0, 0, 0.35);
+}
+.lb-msg .md-fnref {
+  font-size: 0.75em;
+  color: var(--color-bone);
+}
+.lb-msg .md-footnotes {
+  margin-top: 0.9rem;
+  padding-top: 0.5rem;
+  font-size: var(--text-sm);
+  color: var(--color-pewter);
+  border-top: 1px solid var(--color-ash);
+}
+.lb-msg .md-footnote {
+  display: flex;
+  gap: 0.4rem;
+  align-items: baseline;
+}
+.lb-msg .md-footnote > div {
+  min-width: 0;
+}
+.lb-msg .md-image-missing {
+  font-style: italic;
+  color: var(--color-smoke);
 }
 .lb-msg .md-pre {
   margin: 0.5rem 0;

@@ -5,7 +5,7 @@ const FULL = { lines: 100, branches: 100, functions: 100, statements: 100 }
 const GATED = [
   'src/lib/archive/crypto.js',
   'src/lib/archive/links.js',
-  'src/lib/archive/markdown.js',
+  'server/src/librariusMarkdown.js',
   'src/lib/archive/audit.js',
   'src/lib/archive/prune.js',
   'src/lib/archive/legacy.js',

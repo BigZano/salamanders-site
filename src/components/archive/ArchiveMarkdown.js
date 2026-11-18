@@ -2,6 +2,10 @@
  * AST → VNodes. Text goes through Vue's escaping; no raw markup is
  * written anywhere in the archive. Links come only from classifyHref: route,
  * external https, or plain text.
+ *
+ * The nodes of the site's extended markdown (tables, dividers, headings 4-6, footnotes, pictures) are drawn here too. A
+ * picture is whatever `ctx.image(ref, alt)` returns, a VNode: only the page knows where an upload is. With no such function,
+ * or when it returns nothing, the alt text is shown in its place.
  */
 import { defineComponent, h, ref } from 'vue'
 import { RouterLink } from 'vue-router'
@@ -28,22 +32,36 @@ export default defineComponent({
   name: 'ArchiveMarkdown',
   props: {
     nodes: { type: Array, required: true },
-    // { link(href) → classifyHref result, emoji(node) → VNode, mention(node) → {label, color} }
+    // { link(href) → classifyHref result, emoji(node) → VNode, mention(node) → {label, color},
+    //   image(ref, alt) → VNode | null (optional; only the extended markdown has pictures) }
     ctx: { type: Object, required: true },
   },
   setup(props) {
     const inl = (nodes) => nodes.map((n) => inline(n, props.ctx))
     function block(n) {
       switch (n.type) {
-        case 'heading': return h(`h${n.level + 1}`, { class: `md-h md-h${n.level}` }, inl(n.children))
+        // Level 1 is an h2 (the page has its own h1); an h6 is the last there is, so levels 5 and 6 share it.
+        case 'heading': return h(`h${Math.min(n.level + 1, 6)}`, { class: `md-h md-h${n.level}` }, inl(n.children))
         case 'subtext': return h('p', { class: 'md-sub' }, inl(n.children))
         case 'quote': return h('blockquote', { class: 'md-quote' }, n.children.map(block))
         case 'list': return h(n.ordered ? 'ol' : 'ul', { class: 'md-list' }, n.items.map((it) => h('li', it.children.map(block))))
         case 'codeblock': return h('pre', { class: 'md-pre' }, h('code', n.text))
         case 'blank': return h('div', { class: 'md-blank', 'aria-hidden': 'true' })
+        case 'divider': return h('hr', { class: 'md-hr' })
+        case 'table': return table(n)
+        case 'footnotes': return h('section', { class: 'md-footnotes', 'aria-label': 'Footnotes' }, n.items.map((it) => h('div', { class: 'md-footnote' }, [marker(it.label), h('div', it.children.map(block))])))
         default: return h('p', { class: 'md-line' }, inl(n.children))
       }
     }
+    // A table that is wider than the column scrolls inside its own region, which the keyboard can reach.
+    function table(n) {
+      const row = (cells, tag, attrs) => h('tr', cells.map((c) => h(tag, attrs, inl(c))))
+      return h('div', { class: 'md-table-wrap', role: 'region', 'aria-label': 'Table', tabindex: 0 }, h('table', { class: 'md-table' }, [
+        h('thead', row(n.head, 'th', { scope: 'col' })),
+        h('tbody', n.rows.map((cells) => row(cells, 'td'))),
+      ]))
+    }
+    const marker = (label) => h('sup', { class: 'md-fnref' }, `[${label}]`)
     function inline(n, ctx) {
       switch (n.type) {
         case 'text': return n.value
@@ -53,6 +71,9 @@ export default defineComponent({
         case 'strike': return h('s', inl(n.children))
         case 'spoiler': return h(Spoiler, null, () => inl(n.children))
         case 'code': return h('code', { class: 'md-code' }, n.text)
+        case 'br': return h('br')
+        case 'image': return ctx.image?.(n.ref, n.alt) ?? h('span', { class: 'md-image-missing' }, n.alt)
+        case 'footnoteRef': return marker(n.label)
         case 'emoji': return ctx.emoji(n)
         case 'mention': return mention(n, ctx)
         case 'link': return anchor(ctx.link(n.href), inl(n.children))
