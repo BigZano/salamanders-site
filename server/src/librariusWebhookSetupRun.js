@@ -10,15 +10,18 @@
  * Settings: DISCORD_BOT_TOKEN, DISCORD_GUILD_ID and LIBRARIUS_CHANNEL_ID (the Librarius forum); DISCORD_API_BASE as
  * everywhere else. It exits 2, before it calls anything, when one of them is missing or is not what it should be or when an
  * argument is not one it knows, and again when the channel is not a forum or is not in DISCORD_GUILD_ID. It exits 1 when
- * Discord refused or did not answer, and when a webhook named "Librarius" that this bot made is already on the forum: it
- * then makes nothing and prints that webhook's id and how to delete it by hand (the address of a webhook is shown only when
- * it is made, so a second one is not made beside the first, and an old one is removed by the owner, not here).
+ * Discord refused or did not answer, and when a webhook named "Librarius" that this bot made is already on the forum but
+ * Discord gave no usable address for it. A webhook that is already there is not made again: Discord lists the address of a
+ * webhook of this kind to the bot that may manage webhooks, so the run prints that address, the same one as ever, and
+ * makes nothing. A second webhook would be another sender: a webhook can edit and delete only its own messages, so once the
+ * site has sent replies through the first, this one must never be deleted (nor a new one put in its place) to get its
+ * address back.
  *
  * On success it prints one line to standard output, `LIBRARIUS_WEBHOOK_URL=` and the address, and says on standard error to
  * paste that line into `server/.env` and to rebuild the API. The address is a secret (whoever has it can post as the
  * Librarius), so it is printed nowhere else, and neither is the bot's token. What Discord says in a failure is cut of every
  * link and of the tokens before it is printed, and a failure to reach Discord names the kind of error and nothing it
- * carried. A webhook that may have been made though no answer came is named in the message, for the owner to delete.
+ * carried. A webhook that may have been made though no answer came is found by running this again.
  *
  * Exports are for the test: setupConfig and runSetup do the work. The file runs only when it is the program Bun was
  * started with.
@@ -31,7 +34,8 @@ const NAME = 'Librarius'
 const FORUM = 15
 const TIMEOUT_MS = 15_000
 const USAGE = 'Unknown argument. usage: bun src/librariusWebhookSetupRun.js [--dry-run]'
-const DELETE_BY_HAND = `Edit Channel → Integrations → Webhooks → ${NAME} → Delete Webhook`
+const WEBHOOKS_PAGE = `Edit Channel → Integrations → Webhooks → ${NAME}`
+const KEEP_IT = 'Do not delete the webhook once the site has sent replies: a new webhook cannot edit or delete what this one sent.'
 
 /** The setup will not run with what it was given. The message names a setting or an argument, never a value. */
 export class SetupRefused extends Error {
@@ -90,7 +94,7 @@ export async function runSetup({ argv = [], env = process.env, fetchImpl = fetch
     log(`GET ${channelPath}`)
     log(`GET ${channelPath}/webhooks`)
     log(`POST ${channelPath}/webhooks  body: ${JSON.stringify({ name: NAME })}`)
-    log("Then it prints LIBRARIUS_WEBHOOK_URL= and the new webhook's address, once. Dry run: nothing was called.")
+    log(`Then it prints LIBRARIUS_WEBHOOK_URL= and the webhook's address, once (a webhook named "${NAME}" that this bot made is used when it is there, and none is made beside it). Dry run: nothing was called.`)
     return 0
   }
 
@@ -151,12 +155,29 @@ export async function runSetup({ argv = [], env = process.env, fetchImpl = fetch
     ((isObject(hook.user) && hook.user.id === me.body.id) || hook.application_id === me.body.id)
   const existing = listed.body.find(mine)
   if (existing !== undefined) {
+    const id = isId(existing.id) ? existing.id : 'unknown'
+    let found = null
+    if (typeof existing.token === 'string') {
+      hidden.push(existing.token)
+      try {
+        found = webhookUrl(apiBase, existing.id, existing.token)
+      } catch {
+        // Discord gave no address that the client takes: it is said below.
+      }
+    }
+    if (found === null) {
+      warn(
+        `Setup not run: a webhook named "${NAME}" that this bot made is already on the Librarius forum (id ${id}), but Discord gave no usable address for it. ` +
+          `Nothing was made. Copy its address from ${WEBHOOKS_PAGE} → Copy Webhook URL. ${KEEP_IT}`,
+      )
+      return 1
+    }
+    log(`LIBRARIUS_WEBHOOK_URL=${found}`)
     warn(
-      `Setup not run: a webhook named "${NAME}" that this bot made is already on the Librarius forum (id ${isId(existing.id) ? existing.id : 'unknown'}). ` +
-        `Nothing was made. Discord shows a webhook's address only when it is made, so this one's is wherever it was saved (server/.env). ` +
-        `To make a new one, delete this one first (${DELETE_BY_HAND}) and run this again.`,
+      `A webhook named "${NAME}" that this bot made is already on the Librarius forum (id ${id}), so none was made: the line above is its address, the one the site uses. ` +
+        `Paste it into server/.env if it is not there. It is a secret: whoever has it can post as the Librarius, so do not paste it anywhere else. ${KEEP_IT}`,
     )
-    return 1
+    return 0
   }
 
   const made = await call('POST', `${channelPath}/webhooks`, { name: NAME })
@@ -164,7 +185,7 @@ export async function runSetup({ argv = [], env = process.env, fetchImpl = fetch
   if (made.status !== 200 || !isObject(made.body)) {
     warn(`Setup stopped: the webhook could not be made (${said(made)}).`)
     // It may be there all the same: an answer that never came says nothing about what Discord did.
-    if (made.status === null) warn(`If a webhook named "${NAME}" is on the Librarius forum now, delete it (${DELETE_BY_HAND}) before you run this again.`)
+    if (made.status === null) warn(`If a webhook named "${NAME}" is on the Librarius forum now, run this again: it finds that webhook and prints its address, and makes no second one.`)
     return 1
   }
   let address
@@ -172,15 +193,15 @@ export async function runSetup({ argv = [], env = process.env, fetchImpl = fetch
     address = webhookUrl(apiBase, made.body.id, made.body.token)
   } catch {
     const named = isId(made.body.id) ? ` Its id is ${made.body.id}.` : ''
-    warn(`Setup stopped: Discord made a webhook but gave no usable address for it.${named} Delete it (${DELETE_BY_HAND}) and run this again.`)
+    warn(`Setup stopped: Discord made a webhook but gave no usable address for it.${named} Delete it (${WEBHOOKS_PAGE} → Delete Webhook: nothing has been sent through it yet) and run this again.`)
     return 1
   }
 
   log(`LIBRARIUS_WEBHOOK_URL=${address}`)
   warn(
     'The webhook is made. Paste the line above into server/.env on the host that runs the API, then rebuild the API. ' +
-      'It is a secret: whoever has it can post as the Librarius, so do not paste it anywhere else. Discord does not show it again; ' +
-      `if it is lost, delete the webhook (${DELETE_BY_HAND}) and run this again.`,
+      'It is a secret: whoever has it can post as the Librarius, so do not paste it anywhere else. ' +
+      `If it is lost, run this again (it prints the address of the webhook that is there) or copy it from ${WEBHOOKS_PAGE} → Copy Webhook URL. ${KEEP_IT}`,
   )
   return 0
 }
