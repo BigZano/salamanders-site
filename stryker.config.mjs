@@ -10,6 +10,8 @@ export default {
     'server/src/librariusForm.js',
     'server/src/librariusSend.js',
     'server/src/librariusWebhook.js',
+    'server/src/librariusOutboxStore.js',
+    'server/src/librariusOutbox.js',
     'src/lib/archive/audit.js',
   'src/lib/archive/prune.js',
     'src/lib/archive/legacy.js',

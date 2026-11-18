@@ -1,0 +1,615 @@
+/**
+ * The Librarius's outbox worker (batch 2): it sends a member's reply from the site to Discord through the webhook, edits it
+ * there and deletes it, and it never loses a reply and never posts one twice. A reply is a row of the outbox (see
+ * librariusOutboxStore.js) before anything is sent, so a restart finds it, and the worker writes down what it has done to
+ * Discord as it does it (payload.progress), so that a restart picks up where it stopped.
+ *
+ * createOutbox({ store, webhook, discord, form = 'v2', guildId, now = Date.now, timers = { setTimeout, clearTimeout }, log })
+ *   → { start(), stop() → Promise, kick(), sendingPausedUntil(), webhookRefused() }
+ *   `store` is the Librarius store (the outbox methods of librariusOutboxStore.js), `webhook` the client of librariusWebhook.js
+ *   (made with `newest`, for recent()) and `discord` the bot client of librariusDiscord.js (setArchived, deleteMessage). `form`
+ *   is the form a new reply is sent in ('v2' or 'plain'); a reply keeps the one it began with. `guildId` makes the links
+ *   between the parts of a reply. `now` is the clock, in milliseconds, and `timers` its timers: tests give it their own.
+ *   start() begins the work, and takes up the entries a stop or a crash left half-done. kick() tells it that an entry was
+ *   queued. stop() ends it at the next safe point, which is between two steps and never inside one, and answers when it has.
+ *   sendingPausedUntil() is the time (ms) sending is paused until, by the breaker, or null. webhookRefused() is null, or
+ *   { status, text } once Discord has refused the webhook itself: the worker has stopped for good (until a restart) and the
+ *   routes should answer 503 to writes.
+ *
+ * The worker runs one entry at a time, the oldest due first (a resumed one before them).
+ * - A reply (kind 'send'): payload { postId, source, replyTo: { messageId, authorId, url } | null, mentions: [ids], uploads:
+ *   [upload ids], username, avatarUrl | null, siteUrl }. It is cut into parts by toDiscord, and the parts are sent in order,
+ *   each carrying the link back to the first; once the last is sent, the first is edited to carry the links forward. Then, in
+ *   one transaction, the message is stored (origin 'site', its source and its layout, which an edit needs), its parts are
+ *   written and the uploads are deleted. A message has no id of its own: its id is its first part's.
+ * - An edit (kind 'edit'): payload { postId, source, mentions }, the key the id of the message. The text is cut again; the
+ *   parts that are there are edited in place, parts that are not needed are deleted and new ones added, and the first is
+ *   edited last to carry the links. Pictures are fixed when a reply is sent: the webhook cannot change the files of a message,
+ *   so an edit that would put a picture in another part, or take one away, or add one (placement() of the form says) is
+ *   refused: "That edit would move or change a picture...". An edit sends no `attachments`, so Discord keeps each part's files.
+ * - A delete (kind 'delete'): payload { postId, partIds? }, the key the id of the message. A reply of the site is removed from
+ *   Discord part by part, through the webhook; a message a person wrote in Discord, by the bot. Then the message is deleted
+ *   from the store.
+ * The parts the worker has sent are in payload.progress: { form, parts: [{ id, at, attachments }], inflight }. `parts` are the
+ * parts this entry made (for an edit, only the ones it added), `inflight` the index of a part it was sending when it
+ * stopped, or null: it is written BEFORE a part is sent and cleared once the part's id is written, so a restart knows when
+ * a part may or may not be in Discord.
+ *
+ * Never twice. A part is only sent again when it is certain that it did not land: a refusal of Discord (a 4xx, a 429) is
+ * certain; a timeout, a reset, a 5xx or an answer with no message is not (`unknown` of the webhook client). After an
+ * unknown, and after a restart with `inflight` set, the worker reads the thread's recent messages from our webhook and looks for
+ * one whose text is the part's and which no reply has taken as its part yet. (A part's text names the part before it, so no
+ * part matches another's.) One found is adopted as the part. Only when there is none is the part sent again, once; a second unknown ends the attempt, and
+ * the next attempt looks again before it sends. A failed look is a failed attempt, never a resend.
+ *
+ * The limits (the spec's "no strikes" numbers):
+ * - every webhook call (send, edit or delete), whichever entry it is for, goes out at least 1500 ms after the one before it;
+ * - at most 20 sends in any 60 s; the worker waits until the oldest has left the window;
+ * - a 429 sets the entry's next try to its Retry-After: it is not an attempt of the ladder, and not a block. A 429 that is
+ *   global pauses every webhook call until then;
+ * - blocked (Discord code 200000 or 200001): the entry is 'blocked' and never tried again. Two blocks within an hour pause all
+ *   work for an hour (the breaker); the blocks are noted in librarius_events, so a restart builds the pause again;
+ * - fatal (the webhook is refused or gone): the worker stops, the entry goes back to 'pending', and webhookRefused() says so;
+ * - any other failure of Discord's (the webhook's or the bot's) is tried again after 5 s, 30 s, 2 min and 10 min, and then the
+ *   entry is 'failed'. Something that cannot succeed (a TypeError or RangeError: a bad entry) fails at once. A failure of the
+ *   store is neither: the entry is kept as it is, with what the worker knows of it, and tried again every 5 s, never counted.
+ * - a thread that is archived (400, code 50083) is unarchived through the bot, the call is made again, and the thread is archived
+ *   again when the entry is done. If the bot may not (403) the entry fails with "This post is locked in Discord.", and is not
+ *   tried again.
+ * - a thread that is gone: a reply fails with "This post is gone from Discord."; for an edit or a delete the message goes from
+ *   the store and the entry is done. A part of a reply that an edit finds deleted in Discord takes the whole reply with it
+ *   (the other parts are deleted through the webhook), as when the gateway says a part was deleted.
+ */
+import { Upstream } from './discordRoles.js'
+import { DEFAULT_FORM, FORMS, placement, toDiscord } from './librariusForm.js'
+import { parseMessage, snowflakeTime } from './librariusParse.js'
+import { describe, isId } from './librariusText.js'
+import { WebhookError, sendBody } from './librariusWebhook.js'
+
+const SPACING_MS = 1500
+const CEILING = 20
+const CEILING_WINDOW_MS = 60_000
+const BREAKER_BLOCKS = 2
+const BREAKER_WINDOW_MS = 3_600_000
+const BREAKER_PAUSE_MS = 3_600_000
+const LADDER_MS = [5_000, 30_000, 120_000, 600_000]
+const STORE_RETRY_MS = 5_000
+// A longer wait than this is waited in steps, since a timer holds 24 days at most.
+const MAX_WAKE_MS = 3_600_000
+const ARCHIVED_CODE = 50083
+const CONTENT_MAX = 4000
+const EXTENSIONS = { 'image/png': 'png', 'image/jpeg': 'jpg', 'image/webp': 'webp', 'image/gif': 'gif' }
+
+const STORE_METHODS = [
+  'outboxInterrupted',
+  'claimOutbox',
+  'outboxNextAt',
+  'outboxProgress',
+  'outboxSet',
+  'finishSend',
+  'finishEdit',
+  'finishDelete',
+  'outboxMessage',
+  'uploadsFor',
+  'knownPartIds',
+  'blockedSince',
+]
+
+// What a member is told. The first six are the ones the plan words.
+export const COPY = Object.freeze({
+  threadGone: 'This post is gone from Discord.',
+  locked: 'This post is locked in Discord.',
+  pictures: "That edit would move or change a picture. Pictures can't be changed after sending: delete the reply and post it again.",
+  tooLong: "That's longer than Discord can carry in 3 messages.",
+  uploadsGone: 'A picture of this reply is no longer held. Post it again.',
+  messageGone: 'This reply is no longer there.',
+  notSite: 'Only replies written on the site can be edited here.',
+  unsendable: 'This reply could not be sent.',
+})
+const NOUN = { send: 'reply', edit: 'edit', delete: 'delete' }
+const PART_DELETED = 'A part was deleted in Discord.'
+
+/** Thrown to say a stop was asked for: the entry is left as it is, for the next start to resume. */
+class Halt extends Error {}
+
+/** Thrown for an entry that cannot succeed, with what the member is told. */
+class Refusal extends Error {}
+
+/** → the text of a message of Discord as the form made it: a plain message's content, or a V2 message's text displays. */
+function textOf(message) {
+  if (typeof message.content === 'string' && message.content !== '') return message.content
+  const texts = []
+  const walk = (components) => {
+    for (const component of Array.isArray(components) ? components : []) {
+      if (typeof component?.content === 'string') texts.push(component.content)
+      walk(component?.components)
+    }
+  }
+  walk(message.components)
+  return texts.join('\n')
+}
+
+/** → at most CONTENT_MAX characters of the source, never cutting a pair. */
+const contentOf = (source) => Array.from(source).slice(0, CONTENT_MAX).join('')
+
+export function createOutbox({ store, webhook, discord, form = DEFAULT_FORM, guildId, now = Date.now, timers, log = console.error }) {
+  for (const name of STORE_METHODS) if (typeof store?.[name] !== 'function') throw new TypeError(`store.${name} must be a function.`)
+  for (const name of ['send', 'edit', 'remove', 'recent']) if (typeof webhook?.[name] !== 'function') throw new TypeError(`webhook.${name} must be a function.`)
+  if (!isId(webhook.id)) throw new TypeError('webhook.id must be a Discord id.')
+  for (const name of ['setArchived', 'deleteMessage']) if (typeof discord?.[name] !== 'function') throw new TypeError(`discord.${name} must be a function.`)
+  if (!FORMS.includes(form)) throw new TypeError('form must be "v2" or "plain".')
+  if (!isId(guildId)) throw new TypeError('guildId must be a Discord id.')
+  if (typeof now !== 'function') throw new TypeError('now must be a function.')
+  if (typeof log !== 'function') throw new TypeError('log must be a function.')
+  // Looked up when it is used, so that a test's fake timers, installed after this is made, still count.
+  const clock = timers ?? { setTimeout: (...args) => globalThis.setTimeout(...args), clearTimeout: (...args) => globalThis.clearTimeout(...args) }
+  for (const name of ['setTimeout', 'clearTimeout']) if (typeof clock[name] !== 'function') throw new TypeError(`timers.${name} must be a function.`)
+
+  // Stryker disable next-line ArrowFunction,StringLiteral: what is logged is for the owner to read, and no test asserts it
+  const report = (text) => log(`Librarius outbox: ${text}`)
+
+  let started = false
+  // Set when the worker starts: whether it is being stopped, whether it has read what the store keeps, and whether a kick came
+  // while it was working.
+  let stopping
+  let ready
+  let again
+  let running = null
+  let wake = null
+  // The entries a stop left half-done, read when the worker starts.
+  let resumeQueue
+  let refused = null
+  // When the last webhook call ended, when a global 429 lets them go on, and until when the breaker has stopped everything.
+  let lastCallAt = -Infinity
+  let globalUntil = 0
+  let pausedUntil = 0
+  // The times of the last CEILING sends, and of the blocks that count towards the breaker.
+  const sends = []
+  // Stryker disable next-line ArrayDeclaration: a text among the times is dropped by the first filter, as no time is within an hour of it
+  let blocks = []
+  const sleeping = new Set()
+
+  /** The breaker: a block at time `t` counts, and the second within an hour pauses everything for an hour. */
+  function noteBlockAt(t) {
+    blocks = blocks.filter((b) => t - b < BREAKER_WINDOW_MS)
+    blocks.push(t)
+    if (blocks.length >= BREAKER_BLOCKS) {
+      pausedUntil = t + BREAKER_PAUSE_MS
+      blocks.length = 0
+    }
+  }
+
+  /** Waits `ms`, unless stop() is called, which ends the wait with a Halt. */
+  function sleep(ms) {
+    return new Promise((resolve, reject) => {
+      const waiter = {}
+      const timer = clock.setTimeout(() => {
+        sleeping.delete(waiter)
+        resolve()
+      }, ms)
+      waiter.cancel = () => {
+        clock.clearTimeout(timer)
+        sleeping.delete(waiter)
+        reject(new Halt())
+      }
+      sleeping.add(waiter)
+    })
+  }
+
+  function checkpoint() {
+    if (stopping) throw new Halt()
+  }
+
+  /** How long a send must wait: the 20th send before it must be a minute old. */
+  const ceilingWait = () => (sends.length < CEILING ? 0 : sends[0] + CEILING_WINDOW_MS - now())
+
+  /** Makes one webhook call, when the limits allow it: spaced from the last call, outside a global 429, and for a send within the ceiling. */
+  async function paced(call, isSend = false) {
+    for (;;) {
+      checkpoint()
+      const t = now()
+      const wait = Math.max(lastCallAt + SPACING_MS - t, globalUntil - t, isSend ? ceilingWait() : 0)
+      if (wait <= 0) break
+      await sleep(wait)
+    }
+    if (isSend) {
+      sends.push(now())
+      if (sends.length > CEILING) sends.shift()
+    }
+    try {
+      return await call()
+    } finally {
+      lastCallAt = now()
+    }
+  }
+
+  /** Makes a call to a thread. A thread that is archived is unarchived, once, and the call made again. */
+  async function inThread(ctx, call) {
+    try {
+      return await call()
+    } catch (err) {
+      if (!(err instanceof WebhookError) || err.code !== ARCHIVED_CODE || ctx.unarchived) throw err
+      if (!(await discord.setArchived(ctx.threadId, false))) throw new Refusal(COPY.locked)
+      ctx.unarchived = true
+      return call()
+    }
+  }
+
+  const sendCall = (ctx, body, files) => inThread(ctx, () => paced(() => webhook.send(ctx.threadId, body, files), true))
+  const editCall = (ctx, messageId, body) => inThread(ctx, () => paced(() => webhook.edit(ctx.threadId, messageId, body)))
+  const removeCall = (ctx, messageId) => inThread(ctx, () => paced(() => webhook.remove(ctx.threadId, messageId)))
+
+  const urlBase = (threadId) => `https://discord.com/channels/${guildId}/${threadId}`
+
+  /** → the progress notes of an entry, made when it has none. They are changed in place, and written whole. */
+  function progressOf(entry) {
+    entry.payload.progress ??= { form: null, parts: [], inflight: null }
+    return entry.payload.progress
+  }
+
+  const save = (entry) => store.outboxProgress(entry.id, entry.payload.progress)
+
+  /**
+   * → the message of our webhook in the thread that is this part, or null: its text, and not taken by a reply already. A part's
+   * text names the part before it (its link back), so no part can match another of the reply, nor one of another reply.
+   */
+  async function lookup(ctx, text) {
+    const recent = await webhook.recent(ctx.threadId)
+    const taken = await store.knownPartIds(recent.map((m) => m.id))
+    return recent.find((m) => !taken.has(m.id) && textOf(m).trim() === text) ?? null
+  }
+
+  /**
+   * Sends part `index` of a reply, or finds it already in Discord, and writes down its id. `known` is the ids of the parts
+   * before it, and it gets this one's.
+   */
+  async function sendPart(entry, ctx, { index, known, built, body, files }) {
+    const progress = progressOf(entry)
+    const adopt = (message) => {
+      progress.parts.push({ id: message.id, at: message.timestamp ?? null, attachments: message.attachments })
+      progress.inflight = null
+      known.push(message.id)
+      return save(entry)
+    }
+    if (progress.inflight === index) {
+      // The part may have landed before a stop: look before sending.
+      const found = await lookup(ctx, built.text)
+      if (found !== null) return adopt(found)
+    }
+    // Written down before the send, every time: what is in memory may be a note the store never took.
+    progress.inflight = index
+    await save(entry)
+    for (let sent = 0; ; sent++) {
+      try {
+        return await adopt(await sendCall(ctx, body, files))
+      } catch (err) {
+        // Only a send that may have landed is looked for, and sent again once.
+        if (!(err instanceof WebhookError) || !err.unknown || sent === 1) throw err
+      }
+      const found = await lookup(ctx, built.text)
+      if (found !== null) return adopt(found)
+    }
+  }
+
+  /** The picture file names a reply's uploads are sent under: the same for every part, so that a part can name the pictures it carries. */
+  const pictureName = (ref, type) => `picture-${ref}.${EXTENSIONS[type]}`
+
+  async function heldUploads(entry, p) {
+    const held = await store.uploadsFor(entry.authorId, p.uploads)
+    if (held.length !== p.uploads.length) throw new Refusal(COPY.uploadsGone)
+    return held
+  }
+
+  const bodyOf = (useForm, built, p) => sendBody({ form: useForm, part: built, username: p.username, avatarUrl: p.avatarUrl, mentionIds: p.mentions })
+
+  /**
+   * Whether an error of the edit that adds the links forward to a reply's first part means the reply is done without them: the
+   * parts are in Discord already, and the links are a nicety, so Discord's refusing them is no reason to lose the reply, and
+   * the other failures are tried again like any, until the last try.
+   */
+  const linksLost = (entry, err) => {
+    if (err instanceof WebhookError && err.blocked) {
+      noteBlockAt(now())
+      return true
+    }
+    // The last try, and a stop is not a failure.
+    return !(err instanceof Halt) && entry.attempts >= LADDER_MS.length
+  }
+
+  async function runSend(entry, ctx) {
+    const p = entry.payload
+    const progress = progressOf(entry)
+    const useForm = progress.form ?? form
+    progress.form = useForm
+    const uploads = await heldUploads(entry, p)
+    const images = uploads.map((upload, i) => ({ ref: i + 1, name: pictureName(i + 1, upload.contentType) }))
+    const options = (partIds) => ({ form: useForm, authorId: entry.authorId, replyTo: p.replyTo, siteUrl: p.siteUrl, images, thread: { urlBase: urlBase(p.postId), partIds } })
+    const plan = toDiscord(p.source, options([]))
+    if (plan.overBudget) throw new Refusal(COPY.tooLong)
+    const n = plan.parts.length
+    const known = progress.parts.map((part) => part.id)
+    for (let index = known.length; index < n; index++) {
+      const built = toDiscord(p.source, options(known)).parts[index]
+      const files = built.files.map((name) => {
+        const upload = uploads[images.findIndex((image) => image.name === name)]
+        return { name, type: upload.contentType, bytes: upload.bytes }
+      })
+      await sendPart(entry, ctx, { index, known, built, body: bodyOf(useForm, built, p), files })
+    }
+    let linked = true
+    if (n > 1) {
+      const first = toDiscord(p.source, options(known)).parts[0]
+      try {
+        await editCall(ctx, known[0], bodyOf(useForm, first, p))
+      } catch (err) {
+        // The first part was deleted in Discord, so the reply goes with it.
+        if (err instanceof WebhookError && err.messageGone) return purge(entry, ctx, known[0], known, PART_DELETED)
+        if (!linksLost(entry, err)) throw err
+        linked = false
+      }
+    }
+    const [head] = progress.parts
+    const attachments = parseMessage({ id: head.id, channel_id: p.postId, type: 0, author: { id: entry.authorId }, attachments: progress.parts.flatMap((part) => part.attachments) }).attachments
+    await store.finishSend(entry.id, {
+      message: {
+        id: head.id,
+        postId: p.postId,
+        authorId: entry.authorId,
+        authorName: p.username,
+        authorAvatar: p.avatarUrl,
+        webhookId: webhook.id,
+        content: contentOf(p.source),
+        replyTo: p.replyTo === null ? null : p.replyTo.messageId,
+        createdAt: head.at ?? snowflakeTime(head.id),
+        source: p.source,
+        layout: { form: useForm, replyTo: p.replyTo, siteUrl: p.siteUrl, username: p.username, avatarUrl: p.avatarUrl, images },
+        attachments,
+      },
+      partIds: known,
+      uploadIds: p.uploads,
+      event: { action: 'send', postId: p.postId, messageId: head.id, note: `${n} ${n === 1 ? 'part' : 'parts'}${linked ? '' : ', no links'}` },
+    })
+  }
+
+  /** The message goes from the store, and so do its parts from Discord (the ones left): an edit or a delete that finds it gone ends there. */
+  async function purge(entry, ctx, messageId, partIds, note) {
+    for (const id of partIds) await removeCall(ctx, id)
+    await store.finishDelete(entry.id, { messageId, partIds, event: { action: 'delete', postId: ctx.threadId, messageId, note } })
+  }
+
+  async function runEdit(entry, ctx) {
+    const p = entry.payload
+    const message = await store.outboxMessage(entry.messageKey)
+    if (message === null) throw new Refusal(COPY.messageGone)
+    if (message.origin !== 'site') throw new Refusal(COPY.notSite)
+    const { layout } = message
+    const base = { form: layout.form, authorId: message.authorId, replyTo: layout.replyTo, siteUrl: layout.siteUrl, images: layout.images }
+    const options = (partIds) => ({ ...base, thread: { urlBase: urlBase(p.postId), partIds } })
+    // Pictures are fixed when a reply is sent: an edit may change the words, never where the pictures fall.
+    if (JSON.stringify(placement(message.source, base)) !== JSON.stringify(placement(p.source, base))) throw new Refusal(COPY.pictures)
+    const progress = progressOf(entry)
+    const existing = message.parts
+    const known = [...existing, ...progress.parts.map((part) => part.id)]
+    const plan = toDiscord(p.source, options(known))
+    if (plan.overBudget) throw new Refusal(COPY.tooLong)
+    const wanted = plan.parts.length
+    const body = (built) => bodyOf(layout.form, built, { username: layout.username, avatarUrl: layout.avatarUrl, mentions: p.mentions })
+    try {
+      for (let i = 0; i < Math.min(existing.length, wanted); i++) await editCall(ctx, existing[i], body(plan.parts[i]))
+      for (let index = known.length; index < wanted; index++) {
+        // A part that is new carries no file: placement() of the new text is the old one, so no picture falls in it.
+        const built = toDiscord(p.source, options(known)).parts[index]
+        await sendPart(entry, ctx, { index, known, built, body: body(built), files: [] })
+      }
+      for (let i = wanted; i < existing.length; i++) await removeCall(ctx, existing[i])
+      if (wanted > existing.length) await editCall(ctx, known[0], body(toDiscord(p.source, options(known)).parts[0]))
+    } catch (err) {
+      if (!(err instanceof WebhookError) || !err.messageGone) throw err
+      // A part was deleted in Discord: the reply goes, all of it.
+      return purge(entry, ctx, message.id, known, PART_DELETED)
+    }
+    await store.finishEdit(entry.id, {
+      messageId: message.id,
+      source: p.source,
+      content: contentOf(p.source),
+      partIds: known.slice(0, wanted),
+      event: { action: 'edit', postId: p.postId, messageId: message.id, note: `${wanted} ${wanted === 1 ? 'part' : 'parts'}` },
+    })
+  }
+
+  async function runDelete(entry, ctx) {
+    const p = entry.payload
+    const progress = progressOf(entry)
+    const message = await store.outboxMessage(entry.messageKey)
+    if (message !== null && message.origin === 'discord') {
+      await discord.deleteMessage(p.postId, message.id)
+      return purge(entry, ctx, message.id, [], null)
+    }
+    if (progress.partIds === undefined) {
+      // What to remove is written down first: the store's parts go with the message, and a restart must not lose them.
+      progress.partIds = p.partIds ?? (message === null ? [] : message.parts)
+      await save(entry)
+    }
+    return purge(entry, ctx, entry.messageKey, progress.partIds, null)
+  }
+
+  const RUN = { send: runSend, edit: runEdit, delete: runDelete }
+
+  /** The entry cannot be done, and the member is told why. */
+  const fail = (entry, error) =>
+    store.outboxSet(entry.id, {
+      state: 'failed',
+      error,
+      messageState: null,
+      event: { action: 'failed', postId: entry.payload.postId, messageId: entry.kind === 'send' ? null : entry.messageKey, note: error },
+    })
+
+  /**
+   * → what to write to the store for an entry that stopped on `err`: a function, which the worker runs, and runs again if the
+   * store fails under it, without doing any of the entry's work over. What it decides of the worker itself (the breaker, a
+   * global 429, a refused webhook) is decided here, once.
+   */
+  function settle(entry, err) {
+    if (err instanceof Refusal) return () => fail(entry, err.message)
+    if (err instanceof TypeError || err instanceof RangeError) {
+      // Stryker disable next-line StringLiteral: what is logged is for the owner to read, and no test asserts it
+      report(`entry ${entry.id} cannot be sent: ${describe(err)}`)
+      return () => fail(entry, COPY.unsendable)
+    }
+    if (err instanceof WebhookError) {
+      const decided = webhookOutcome(entry, err)
+      if (decided !== null) return decided
+    } else if (!(err instanceof Upstream)) {
+      // Not Discord's doing, nor a stop's: the store failed under the entry. The worker tries it again as it is, after a wait.
+      throw err
+    }
+    // Anything else of Discord's may pass: tried again after a wait, and failed when the waits are used up.
+    const attempts = entry.attempts + 1
+    if (attempts > LADDER_MS.length) return () => fail(entry, `Discord did not take this ${NOUN[entry.kind]}. Try again in a little while.`)
+    const nextAt = now() + LADDER_MS[attempts - 1]
+    // Stryker disable next-line StringLiteral: what is stored is for the owner to read
+    return () => store.outboxSet(entry.id, { state: 'pending', attempts, nextAt, error: describe(err) })
+  }
+
+  /** → what to write for an entry that stopped on a refusal of the webhook that has a meaning of its own, or null when it has none. */
+  function webhookOutcome(entry, err) {
+    if (err.fatal) {
+      refused = { status: err.status, text: `The Librarius webhook was refused (status ${err.status}): create it again with librariusWebhookSetupRun.` }
+      report(refused.text)
+      // The entry is not lost: it goes on when the webhook is made again and the site restarted.
+      return () => store.outboxSet(entry.id, { state: 'pending' })
+    }
+    if (err.blocked) {
+      noteBlockAt(now())
+      return () =>
+        store.outboxSet(entry.id, {
+          state: 'blocked',
+          error: `Discord blocked this ${NOUN[entry.kind]}.`,
+          messageState: 'blocked',
+          event: { action: 'blocked', postId: entry.payload.postId, messageId: entry.kind === 'send' ? null : entry.messageKey, note: entry.kind },
+        })
+    }
+    if (err.status === 429) {
+      const nextAt = now() + err.retryAfterMs
+      if (err.global) globalUntil = Math.max(globalUntil, nextAt)
+      return () => store.outboxSet(entry.id, { state: 'pending', nextAt })
+    }
+    if (err.threadGone) {
+      if (entry.kind === 'send') return () => fail(entry, COPY.threadGone)
+      // The parts of the message go with it (the store knows them by the message), and nothing is left in Discord to remove.
+      return () => purge(entry, { threadId: entry.payload.postId }, entry.messageKey, [], COPY.threadGone)
+    }
+    return null
+  }
+
+  async function process(entry) {
+    // What was decided for this entry, when the store failed under the write of it.
+    if (entry.settling !== undefined) return entry.settling()
+    const ctx = { threadId: entry.payload.postId, unarchived: false }
+    try {
+      await RUN[entry.kind](entry, ctx)
+    } catch (err) {
+      entry.settling = settle(entry, err)
+      await entry.settling()
+    } finally {
+      // The thread is left as it was found.
+      if (ctx.unarchived) {
+        // Stryker disable next-line ArrowFunction,StringLiteral: what is logged is for the owner to read, and no test asserts it
+        await discord.setArchived(ctx.threadId, true).catch((err) => report(`a post could not be archived again: ${describe(err)}`))
+      }
+    }
+  }
+
+  function schedule(delay) {
+    clock.clearTimeout(wake)
+    wake = clock.setTimeout(
+      () => {
+        wake = null
+        kick()
+      },
+      Math.min(Math.max(delay, 0), MAX_WAKE_MS),
+    )
+  }
+
+  /** The things only the store knows, read again at each start: the entries a stop left half-done, and the blocks of the last two hours. */
+  async function initialise() {
+    const blocked = await store.blockedSince(now() - 2 * BREAKER_WINDOW_MS)
+    const left = await store.outboxInterrupted()
+    for (const at of blocked) noteBlockAt(Date.parse(at))
+    resumeQueue = left
+    // A call may have gone out just before the stop that left these: the first one waits its time.
+    if (left.length > 0) lastCallAt = now()
+    ready = true
+  }
+
+  /** Works through what is due, and sets a timer for what is not yet. Never rejects. */
+  async function pass() {
+    try {
+      if (!ready) await initialise()
+      while (!stopping && refused === null) {
+        const wait = pausedUntil - now()
+        if (wait > 0) return schedule(wait)
+        const entry = resumeQueue.shift() ?? (await store.claimOutbox(now()))
+        if (entry === null) break
+        try {
+          await process(entry)
+        } catch (err) {
+          // The store failed under it (not Discord): it is tried again, and what it had written down is still in memory.
+          resumeQueue.unshift(entry)
+          throw err
+        }
+      }
+      if (stopping || refused !== null) return
+      const next = await store.outboxNextAt()
+      if (next !== null) schedule(Date.parse(next) - now())
+    } catch (err) {
+      if (err instanceof Halt) return
+      // Stryker disable next-line StringLiteral: what is logged is for the owner to read, and no test asserts it
+      report(`the store failed: ${describe(err)}`)
+      schedule(STORE_RETRY_MS)
+    }
+  }
+
+  async function pump() {
+    do {
+      again = false
+      await pass()
+    } while (again)
+  }
+
+  function kick() {
+    if (!started || stopping) return
+    if (running !== null) {
+      again = true
+      return
+    }
+    running = pump().finally(() => {
+      running = null
+    })
+  }
+
+  return {
+    start() {
+      if (started) return
+      started = true
+      stopping = false
+      ready = false
+      kick()
+    },
+
+    async stop() {
+      stopping = true
+      clock.clearTimeout(wake)
+      wake = null
+      for (const waiter of [...sleeping]) waiter.cancel()
+      await running
+      started = false
+    },
+
+    kick,
+
+    sendingPausedUntil: () => (pausedUntil > now() ? pausedUntil : null),
+
+    webhookRefused: () => refused,
+  }
+}
