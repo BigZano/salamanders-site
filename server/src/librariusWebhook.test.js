@@ -738,6 +738,85 @@ describe('send', () => {
     expect(r.seen).toHaveLength(0)
   })
 
+  it('refuses a body whose flags are not the form it holds: 4 with content only, or 32768 with components only', async () => {
+    const r = rig([])
+    const v2Body = sendBody(v2())
+    const plainBody = sendBody(plain())
+    const refused = [
+      { ...v2Body, flags: 4 },
+      { ...v2Body, flags: 0 },
+      { ...v2Body, flags: 32768 | 4 },
+      { ...v2Body, flags: '32768' },
+      { ...v2Body, flags: 32768.5 },
+      { ...v2Body, flags: null },
+      { ...v2Body, flags: undefined },
+      { ...v2Body, content: 'hello' },
+      { ...v2Body, components: undefined },
+      { ...v2Body, components: null },
+      { ...v2Body, components: 'x' },
+      { ...v2Body, components: {} },
+      { ...v2Body, components: [] },
+      { ...plainBody, flags: 32768 },
+      { ...plainBody, flags: 0 },
+      { ...plainBody, flags: 36 },
+      { ...plainBody, flags: '4' },
+      { ...plainBody, flags: null },
+      { ...plainBody, flags: undefined },
+      { ...plainBody, components: V2_PART.components },
+      { ...plainBody, components: [] },
+      { ...plainBody, content: undefined },
+      { ...plainBody, content: '' },
+      { ...plainBody, content: 5 },
+      { ...plainBody, content: null },
+      { ...plainBody, content: ['hello'] },
+    ]
+    const says = 'The body must be a v2 message (flags 32768, components) or a plain one (flags 4, content), as sendBody builds them.'
+    for (const body of refused) {
+      for (const err of [await failure(r.client.send(THREAD, body)), await failure(r.client.edit(THREAD, MSG, body))]) {
+        expect(err, JSON.stringify(body)).toBeInstanceOf(RangeError)
+        expect(err.message).toBe(says)
+      }
+    }
+    expect(r.seen).toHaveLength(0)
+  })
+
+  it('refuses a body whose username or avatar_url is not what sendBody would have put there', async () => {
+    const r = rig([])
+    const good = sendBody(v2())
+    const refused = [
+      { ...good, username: undefined },
+      { ...good, username: '' },
+      { ...good, username: 'x'.repeat(81) },
+      { ...good, username: 5 },
+      { ...good, username: null },
+      { ...good, username: ['Invented Name'] },
+      { ...good, avatar_url: 'http://cdn.example/a.png' },
+      { ...good, avatar_url: 'https://' },
+      { ...good, avatar_url: 'https://cdn.example/a b.png' },
+      { ...good, avatar_url: 'https://cdn.example/<a>' },
+      { ...good, avatar_url: `https://cdn.example/${'a'.repeat(512)}` },
+      { ...good, avatar_url: 5 },
+      { ...good, avatar_url: null },
+      { ...good, avatar_url: '' },
+    ]
+    const says = 'The body must carry the username and avatar_url that sendBody builds.'
+    for (const body of refused) {
+      for (const err of [await failure(r.client.send(THREAD, body)), await failure(r.client.edit(THREAD, MSG, body))]) {
+        expect(err, JSON.stringify(body)).toBeInstanceOf(RangeError)
+        expect(err.message).toBe(says)
+      }
+    }
+    expect(r.seen).toHaveLength(0)
+  })
+
+  it('takes a body at the edges of what sendBody allows: an 80-character name, the longest avatar, none', async () => {
+    const r = rig([answer(200, message()), answer(200, message()), answer(200, message())])
+    await r.client.send(THREAD, sendBody(v2({ username: 'x'.repeat(80) })))
+    await r.client.send(THREAD, sendBody(plain({ username: 'x', avatarUrl: `https://cdn.example/${'a'.repeat(512 - 20)}` })))
+    await r.client.send(THREAD, sendBody(plain({ avatarUrl: null })))
+    expect(r.seen).toHaveLength(3)
+  })
+
   it('takes every field sendBody sets, and the empty and the full list of people', async () => {
     const r = rig([answer(200, message()), answer(200, message()), answer(200, message())])
     const many = Array.from({ length: 10 }, (_, i) => String(200000000000000500n + BigInt(i)))
@@ -980,14 +1059,16 @@ describe('the errors of send: what may have landed, and what was refused', () =>
     expect(await sendError(answer(403, { code: 50013 }))).toMatchObject({ status: 403, code: 50013, fatal: false })
   })
 
-  it('an AutoMod block (200000) or a blocked link (200001) was refused: blocked, never unknown', async () => {
-    for (const code of [200000, 200001]) {
+  it('a message blocked by AutoMod (200000), a title blocked by it (200001) or a message blocked by the harmful links filter (240000) was refused: blocked, never unknown', async () => {
+    for (const code of [200000, 200001, 240000]) {
       for (const status of [400, 403]) {
         const err = await sendError(answer(status, { code, message: 'Message was blocked by AutoMod' }))
         expect(err).toMatchObject({ status, code, blocked: true, fatal: false, unknown: false, retryAfterMs: null })
       }
     }
     expect(await sendError(answer(400, { code: 200002 }))).toMatchObject({ blocked: false })
+    expect(await sendError(answer(400, { code: 240001 }))).toMatchObject({ blocked: false })
+    expect(await sendError(answer(400, { code: 239999 }))).toMatchObject({ blocked: false })
     expect(await sendError(answer(400, { code: 199999 }))).toMatchObject({ blocked: false })
     expect(await sendError(answer(400, { code: '200000' }))).toMatchObject({ blocked: false, code: null })
   })
@@ -995,6 +1076,7 @@ describe('the errors of send: what may have landed, and what was refused', () =>
   it('a blocked answer is blocked even on 404 or 401, which no real answer is, because the code says what was refused', async () => {
     expect(await sendError(answer(404, { code: 200000 }))).toMatchObject({ blocked: true, fatal: false })
     expect(await sendError(answer(401, { code: 200001 }))).toMatchObject({ blocked: true, fatal: false })
+    expect(await sendError(answer(404, { code: 240000 }))).toMatchObject({ blocked: true, fatal: false })
   })
 
   it('reads a code only when it is a whole number', async () => {
@@ -1122,9 +1204,9 @@ describe('edit', () => {
     expect(body).toEqual(copy)
   })
 
-  it('takes a body with no name or picture', async () => {
+  it('takes a body with no picture, and sends it with no name either, an edit being unable to change them', async () => {
     const r = rig([answer(200, message())])
-    await r.client.edit(THREAD, MSG, { flags: 4, content: 'x', allowed_mentions: { parse: [] } })
+    await r.client.edit(THREAD, MSG, { flags: 4, content: 'x', username: 'Invented Name', allowed_mentions: { parse: [] } })
     expect(JSON.parse(r.seen[0].init.body)).toEqual({ flags: 4, content: 'x', allowed_mentions: { parse: [] } })
   })
 
@@ -1170,6 +1252,7 @@ describe('edit', () => {
     expect(await run(answer(404, { code: 10003 }))).toMatchObject({ fatal: false, threadGone: true })
     expect(await run(answer(400, { code: 200000 }))).toMatchObject({ blocked: true })
     expect(await run(answer(400, { code: 200001 }))).toMatchObject({ blocked: true })
+    expect(await run(answer(400, { code: 240000 }))).toMatchObject({ blocked: true })
     expect(await run(answer(400, { code: 50083 }))).toMatchObject({ status: 400, code: 50083, fatal: false, blocked: false })
   })
 })
@@ -1223,6 +1306,7 @@ describe('remove', () => {
     expect(await failure(rig([answer(401, null)]).client.remove(THREAD, MSG))).toMatchObject({ fatal: true })
     expect(await failure(rig([answer(403, { code: 50013 })]).client.remove(THREAD, MSG))).toMatchObject({ status: 403, code: 50013, fatal: false })
     expect(await failure(rig([answer(400, { code: 200000 })]).client.remove(THREAD, MSG))).toMatchObject({ blocked: true })
+    expect(await failure(rig([answer(400, { code: 240000 })]).client.remove(THREAD, MSG))).toMatchObject({ blocked: true })
   })
 
   it('refuses ids that are not plain Discord ids, before it sends anything', async () => {
@@ -1278,6 +1362,49 @@ describe('recent: what this webhook posted lately, through the bot client', () =
     const boom = new Error('bot client says no')
     const client = createWebhookClient({ fetchImpl: async () => null, url: URL_OK, apiBase: API, newest: async () => Promise.reject(boom) })
     expect(await failure(client.recent(THREAD))).toBe(boom)
+  })
+
+  it('refuses a thread id that is not a Discord id, or a limit that is not 1 to 100, before it asks', async () => {
+    const asked = []
+    const client = createWebhookClient({ fetchImpl: async () => null, url: URL_OK, apiBase: API, newest: async (...args) => asked.push(args) && [] })
+    for (const bad of ['', '1', `${THREAD}&x=1`, undefined, null, 12, [], {}]) {
+      const err = await failure(client.recent(bad))
+      expect(err, String(bad)).toBeInstanceOf(TypeError)
+      expect(err.message).toBe('threadId must be a Discord id.')
+    }
+    for (const bad of ['5', 5.5, null, Number.NaN, Infinity, {}, [], true]) {
+      const err = await failure(client.recent(THREAD, bad))
+      expect(err, String(bad)).toBeInstanceOf(TypeError)
+      expect(err.message).toBe('limit must be a whole number.')
+    }
+    for (const bad of [0, -1, 101, 1000]) {
+      const err = await failure(client.recent(THREAD, bad))
+      expect(err, String(bad)).toBeInstanceOf(RangeError)
+      expect(err.message).toBe('limit must be from 1 to 100.')
+    }
+    expect(asked).toEqual([])
+    await client.recent(THREAD, 1)
+    await client.recent(THREAD, 100)
+    expect(asked).toEqual([
+      [THREAD, 1],
+      [THREAD, 100],
+    ])
+  })
+
+  it('says a page that is not a list is a WebhookError, with the status of no answer and nothing of the page', async () => {
+    for (const page of [undefined, null, 'x', 5, {}, { messages: [ours] }, new Set([ours])]) {
+      const client = createWebhookClient({ fetchImpl: async () => null, url: URL_OK, apiBase: API, newest: async () => page })
+      const err = await failure(client.recent(THREAD))
+      expect(err, String(page)).toBeInstanceOf(WebhookError)
+      expect(err).toMatchObject({ status: null, code: null, fatal: false, blocked: false, unknown: false })
+      expect(err.message).toBe('The webhook recent got no list of messages.')
+    }
+  })
+
+  it('skips an entry of the page that is not a message, instead of failing on it', async () => {
+    const page = [null, undefined, 5, 'x', [], ours, { webhook_id: HOOK }, ours2]
+    const client = createWebhookClient({ fetchImpl: async () => null, url: URL_OK, apiBase: API, newest: async () => page })
+    expect(await client.recent(THREAD)).toEqual([ours, { webhook_id: HOOK }, ours2])
   })
 
   it('never calls the webhook itself', async () => {

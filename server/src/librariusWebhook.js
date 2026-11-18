@@ -21,8 +21,9 @@
  *   a redirect. The client does not sleep and does not retry: what to do after a failure is the outbox's.
  *   send(threadId, body, files) → the message Discord made (`?wait=true&thread_id=&with_components=true`). `body` is
  *     what sendBody built, and only that: any body whose `allowed_mentions` is not `{ parse: [], users: [≤10 ids] }`, or
- *     that holds a field sendBody never sets (`thread_name` would make a new post: the site never makes one), is a
- *     RangeError. `files` is [{ name, type, bytes }]: at most 10, each a plain file name, one of the four picture types
+ *     that holds a field sendBody never sets (`thread_name` would make a new post: the site never makes one), or whose
+ *     `flags` and content do not go together (4 with `content` and no `components`, 32768 with `components` and no `content`),
+ *     or whose `username` or `avatar_url` is not one sendBody would take, is a RangeError. `files` is [{ name, type, bytes }]: at most 10, each a plain file name, one of the four picture types
  *     (image/png, image/jpeg, image/webp, image/gif) and some bytes. With files the call is multipart: the body, with the
  *     list of files added to it, as `payload_json`, then `files[0]`, `files[1]`…
  *   edit(threadId, messageId, body) → the message. Idempotent. The `username` and `avatar_url` of the body are left out:
@@ -30,7 +31,9 @@
  *   remove(threadId, messageId) → undefined. Idempotent: a message that is already gone (404, code 10008) is done.
  *   recent(threadId, limit = 20) → the newest messages of the thread that this webhook posted, newest first, through
  *     `newest` (a TypeError when the client was made without it). It is how the outbox finds out whether a send that
- *     answered `unknown` did land.
+ *     answered `unknown` did land. The thread is checked like any other (a TypeError), and the limit is a whole number from 1 to
+ *     100 (a TypeError, or a RangeError). A page that is no list is a WebhookError with no status, and an entry of it that is no
+ *     message is left out.
  *
  * Failures are a WebhookError { status, code, fatal, blocked, unknown, threadGone, messageGone, retryAfterMs, global }.
  * `status` is the HTTP status (null when Discord did not answer), `code` Discord's JSON error code when it gave a whole
@@ -42,7 +45,8 @@
  *   redirect), a 5xx, any status that is neither 2xx nor 4xx, and a 2xx that carries no message. The outbox looks at
  *   recent() before it resends; saying `unknown` too often costs a look, saying it too seldom would post twice. On edit
  *   and remove the same failures are plain failures, status null for no answer: repeating them does no harm.
- * - `blocked`: Discord refused the message by its code, 200000 (AutoMod) or 200001 (a blocked link). Never retried.
+ * - `blocked`: Discord refused the message by its code: 200000 (message blocked by automatic moderation), 200001 (title blocked by
+ *   automatic moderation) or 240000 (message blocked by the harmful links filter). Never retried.
  * - `fatal`: the webhook itself is refused or gone: 401 (whatever the code), or 404 with any code but 10003 and 10008
  *   (Unknown Webhook is 10015; an answer with no code, such as a proxy's, counts too). The outbox stops everything.
  * - `threadGone`: 404 with code 10003 (Unknown Channel): the thread is gone, not the webhook.
@@ -73,6 +77,8 @@ const MAX_USERNAME = 80
 const MAX_AVATAR = 512
 const MAX_MENTIONS = 10
 const MAX_FILES = 10
+// The most messages Discord gives of a thread in one page.
+const MAX_RECENT = 100
 // What Discord refuses a message over: the displayable text of a V2 message, the content of a plain one.
 const HARD_LIMIT = { v2: 4000, plain: 2000 }
 // An id that goes into allowed_mentions: canonical, with no leading zero.
@@ -83,12 +89,16 @@ const FILE_TYPES = new Set(['image/png', 'image/jpeg', 'image/webp', 'image/gif'
 // The only fields a message of the site has.
 const BODY_KEYS = new Set(['content', 'flags', 'components', 'username', 'avatar_url', 'allowed_mentions'])
 const MENTION_KEYS = new Set(['parse', 'users'])
-const BLOCKED = new Set([200000, 200001])
+// Discord's codes for a message it refused to post: 200000 (blocked by AutoMod), 200001 (a title blocked by AutoMod), 240000 (blocked by
+// the harmful links filter).
+const BLOCKED = new Set([200000, 200001, 240000])
 const UNKNOWN_CHANNEL = 10003
 const UNKNOWN_MESSAGE = 10008
 const MAX_WAIT_S = 3600
 
 const isObject = (v) => typeof v === 'object' && v !== null && !Array.isArray(v)
+const okName = (v) => typeof v === 'string' && v.length >= 1 && v.length <= MAX_USERNAME
+const okAvatar = (v) => typeof v === 'string' && v.length <= MAX_AVATAR && AVATAR.test(v)
 
 export class WebhookError extends Error {
   name = 'WebhookError'
@@ -157,12 +167,12 @@ export function sendBody({ form, part, username, avatarUrl = null, mentionIds = 
   if (displayableLength(part) > HARD_LIMIT[form]) throw new RangeError(`A ${form} message holds at most ${HARD_LIMIT[form]} characters.`)
 
   if (typeof username !== 'string') throw new TypeError('username must be text.')
-  if (username.length < 1 || username.length > MAX_USERNAME) throw new RangeError(`username must be 1 to ${MAX_USERNAME} characters.`)
+  if (!okName(username)) throw new RangeError(`username must be 1 to ${MAX_USERNAME} characters.`)
   body.username = username
 
   if (avatarUrl !== null) {
     if (typeof avatarUrl !== 'string') throw new TypeError('avatarUrl must be text or null.')
-    if (avatarUrl.length > MAX_AVATAR || !AVATAR.test(avatarUrl)) throw new RangeError(`avatarUrl must be an https link of at most ${MAX_AVATAR} characters.`)
+    if (!okAvatar(avatarUrl)) throw new RangeError(`avatarUrl must be an https link of at most ${MAX_AVATAR} characters.`)
     body.avatar_url = avatarUrl
   }
 
@@ -179,10 +189,13 @@ function needId(value, name) {
   if (!isId(value)) throw new TypeError(`${name} must be a Discord id.`)
 }
 
-/** → the body, when it is one sendBody could have built: only its fields, and nobody parsed or pinged but the picked. */
+/** → the body, when it is one sendBody could have built: only its fields, the flags that go with its content, its name and picture as sendBody takes them, and nobody parsed or pinged but the picked. */
 function needBody(body) {
   if (!isObject(body)) throw new TypeError('The body must be one that sendBody built.')
   if (!Object.keys(body).every((key) => BODY_KEYS.has(key))) throw new RangeError('The body holds a field that sendBody never sets.')
+  const shown = body.flags === V2_FLAG ? Array.isArray(body.components) && body.components.length > 0 && !Object.hasOwn(body, 'content') : body.flags === SUPPRESS_EMBEDS && typeof body.content === 'string' && body.content !== '' && !Object.hasOwn(body, 'components')
+  if (!shown) throw new RangeError('The body must be a v2 message (flags 32768, components) or a plain one (flags 4, content), as sendBody builds them.')
+  if (!okName(body.username) || (Object.hasOwn(body, 'avatar_url') && !okAvatar(body.avatar_url))) throw new RangeError('The body must carry the username and avatar_url that sendBody builds.')
   const mentions = body.allowed_mentions
   const users = isObject(mentions) ? mentions.users : undefined
   if (
@@ -317,8 +330,12 @@ export function createWebhookClient({ fetchImpl = fetch, url, apiBase, timeoutMs
 
     async recent(threadId, limit = 20) {
       if (newest === undefined) throw new TypeError('recent needs the newest option of createWebhookClient.')
+      needId(threadId, 'threadId')
+      if (!Number.isInteger(limit)) throw new TypeError('limit must be a whole number.')
+      if (limit < 1 || limit > MAX_RECENT) throw new RangeError(`limit must be from 1 to ${MAX_RECENT}.`)
       const page = await newest(threadId, limit)
-      return page.filter((message) => message.webhook_id === id)
+      if (!Array.isArray(page)) throw new WebhookError('The webhook recent got no list of messages.')
+      return page.filter((message) => isObject(message) && message.webhook_id === id)
     },
   }
 }
