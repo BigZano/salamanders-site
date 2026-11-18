@@ -146,7 +146,7 @@ export function createLibrariusWrites({ store, guild, roster, outbox, limits, gu
    */
   async function checked(verdict, postId, input, options) {
     const matcher = automodMatcher(await guild.automodRules(), { memberRoleIds: verdict.roleIds, channelIds: [forumId, postId], isAdmin: verdict.admin })
-    const result = validateReply(input, { ...options, automod: matcher })
+    const result = await validateReply(input, { ...options, automod: matcher })
     if (!result.ok) {
       const { ok: _ok, status, ...body } = result
       return { refusal: reply(status, body) }
