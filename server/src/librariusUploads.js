@@ -11,15 +11,25 @@
  * strip(bytes, type) → a new, plain Uint8Array, or null. `type` is the answer of sniff for those bytes: when it is not,
  * or the bytes are not a whole well-formed picture, the answer is null. The bytes are walked once, by the lengths the
  * format itself gives (never by searching for a name), so metadata-looking bytes inside the image data are image data
- * and stay. What is taken out, and what is kept:
- *   - JPEG: every APPn segment goes but three, and so does the comment (COM). APP0 (JFIF), APP2 (the ICC colour profile)
- *     and APP14 (Adobe, which says how the colour channels are to be read) stay, because the picture's colours depend on
- *     them; all the rest (APP1 with its EXIF and XMP, APP3 to APP13, APP15) is metadata and goes;
- *   - PNG: the tEXt, zTXt, iTXt and eXIf chunks go (tIME is harmless and stays);
- *   - WebP: the XMP chunk goes, the EXIF chunk goes, and the RIFF size and the VP8X flags that announce them are put right;
- *   - GIF: the comment extensions (0x21 0xFE) and the XMP application extension ("XMP DataXMP") go. The looping blocks
- *     (NETSCAPE2.0, ANIMEXTS1.0), the graphic control extensions and the ICC profile extension stay: they are how the
- *     picture moves and what colour it is.
+ * and stay.
+ *
+ * What stays is a list, not what is left over once a list of known metadata has gone: a container of metadata that this
+ * file has never heard of (a C2PA manifest, an editor's private chunk, a block that a newer version of the format adds)
+ * is dropped with the rest, and only what a picture needs to be seen stays, in each format:
+ *   - JPEG: the segments that are not APPn or COM (the tables, the frame, the scans) stay, and of the APPn three: APP0
+ *     (JFIF), APP2 when its payload starts with "ICC_PROFILE\0" (the colour profile) and APP14 (Adobe, which says how the
+ *     colour channels are to be read). Every other APPn goes: APP1 with its EXIF and XMP, APP2 of FlashPix (FPXR) and of
+ *     the Multi-Picture Format (MPF), APP11 (the JUMBF of C2PA), APP13 and the rest. So does the comment (COM);
+ *   - PNG: IHDR, PLTE, IDAT and IEND (the picture), tRNS, cHRM, gAMA, iCCP, sBIT, sRGB, cICP, mDCv, cLLi and bKGD (how it is
+ *     coloured), pHYs (its size), acTL, fcTL and fdAT (its movement) and tIME stay. Every other chunk goes: the text chunks,
+ *     eXIf, zxIf, caBX (C2PA), and every one that no one has heard of. A chunk that is not on the list and is critical (its
+ *     first letter is not a lowercase one) cannot be dropped without breaking the picture, so the file is refused;
+ *   - WebP: VP8, VP8L, VP8X, ALPH, ANIM, ANMF and ICCP stay. Every other chunk goes: the XMP chunk, the EXIF chunk, C2PA, and
+ *     the unknown. The RIFF size is put right, and so are the VP8X flags that announce an EXIF or an XMP chunk;
+ *   - GIF: the graphic control extensions (0xF9) stay, and of the application extensions the three that tell how the
+ *     picture moves and what colour it is: NETSCAPE2.0 and ANIMEXTS1.0 (the looping) and ICCRGBG1012 (the ICC profile).
+ *     Every other extension goes: the comment (0xFE), the plain text (0x01), the XMP, ImageMagick's MGK8BIM0000 and
+ *     MGKIPTC0000, and every label and application that no one has heard of.
  * What of an EXIF survives is its orientation, because a photo taken upright on a phone is stored sideways with only this
  * tag saying which way up it goes. When the EXIF of a JPEG (its APP1) or of a WebP (its EXIF chunk) has an Orientation
  * (tag 0x0112) of 2 to 8 in IFD0, an EXIF of that alone is written back where it stood: the TIFF header in the original's
@@ -28,10 +38,10 @@
  * any way writes nothing. The first EXIF that yields an orientation is the one used, and only one is written. A WebP gets
  * the EXIF flag in its VP8X only when a chunk is written, and a WebP with no VP8X cannot carry one. A PNG's eXIf is
  * dropped whole.
- * Everything else stays byte for byte, so the image data is identical and an animation stays animated. What follows the
- * end of the picture (the EOI of a JPEG, the IEND of a PNG, the RIFF size of a WebP, the trailer of a GIF) is cut off: it
- * is not part of the picture, and it is where a second picture or a leftover of an editor hides. Checksums are not
- * verified (the PNG CRCs); the structure is.
+ * What stays of a kept chunk, segment or block is its bytes as they were, so the image data is identical and an animation
+ * stays animated; the lists are of what stays, not of what is inside it. What follows the end of the picture (the EOI of a
+ * JPEG, the IEND of a PNG, the RIFF size of a WebP, the trailer of a GIF) is cut off: it is not part of the picture, and it
+ * is where a second picture or a leftover of an editor hides. Checksums are not verified (the PNG CRCs); the structure is.
  *
  * null means malformed: a segment, chunk or block that overruns the buffer, a length that cannot be right, a picture with
  * no image data (a JPEG with no scan, a PNG with no IDAT, a WebP with no picture chunk, a GIF with no image), or one that
@@ -50,29 +60,41 @@ const GIF89A_SIGNATURE = bytesOf('GIF89a')
 const RIFF_SIGNATURE = bytesOf('RIFF')
 const WEBP_SIGNATURE = bytesOf('WEBP')
 
-// Every APPn but APP0 (0xE0, JFIF), APP2 (0xE2, ICC profile) and APP14 (0xEE, Adobe), and COM (0xFE).
-const JPEG_DROP = new Set([0xe1, 0xe3, 0xe4, 0xe5, 0xe6, 0xe7, 0xe8, 0xe9, 0xea, 0xeb, 0xec, 0xed, 0xef, 0xfe])
 const APP1 = 0xe1
+const APP2 = 0xe2
+const APP14 = 0xee
+const APP15 = 0xef
+const COM = 0xfe
+const ICC_ID = bytesOf('ICC_PROFILE\0') // what the payload of an APP2 starts with when it holds a colour profile
 const EXIF_ID = bytesOf('Exif\0\0')
 const ORIENTATION_TAG = 0x0112
 const TIFF_SHORT = 3
 
+const LOWERCASE_A = 0x61
+const LOWERCASE_Z = 0x7a
+
 const IHDR = tag('IHDR')
 const IDAT = tag('IDAT')
 const IEND = tag('IEND')
-const PNG_DROP = new Set([tag('tEXt'), tag('zTXt'), tag('iTXt'), tag('eXIf')])
+// The chunks a PNG keeps: the picture, how it is coloured, how large it is, how it moves, and when it was made.
+const PNG_KEEP = new Set(
+  ['IHDR', 'PLTE', 'IDAT', 'IEND', 'tRNS', 'cHRM', 'gAMA', 'iCCP', 'sBIT', 'sRGB', 'cICP', 'mDCv', 'cLLi', 'bKGD', 'pHYs', 'acTL', 'fcTL', 'fdAT', 'tIME'].map(tag),
+)
 
 const VP8 = tag('VP8 ')
 const VP8L = tag('VP8L')
 const VP8X = tag('VP8X')
 const WEBP_EXIF = tag('EXIF')
-const WEBP_DROP = new Set([WEBP_EXIF, tag('XMP ')])
+const WEBP_KEEP = new Set(['VP8 ', 'VP8L', 'VP8X', 'ALPH', 'ANIM', 'ANMF', 'ICCP'].map(tag))
 const WEBP_IMAGE = new Set([VP8, VP8L, tag('ANMF')])
 // In the first byte of a VP8X chunk: the flag of an EXIF chunk (0x08) and of an XMP chunk (0x04).
 const WEBP_EXIF_FLAG = 0x08
 const WEBP_METADATA_FLAGS = 0x0c
 
-const XMP_APPLICATION = bytesOf('XMP DataXMP') // the application identifier and authentication code of a GIF's XMP
+const GRAPHIC_CONTROL = 0xf9
+const APPLICATION = 0xff
+// The application identifier and authentication code, 11 bytes, of the application extensions a GIF keeps.
+const GIF_KEEP = ['NETSCAPE2.0', 'ANIMEXTS1.0', 'ICCRGBG1012'].map(bytesOf)
 
 /** Whether `signature` sits at `at` in `bytes`, all of it: a file that ends inside the signature does not match. */
 const hasAt = (bytes, signature, at = 0) =>
@@ -195,6 +217,17 @@ function endOfScan(b, from) {
   return n
 }
 
+/**
+ * Whether the segment at b[pos] with the marker `code` goes: the comment, and every APPn but APP14 (Adobe) and the APP2 that
+ * holds an ICC profile. APP0 (JFIF) is not in that range. An identifier that is cut short by the end of its segment does not
+ * match: the byte that follows a segment is 0xFF, which no identifier holds.
+ */
+function dropsJpeg(b, pos, code) {
+  if (code === COM) return true
+  if (code < APP1 || code > APP15 || code === APP14) return false
+  return code !== APP2 || !hasAt(b, ICC_ID, pos + 4)
+}
+
 function stripJpeg(b) {
   const n = b.length
   const view = new DataView(b.buffer, b.byteOffset, b.length)
@@ -218,7 +251,7 @@ function stripJpeg(b) {
     if (length < 2) return null
     // A segment that claims more than the file holds leaves `pos` at or past the end, and the walk ends in null.
     const next = pos + 2 + length
-    if (JPEG_DROP.has(code)) {
+    if (dropsJpeg(b, pos, code)) {
       drops.push(pos, next)
       // The first EXIF with an orientation to keep is the one that does. It must lie inside the file, with an EOI after it.
       if (code === APP1 && patch === NO_PATCH && next + 2 <= n) patch = jpegPatch(b, pos, next)
@@ -247,7 +280,12 @@ function stripPng(b) {
     if (pos === 8 && (type !== IHDR || size !== 13)) return null
     if (type === IEND) return size === 0 && data ? without(b, end, drops, NO_PATCH) : null
     if (type === IDAT) data = true
-    else if (PNG_DROP.has(type)) drops.push(pos, end)
+    else if (!PNG_KEEP.has(type)) {
+      // Off the list: an ancillary chunk (its first letter is a lowercase one) goes, and a critical one cannot go without
+      // breaking the picture, so the file is not taken.
+      if (type >>> 24 < LOWERCASE_A || type >>> 24 > LOWERCASE_Z) return null
+      drops.push(pos, end)
+    }
     pos = end // a chunk that claims more than the file holds ends the walk here, in null
   }
   return null
@@ -274,7 +312,7 @@ function stripWebp(b) {
         extended = true
       } else if (type !== VP8 && type !== VP8L) return null
     }
-    if (WEBP_DROP.has(type)) {
+    if (!WEBP_KEEP.has(type)) {
       drops.push(pos, next)
       // Only a VP8X can announce an EXIF chunk, so only a file with one can have one written.
       if (type === WEBP_EXIF && extended && patch === NO_PATCH) patch = webpPatch(b, pos, pos + 8 + size)
@@ -307,8 +345,13 @@ function endOfSubBlocks(b, from) {
   return b.length
 }
 
-/** Whether the extension at `pos` is the XMP one: an application extension whose first sub-block is the 11-byte id. */
-const isXmpExtension = (b, pos) => b[pos + 1] === 0xff && b[pos + 2] === 11 && hasAt(b, XMP_APPLICATION, pos + 3)
+/**
+ * Whether the extension at `pos` stays: a graphic control extension, or an application extension whose first sub-block is
+ * exactly the 11 bytes of the identifier of one on the list.
+ */
+const keepsExtension = (b, pos) =>
+  b[pos + 1] === GRAPHIC_CONTROL ||
+  (b[pos + 1] === APPLICATION && b[pos + 2] === GIF_KEEP[0].length && GIF_KEEP.some((id) => hasAt(b, id, pos + 3)))
 
 function stripGif(b) {
   const n = b.length
@@ -324,7 +367,7 @@ function stripGif(b) {
     if (kind === 0x21) {
       if (pos + 4 > n) return null // the introducer, the label, the end of the chain and the trailer must still fit
       const next = endOfSubBlocks(b, pos + 2) // past the introducer and the label
-      if (b[pos + 1] === 0xfe || isXmpExtension(b, pos)) drops.push(pos, next)
+      if (!keepsExtension(b, pos)) drops.push(pos, next)
       pos = next
     } else if (kind === 0x2c) {
       if (pos + 13 > n) return null // the descriptor, the LZW size, the end of its chain and the trailer must still fit

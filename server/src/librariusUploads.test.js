@@ -115,6 +115,8 @@ const IHDR = chunk('IHDR', [be32(2), be32(2), 8, 6, 0, 0, 0])
 const IDAT = chunk('IDAT', cat([0x78, 0x9c], TRAP, [1, 2, 3, 4, 5, 6, 7, 8]))
 const IEND = chunk('IEND')
 const png = (...chunks) => cat(PNG_SIG, chunks)
+/** The chunks a PNG keeps besides IHDR and IEND, which stand first and last: the picture, its colours, its movement. */
+const PNG_KEPT = ['IDAT', 'PLTE', 'tRNS', 'cHRM', 'gAMA', 'iCCP', 'sBIT', 'sRGB', 'cICP', 'mDCv', 'cLLi', 'bKGD', 'pHYs', 'acTL', 'fcTL', 'fdAT', 'tIME']
 const PNG_METADATA = [
   chunk('tEXt', ascii('Comment\0GPSLatitude=51.5')),
   chunk('zTXt', [ascii('Raw profile type exif\0\0'), GPS_MARK]),
@@ -126,7 +128,7 @@ const PNG_METADATA = [
 
 const riff = (type, data = []) => {
   const d = cat(data)
-  return cat(ascii(type), le32(d.length), d, d.length & 1 ? [0] : [])
+  return cat(typeof type === 'string' ? ascii(type) : type, le32(d.length), d, d.length & 1 ? [0] : [])
 }
 const webp = (...chunks) => {
   const body = cat(ascii('WEBP'), chunks)
@@ -234,6 +236,83 @@ const CLEAN = {
   [GIF]: () => gif(GCE, FRAME_TRAP),
 }
 const TYPES = [JPEG, PNG, WEBP, GIF]
+
+// ---------------------------------------------------------------------------------------------- containers that must go
+
+/** An invented place and an invented author, the way any metadata container might carry them. */
+const LOCATION = ascii('GPSLatitude=0/1,0/1,0/1;GPSLongitude=0/1,0/1,0/1;author=Nobody Invented')
+/** A C2PA manifest as its JUMBF box would hold it, with an assertion that names the place and the author. */
+const C2PA = cat(ascii('jumb'), ascii('c2pa'), ascii('stds.exif'), LOCATION)
+
+/**
+ * Every container of metadata that a picture of each type may carry and that must not reach Discord, named as the format
+ * names it. Each is a function: the bytes are built where the test runs.
+ */
+const CONTAINERS = {
+  [PNG]: [
+    ['caBX, the C2PA manifest', () => chunk('caBX', C2PA)],
+    ['zxIf, the compressed EXIF', () => chunk('zxIf', [be32(LOCATION.length), LOCATION])],
+    ['eXIf', () => chunk('eXIf', EXIF_GPS)],
+    ['tEXt', () => PNG_METADATA[0]],
+    ['zTXt', () => PNG_METADATA[1]],
+    ['iTXt', () => PNG_METADATA[2]],
+    ['an unknown private chunk', () => chunk('prVt', LOCATION)],
+    ['an unknown public chunk', () => chunk('abCd', LOCATION)],
+    ['hIST', () => chunk('hIST', LOCATION)],
+    ['sPLT', () => chunk('sPLT', [ascii('name\0'), 8, LOCATION])],
+    ['oFFs', () => chunk('oFFs', LOCATION)],
+    ['iDOT, the chunk of a phone', () => chunk('iDOT', LOCATION)],
+    ['dSIG', () => chunk('dSIG', LOCATION)],
+    ['an empty unknown chunk with a lowercase name', () => chunk('zzzz')],
+    ['a chunk named as a kept one, but in lowercase', () => chunk('time', LOCATION)],
+  ],
+  [WEBP]: [
+    ['C2PA, the manifest', () => riff('C2PA', C2PA)],
+    ['XMP', () => XMP_CHUNK],
+    ['the EXIF of a picture with no orientation', () => EXIF_CHUNK],
+    ['an unknown chunk', () => riff('abcd', LOCATION)],
+    ['an unknown chunk of one odd byte', () => riff('abcd', [1])],
+    ['a chunk named in bytes that are no letters', () => riff(Uint8Array.of(0, 1, 0xfe, 0xff), LOCATION)],
+    ['a chunk named as a kept one, but in lowercase', () => riff('iccp', LOCATION)],
+    ['a chunk named as a kept one, but for its last byte', () => riff('VP8\0', LOCATION)],
+    ['a chunk named as a kept one, but for its fourth letter', () => riff('ICCQ', LOCATION)],
+    ['a second XMP', () => riff('XMP ', XMP_GPS)],
+  ],
+  [GIF]: [
+    ['MGK8BIM0000, the Photoshop resources ImageMagick writes', () => ext(0xff, ascii('MGK8BIM0000'), LOCATION)],
+    ['MGKIPTC0000, the IPTC ImageMagick writes', () => ext(0xff, ascii('MGKIPTC0000'), LOCATION)],
+    ['XMP', () => xmpExt(LOCATION)],
+    ['an unknown application', () => ext(0xff, ascii('INVENTED000'), LOCATION)],
+    ['an application that is NETSCAPE2.0 but for its version', () => ext(0xff, ascii('NETSCAPE2.1'), LOCATION)],
+    ['a comment', () => ext(0xfe, LOCATION)],
+    ['a plain text extension', () => ext(0x01, [12, 0, 0, 0, 0, 2, 0, 2, 0, 1, 1, 0, 0], LOCATION)],
+    ['an extension of a label nobody defined', () => ext(0x42, LOCATION)],
+    ['an application extension with nothing in it', () => ext(0xff)],
+  ],
+  [JPEG]: [
+    ['APP2 of FlashPix (FPXR)', () => seg(0xe2, [ascii('FPXR\0'), LOCATION])],
+    ['APP2 of the Multi-Picture Format (MPF)', () => seg(0xe2, [ascii('MPF\0'), LOCATION])],
+    ['APP2 with an empty payload', () => seg(0xe2)],
+    ['APP2 that is ICC_PROFILE but for its terminator', () => seg(0xe2, [ascii('ICC_PROFILE'), 1, 1, LOCATION])],
+    ['APP1 of an EXIF with no orientation', () => APP1_EXIF],
+    ['APP1 of an XMP', () => APP1_XMP],
+    ['APP3 (Meta)', () => seg(0xe3, [ascii('Meta\0'), LOCATION])],
+    ['APP11, the JUMBF box of a C2PA manifest', () => seg(0xeb, [ascii('JP\0\0'), C2PA])],
+    ['APP12', () => seg(0xec, [ascii('Ducky'), LOCATION])],
+    ['APP13 (Photoshop, with the IPTC)', () => APP13],
+    ['APP15', () => seg(0xef, LOCATION)],
+    ['a comment', () => seg(0xfe, LOCATION)],
+  ],
+}
+/** The picture with `cs` (containers) in it twice: among the header and after the image data, or either side of it. */
+const WITH = {
+  [JPEG]: (cs) => cat(SOI, JFIF, cs, DQT, SOF0, DHT, SOS_HEADER, SCAN, cs, EOI),
+  [PNG]: (cs) => png(IHDR, cs, IDAT, cs, IEND),
+  [WEBP]: (cs) => webp(vp8x(0), cs, VP8, cs),
+  [GIF]: (cs) => gif(cs, GCE, FRAME_TRAP, cs),
+}
+/** The bytes of the image itself in each of those pictures: the part that must come out as it went in. */
+const IMAGE_DATA = { [JPEG]: () => cat(SOS_HEADER, SCAN), [PNG]: () => IDAT, [WEBP]: () => VP8, [GIF]: () => FRAME_TRAP }
 
 // ================================================================================================= the guard itself
 
@@ -521,9 +600,9 @@ describe('strip: JPEG', () => {
     for (const payload of payloads) expectBytes(strip(jpeg([JFIF, seg(0xe1, payload), DQT]), JPEG), jpeg([JFIF, DQT]))
   })
 
-  it('treats every marker as the table says: APP0, APP2 and APP14 stay, every other APPn and COM go', () => {
+  it('treats every marker as the table says: APP0 and APP14 stay, so does an APP2 of an ICC profile, every other APPn and COM go', () => {
     const OFF = new Set([0xd0, 0xd1, 0xd2, 0xd3, 0xd4, 0xd5, 0xd6, 0xd7, 0xd8, 0xd9, 0xff, 0x00, 0x01])
-    const GONE = new Set([0xe1, 0xe3, 0xe4, 0xe5, 0xe6, 0xe7, 0xe8, 0xe9, 0xea, 0xeb, 0xec, 0xed, 0xef, 0xfe])
+    const GONE = new Set([0xe1, 0xe2, 0xe3, 0xe4, 0xe5, 0xe6, 0xe7, 0xe8, 0xe9, 0xea, 0xeb, 0xec, 0xed, 0xef, 0xfe])
     for (let code = 0; code < 256; code++) {
       const input = jpeg([JFIF, seg(code, [0xaa, 0xbb, 0xcc]), DQT])
       const out = strip(input, JPEG)
@@ -534,13 +613,58 @@ describe('strip: JPEG', () => {
   })
 
   it('keeps the JFIF, ICC profile and Adobe segments, whose bytes the picture is read by', () => {
-    const kept = [JFIF, ICC, ADOBE, seg(0xe0, ascii('JFXX\0')), seg(0xe2, ascii('MPF\0'))]
+    const kept = [JFIF, ICC, ADOBE, seg(0xe0, ascii('JFXX\0')), seg(0xe0), seg(0xee)]
     for (const segment of kept) expectBytes(strip(jpeg([segment, DQT]), JPEG), jpeg([segment, DQT]))
     expectBytes(strip(jpeg([ADOBE, JFIF, ICC]), JPEG), jpeg([ADOBE, JFIF, ICC]))
   })
 
-  it('drops every APPn but those three, and the comment, wherever they stand', () => {
+  it('keeps an APP2 only when its payload starts with ICC_PROFILE and a zero byte, and whatever follows them', () => {
+    const id = ascii('ICC_PROFILE\0')
+    for (const rest of [[], [1], [1, 1], new Array(300).fill(0x33), LOCATION]) {
+      const profile = seg(0xe2, [id, rest])
+      expectBytes(strip(jpeg([JFIF, profile, DQT]), JPEG), jpeg([JFIF, profile, DQT]))
+    }
+    // every way to be one byte off: a byte changed, a byte missing, a byte first, the id further in, a shorter payload
+    for (let at = 0; at < id.length; at++) {
+      for (const change of [(x) => x ^ 0x20, (x) => x ^ 0x01, (x) => (x === 0 ? 0xff : 0)]) {
+        const bent = Uint8Array.from(id)
+        bent[at] = change(bent[at])
+        expectBytes(strip(jpeg([JFIF, seg(0xe2, [bent, LOCATION]), DQT]), JPEG), jpeg([JFIF, DQT]))
+      }
+      expectBytes(strip(jpeg([JFIF, seg(0xe2, [id.subarray(0, at), LOCATION]), DQT]), JPEG), jpeg([JFIF, DQT]))
+    }
+    for (const lead of [[0], [0x20], [0xff], [0xe2]]) expectBytes(strip(jpeg([JFIF, seg(0xe2, [lead, id, 1, 1]), DQT]), JPEG), jpeg([JFIF, DQT]))
+    expectBytes(strip(jpeg([JFIF, seg(0xe2, [id.subarray(1), 1]), DQT]), JPEG), jpeg([JFIF, DQT]))
+  })
+
+  it('does not take the identifier from a segment that is too short to hold it, whatever follows', () => {
+    // the first bytes of an ICC_PROFILE\0 payload, then the next segment: its marker is 0xFF, which no identifier holds
+    const id = ascii('ICC_PROFILE\0')
+    for (let keep = 0; keep < id.length; keep++) {
+      const cut = cat([0xff, 0xe2], be16(2 + keep), id.subarray(0, keep))
+      expectBytes(strip(cat(SOI, JFIF, cut, DQT, SOS_HEADER, SCAN, EOI), JPEG), jpeg([JFIF, DQT]))
+    }
+    // an APP2 that ends the file's segments just before the scan
+    expectBytes(strip(cat(SOI, JFIF, [0xff, 0xe2], be16(2 + 11), id.subarray(0, 11), SOS_HEADER, SCAN, EOI), JPEG), jpeg([JFIF], SCAN))
+  })
+
+  it('drops the FlashPix and Multi-Picture APP2 and the others like them, with every location they carry', () => {
+    for (const name of ['FPXR\0', 'MPF\0', 'ICC_PROFIL\0', 'ICC-PROFILE\0', 'XMP\0', 'Exif\0\0', 'JFIF\0', 'Adobe']) {
+      const out = strip(jpeg([JFIF, seg(0xe2, [ascii(name), LOCATION]), DQT]), JPEG)
+      expectBytes(out, jpeg([JFIF, DQT]))
+      expect(has(out, GPS_MARK)).toBe(false)
+    }
+  })
+
+  it('does not keep an ICC profile that sits in any other APPn', () => {
+    const profile = [ascii('ICC_PROFILE\0'), 1, 1, LOCATION]
     for (const code of [0xe1, 0xe3, 0xe4, 0xe5, 0xe6, 0xe7, 0xe8, 0xe9, 0xea, 0xeb, 0xec, 0xed, 0xef, 0xfe]) {
+      expectBytes(strip(jpeg([JFIF, seg(code, profile), DQT]), JPEG), jpeg([JFIF, DQT]))
+    }
+  })
+
+  it('drops every APPn but APP0, APP14 and an ICC APP2, and the comment, wherever they stand', () => {
+    for (const code of [0xe1, 0xe2, 0xe3, 0xe4, 0xe5, 0xe6, 0xe7, 0xe8, 0xe9, 0xea, 0xeb, 0xec, 0xed, 0xef, 0xfe]) {
       const gone = seg(code, ascii('GPSLatitude=51.5'))
       const out = strip(cat(SOI, gone, JFIF, SOS_HEADER, SCAN, gone, EOI), JPEG)
       expectBytes(out, jpeg([JFIF]))
@@ -576,9 +700,10 @@ describe('strip: JPEG', () => {
   })
 
   it('does not stop at an EOI that sits inside a segment it keeps or drops', () => {
-    const inside = seg(0xe2, [1, 2, 0xff, 0xd9, 3, 4])
-    const input = jpeg([JFIF, inside, APP1_EXIF, DQT, seg(0xfe, [1, 0xff, 0xd9, 2])])
-    expectBytes(strip(input, JPEG), jpeg([JFIF, inside, DQT]))
+    const inside = seg(0xe0, [1, 2, 0xff, 0xd9, 3, 4])
+    const insideIcc = seg(0xe2, [ascii('ICC_PROFILE\0'), 0xff, 0xd9, 3, 4])
+    const input = jpeg([JFIF, inside, APP1_EXIF, insideIcc, DQT, seg(0xe2, [1, 0xff, 0xd9, 2]), seg(0xfe, [1, 0xff, 0xd9, 2])])
+    expectBytes(strip(input, JPEG), jpeg([JFIF, inside, insideIcc, DQT]))
   })
 
   it('drops what follows the final EOI: a hidden second picture, motion data, anything', () => {
@@ -624,7 +749,7 @@ describe('strip: JPEG', () => {
       expect(strip(bad, JPEG), `claim ${claim}`).toBeNull()
     }
     // the same lengths on a segment that would be kept
-    const kept = jpeg([JFIF, seg(0xe2, [1, 2, 3])])
+    const kept = jpeg([JFIF, seg(0xe0, [1, 2, 3])])
     const keptAt = kept.length - EOI.length - SOS_HEADER.length - SCAN.length - 7
     const bad = Uint8Array.from(kept)
     bad.set(be16(0xffff), keptAt + 2)
@@ -642,7 +767,8 @@ describe('strip: JPEG', () => {
 
   it('takes a segment of length 2, which holds nothing, and drops it when it is APP1', () => {
     expectBytes(strip(jpeg([JFIF, seg(0xe1), DQT]), JPEG), jpeg([JFIF, DQT]))
-    expectBytes(strip(jpeg([JFIF, seg(0xe2), DQT]), JPEG), jpeg([JFIF, seg(0xe2), DQT]))
+    expectBytes(strip(jpeg([JFIF, seg(0xe0), DQT]), JPEG), jpeg([JFIF, seg(0xe0), DQT]))
+    expectBytes(strip(jpeg([JFIF, seg(0xe2), DQT]), JPEG), jpeg([JFIF, DQT])) // an APP2 with no profile is no ICC
   })
 
   it('accepts a segment that ends exactly at the end of the file only if the file is finished', () => {
@@ -858,7 +984,7 @@ describe('strip: a photo keeps which way up it goes (JPEG)', () => {
 
   it('does not read an Exif identifier that lies in the next segment, nor past its own end', () => {
     // an APP1 of length 2 followed by a segment that spells the identifier and holds an orientation is not an EXIF
-    const next = seg(0xe2, [ascii('Exif\0\0'), tiff({ entries: [orient(false, 6)] })])
+    const next = seg(0xe0, [ascii('Exif\0\0'), tiff({ entries: [orient(false, 6)] })])
     expectBytes(strip(cat(SOI, JFIF, [0xff, 0xe1, 0x00, 0x02], next, SOS_HEADER, SCAN, EOI), JPEG), cat(SOI, JFIF, next, SOS_HEADER, SCAN, EOI))
     // a segment whose length ends in the middle of the identifier, and in the middle of the TIFF header
     for (const keep of [0, 3, 5, 6, 7, 10, 13]) {
@@ -883,10 +1009,11 @@ describe('strip: a photo keeps which way up it goes (JPEG)', () => {
     for (const code of [0xe3, 0xe4, 0xe5, 0xe6, 0xe7, 0xe8, 0xe9, 0xea, 0xeb, 0xec, 0xed, 0xef, 0xfe]) {
       expectBytes(strip(jpeg([JFIF, seg(code, [ascii('Exif\0\0'), t]), DQT]), JPEG), jpeg([JFIF, DQT]))
     }
-    for (const code of [0xe0, 0xe2, 0xee]) {
+    for (const code of [0xe0, 0xee]) {
       const kept = seg(code, [ascii('Exif\0\0'), t])
       expectBytes(strip(jpeg([kept, DQT]), JPEG), jpeg([kept, DQT])) // kept as they are, whatever they hold
     }
+    expectBytes(strip(jpeg([seg(0xe2, [ascii('Exif\0\0'), t]), DQT]), JPEG), jpeg([DQT])) // an APP2 that is no ICC profile is dropped
   })
 
   it('writes one APP1 at most: the first EXIF with a usable orientation, the rest are dropped', () => {
@@ -979,8 +1106,8 @@ describe('strip: a photo keeps which way up it goes (WebP)', () => {
   })
 
   it('keeps every other flag and chunk, an animation included', () => {
-    const kept = [riff('ICCP', [1, 2]), riff('ANIM', [0, 0, 0, 0, 0, 0]), riff('ALPH', [1, 2, 3, 4]), riff('ANMF', cat(new Array(16).fill(1), VP8)), riff('abcd', [1])]
-    const input = webp(vp8x(FLAGS | FLAG.xmp), ...kept, exifChunk(gpsTiff(false, 6)), XMP_CHUNK)
+    const kept = [riff('ICCP', [1, 2]), riff('ANIM', [0, 0, 0, 0, 0, 0]), riff('ALPH', [1, 2, 3, 4]), riff('ANMF', cat(new Array(16).fill(1), VP8))]
+    const input = webp(vp8x(FLAGS | FLAG.xmp), ...kept, riff('abcd', [1]), exifChunk(gpsTiff(false, 6)), XMP_CHUNK)
     expectBytes(strip(input, WEBP), webp(vp8x(FLAGS | FLAG.exif), ...kept, MIN_WEBP_EXIF(false, 6)))
   })
 
@@ -1006,14 +1133,12 @@ describe('strip: a photo keeps which way up it goes (WebP)', () => {
     expectBytes(strip(webp(VP8L, exifChunk(gpsTiff(true, 6)), XMP_CHUNK), WEBP), webp(VP8L))
   })
 
-  it('writes nothing for an XMP chunk that holds a TIFF block with an orientation, and keeps the other chunks that do', () => {
+  it('writes nothing for an XMP chunk that holds a TIFF block with an orientation, and keeps only the ICC chunk of those that do', () => {
     const t = gpsTiff(false, 6)
     for (const body of [t, cat(ascii('Exif\0\0'), t)]) {
       expectBytes(strip(webp(vp8x(FLAG.exif), VP8, riff('XMP ', body)), WEBP), webp(vp8x(0), VP8))
-      for (const name of ['ICCP', 'abcd', 'EXIf', 'exif']) {
-        const other = riff(name, body)
-        expectBytes(strip(webp(vp8x(FLAG.exif), VP8, other), WEBP), webp(vp8x(0), VP8, other))
-      }
+      expectBytes(strip(webp(vp8x(FLAG.exif), VP8, riff('ICCP', body)), WEBP), webp(vp8x(0), VP8, riff('ICCP', body)))
+      for (const name of ['abcd', 'EXIf', 'exif']) expectBytes(strip(webp(vp8x(FLAG.exif), VP8, riff(name, body)), WEBP), webp(vp8x(0), VP8))
     }
   })
 
@@ -1072,34 +1197,8 @@ describe('strip: PNG', () => {
     expect(has(out, GPS_MARK)).toBe(true) // inside the IDAT: image data, not ours to touch
   })
 
-  it('keeps every other chunk, tIME and the animation chunks included, so an animated PNG stays animated', () => {
-    const kept = [
-      'tIME',
-      'pHYs',
-      'gAMA',
-      'cHRM',
-      'sRGB',
-      'iCCP',
-      'sBIT',
-      'bKGD',
-      'PLTE',
-      'tRNS',
-      'hIST',
-      'sPLT',
-      'acTL',
-      'fcTL',
-      'fdAT',
-      'oFFs',
-      'zzzz',
-      'TEXT',
-      'text',
-      'Exif',
-      'exif',
-      'EXIf',
-      'eXIF',
-      'tEXT',
-    ]
-    for (const type of kept) {
+  it('keeps the chunks on its list, tIME and the animation chunks included, so an animated PNG stays animated', () => {
+    for (const type of PNG_KEPT) {
       const input = png(IHDR, chunk(type, [1, 2, 3]), IDAT, IEND)
       expectBytes(strip(input, PNG), input)
     }
@@ -1116,19 +1215,84 @@ describe('strip: PNG', () => {
     expectBytes(strip(apng, PNG), png(IHDR, chunk('acTL', [be32(2), be32(0)]), chunk('fcTL', new Array(26).fill(1)), IDAT, chunk('fcTL', new Array(26).fill(2)), chunk('fdAT', [be32(2), 1, 2, 3]), IEND))
   })
 
-  it('drops the four chunk types and no other, at any place between IHDR and IEND', () => {
-    const dropped = new Set(['tEXt', 'zTXt', 'iTXt', 'eXIf'])
-    for (const type of ['tEXt', 'zTXt', 'iTXt', 'eXIf', 'tIME', 'iCCP', 'IDAT', 'abcd']) {
-      const mid = chunk(type, GPS_MARK)
-      const input = png(IHDR, mid, IDAT, IEND)
-      const out = strip(input, PNG)
-      expectBytes(out, dropped.has(type) ? png(IHDR, IDAT, IEND) : input)
+  it('keeps a chunk on its list at any place, and one of no data', () => {
+    for (const type of PNG_KEPT) {
+      for (const data of [[], [1], new Array(300).fill(7)]) {
+        const input = png(IHDR, chunk(type, data), IDAT, chunk(type, data), IEND)
+        expectBytes(strip(input, PNG), input)
+      }
     }
   })
 
-  it('drops metadata chunks with no data, and keeps empty chunks that are not metadata', () => {
-    expectBytes(strip(png(IHDR, chunk('tEXt'), chunk('zTXt'), chunk('iTXt'), chunk('eXIf'), IDAT, IEND), PNG), png(IHDR, IDAT, IEND))
-    const empty = png(IHDR, chunk('tIME'), chunk('abcd'), chunk('IDAT'), IDAT, IEND)
+  it('keeps what the list names and nothing near it: a name one byte off is dropped, or refuses the file when it is critical', () => {
+    const kept = new Set(PNG_KEPT)
+    for (const name of PNG_KEPT) {
+      for (let at = 0; at < 4; at++) {
+        for (const change of [(x) => x ^ 0x20, (x) => x + 1, (x) => x - 1]) {
+          const bytes = Uint8Array.from(ascii(name))
+          bytes[at] = change(bytes[at])
+          const near = String.fromCharCode(...bytes)
+          const input = png(IHDR, chunk(near, LOCATION), IDAT, IEND)
+          const out = strip(input, PNG)
+          const label = `${name} as ${JSON.stringify(near)}`
+          if (kept.has(near)) expectBytes(out, input)
+          else if (bytes[0] >= 0x61 && bytes[0] <= 0x7a) expectBytes(out, png(IHDR, IDAT, IEND))
+          else expect(out, label).toBeNull()
+        }
+      }
+    }
+  })
+
+  it('drops every chunk that is not on the list and has a lowercase first letter, whatever it is called and wherever it stands', () => {
+    fc.assert(
+      fc.property(
+        fc.uint8Array({ minLength: 4, maxLength: 4 }),
+        fc.integer({ min: 0x61, max: 0x7a }),
+        fc.uint8Array({ maxLength: 40 }),
+        fc.integer({ min: 0, max: 2 }),
+        (name, first, data, place) => {
+          const type = Uint8Array.from([first, name[1], name[2], name[3]])
+          if (PNG_KEPT.includes(String.fromCharCode(...type))) return
+          const metadata = cat(be32(data.length), type, data, be32(crc32(cat(type, data))))
+          const input = [png(IHDR, metadata, IDAT, IEND), png(IHDR, IDAT, metadata, IDAT, IEND), png(IHDR, IDAT, metadata, IEND)][place]
+          const expected = [png(IHDR, IDAT, IEND), png(IHDR, IDAT, IDAT, IEND), png(IHDR, IDAT, IEND)][place]
+          expectBytes(strip(input, PNG), expected)
+        },
+      ),
+      { numRuns: 500 },
+    )
+  })
+
+  it('refuses a file with an unknown critical chunk, before the first IDAT, between two, and after the last', () => {
+    for (const name of ['ABCD', 'Exif', 'TEXT', 'EXIf', 'XMP ', 'C2PA', 'Zzzz', 'AAAA', 'IHDx', 'IDAt', 'IENd', 'PLTe', 'CABX']) {
+      const critical = chunk(name, LOCATION)
+      expect(strip(png(IHDR, critical, IDAT, IEND), PNG), `${name} first`).toBeNull()
+      expect(strip(png(IHDR, IDAT, critical, IDAT, IEND), PNG), `${name} between`).toBeNull()
+      expect(strip(png(IHDR, IDAT, critical, IEND), PNG), `${name} last`).toBeNull()
+      expect(strip(png(IHDR, PNG_METADATA[0], IDAT, IEND, critical), PNG), `${name} past the end`).not.toBeNull()
+    }
+  })
+
+  it('judges a chunk by its first byte: a to z may be dropped, any other byte makes it critical and refuses the file', () => {
+    for (let first = 0; first < 256; first++) {
+      const type = Uint8Array.of(first, 0x62, 0x43, 0x64)
+      const odd = cat(be32(3), type, [1, 2, 3], be32(crc32(cat(type, [1, 2, 3]))))
+      const out = strip(png(IHDR, odd, IDAT, IEND), PNG)
+      if (first >= 0x61 && first <= 0x7a) expectBytes(out, png(IHDR, IDAT, IEND))
+      else expect(out, `first byte ${first.toString(16)}`).toBeNull()
+    }
+  })
+
+  it('refuses a critical chunk of no data, and one that is longer than the file, without a throw', () => {
+    expect(strip(png(IHDR, chunk('ABCD'), IDAT, IEND), PNG)).toBeNull()
+    const bad = Uint8Array.from(png(IHDR, chunk('ABCD', [1, 2]), IDAT, IEND))
+    bad.set(be32(0xffffffff), PNG_SIG.length + IHDR.length)
+    expect(strip(bad, PNG)).toBeNull()
+  })
+
+  it('drops metadata chunks with no data, and keeps empty chunks that are on the list', () => {
+    expectBytes(strip(png(IHDR, chunk('tEXt'), chunk('zTXt'), chunk('iTXt'), chunk('eXIf'), chunk('abcd'), IDAT, IEND), PNG), png(IHDR, IDAT, IEND))
+    const empty = png(IHDR, chunk('tIME'), chunk('pHYs'), chunk('IDAT'), IDAT, IEND)
     expectBytes(strip(empty, PNG), empty)
   })
 
@@ -1214,9 +1378,12 @@ describe('strip: PNG', () => {
   })
 
   it('does not loop on a file of zero-length chunks, and still reaches the end', () => {
-    const zeros = new Uint8Array(12 * 50_000) // a chunk each: length 0, type 0, crc 0
-    expect(strip(png(IHDR, IDAT, zeros), PNG)).toBeNull()
-    expectBytes(strip(png(IHDR, IDAT, zeros, IEND), PNG), png(IHDR, IDAT, zeros, IEND))
+    const kept = new Uint8Array(12 * 50_000)
+    for (let i = 0; i < kept.length; i += 12) kept.set(ascii('tIME'), i + 4) // a chunk each: length 0, then the name, crc 0
+    expect(strip(png(IHDR, IDAT, kept), PNG)).toBeNull()
+    expectBytes(strip(png(IHDR, IDAT, kept, IEND), PNG), png(IHDR, IDAT, kept, IEND))
+    // the same chunks with a name of no letters at all are critical, and refuse the file
+    expect(strip(png(IHDR, IDAT, new Uint8Array(12 * 50_000), IEND), PNG)).toBeNull()
   })
 })
 
@@ -1265,9 +1432,58 @@ describe('strip: WebP', () => {
   })
 
   it('keeps every other chunk, so an animated WebP stays animated', () => {
-    const kept = [riff('ICCP', [1, 2]), riff('ANIM', [0, 0, 0, 0, 0, 0]), riff('ALPH', [1, 2, 3, 4]), riff('ANMF', cat(new Array(16).fill(1), VP8)), riff('ANMF', cat(new Array(16).fill(2), VP8L)), riff('abcd', [1]), riff('exif', [1]), riff('Exif', [1]), riff('xmp ', [1]), riff('XMP\0', [1])]
-    const animated = webp(vp8x(FLAG.anim | FLAG.alpha | FLAG.exif), ...kept, EXIF_CHUNK, XMP_CHUNK)
+    const kept = [riff('ICCP', [1, 2]), riff('ANIM', [0, 0, 0, 0, 0, 0]), riff('ALPH', [1, 2, 3, 4]), riff('ANMF', cat(new Array(16).fill(1), VP8)), riff('ANMF', cat(new Array(16).fill(2), VP8L))]
+    const others = [riff('abcd', [1]), riff('exif', [1]), riff('Exif', [1]), riff('xmp ', [1]), riff('XMP\0', [1]), riff('C2PA', C2PA)]
+    const animated = webp(vp8x(FLAG.anim | FLAG.alpha | FLAG.exif), ...kept, EXIF_CHUNK, XMP_CHUNK, ...others)
     expectBytes(strip(animated, WEBP), webp(vp8x(FLAG.anim | FLAG.alpha), ...kept))
+  })
+
+  it('keeps the chunks on its list, each of them, at any place after the first, and one of no data', () => {
+    for (const name of ['VP8 ', 'VP8L', 'ALPH', 'ANIM', 'ANMF', 'ICCP']) {
+      for (const data of [[], [1], [1, 2], new Array(301).fill(7)]) {
+        const chunkOf = riff(name, data)
+        const input = webp(vp8x(0), chunkOf, VP8, chunkOf)
+        expectBytes(strip(input, WEBP), input)
+      }
+    }
+    const second = riff('VP8X', new Array(10).fill(0))
+    expectBytes(strip(webp(vp8x(0), VP8, second), WEBP), webp(vp8x(0), VP8, second))
+  })
+
+  it('keeps what the list names and nothing near it: a name one byte off is dropped', () => {
+    const names = ['VP8 ', 'VP8L', 'VP8X', 'ALPH', 'ANIM', 'ANMF', 'ICCP']
+    for (const name of names) {
+      for (let at = 0; at < 4; at++) {
+        for (const change of [(x) => x ^ 0x20, (x) => x + 1, (x) => x - 1, () => 0]) {
+          const near = Uint8Array.from(ascii(name))
+          near[at] = change(near[at])
+          if (names.includes(String.fromCharCode(...near)) || String.fromCharCode(...near) === 'EXIF') continue
+          expectBytes(strip(webp(vp8x(0), VP8, riff(near, LOCATION)), WEBP), webp(vp8x(0), VP8))
+        }
+      }
+    }
+  })
+
+  it('drops a chunk of any name that is not on the list, and fixes the RIFF size and the flags for it', () => {
+    fc.assert(
+      fc.property(fc.uint8Array({ minLength: 4, maxLength: 4 }), fc.uint8Array({ maxLength: 40 }), fc.integer({ min: 0, max: 255 }), fc.integer({ min: 0, max: 2 }), (name, data, flags, place) => {
+        const known = ['VP8 ', 'VP8L', 'VP8X', 'ALPH', 'ANIM', 'ANMF', 'ICCP', 'EXIF']
+        if (known.includes(String.fromCharCode(...name))) return
+        const other = riff(name, data)
+        const input = [webp(vp8x(flags), other, VP8), webp(vp8x(flags), VP8, other), webp(vp8x(flags), VP8, other, other)][place]
+        const out = strip(input, WEBP)
+        expectBytes(out, webp(vp8x(flags & 0xf3), VP8))
+        expect(sizeField(out)).toBe(out.length - 8)
+      }),
+      { numRuns: 500 },
+    )
+  })
+
+  it('drops a C2PA chunk whatever the flags say, and leaves the flags alone: no flag stands for it', () => {
+    for (let flags = 0; flags < 256; flags++) {
+      const out = strip(webp(vp8x(flags), VP8, riff('C2PA', C2PA)), WEBP)
+      expectBytes(out, webp(vp8x(flags & 0xf3), VP8))
+    }
   })
 
   it('takes a lossless image, and a plain lossy one with no VP8X, and changes neither', () => {
@@ -1401,28 +1617,70 @@ describe('strip: GIF', () => {
     }
   })
 
-  it('keeps the other extensions: looping, timing, the ICC profile, plain text and the unknown', () => {
-    const others = [
+  it('keeps the graphic control extension, and the three application extensions of its list, exactly', () => {
+    const kept = [
       GCE,
       NETSCAPE,
       ext(0xff, ascii('ANIMEXTS1.0'), [1, 0, 0]),
       ext(0xff, ascii('ICCRGBG1012'), [1, 2, 3]),
-      ext(0x01, [12, 0, 0, 0, 0, 2, 0, 2, 0, 1, 1, 0, 0], ascii('hi')),
-      ext(0x00, [1]),
-      ext(0xfd, [1]),
-      ext(0xff, [1]),
       ext(0xf9, [4, 0, 0, 0, 0]),
+      ext(0xf9),
+      ext(0xff, ascii('NETSCAPE2.0')),
+      ext(0xff, ascii('NETSCAPE2.0'), new Uint8Array(700).fill(0x33), [1, 2, 3]),
+      ext(0xff, ascii('ICCRGBG1012'), new Uint8Array(300).fill(0x44)),
     ]
-    for (const other of others) {
+    for (const other of kept) {
       const input = gif(other, frame())
       expectBytes(strip(input, GIF), input)
     }
   })
 
-  it('drops only the comment extension label, 0xFE', () => {
+  it('keeps an extension of its list at any place: before the first image, between two, and after the last', () => {
+    for (const keptExt of [GCE, NETSCAPE, ext(0xff, ascii('ANIMEXTS1.0'), [1, 0, 0]), ext(0xff, ascii('ICCRGBG1012'), [1, 2, 3])]) {
+      const input = gif(keptExt, frame(), keptExt, frame([5, 6]), keptExt)
+      expectBytes(strip(input, GIF), input)
+    }
+  })
+
+  it('drops every extension but those: plain text, comment, XMP, MGK8BIM0000 and MGKIPTC0000, and every label nobody defined', () => {
     for (let label = 0; label < 256; label++) {
-      const input = gif(ext(label, [9, 9, 9]), frame())
-      expectBytes(strip(input, GIF), label === 0xfe ? gif(frame()) : input)
+      for (const data of [[[9, 9, 9]], [[1], [2]], []]) {
+        const input = gif(ext(label, ...data), frame())
+        expectBytes(strip(input, GIF), label === 0xf9 ? input : gif(frame()))
+      }
+    }
+  })
+
+  it('judges an application extension by its identifier, whole, and by the first sub-block of the extension alone', () => {
+    const ids = ['NETSCAPE2.0', 'ANIMEXTS1.0', 'ICCRGBG1012']
+    for (const id of ids) {
+      for (let at = 0; at < id.length; at++) {
+        for (const change of [(x) => x ^ 0x20, (x) => x ^ 0x01, () => 0, () => 0xff]) {
+          const bent = Uint8Array.from(ascii(id))
+          bent[at] = change(bent[at])
+          if (ids.includes(String.fromCharCode(...bent))) continue
+          expectBytes(strip(gif(ext(0xff, bent, [1, 0, 0]), frame()), GIF), gif(frame()))
+        }
+      }
+      // the identifier is the whole first sub-block: one byte more, one byte less, the same bytes in the second sub-block
+      expectBytes(strip(gif(cat([0x21, 0xff, 12], ascii(id), [0x41, 0]), frame()), GIF), gif(frame()))
+      expectBytes(strip(gif(cat([0x21, 0xff, 10], ascii(id).subarray(0, 10), [1, 0, 0]), frame()), GIF), gif(frame()))
+      expectBytes(strip(gif(cat([0x21, 0xff, 12], ascii(id).subarray(0, 10), [0x41, 0x42, 0]), frame()), GIF), gif(frame()))
+      expectBytes(strip(gif(ext(0xff, [1], ascii(id)), frame()), GIF), gif(frame()))
+      // the same identifier under a label that is not 0xFF
+      for (const label of [0x01, 0xf9, 0xfe, 0xfd, 0x00]) {
+        const input = gif(ext(label, ascii(id), [1, 0, 0]), frame())
+        expectBytes(strip(input, GIF), label === 0xf9 ? input : gif(frame()))
+      }
+    }
+  })
+
+  it('drops MGK8BIM0000 and MGKIPTC0000, the blocks ImageMagick writes the editor data into, and the location in them', () => {
+    for (const id of ['MGK8BIM0000', 'MGKIPTC0000', 'MGKICC00000', 'MGKEXIF0000']) {
+      const input = gif(NETSCAPE, ext(0xff, ascii(id), LOCATION, new Uint8Array(400).fill(0x55)), GCE, frame(), ext(0xff, ascii(id), [1]))
+      const out = strip(input, GIF)
+      expectBytes(out, gif(NETSCAPE, GCE, frame()))
+      expect(has(out, GPS_MARK)).toBe(false)
     }
   })
 
@@ -1444,25 +1702,19 @@ describe('strip: GIF', () => {
     )
   })
 
-  it('keeps an application extension that only looks like XMP', () => {
+  it('drops an application extension that only looks like XMP, as it drops every one that is not on the list', () => {
     const lookAlikes = [
       ext(0xff, ascii('XMP DataXMQ'), [1, 0, 0]),
       ext(0xff, ascii('xmp DataXMP'), [1, 0, 0]),
       ext(0xff, ascii('XMP DataXM'), [1, 0, 0]),
       ext(0xff, ascii('XMP DataXMPP'), [1, 0, 0]),
       ext(0xff, ascii('XMP Data'), [1, 0, 0]),
-      ext(0xff, ascii('NETSCAPE2.0'), ascii('XMP DataXMP')),
-      ext(0xff, [1], ascii('XMP DataXMP')),
       ext(0x01, ascii('XMP DataXMP'), [1, 0, 0]),
       ext(0xfd, ascii('XMP DataXMP'), [1, 0, 0]),
-      ext(0xf9, ascii('XMP DataXMP')),
       cat([0x21, 0xff, 12], ascii('XMP DataXMP'), [0x41], [1, 0, 0]),
       cat([0x21, 0xff, 10], ascii('XMP DataXM'), [1, 0, 0]),
     ]
-    for (const other of lookAlikes) {
-      const input = gif(other, frame())
-      expectBytes(strip(input, GIF), input)
-    }
+    for (const other of lookAlikes) expectBytes(strip(gif(other, frame()), GIF), gif(frame()))
   })
 
   it('keeps the looping and ICC extensions while it drops the XMP one next to them', () => {
@@ -1620,6 +1872,77 @@ describe('strip: GIF', () => {
   })
 })
 
+// ================================================================================================= keep lists
+
+describe('strip: a picture keeps only what it needs to be seen', () => {
+  for (const type of TYPES) {
+    for (const [label, build] of CONTAINERS[type]) {
+      it(`${type}: ${label} goes, with whatever it carries, and the image data comes out as it went in`, () => {
+        const input = WITH[type]([build()])
+        expect(input.length).toBeGreaterThan(CLEAN[type]().length)
+        const out = strip(input, type)
+        expectBytes(out, CLEAN[type]())
+        expect(has(out, GPS_MARK)).toBe(false)
+        expect(has(out, LOCATION)).toBe(false)
+        expect(has(out, IMAGE_DATA[type]())).toBe(true)
+        expectBytes(strip(out, type), out) // and stripping what came out changes nothing
+      })
+    }
+
+    it(`${type}: all of them in one picture go, and nothing of them stays`, () => {
+      const all = CONTAINERS[type].map(([, build]) => build())
+      const input = WITH[type](all)
+      expect(has(input, GPS_MARK)).toBe(true)
+      const out = strip(input, type)
+      expectBytes(out, CLEAN[type]())
+      expect(has(out, GPS_MARK)).toBe(false)
+      expectBytes(strip(out, type), out)
+    })
+  }
+
+  it('drops a container whole, whatever kept chunks and blocks its bytes spell inside it', () => {
+    const inside = {
+      [PNG]: chunk('caBX', [IDAT, chunk('IEND'), LOCATION]),
+      [WEBP]: riff('C2PA', [VP8, LOCATION]),
+      [GIF]: ext(0xff, ascii('MGK8BIM0000'), frame(), [0x3b], NETSCAPE, LOCATION),
+      [JPEG]: seg(0xeb, [JFIF, SOS_HEADER, EOI, LOCATION]),
+    }
+    for (const type of TYPES) {
+      const out = strip(WITH[type]([inside[type]]), type)
+      expectBytes(out, CLEAN[type]())
+      expect(has(out, GPS_MARK)).toBe(false)
+    }
+  })
+
+  it('refuses what it cannot keep and cannot drop: a PNG chunk that is critical and unknown', () => {
+    const out = strip(WITH[PNG]([chunk('CAbX', C2PA)]), PNG)
+    expect(out).toBeNull()
+  })
+
+  it('leaves the image data byte for byte, and everything it keeps in place, when containers stand among it', () => {
+    const colours = {
+      [PNG]: [chunk('pHYs', [1, 2, 3, 4]), chunk('iCCP', [ascii('icc\0\0'), 9, 9]), chunk('tIME', [1, 2, 3, 4, 5, 6, 7]), chunk('acTL', [be32(2), be32(0)])],
+      [WEBP]: [riff('ICCP', [1, 2, 3]), riff('ANIM', [0, 0, 0, 0, 0, 0]), riff('ALPH', [1, 2, 3, 4, 5])],
+      [GIF]: [NETSCAPE, ext(0xff, ascii('ANIMEXTS1.0'), [1, 0, 0]), ext(0xff, ascii('ICCRGBG1012'), [1, 2, 3, 4])],
+      [JPEG]: [JFIF, ICC, ADOBE, seg(0xe0, ascii('JFXX\0'))],
+    }
+    const place = {
+      [PNG]: (middle) => png(IHDR, middle, IDAT, IEND),
+      [WEBP]: (middle) => webp(vp8x(0), middle, VP8),
+      [GIF]: (middle) => gif(middle, GCE, FRAME_TRAP),
+      [JPEG]: (middle) => cat(SOI, middle, DQT, SOF0, SOS_HEADER, SCAN, EOI),
+    }
+    for (const type of TYPES) {
+      const containers = CONTAINERS[type].map(([, build]) => build())
+      const stays = containers.map((_, i) => colours[type][i % colours[type].length])
+      const out = strip(place[type](containers.flatMap((c, i) => [c, stays[i]])), type)
+      expectBytes(out, place[type](stays))
+      expect(has(out, GPS_MARK)).toBe(false)
+      expect(has(out, IMAGE_DATA[type]())).toBe(true)
+    }
+  })
+})
+
 // ================================================================================================= properties
 
 describe('strip: properties over generated pictures', () => {
@@ -1657,11 +1980,15 @@ describe('strip: properties over generated pictures', () => {
     { weight: 4, arbitrary: fc.record({ code: jpegCode, payload: dataBytes, fill: fillCount }).map((s) => ({ kind: 'seg', ...s })) },
     { weight: 2, arbitrary: exifSpec.map((s) => ({ kind: 'exif', ...s })) },
     { weight: 1, arbitrary: entropy.map((data) => ({ kind: 'scan', data })) },
+    // an APP2 that does hold an ICC profile: the one APP2 that stays
+    { weight: 1, arbitrary: fc.record({ payload: dataBytes, fill: fillCount }).map(({ payload, fill }) => ({ kind: 'seg', code: 0xe2, payload: cat(ascii('ICC_PROFILE\0'), payload), fill })) },
   )
   const jpegCase = fc
     .record({ head: fc.array(jpegPiece, { maxLength: 8 }), scan: entropy, tail: fc.array(jpegPiece, { maxLength: 6 }), junk: dataBytes })
     .map(({ head, scan, tail, junk }) => ({ pieces: [...head, { kind: 'scan', data: scan }, ...tail], junk }))
-  const JPEG_GONE = new Set([0xe1, 0xe3, 0xe4, 0xe5, 0xe6, 0xe7, 0xe8, 0xe9, 0xea, 0xeb, 0xec, 0xed, 0xef, 0xfe])
+  const JPEG_GONE = new Set([0xe1, 0xe2, 0xe3, 0xe4, 0xe5, 0xe6, 0xe7, 0xe8, 0xe9, 0xea, 0xeb, 0xec, 0xed, 0xef, 0xfe])
+  const ICC_ID = ascii('ICC_PROFILE\0')
+  const isIcc = (p) => p.code === 0xe2 && ICC_ID.every((x, i) => p.payload[i] === x)
   const jpegOf = (pieces, keep, junk = []) => {
     let written = false
     return cat(
@@ -1676,7 +2003,7 @@ describe('strip: properties over generated pictures', () => {
           written = true // the first usable EXIF stands for all of them
           return [fill, MIN_APP1(p.little, p.orientation)]
         }
-        return [fill, keep && JPEG_GONE.has(p.code) ? [] : seg(p.code, p.payload)]
+        return [fill, keep && JPEG_GONE.has(p.code) && !isIcc(p) ? [] : seg(p.code, p.payload)]
       }),
       EOI,
       junk,
@@ -1685,15 +2012,15 @@ describe('strip: properties over generated pictures', () => {
 
   // PNG: IHDR, any chunks, at least one IDAT, IEND.
   const pngType = fc.oneof(
-    fc.constantFrom('tEXt', 'zTXt', 'iTXt', 'eXIf', 'tIME', 'pHYs', 'IDAT', 'IDAT', 'acTL', 'fdAT', 'iCCP'),
-    fc.stringMatching(/^[a-zA-Z]{4}$/).filter((t) => !['IHDR', 'IEND'].includes(t)),
+    fc.constantFrom('tEXt', 'zTXt', 'iTXt', 'eXIf', 'caBX', 'zxIf', 'tIME', 'pHYs', 'IDAT', 'IDAT', 'acTL', 'fdAT', 'iCCP'),
+    fc.stringMatching(/^[a-z][a-zA-Z]{3}$/), // an ancillary chunk of any name: it stays only if it is on the list
   )
   const pngCase = fc.record({
     mid: fc.array(fc.record({ type: pngType, data: dataBytes }), { maxLength: 10 }),
     junk: dataBytes,
   })
   const pngOf = (mid, keep, junk = []) =>
-    cat(PNG_SIG, IHDR, mid.filter((c) => !(keep && ['tEXt', 'zTXt', 'iTXt', 'eXIf'].includes(c.type))).map((c) => chunk(c.type, c.data)), IDAT, IEND, junk)
+    cat(PNG_SIG, IHDR, mid.filter((c) => !(keep && !PNG_KEPT.includes(c.type))).map((c) => chunk(c.type, c.data)), IDAT, IEND, junk)
 
   // WebP: VP8X, any chunks and a picture.
   const webpType = fc.oneof(
@@ -1718,7 +2045,7 @@ describe('strip: properties over generated pictures', () => {
         written = true
         return [MIN_WEBP_EXIF(c.exif.little, c.exif.orientation)]
       }
-      return keep && ['EXIF', 'XMP '].includes(c.type) ? [] : [riff(c.type, c.data)]
+      return keep && !['VP8 ', 'VP8L', 'ALPH', 'ANIM', 'ANMF', 'ICCP'].includes(c.type) ? [] : [riff(c.type, c.data)]
     })
     return cat(webp(vp8x(keep ? (flags & 0xf3) | (written ? FLAG.exif : 0) : flags), chunks, VP8), junk)
   }
@@ -1727,9 +2054,14 @@ describe('strip: properties over generated pictures', () => {
   const gifItem = fc.oneof(
     fc.record({ kind: fc.constant('comment'), data: fc.array(dataBytes, { maxLength: 3 }) }),
     fc.record({ kind: fc.constant('ext'), label: fc.integer({ min: 0, max: 255 }).filter((l) => l !== 0xfe), data: fc.array(dataBytes, { maxLength: 3 }) }),
+    // an application extension of the list, with any data behind its identifier: the one kind that stays besides the GCE
+    fc.record({ kind: fc.constant('app'), id: fc.constantFrom('NETSCAPE2.0', 'ANIMEXTS1.0', 'ICCRGBG1012'), data: fc.array(dataBytes, { maxLength: 3 }) }),
+    // an application extension of an identifier made of any 11 bytes, which goes unless it is one of the three
+    fc.record({ kind: fc.constant('other'), id: fc.uint8Array({ minLength: 11, maxLength: 11 }), data: fc.array(dataBytes, { maxLength: 3 }) }),
     fc.record({ kind: fc.constant('frame'), data: dataBytes, lct: fc.boolean() }),
     fc.record({ kind: fc.constant('xmp'), packet: xmpPacket(300) }),
   )
+  const isListed = (id) => ['NETSCAPE2.0', 'ANIMEXTS1.0', 'ICCRGBG1012'].includes(String.fromCharCode(...id))
   const gifCase = fc.record({ items: fc.array(gifItem, { maxLength: 8 }), junk: dataBytes })
   const gifOf = (items, keep, junk = []) =>
     cat(
@@ -1738,14 +2070,16 @@ describe('strip: properties over generated pictures', () => {
         if (i.kind === 'frame') return frame(i.data, { lct: i.lct })
         if (i.kind === 'comment') return keep ? [] : ext(0xfe, ...i.data)
         if (i.kind === 'xmp') return keep ? [] : xmpExt(i.packet)
-        return ext(i.label, ...i.data)
+        if (i.kind === 'app') return ext(0xff, ascii(i.id), ...i.data)
+        if (i.kind === 'other') return keep && !isListed(i.id) ? [] : ext(0xff, i.id, ...i.data)
+        return keep && i.label !== 0xf9 ? [] : ext(i.label, ...i.data)
       }),
       frame([9]),
       [0x3b],
       junk,
     )
 
-  it('JPEG: what comes out is the input minus every APPn but 0, 2 and 14, the comments, what follows the EOI, and an EXIF cut down to its orientation', () => {
+  it('JPEG: what comes out is the input minus every APPn but 0, 14 and an ICC profile in 2, the comments, what follows the EOI, and an EXIF cut down to its orientation', () => {
     fc.assert(
       fc.property(jpegCase, ({ pieces, junk }) => {
         const input = jpegOf(pieces, false, junk)
@@ -1755,7 +2089,7 @@ describe('strip: properties over generated pictures', () => {
     )
   })
 
-  it('PNG: what comes out is the input minus the four text and EXIF chunks and what follows IEND', () => {
+  it('PNG: what comes out is the input minus every chunk that is not on the list, and what follows IEND', () => {
     fc.assert(
       fc.property(pngCase, ({ mid, junk }) => {
         expectBytes(strip(pngOf(mid, false, junk), PNG), pngOf(mid, true))
@@ -1764,7 +2098,7 @@ describe('strip: properties over generated pictures', () => {
     )
   })
 
-  it('WebP: what comes out is the input minus XMP and all of the EXIF but its orientation, with the size and the flags right', () => {
+  it('WebP: what comes out is the input minus every chunk that is not on the list and all of the EXIF but its orientation, with the size and the flags right', () => {
     fc.assert(
       fc.property(webpCase, ({ flags, mid, junk }) => {
         expectBytes(strip(webpOf(flags, mid, false, junk), WEBP), webpOf(flags, mid, true))
@@ -1773,7 +2107,7 @@ describe('strip: properties over generated pictures', () => {
     )
   })
 
-  it('GIF: what comes out is the input minus comment and XMP extensions and what follows the trailer', () => {
+  it('GIF: what comes out is the input minus every extension but the graphic control and those of the list, and what follows the trailer', () => {
     fc.assert(
       fc.property(gifCase, ({ items, junk }) => {
         expectBytes(strip(gifOf(items, false, junk), GIF), gifOf(items, true))
@@ -1917,6 +2251,38 @@ describe.skipIf(process.env.STRYKER_MUTATOR_WORKER)('strip: the work is bounded 
 
   it('a 10 MB GIF of three-byte comment extensions', LONG, () => {
     const { bytes } = repeat(ext(0xfe), TEN_MB - 200)
+    const { result, ms } = timed(() => stripBytes(cat(GIF_HEAD(), bytes, frame(), [0x3b]), GIF))
+    expect(ms).toBeLessThan(BUDGET_MS)
+    expectBytes(result, gif(frame()))
+  })
+
+  it('a 10 MB JPEG of empty APP3 segments, and one of APP2 segments that nearly spell an ICC profile', LONG, () => {
+    const empty = repeat(seg(0xe3), TEN_MB - 400)
+    const first = timed(() => stripBytes(jpeg([JFIF, empty.bytes]), JPEG))
+    expect(first.ms).toBeLessThan(BUDGET_MS)
+    expectBytes(first.result, jpeg([JFIF]))
+    const nearly = repeat(seg(0xe2, [ascii('ICC_PROFILE'), 1]), TEN_MB - 400)
+    const second = timed(() => stripBytes(jpeg([JFIF, nearly.bytes]), JPEG))
+    expect(second.ms).toBeLessThan(BUDGET_MS)
+    expectBytes(second.result, jpeg([JFIF]))
+  })
+
+  it('a 10 MB PNG of empty chunks that are not on the list', LONG, () => {
+    const { bytes } = repeat(chunk('abcd'), TEN_MB - 200)
+    const { result, ms } = timed(() => stripBytes(png(IHDR, IDAT, bytes, IEND), PNG))
+    expect(ms).toBeLessThan(BUDGET_MS)
+    expectBytes(result, png(IHDR, IDAT, IEND))
+  })
+
+  it('a 10 MB WebP of empty chunks that are not on the list', LONG, () => {
+    const { bytes } = repeat(riff('abcd'), TEN_MB - 200)
+    const { result, ms } = timed(() => stripBytes(webp(vp8x(0), VP8, bytes), WEBP))
+    expect(ms).toBeLessThan(BUDGET_MS)
+    expectBytes(result, webp(vp8x(0), VP8))
+  })
+
+  it('a 10 MB GIF of application extensions that nearly are one of the list', LONG, () => {
+    const { bytes } = repeat(ext(0xff, ascii('NETSCAPE2.1')), TEN_MB - 200)
     const { result, ms } = timed(() => stripBytes(cat(GIF_HEAD(), bytes, frame(), [0x3b]), GIF))
     expect(ms).toBeLessThan(BUDGET_MS)
     expectBytes(result, gif(frame()))
