@@ -6,8 +6,9 @@
  * unconfigured Librarius is 503; then librariusAccess.js gives a verdict: none is 401, Discord down is 503. /librarius/me
  * answers any signed-in user, and tells someone who may not read the forum only that (`access: false`); every other route
  * needs a reader (403). The read routes use the short-lived cached verdict, the PUT too: it writes only the caller's own read
- * mark. The write routes (batch 2: a reply, an edit, a delete, a picture, which librariusWrites.js answers) always ask for a
- * fresh verdict, so that a role taken away or a timeout that has begun stops a write at once, and they are 503 while there is no
+ * mark. The write routes (batch 2: a reply, an edit, a delete, a picture, which librariusWrites.js answers) ask for a
+ * fresh verdict (never older than 3 seconds, and one lookup of Discord for writes that come together), so that a role taken away or a
+ * timeout that has begun stops a write within that, and they are 503 while there is no
  * outbox (the webhook is not set up) or the outbox says Discord has refused the webhook for good. No route reads its body before
  * those checks, and no error message echoes what was sent. Responses are never cached.
  *
