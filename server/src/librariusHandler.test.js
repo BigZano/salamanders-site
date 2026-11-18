@@ -1882,7 +1882,7 @@ describe.each(WRITE_ROUTES)('%s (%s %s): the gates', (_, method, path, send) => 
     const t = setup({ verdict: VERDICTS.librarian })
     const res = await send(t)
     expect(res.status).toBe(503)
-    expect(await body(res)).toEqual({ error: 'Replying from the site is not set up.' })
+    expect(await body(res)).toEqual({ error: "Replying from the site isn't switched on yet." })
     expect(t.log).toEqual([])
     expect(t.asked).toEqual([{ fresh: true }])
   })

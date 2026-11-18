@@ -18,6 +18,7 @@ export default {
     'server/src/librariusSweeper.js',
     'server/src/librariusWrites.js',
     'server/src/librariusCommand.js',
+    'server/src/librariusDispatch.js',
     'src/lib/archive/audit.js',
   'src/lib/archive/prune.js',
     'src/lib/archive/legacy.js',

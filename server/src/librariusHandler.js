@@ -70,7 +70,7 @@ const NO_SUCH_POST = 'No such post.'
 const NO_SUCH_MESSAGE = 'No such message.'
 // Where the site is, for the button of a reply and the link "Delete on site" gives.
 const SITE_URL = 'https://sm2salamanders.site'
-const NO_WEBHOOK = 'Replying from the site is not set up.'
+const NO_WEBHOOK = "Replying from the site isn't switched on yet."
 const WEBHOOK_REFUSED = 'Replying from the site is paused. Try again later.'
 const BAD_CURSOR = 'That page cursor is not valid.'
 const BAD_MESSAGE = 'That message id is not valid.'

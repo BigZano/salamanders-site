@@ -33,16 +33,21 @@ import { createGalleryPoll } from './galleryPoll.js'
 import { createGalleryStore } from './galleryStore.js'
 import { createHistoryStore } from './historyStore.js'
 import { createLibrariusAccess } from './librariusAccess.js'
-import { librariusConfig } from './librariusConfig.js'
+import { createCommand } from './librariusCommand.js'
+import { librariusConfig, repliesConfig } from './librariusConfig.js'
 import { createLibrariusDiscord } from './librariusDiscord.js'
+import { alongside } from './librariusDispatch.js'
 import { createGateway } from './librariusGateway.js'
 import { createLibrariusGuild } from './librariusGuild.js'
 import { createLibrariusHandler } from './librariusHandler.js'
 import { createImport } from './librariusImport.js'
 import { createIngest } from './librariusIngest.js'
 import { createLinkRefresh } from './librariusLinks.js'
+import { createOutbox } from './librariusOutbox.js'
 import { createLibrariusStore } from './librariusStore.js'
+import { createUploadSweeper } from './librariusSweeper.js'
 import { describe as describeFailure } from './librariusText.js'
+import { createWebhookClient } from './librariusWebhook.js'
 import { createMembership } from './membership.js'
 import { createMembershipHandler } from './membershipHandler.js'
 import { createPerksHandler } from './perks.js'
@@ -219,6 +224,11 @@ else if (librarius.configured && !librariusConfigured) {
     'Librarius is not configured, so every /librarius route answers 503 and the gateway stays off: DISCORD_GUILD_ID and DISCORD_BOT_TOKEN are both needed.',
   )
 }
+// Replying from the site, on top of that (librariusOutbox.js): on only when LIBRARIUS_WEBHOOK_URL is a webhook address. Off, the
+// read side is whole, every write route answers 503, /librarius/me says it cannot reply, and the outbox, the upload sweeper and the
+// "Delete on site" command do not start. The warnings say which setting, never its value (the address is a secret).
+const replies = repliesConfig(process.env, DISCORD_API_BASE)
+if (librariusConfigured) for (const line of replies.reports) console.warn(line)
 
 /** Do one startup step, and log it when it fails: nothing a step throws may reach the server. */
 async function librariusStep(what, run) {
@@ -238,6 +248,31 @@ if (librariusConfigured) {
     const guild = createLibrariusGuild({ discord, forumId: librarius.forumId })
     const access = createLibrariusAccess({ roles, guild, guildId: GUILD_ID })
     const store = createLibrariusStore(pool)
+    // The replies' parts, made only when there is an address for the webhook: the outbox is the one writer to the forum, the
+    // sweeper clears the pictures held for replies that were never sent, and the command is "Delete on site" in the Apps menu.
+    // A failure to make them leaves the replies off and the read side on: no outbox is no webhook, to the handler.
+    let webhook = null
+    let outbox = null
+    let sweeper = null
+    let command = null
+    if (replies.webhookUrl !== null) {
+      try {
+        webhook = createWebhookClient({
+          url: replies.webhookUrl,
+          apiBase: DISCORD_API_BASE,
+          newest: (channelId, limit) => discord.newest(channelId, limit),
+        })
+        outbox = createOutbox({ store, webhook, discord, form: replies.form, guildId: GUILD_ID })
+        sweeper = createUploadSweeper({ store })
+        command = createCommand({ discord, store, guildId: GUILD_ID })
+      } catch (err) {
+        outbox = sweeper = command = null
+        console.error(`Librarius: replying from the site could not be set up, so it stays off: ${describeForLog(err)}`)
+      }
+    }
+    // What the webhook posts is the outbox's to store, whole: the import and the live feed must know it by its id, or a catch-up
+    // would store parts 2 and 3 of a reply as messages of their own, and the first part over the reply.
+    const webhookId = webhook === null ? null : webhook.id
     // The import may queue for Discord longer than a reader's request may: it is given a view of the REST client that
     // waits up to a minute for its turn. Everything else keeps the five seconds.
     const importer = createImport({
@@ -247,6 +282,7 @@ if (librariusConfigured) {
       // Once the posts are listed, before the long read of their messages: the live feed takes in the posts it has just
       // been told of. `ingest` is made below, and is only called once the import runs.
       onPostsListed: () => ingest.load(),
+      webhookId,
     })
     const links = createLinkRefresh({ discord, store })
     const ingest = createIngest({
@@ -258,8 +294,17 @@ if (librariusConfigured) {
       // The gateway's READY starts the catch-up. A run already going is not shared: this queues one follow-up pass, which
       // starts as the going one ends (librariusImport.js).
       onReady: () => importer.run(),
+      webhookId,
     })
-    const gateway = createGateway({ discord, botToken: BOT_TOKEN, onDispatch: ingest.dispatch })
+    // The command answers an interaction within about two seconds, so it runs beside the live feed and never in front of it
+    // (librariusDispatch.js).
+    const onDispatch =
+      command === null
+        ? ingest.dispatch
+        : alongside(ingest.dispatch, command.dispatch, (err) =>
+            console.error(`Librarius: the command could not be handled: ${describeForLog(err)}`),
+          )
+    const gateway = createGateway({ discord, botToken: BOT_TOKEN, onDispatch })
     librariusRoutes = createLibrariusHandler({
       access,
       store,
@@ -270,11 +315,15 @@ if (librariusConfigured) {
       guildId: GUILD_ID,
       forumId: librarius.forumId,
       configured: true,
+      // No outbox: the handler answers every write 503, and /librarius/me says that nobody can reply.
+      outbox,
+      form: replies.form,
     })
     // Run once the server is listening, and in this order: the posts it listens to, the import (not waited for: it can
-    // take minutes), the import's timer (its first run is the one just started), the link timer, the gateway. A step
-    // that fails is logged and the rest go on: the catch-up that follows READY loads the posts again, so a failed load
-    // only delays the live feed, and the import's timer tries a failed import again.
+    // take minutes), the import's timer (its first run is the one just started), the link timer, the gateway, and, with a
+    // webhook, the outbox (it takes up what a stop left half-done) and the upload sweeper. A step that fails is logged and
+    // the rest go on: the catch-up that follows READY loads the posts again, so a failed load only delays the live feed, and
+    // the import's timer tries a failed import again.
     startLibrarius = async () => {
       // The roster supplies the names and avatars on a page: warm it now (not waited for), so that a reader's first
       // request does not wait on it.
@@ -284,6 +333,8 @@ if (librariusConfigured) {
       await librariusStep('the import timer could not start', () => importer.start())
       await librariusStep('the link refresh could not start', () => links.start())
       await librariusStep('the gateway could not start', () => gateway.start())
+      if (outbox !== null) await librariusStep('the outbox could not start', () => outbox.start())
+      if (sweeper !== null) await librariusStep('the upload sweeper could not start', () => sweeper.start())
     }
   } catch (err) {
     console.error(`Librarius: could not be set up, so every /librarius route answers 503: ${describeForLog(err)}`)

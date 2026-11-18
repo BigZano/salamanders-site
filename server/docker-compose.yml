@@ -77,6 +77,12 @@ services:
       # /librarius route answers 503 and the gateway connection, the import and the link refresh do not start. The id is
       # not a secret, but it is live data, so it lives in server/.env and never in git.
       LIBRARIUS_CHANNEL_ID: ${LIBRARIUS_CHANNEL_ID:-}
+      # Replying from the site (batch 2): the address of the Librarius's own webhook, made by librariusWebhookSetupRun.js (see
+      # README, "Librarius replies"). A SECRET: anyone holding it can post as the Librarius. server/.env only, never committed.
+      # Unset or not a webhook address, the read side goes on as it is and every write route answers 503.
+      LIBRARIUS_WEBHOOK_URL: ${LIBRARIUS_WEBHOOK_URL:-}
+      # How a reply is sent: v2 (Components V2, the default) or plain (a message of text). Empty means v2.
+      LIBRARIUS_FORM: ${LIBRARIUS_FORM:-}
     ports:
       # The host's loopback only: the Cloudflare tunnel and the owner's curl both run on the host, so nothing on the
       # LAN can reach the API directly.

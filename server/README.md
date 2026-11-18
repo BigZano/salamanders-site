@@ -245,13 +245,14 @@ The one-time import of the channel's back catalogue is a separate job.
 ## Librarius (`/librarius/*`)
 
 The guild's Discord forum, read on the site: the posts and their messages are copied into Postgres (the import,
-then the gateway's live events), and the site reads that copy. Nothing here writes to Discord. Design:
+then the gateway's live events), and the site reads that copy. Reading writes nothing to Discord: replying from the site,
+which does, is a separate switch with its own setup ("Librarius replies", below). Design:
 `docs/superpowers/specs/2026-11-15-librarius-design.md`. Access follows the forum in Discord: a member may read it
 here exactly when Discord would let them open it, worked out from the guild's roles and the forum's permission
 overwrites (View Channel and Read Message History, `librariusPerms.js`). The guild owner and Administrators read it
-too, as in Discord, and a role the forum shuts out does not. Every route reuses a verdict for 30 seconds, marking a post
-read included: it writes only the caller's own read mark. The guild and the forum that a verdict is drawn from are kept for
-5 minutes, and the gateway's role and channel events drop them at once; if such an event is lost, a change to a role or to
+too, as in Discord, and a role the forum shuts out does not. Every read route reuses a verdict for 30 seconds (the write
+routes ask afresh), marking a post read included: it writes only the caller's own read mark. The guild and the forum that
+a verdict is drawn from are kept for 5 minutes, and the gateway's role and channel events drop them at once; if such an event is lost, a change to a role or to
 the forum's overwrites takes effect within about 5.5 minutes (the 5 minutes of the cache and the 30 seconds of the verdict).
 Any Discord failure answers 503, and responses are never cached.
 
@@ -265,7 +266,7 @@ Any Discord failure answers 503, and responses are never cached.
 | `GET /librarius/posts/:id/changes?since=<rev>` | reader | what changed after `rev`: `{ messages, deleted, rev, people }`, or `{ reset: true }` when too much did and the page must be read again; 404 once the post is gone (deleted in Discord), which is how a page left open learns it |
 | `PUT /librarius/posts/:id/read` | reader | JSON `{ messageId }` (at most 1 KB): how far the caller has read; 204 |
 
-A route that is not listed answers 404, an unconfigured Librarius 503, no identity 401 and no read permission 403
+A route that is listed neither here nor under "Librarius replies" answers 404, an unconfigured Librarius 503, no identity 401 and no read permission 403
 (except `/librarius/me`). A post or message id that is not a snowflake never reaches the database: a post is 404, a
 cursor 400. Attachment links are signed by Discord and lapse. The link refresh (every 10 minutes) renews, up to 200 a
 pass, those that lapse within two hours of posts viewed in the last day. A read renews the first 50 links on its page that
@@ -291,7 +292,7 @@ port taken, say) still does, so that docker restarts it.
 
 **Bot permissions:** View Channel and Read Message History on the forum (granted 2026-11-15), and the Message Content
 intent toggle on the bot's page in the Discord Developer Portal, already on for the Reliquarium (without it the gateway
-is refused).
+is refused). The replies need more of the bot: see "Librarius replies", below.
 
 **The port.** `docker-compose.yml` publishes the API as `127.0.0.1:8787:8787`: on the host's loopback only. The Cloudflare
 tunnel runs on the host and reaches it there; nothing else on the LAN can. `src/composePorts.test.js` pins this. The
@@ -443,3 +444,222 @@ Exit 1 also means it could not make its webhook or post, or could not delete the
 webhook, if it has made one, and exits 130. If the webhook could not be made or its answer was lost, it may exist
 anyway: if a webhook named "Librarius probe" exists in the probe forum, delete it under Edit Channel → Integrations →
 Webhooks. A token or a webhook url is never printed, and what Discord says is cut of links.
+
+## Librarius replies (`LIBRARIUS_WEBHOOK_URL`)
+
+Batch 2: a member who may reply in the Librarius, by the same Discord rules as above, can reply, edit and delete from the
+site. A reply is posted by neither the bot nor the member's own account. It goes through one webhook that the bot makes on
+the forum, and Discord shows it under the member's name and picture, with "Open On Site" at its end. The site never
+creates a post: there is no route for it. Design: `docs/superpowers/specs/2026-11-15-librarius-design.md`. Replies are off
+until `LIBRARIUS_WEBHOOK_URL` is set, and the rest of the Librarius works without it.
+
+| Endpoint | Who | Notes |
+|---|---|---|
+| `POST /librarius/posts/:id/messages` | a member who may reply | JSON `{ source, replyTo?, pingReply?, mentions, uploads }`, 64 KB at most. 202 `{ pending: { key, state } }`: the reply is queued, not yet in Discord |
+| `PATCH /librarius/messages/:id` | the author of a reply written on the site | JSON `{ source, mentions, uploads? }`. The text and the mentions change; the pictures cannot after sending. 202 |
+| `DELETE /librarius/messages/:id` | the author, or someone who can manage messages | any message but a post's first (a whole post is never deleted here). 202 |
+| `POST /librarius/uploads` | a member who may attach | one picture as multipart, 201 `{ id }`. Held for the reply that names it, an hour at most |
+| `GET /librarius/posts/:id/pending` | reader | the caller's own replies, edits and deletes that are queued, blocked or failed, from the last 24 hours (newest 20) |
+| `GET /librarius/members?q=` | reader | `{ members }`: up to 10 people who may read the forum, for picking someone to mention |
+
+`GET /librarius/me` adds, for a reader, `can: { reply, attach, manageMessages, manageThreads }`, the member's `limits` and
+what is left of each, and, for someone who can manage messages, `sendingPausedUntil` and `sendingFatal` (why replies are not
+going out). A member may reply when Discord would let them: Send Messages in Threads on the post, worked out from the guild's
+roles and the forum's overwrites as for reading, and not timed out in the server (a timeout takes every right but reading,
+so a timed-out member can only delete their own replies). Pictures need Attach Files too, and in a locked post only
+someone who can manage threads may write. Every write route asks for a fresh verdict, never the cached one, so a role
+taken away or a timeout that has begun stops a write at once.
+
+A reply is a row of `librarius_outbox` before anything is sent, and the outbox (`librariusOutbox.js`) sends it, one at a
+time, and takes up what a stop or a crash left half-done. The reply then shows on the site greyed, as sending, until Discord
+has all of it. A part is sent again only when Discord certainly did not take it: after a timeout or a restart the outbox
+looks in the post for what may already be there first, so no part is ever sent twice. A 429 waits as long as Discord says. Any
+other failure of Discord's is tried again after 5 seconds, 30 seconds, 2 minutes and 10 minutes, and then the reply is
+marked failed.
+
+| Variable | Value |
+|---|---|
+| `LIBRARIUS_WEBHOOK_URL` | the address of the Librarius's webhook, printed once by the setup command below. **A secret**: whoever has it can post as the Librarius. `server/.env` only, never git, never a chat |
+| `LIBRARIUS_FORM` | `v2` (Components V2, the default) or `plain` (a message of text). Empty is `v2`; anything else is a startup warning and also `v2` |
+| `DISCORD_GUILD_ID`, `DISCORD_BOT_TOKEN`, `LIBRARIUS_CHANNEL_ID` | as for the Librarius above, all required |
+
+**When replies are off.** `LIBRARIUS_WEBHOOK_URL` unset, or not an address the client takes
+(`https://discord.com/api/webhooks/<id>/<token>`): the read side is as it was. Every write route answers 503 "Replying from
+the site isn't switched on yet.", `/librarius/me` says `can.reply` is false, and the outbox, the upload sweeper and the
+"Delete on site" command do not start. The API logs one warning at startup that says which setting, never its value.
+
+**What starts when they are on.** After the gateway, in this order, with the rest of the start-up above: the outbox, then
+the upload sweeper (it deletes the pictures held for replies that were never sent, and those of a reply that failed or was
+blocked, once they are an hour old or the reply has ended; never a picture a queued reply names). The "Delete on site"
+command is made when the gateway says READY, and answers beside the live feed, never in front of it. A step that fails to
+start is logged as `Librarius: ...`, as above, and the others go on. The API gives the live feed and the import the
+webhook's id, so that a catch-up does not read the parts of a reply as messages of their own.
+
+### Bot permissions the replies need, beyond the Librarius's
+
+Each permission below is the one that Discord's documentation (`docs.discord.com/developers`, read 2026-11-18) names for
+the call that the code makes with it.
+
+| Permission | Call | Why |
+|---|---|---|
+| Manage Webhooks, on the forum | `GET /channels/{channel.id}/webhooks` and `POST /channels/{channel.id}/webhooks`: "Requires the `MANAGE_WEBHOOKS` permission" | the setup command only: it looks for a webhook it made before, and makes one. The running API never makes or lists webhooks, so the permission can be taken away again once the webhook exists. The webhook's own calls (`POST /webhooks/{id}/{token}` to send, and to edit and delete its own messages) need no bot and no permission: the address is the credential |
+| Send Messages in Threads, on the forum | `PATCH /channels/{thread.id}` with `{ archived: false }`, which the outbox makes when Discord says a post is archived, before a reply or an edit. The endpoint's page says "When setting `archived` to `false`, when `locked` is also `false`, only the `SEND_MESSAGES` permission is required"; the permissions page says `SEND_MESSAGES` "does not allow sending messages in threads" and is not inherited by them, `SEND_MESSAGES_IN_THREADS` is | opening an archived post. Without it a reply or an edit in an archived post fails with "This post is locked in Discord." A post that is locked can be opened only by someone with Manage Threads, which the bot is not given, so a reply or an edit there fails with the same text |
+| Manage Messages, on the forum | `DELETE /channels/{channel.id}/messages/{message.id}`: for a message "not sent by the current user", "requires the `MANAGE_MESSAGES` permission" | a moderator's delete, from the site, of a message that a person wrote in Discord. A reply written on the site is deleted through the webhook, without it. Without it that one delete fails |
+| Manage Server (guild-wide, on the bot's role: a forum cannot grant it) | `GET /guilds/{guild.id}/auto-moderation/rules`: "This endpoint requires the `MANAGE_GUILD` permission". "All Auto Moderation related events are only sent to bot users which have the `MANAGE_GUILD` permission" | the site checks every reply against the guild's AutoMod rules before it is queued, because AutoMod does not look at webhook posts (the probe). Without it the rules cannot be read, so every write answers 503 and nothing is let through unchecked. The events (`AUTO_MODERATION_RULE_CREATE`, `_UPDATE` and `_DELETE`, intent `1 << 20`, which the gateway now asks for) make a change to a rule count at once; without them it counts within 5 minutes |
+| the `applications.commands` scope | `POST /applications/{application.id}/guilds/{guild.id}/commands` (and the `GET` before it) | "Delete on site" in the Apps menu. Discord's page: "your app must be authorized with the `applications.commands` scope", which "is also automatically included with the `bot` scope". The interaction's answer, `POST /interactions/{interaction.id}/{interaction.token}/callback`, needs nothing but its token |
+
+Two more things in the Developer Portal. The application must have **no Interactions Endpoint URL**: Discord delivers
+interactions either to that URL or over the gateway, "mutually exclusive" ways, and the command listens on the gateway. And
+if "Delete on site" never appears in the Apps menu (after the next gateway READY, which a restart brings), read
+`docker compose logs api | grep 'Librarius command'`: `"Delete on site" could not be made: Discord does not let the bot make
+commands in this server.` means the bot was added without the scope. Add it again with the scope, through the application's
+OAuth2 URL generator with `bot` and `applications.commands` ticked, and restart the API.
+
+The bot is not given Manage Threads. It could archive a post again after an edit ("Otherwise, requires the
+`MANAGE_THREADS` permission"), but without it nothing fails: a post that the bot opened stays open until Discord's own
+auto-archive closes it.
+
+### What the site does so that Discord has nothing to act on
+
+- **Per member:** 3 replies a minute, 20 edits a minute (deletes and the member search count in the same window) and 30
+  pictures an hour. A request over that is refused with 429 and "Slow down a little: try again in N seconds.", and costs
+  nothing.
+- **Across everyone:** every call to the webhook, a reply's parts, edits and deletes, whoever it is for, goes out at least
+  1500 ms after the one before, one at a time, and at most 20 messages are sent in any minute. Over that, replies wait in
+  the outbox; they are not refused.
+- **Mentions:** at most 10 people in a reply (fewer when the server's mention rule is lower), and only people picked from
+  the member search who may read the forum. Every message is sent with `allowed_mentions: { parse: [] }` and exactly those
+  people, so `@everyone`, `@here`, a role, or an id typed by hand never pings: a typed `<@id>` is refused on the site.
+- **AutoMod:** the site matches a reply against the guild's AutoMod keyword rules and its mention limit before it is
+  queued, and refuses a match with the rule's name. Administrators and members with Manage Server are exempt, as in Discord.
+  If Discord blocks a message all the same (code 200000), the reply is marked blocked and is never sent again: the member is
+  told to edit or delete it. Two blocks within an hour stop all sending for an hour; replies wait, and a restart does not
+  clear it (it is built again from `librarius_events`).
+- **Size:** at most 3 Discord messages a reply. A message holds about 4000 characters of text in the `v2` form (the probe
+  measured exactly 4000 of everything Discord counts, the button's label included) and 2000 in `plain`, so a reply is about
+  12,000 characters. At most 10 pictures a reply, 10 MB each. A picture is PNG, JPEG, WebP or GIF by its bytes, never by its
+  name or its type, and leaves with its location and camera data removed (which way up it goes is kept, and a GIF keeps
+  its animation).
+- **Pictures are fixed when sent:** an edit changes the text and the mentions, and a change that would move or take away
+  a picture is refused ("delete the reply and post it again").
+
+### Setup, in this order
+
+The API goes first, as in batch 1's rollout: the new API is additive and the old site never asks for its routes. Batch 1's
+own rollout (above) comes before all of this. The checks in step 7 that use the composer need the site that has it, which
+is the merge of the site's half; the command check and the log check can run as soon as step 6 is done.
+
+1. **The probe has been run.** It was, on 2026-11-18 (the "Batch 2 probe" section above). What it settled: the `v2` form
+   works and takes exactly 4000 characters of displayable text a message; three sends 1500 ms apart are taken; AutoMod
+   does not filter webhook posts in either form, so the site's own check is the only filter. `LIBRARIUS_FORM` is `v2`
+   unless the probe's open question (whether Discord's search finds the words inside a `v2` message) says otherwise: then
+   set `plain`.
+2. **Grant the permissions** in the table above: Manage Webhooks, Send Messages in Threads and Manage Messages on the
+   forum (Edit Channel → Permissions, the bot's role), and Manage Server on the bot's role (Server Settings → Roles). Check
+   that the application has no Interactions Endpoint URL.
+3. **Run the setup command**, on the host, from the `server/` folder of the checkout that holds `server/.env` (Bun reads
+   `.env` from the working directory, and a worktree has none). First a dry run, which prints the four calls it would make
+   and calls nothing:
+
+   ```sh
+   cd /home/artellus/Documents/salamanders-site/server && ../node_modules/.bin/bun /home/artellus/Documents/salamanders-librarius-replies/server/src/librariusWebhookSetupRun.js --dry-run
+   ```
+
+   then the real one, the same without `--dry-run`. Once batch 2 is on `main`, use the merged path,
+   `cd /home/artellus/Documents/salamanders-site/server && ../node_modules/.bin/bun src/librariusWebhookSetupRun.js`.
+   It makes a webhook called "Librarius" on the forum as the bot, and prints one line, `LIBRARIUS_WEBHOOK_URL=` and the
+   address, once: Discord shows the address of a webhook only when it makes it. The rest it says (what to do with the line)
+   goes to the error output. It makes nothing, and says so, when a webhook called "Librarius" that this bot made is already
+   there (it prints its id, and how to delete it under Edit Channel → Integrations → Webhooks). It exits 2 for a bad
+   setting (before any call) and when `LIBRARIUS_CHANNEL_ID` is not a forum of the guild, and 1 when Discord refuses or does
+   not answer. If an answer was lost a webhook may exist anyway: it says so, and which to delete. The bot's token is never
+   printed.
+4. **Paste the line into `server/.env`**, and `LIBRARIUS_FORM=` if it is not `v2`. Do not save it anywhere else, and clear
+   the terminal that printed it. Lost it? Delete the webhook as above and run the setup command again.
+5. **Apply the schema** (idempotent, the command in the reports section above) **before** starting the new image. The
+   replies add `librarius_outbox`, `librarius_parts`, `librarius_uploads` and `librarius_events`, and four columns on
+   `librarius_messages` (`origin`, `source`, `state`, `layout`). The tables need no grant: `app-role.sql`'s default
+   privileges cover them.
+6. **Rebuild the API, keeping the rollback tag**: `docker tag server-api:latest server-api:pre-librarius-replies` first,
+   then `docker compose up -d --build api`. It reads `.env` when it is made, so an edit of `.env` needs
+   `docker compose up -d api`, not `docker compose restart api`. In `docker compose logs api` there should be no
+   "Replying from the site is off" and no `Librarius: replying from the site could not be set up`.
+7. **The live checks.** Use a post in the forum that is yours for this, invented text only, and a second account for
+   the mention. Run the AutoMod check as a member who is **not** an Administrator and does not hold Manage Server (they are
+   exempt from AutoMod, as in Discord). Each says what you should see.
+   - **A one-part reply.** Send "a short test" from the site. On the site it shows greyed, "sending…", then as a message
+     tagged "site" within a few seconds. In Discord the post has a new message under that member's name and picture, with
+     the text and an "Open On Site" button. In the database, with the post's id in place of `<post id>`, `origin` is `site`
+     and `state` is empty:
+
+     ```sh
+     docker compose exec -T db psql -U salamanders salamanders_builds -c "select id, origin, state, left(source, 40) as source from librarius_messages where post_id = <post id> order by id desc limit 3;"
+     ```
+
+   - **A reply of three parts**, about 9,000 characters of invented text (several paragraphs, so that it has places to be
+     cut). In Discord it is three messages, each starting `1/3`, `2/3` and `3/3`, the later ones with a link back
+     (`↑ from 1/3`), the first with links forward (`continues: 2/3 · 3/3`), and the last with the "Open On Site" footer.
+     Read in Discord from the first to the last, nothing is missing: its last words are the text's last words. On the site
+     it is one message with the whole text. With the message's id in place of `<message id>`, this gives three rows, in order:
+
+     ```sh
+     docker compose exec -T db psql -U salamanders salamanders_builds -c "select message_id, part_index, discord_id from librarius_parts where message_id = <message id> order by part_index;"
+     ```
+
+   - **A reply to a message.** Reply to someone's message. In Discord the first line of the reply is `↪`, that person's
+     name and a "jump" link to the message.
+   - **Mentions.** Pick a member from the @ list and send. In Discord the name shows as a mention, and that member gets
+     the ping. Then write `<@` and an id by hand, and send: the site refuses it with "Pick people to mention from the list
+     (10 at most).", and nothing reaches Discord.
+   - **An edit.** Edit the first reply's text. In Discord the same message changes and is marked edited, and the site shows
+     the new text. Then send a reply with a picture and edit its text: **the picture stays**, in the same place. (Discord
+     keeping a picture through a `v2` edit was never probed: this is where it is found out. If the picture goes, stop and
+     say so: that edit is the thing to fix.)
+   - **A phone's photo.** Send a portrait photo straight from a phone, taken upright. It shows upright in Discord and on the
+     site. Download it from Discord and look at its details on a computer: no location and no camera data.
+   - **A delete from the site.** Delete a reply of one part, and a reply of three, from the site. Each goes from Discord,
+     every part of it, and from the site. A member who cannot manage messages has no Delete on someone else's reply.
+   - **A part deleted in Discord.** Delete the second part of a three-part reply in Discord. Within about 10 seconds the
+     other parts go from Discord too, and the whole reply goes from the site.
+   - **"Delete on site".** In Discord, on a message, open Apps → "Delete on site". Only you see the answer, and it is one of
+     three:
+     - for a reply you wrote on the site, "This was written on the site. Delete it there:" and a link to it;
+     - for a message anyone wrote in Discord, "Written in Discord: use Discord's own Delete.";
+     - for someone else's reply of the site, or a message the Librarius does not hold, "Only the author can delete this, on
+       the site."
+   - **AutoMod.** Take one of the guild's AutoMod keyword rules that blocks messages, and put its keyword in a reply. The
+     site refuses it with `Blocked by the server's AutoMod rule "<the rule's name>".`, and nothing reaches Discord.
+   - **The limits.** Send 4 short replies within a minute. The first three go, a second and a half or more apart, and the
+     4th is refused with "Slow down a little: try again in N seconds.".
+   - **No secret in the logs.** Each of these prints `0`:
+
+     ```sh
+     docker compose logs api | grep -c -F "$(grep '^LIBRARIUS_WEBHOOK_URL=' .env | cut -d= -f2-)"
+     docker compose logs api | grep -c -F "$(grep '^DISCORD_BOT_TOKEN=' .env | cut -d= -f2-)"
+     ```
+
+If a reply never leaves, look at the outbox and at what the site noted, from `server/`:
+
+```sh
+docker compose exec -T db psql -U salamanders salamanders_builds -c "select id, kind, state, attempts, last_error, next_at from librarius_outbox order by id desc limit 10;"
+docker compose exec -T db psql -U salamanders salamanders_builds -c "select at, action, post_id, message_id, note from librarius_events order by id desc limit 10;"
+```
+
+`blocked` and `failed` entries are final; the member is shown why and can edit or delete the reply. A `last_error` for an entry
+that is still `pending` is the last attempt's technical text.
+
+### Rolling back the replies
+
+- **The image:** `docker tag server-api:pre-librarius-replies server-api:latest && docker compose up -d --no-build
+  --force-recreate api`. The schema stays: the new tables and columns are additive, and the old image ignores them.
+- **Switching the replies off without a rebuild:** unset `LIBRARIUS_WEBHOOK_URL` in `server/.env` and run `docker compose
+  up -d api`. The read side goes on, writes answer 503 (see "When replies are off"), and the outbox, the sweeper and the
+  command do not start.
+- **A webhook deleted in Discord:** the next call to it is refused for good, the outbox stops (the reply it held goes back to
+  waiting) and every write answers 503 "Replying from the site is paused. Try again later." until the API is started again.
+  To recover, run the setup command (it makes a new webhook), put its line in `server/.env`, and `docker compose up -d api`.
+- **What stays.** Replies already sent stay in Discord and in the database. A webhook can change only its own messages, so a
+  new webhook cannot edit or delete the replies of the old one from the site: a moderator deletes them in Discord, and the
+  site follows. While the API does not know the webhook that sent them (an image from before the replies, the address
+  unset, or a new webhook), a catch-up (after every gateway READY and every 6 hours) reads each part of such a reply as a
+  message of its own, so that the reply shows in pieces.

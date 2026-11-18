@@ -74,4 +74,18 @@ describe('server/docker-compose.yml', () => {
     expect(environmentOf('db').LIBRARIUS_CHANNEL_ID).toBeUndefined()
     expect(compose.match(/LIBRARIUS_CHANNEL_ID: /g)).toHaveLength(1)
   })
+
+  it('hands the api the webhook address and the form from server/.env, empty when unset', () => {
+    expect(environmentOf('api').LIBRARIUS_WEBHOOK_URL).toBe('${LIBRARIUS_WEBHOOK_URL:-}')
+    expect(environmentOf('api').LIBRARIUS_FORM).toBe('${LIBRARIUS_FORM:-}')
+  })
+
+  it('gives the webhook address and the form to the api and to nothing else, and never as a value', () => {
+    expect(environmentOf('db').LIBRARIUS_WEBHOOK_URL).toBeUndefined()
+    expect(environmentOf('db').LIBRARIUS_FORM).toBeUndefined()
+    expect(compose.match(/LIBRARIUS_WEBHOOK_URL: /g)).toHaveLength(1)
+    expect(compose.match(/LIBRARIUS_FORM: /g)).toHaveLength(1)
+    // The address is a secret: nothing in the file may look like one.
+    expect(compose).not.toMatch(/\/api\/webhooks\//)
+  })
 })
