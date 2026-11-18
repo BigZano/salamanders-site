@@ -50,6 +50,13 @@
  * body room of MAX_PARTS parts, `parts` how many parts the reply needs.
  * displayableLength(part) → the characters of a part that Discord counts against its limit.
  * limitFor(form) → the body budget of a part of that form.
+ * placement(source, options) → number[][]: for each part, the refs of the pictures it carries (the N of each `upload:N` that
+ *   has a file in `images`), in the order the part shows them, each once. The empty parts that end the list are left off, so
+ *   that two placements are the same when `JSON.stringify` says so. It takes the options of toDiscord and cuts the reply as it
+ *   does (`thread` changes nothing), so it says where a reply's pictures fell when it was sent, and where an edit of its text
+ *   would put them. Pictures are fixed when a reply is sent, since a webhook cannot change the files of a message: an edit
+ *   that would move or change one is refused (the outbox does, and so does the route). Two refs may not share a file name. It
+ *   answers for a reply that is over budget too: it only says where the pictures fall.
  */
 import { parse } from './librariusMarkdown.js'
 
@@ -677,6 +684,15 @@ export function toDiscord(source, options) {
   const c = { o, n, rows, notes, reply, footer, lines }
   const built = cuts.map((cut, k) => assemble(c, cut, k))
   return { parts: built.map((b) => b.part), length: built.reduce((sum, b) => sum + b.length, 0), overBudget: n > MAX_PARTS }
+}
+
+export function placement(source, options) {
+  const { images } = settle(source, options)
+  if (new Set(images.values()).size !== images.size) throw new RangeError('two image refs share a file name')
+  const refOf = new Map([...images].map(([ref, name]) => [name, ref]))
+  const placed = toDiscord(source, options).parts.map((part) => part.files.map((name) => refOf.get(name)))
+  while (placed.length > 0 && placed.at(-1).length === 0) placed.pop()
+  return placed
 }
 
 export function budget(source, options) {

@@ -52,7 +52,9 @@ function rig(replies = [], over = {}, concurrent = false) {
     const r = replies.shift()
     if (r instanceof Error) throw r
     if (r === undefined) throw new Error('the test queued no reply for this call')
-    return new Response(r.raw !== undefined ? r.raw : JSON.stringify(r.body ?? null), { status: r.status, headers: r.headers })
+    // A 204 has no body, and the Response constructor refuses one for it.
+    const bodyless = r.status === 204
+    return new Response(bodyless ? null : r.raw !== undefined ? r.raw : JSON.stringify(r.body ?? null), { status: r.status, headers: r.headers })
   }
   const sleep = concurrent
     ? (ms) => {
@@ -542,6 +544,120 @@ describe('message', () => {
   it('answers a 200 as the message, whatever code its body carries', async () => {
     const r = rig([ok({ id: MSG, code: 10008 })])
     expect(await r.discord.message(THREAD, MSG)).toEqual({ id: MSG, code: 10008 })
+  })
+})
+
+describe('setArchived', () => {
+  it('sends the thread a PATCH with the flag as JSON and the bot token, and answers true for a 200', async () => {
+    for (const archived of [false, true]) {
+      const r = rig([ok({ id: THREAD })])
+      expect(await r.discord.setArchived(THREAD, archived)).toBe(true)
+      expect(r.seen).toHaveLength(1)
+      expect(r.seen[0].url).toBe(`${API}/v10/channels/${THREAD}`)
+      expect(r.seen[0].method).toBe('PATCH')
+      expect(r.seen[0].headers).toEqual({ Authorization: 'Bot secret-bot-token', 'Content-Type': 'application/json' })
+      expect(JSON.parse(r.seen[0].body)).toEqual({ archived })
+      expect(r.seen[0].signal).toBeInstanceOf(AbortSignal)
+    }
+  })
+
+  it('answers false for a 403, which is a locked thread or a bot that may not manage it, and does not retry', async () => {
+    const r = rig([{ status: 403, body: { code: 50013, message: 'Missing Permissions' } }])
+    expect(await r.discord.setArchived(THREAD, false)).toBe(false)
+    expect(r.seen).toHaveLength(1)
+  })
+
+  it.each([400, 401, 404, 500, 502, 204, 201])('throws Upstream, naming the status and nothing else, for a %i', async (status) => {
+    const r = rig([{ status, body: { code: 10003, message: 'https://secret.example/x' } }])
+    const err = await r.discord.setArchived(THREAD, false).catch((e) => e)
+    expect(err).toBeInstanceOf(Upstream)
+    expect(err.message).toBe(`Discord answered ${status} for a thread change.`)
+  })
+
+  it('refuses a thread id that is not an id and a flag that is not true or false, before any request', async () => {
+    const r = rig([ok({}), ok({})])
+    for (const bad of ['', '123', 'x'.repeat(18), 7, null, undefined, `${THREAD}/x`]) await expect(r.discord.setArchived(bad, true)).rejects.toThrow(new TypeError('threadId must be a Discord id.'))
+    for (const bad of [undefined, null, 'true', 1, 0, {}]) await expect(r.discord.setArchived(THREAD, bad)).rejects.toThrow(new TypeError('archived must be true or false.'))
+    expect(r.seen).toEqual([])
+  })
+
+  it('goes by the same limits as every other call: a 429 waits and tries once more', async () => {
+    const r = rig([{ status: 429, headers: { 'Retry-After': '2' }, body: {} }, ok({})])
+    expect(await r.discord.setArchived(THREAD, true)).toBe(true)
+    expect(r.slept).toEqual([2000])
+    expect(r.seen).toHaveLength(2)
+  })
+
+  it('is Upstream, with no request, when the client is not configured, and Upstream when Discord cannot be reached', async () => {
+    const off = rig([], { botToken: '' })
+    await expect(off.discord.setArchived(THREAD, true)).rejects.toThrow(Upstream)
+    expect(off.seen).toEqual([])
+    const down = rig([new Error(`connect to ${API} with ${TOKEN}`)])
+    const err = await down.discord.setArchived(THREAD, true).catch((e) => e)
+    expect(err).toBeInstanceOf(Upstream)
+    expect(err.message).toBe('Discord is unreachable.')
+  })
+})
+
+describe('deleteMessage', () => {
+  it('sends a DELETE to the message with the bot token, and answers nothing for a 204', async () => {
+    const r = rig([{ status: 204, raw: '' }])
+    expect(await r.discord.deleteMessage(THREAD, MSG)).toBeUndefined()
+    expect(r.seen).toHaveLength(1)
+    expect(r.seen[0].url).toBe(`${API}/v10/channels/${THREAD}/messages/${MSG}`)
+    expect(r.seen[0].method).toBe('DELETE')
+    expect(r.seen[0].headers).toEqual({ Authorization: 'Bot secret-bot-token' })
+    expect(r.seen[0].body).toBeUndefined()
+  })
+
+  it('takes a message that is already gone (404, code 10008) as deleted', async () => {
+    const r = rig([{ status: 404, body: { code: 10008, message: 'Unknown Message' } }])
+    expect(await r.discord.deleteMessage(THREAD, MSG)).toBeUndefined()
+  })
+
+  it.each([
+    ['a 404 Unknown Channel', { status: 404, body: { code: 10003 } }],
+    ['a 404 with no code', { status: 404, body: {} }],
+    ['a 404 with no JSON', { status: 404, raw: 'Not Found' }],
+    ['a 403 whose code is 10008', { status: 403, body: { code: 10008 } }],
+    ['a 500 whose code is 10008', { status: 500, body: { code: 10008 } }],
+    ['a 200', { status: 200, body: {} }],
+    ['a 400', { status: 400, body: { code: 50035 } }],
+  ])('throws Upstream on %s', async (_, reply) => {
+    const r = rig([reply])
+    const err = await r.discord.deleteMessage(THREAD, MSG).catch((e) => e)
+    expect(err).toBeInstanceOf(Upstream)
+    expect(err.message).toBe(`Discord answered ${reply.status} for a message delete.`)
+  })
+
+  it('refuses ids that are not ids, before any request', async () => {
+    const r = rig([])
+    for (const bad of ['', '1', 'x'.repeat(18), 7, null, undefined]) {
+      await expect(r.discord.deleteMessage(bad, MSG)).rejects.toThrow(new TypeError('channelId must be a Discord id.'))
+      await expect(r.discord.deleteMessage(THREAD, bad)).rejects.toThrow(new TypeError('messageId must be a Discord id.'))
+    }
+    expect(r.seen).toEqual([])
+  })
+
+  it('counts every message of a channel as one route, so what a bucket says about one holds for the next', async () => {
+    const r = rig([{ status: 204, raw: '', headers: bucket('del', 0, 3) }, { status: 204, raw: '' }])
+    await r.discord.deleteMessage(THREAD, MSG)
+    await r.discord.deleteMessage(THREAD, MSG_2)
+    expect(r.slept).toEqual([3000])
+  })
+
+  it('keeps what a bucket says to its own channel: the messages of another channel are not held up by it', async () => {
+    const r = rig([{ status: 204, raw: '', headers: bucket('del', 0, 3) }, { status: 204, raw: '' }])
+    await r.discord.deleteMessage(THREAD, MSG)
+    await r.discord.deleteMessage(THREAD_2, MSG_2)
+    expect(r.slept).toEqual([])
+  })
+
+  it('is Upstream when the client is not configured, and when Discord cannot be reached', async () => {
+    const off = rig([], { apiBase: '' })
+    await expect(off.discord.deleteMessage(THREAD, MSG)).rejects.toThrow(Upstream)
+    const down = rig([new Error('reset')])
+    await expect(down.discord.deleteMessage(THREAD, MSG)).rejects.toThrow(new Upstream('Discord is unreachable.'))
   })
 })
 

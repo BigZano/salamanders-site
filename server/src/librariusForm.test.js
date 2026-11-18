@@ -11,6 +11,7 @@ import {
   displayableLength,
   limitFor,
   markers,
+  placement,
   split,
   toDiscord,
 } from './librariusForm.js'
@@ -1498,6 +1499,116 @@ describe('toDiscord: properties over hostile replies', () => {
         expect(parse(flat, { dialect: 'discord' })).toEqual(before)
       }),
       { numRuns: 500 },
+    )
+  })
+})
+
+describe('placement: which pictures are attached to which part', () => {
+  const pics = (...refs) => refs.map((ref) => ({ ref, name: `picture-${ref}.png` }))
+  const place = (src, over) => placement(src, opts({ images: pics(1, 2, 3), ...over }))
+  // Three paragraphs of 3000 characters cannot share a part, so each is one, and a picture sits between them.
+  const THREE = (a, b, c) => `${x(3000)}\n\n${a}\n\n${x(3000)}\n\n${b}\n\n${x(3000)}\n\n${c}`
+  const img = (n) => `![alt](upload:${n})`
+
+  it('is no part with a picture when there are no pictures', () => {
+    expect(place('Hello there.')).toEqual([])
+    expect(place('')).toEqual([])
+  })
+
+  it('lists the ref of a picture in the part that carries it, in both forms', () => {
+    for (const form of ['v2', 'plain']) {
+      expect(place(`Look: ${img(2)}`, { form })).toEqual([[2]])
+    }
+  })
+
+  it('lists the refs of a part in the order the source shows them, not the order they were given or numbered', () => {
+    const src = `${img(3)}\n\ntext\n\n${img(1)}\n\n${img(2)}`
+    expect(place(src)).toEqual([[3, 1, 2]])
+    expect(place(src, { images: pics(2, 3, 1) })).toEqual([[3, 1, 2]])
+  })
+
+  it('lists a picture once however many times it is shown in a part', () => {
+    expect(place(`${img(1)}\n\n${img(1)}\n\n${img(2)}\n\n${img(1)}`)).toEqual([[1, 2]])
+  })
+
+  it('puts each picture in the part it falls in, over three parts', () => {
+    const src = THREE(img(1), img(2), img(3))
+    expect(place(src)).toEqual([[1], [2], [3]])
+    expect(place(THREE(img(3), img(2), img(1)))).toEqual([[3], [2], [1]])
+  })
+
+  it('keeps the parts with no picture before the last one that has one, as empty lists, and drops the empty parts that end it', () => {
+    expect(place(THREE('', '', img(1)))).toEqual([[], [], [1]])
+    expect(place(THREE(img(1), '', ''))).toEqual([[1]])
+    expect(place(THREE('', img(2), ''))).toEqual([[], [2]])
+    expect(place(THREE('', '', ''))).toEqual([])
+  })
+
+  it('does not place a picture that has no file: it is shown as its alt text', () => {
+    expect(place(`${img(1)} ${img(2)}`, { images: pics(2) })).toEqual([[2]])
+    expect(place(img(1), { images: [] })).toEqual([])
+  })
+
+  it('does not place what is not a picture: a link, a code span, a refused ref', () => {
+    expect(place('[1](upload:1) and `![a](upload:1)`')).toEqual([])
+  })
+
+  it('is the same whatever the files are called', () => {
+    const src = THREE(img(1), img(2), img(3))
+    const named = place(src, { images: [1, 2, 3].map((ref) => ({ ref, name: `other-${ref}.jpg` })) })
+    expect(named).toEqual(place(src))
+  })
+
+  it('is the same with the links of the parts as without them: the cuts do not move', () => {
+    const src = THREE(img(1), img(2), img(3))
+    const thread = { urlBase: BASE, partIds: [MSG[0], MSG[1], null] }
+    expect(place(src, { thread })).toEqual(place(src))
+    expect(place(src, { thread: { urlBase: BASE, partIds: [] } })).toEqual(place(src))
+  })
+
+  it('follows the reply line and the footer, which take room, as toDiscord cuts', () => {
+    const src = `${x(3900)}\n\n${img(1)}`
+    const replyTo = { authorId: REPLIED, url: JUMP }
+    for (const over of [{}, { replyTo }]) {
+      const parts = v2(src, { images: pics(1), ...over }).parts
+      expect(place(src, over)).toEqual(parts.map((part) => part.files.map((name) => Number(/(\d+)/.exec(name)[1]))).reduceRight((acc, refs) => (acc.length === 0 && refs.length === 0 ? acc : [refs, ...acc]), []))
+    }
+  })
+
+  it('answers for a reply that is over its budget too, since it only says where the pictures fall', () => {
+    expect(place(`${x(13000)}\n\n${img(1)}`)).toEqual([[], [], [], [1]])
+  })
+
+  it('refuses two refs that share a file name, since the part cannot say which of them it carries', () => {
+    expect(() => place(img(1), { images: [{ ref: 1, name: 'same.png' }, { ref: 2, name: 'same.png' }] })).toThrow(new RangeError('two image refs share a file name'))
+  })
+
+  it('refuses what toDiscord refuses', () => {
+    expect(() => placement(3, opts())).toThrow(new TypeError('the source must be a string'))
+    expect(() => placement('x', null)).toThrow(new TypeError('the options must be an object'))
+    expect(() => place('x', { form: 'html' })).toThrow(new RangeError(FORM_MSG))
+    expect(() => place('x', { authorId: 'nope' })).toThrow(new RangeError(ID_MSG('authorId')))
+    expect(() => place('x', { images: [{ ref: 0, name: 'a.png' }] })).toThrow(new RangeError('an image ref must be a whole number from 1 to 10'))
+  })
+
+  it('is what the parts of toDiscord attach, as refs (property)', () => {
+    const piece = fc.oneof(
+      fc.string({ minLength: 0, maxLength: 60 }).map((t) => t.replace(/[\\`*_~|<>[\]()!#>-]/g, 'x')),
+      fc.integer({ min: 1, max: 4 }).map((n) => img(n)),
+      fc.integer({ min: 100, max: 3500 }).map(x),
+    )
+    fc.assert(
+      fc.property(fc.array(piece, { maxLength: 14 }), fc.subarray([1, 2, 3, 4]), fc.constantFrom('v2', 'plain'), (pieces, refs, form) => {
+        const src = pieces.join('\n\n')
+        const images = pics(...refs)
+        const got = placement(src, opts({ form, images }))
+        const parts = toDiscord(src, opts({ form, images })).parts
+        const model = parts.map((part) => part.files.map((name) => Number(/(\d+)/.exec(name)[1])))
+        while (model.length > 0 && model.at(-1).length === 0) model.pop()
+        expect(got).toEqual(model)
+        for (const refsOfPart of got) for (const ref of refsOfPart) expect(refs).toContain(ref)
+      }),
+      { numRuns: 150 },
     )
   })
 })

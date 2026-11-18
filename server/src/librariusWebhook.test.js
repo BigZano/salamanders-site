@@ -562,6 +562,23 @@ describe('WebhookError', () => {
   })
 })
 
+describe('the id of the webhook', () => {
+  it('is the id of the address, which Discord puts on every message the webhook posts, so the site can tell them from the rest', () => {
+    expect(rig().client.id).toBe(HOOK)
+    expect(rig([], { url: `${MOCK}/api/webhooks/${USER_A}/${TOKEN}`, apiBase: MOCK }).client.id).toBe(USER_A)
+  })
+
+  it('cannot be changed, and is not the token', () => {
+    const { client } = rig()
+    expect(() => {
+      client.id = USER_B
+    }).toThrow(TypeError)
+    expect(client.id).toBe(HOOK)
+    expect(JSON.stringify(client)).not.toContain(TOKEN)
+    expect(inspect(client, { showHidden: true })).not.toContain(TOKEN)
+  })
+})
+
 describe('createWebhookClient: the settings', () => {
   it('refuses an address that is not a Discord webhook, naming nothing of it', () => {
     for (const url of [undefined, null, 12, '', 'https://example.test/api/webhooks/x/y', `${API}/webhooks/${HOOK}`, `${URL_OK}?x=1`]) {

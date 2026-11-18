@@ -12,7 +12,9 @@
  *   Discord takes (4000 displayable characters in V2, counting the button's label; 2000 of content in plain), so no
  *   message goes out that Discord would refuse for its length.
  *
- * createWebhookClient({ fetchImpl, url, apiBase, timeoutMs = 15000, newest }) → { send, edit, remove, recent }.
+ * createWebhookClient({ fetchImpl, url, apiBase, timeoutMs = 15000, newest }) → { id, send, edit, remove, recent }.
+ *   `id` is the webhook's id, which is not secret (the token is): Discord names it as `webhook_id` on every message the webhook
+ *   posts, so the site can tell those messages from the rest. It is read-only.
  *   `url` is LIBRARIUS_WEBHOOK_URL (see parseWebhookUrl); the calls go to `${apiBase}/v10/webhooks/<id>/<token>`. `newest` is
  *   the bot client's `newest(channelId, limit)`, for recent() only. Every thread and message id is checked to be a Discord
  *   id before anything is sent, a bad one being a TypeError. Each call is one request, with `timeoutMs`, that never follows
@@ -276,6 +278,10 @@ export function createWebhookClient({ fetchImpl = fetch, url, apiBase, timeoutMs
   }
 
   return {
+    get id() {
+      return id
+    },
+
     async send(threadId, body, files) {
       needId(threadId, 'threadId')
       needBody(body)

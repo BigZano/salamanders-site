@@ -1,6 +1,7 @@
 /**
- * The Librarius's own reads of Discord's REST API, with the bot token. Nothing here writes to Discord: the one POST,
- * refreshUrls, only asks for new links to files Discord already holds.
+ * The Librarius's own calls to Discord's REST API, with the bot token. Almost all of them read. The writes are the POST of
+ * refreshUrls, which only asks for new links to files Discord already holds, and the two calls the outbox makes (batch 2):
+ * setArchived and deleteMessage. Nothing the site's members write goes through here: that is the webhook's.
  *
  * gatewayBot()  → { url, remaining, resetAfterMs }: where to connect, and how many connects are left in this window.
  * guild() / channel(id) → the raw object.
@@ -17,6 +18,12 @@
  *   deletes a post.
  * message(channelId, id) → the raw message, or null (404 Unknown Message, code 10008; any other 404 is Upstream).
  * emojis() → the guild's raw emoji.
+ * setArchived(threadId, archived) → true when the thread was set (`PATCH /channels/<id>` with `{ archived }`), false when
+ *   Discord refused with 403 (the thread is locked, or the bot may not manage it); any other failure is Upstream. The outbox
+ *   unarchives a thread to edit in it, and archives it again.
+ * deleteMessage(channelId, messageId) → undefined once the message is gone: deleted, or already not there (404 Unknown
+ *   Message, code 10008). It is how a message that a person wrote in Discord is deleted from the site. Any other failure is
+ *   Upstream, and so is a 404 of another code (Unknown Channel, say).
  * refreshUrls(urls) → Map of each link Discord refreshed to its new one. At most 50 links, or RangeError. A link
  *   Discord did not refresh is not in the Map, and neither is one it answered with that is not on Discord's CDN
  *   attachments path: a refreshed link is stored and handed to a browser, so it has to pass the check an attachment's
@@ -298,6 +305,27 @@ export function createLibrariusDiscord({
       },
 
       emojis: () => getList(`${guildPath}/emojis`, 'the emoji'),
+
+      async setArchived(threadId, archived) {
+        needId(threadId, 'threadId')
+        if (typeof archived !== 'boolean') throw new TypeError('archived must be true or false.')
+        const { status } = await send('PATCH', `/v10/channels/${threadId}`, {
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ archived }),
+        })
+        if (status === 403) return false
+        if (status !== 200) throw refused(status, 'a thread change')
+        return true
+      },
+
+      async deleteMessage(channelId, messageId) {
+        needId(channelId, 'channelId')
+        needId(messageId, 'messageId')
+        const { status, json } = await send('DELETE', `${messagesPath(channelId)}/${messageId}`, { route: `${messagesPath(channelId)}/:id` })
+        // Gone is what a delete is for, but only a gone message: another 404 (Unknown Channel) is not one.
+        if (status === 204 || (status === 404 && json?.code === UNKNOWN_MESSAGE)) return
+        throw refused(status, 'a message delete')
+      },
 
       async refreshUrls(urls) {
         if (!Array.isArray(urls) || !urls.every((u) => typeof u === 'string')) throw new TypeError('urls must be a list of strings.')
