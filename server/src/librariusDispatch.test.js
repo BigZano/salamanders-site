@@ -71,6 +71,17 @@ describe('alongside', () => {
     expect(await answer).toBe('late')
   })
 
+  it('starts the aside handler of an event at once, whatever the main handler is still doing with the events before it: it waits for no earlier event', () => {
+    const main = handler(() => new Promise(() => {}))
+    const aside = handler(async () => undefined)
+    const dispatch = alongside(main.fn, aside.fn, () => {})
+    dispatch('A_THING', { n: 1 })
+    dispatch('B_THING', { n: 2 })
+    dispatch('INTERACTION_CREATE', { n: 3 })
+    // Nothing has been awaited: all three asides have begun, before any main handler has finished.
+    expect(aside.calls.map(([type]) => type)).toEqual(['A_THING', 'B_THING', 'INTERACTION_CREATE'])
+  })
+
   it('does not hold the main answer back when the main handler is the slow one', async () => {
     const main = handler(() => new Promise(() => {}))
     const aside = handler(async () => 'quick')

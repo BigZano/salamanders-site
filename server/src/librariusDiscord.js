@@ -22,9 +22,13 @@
  * createMessageCommand(applicationId, name) → true once the guild has a message command (type 3) of that name, false when Discord
  *   refuses with 403 (the bot may not make commands in this server); any other failure is Upstream. It creates one command and never
  *   overwrites the list, since other commands may be there ("Delete on site" is made this way, librariusCommand.js).
- * interactionCallback(interactionId, token, body) → undefined once Discord took the reply to an interaction (`POST /interactions/<id>/
- *   <token>/callback`, which must come within 3 seconds of the interaction). `token` is the interaction's, and goes only in the address:
- *   no error says it. The callback needs no authority of the bot's, and is counted by the limits as the route of that interaction.
+ * interactionCallback(interactionId, token, body, { timeoutMs }) → undefined once Discord took the reply to an interaction (`POST
+ *   /interactions/<id>/<token>/callback`, which must come within 3 seconds of the interaction). `token` is the interaction's, and goes
+ *   only in the address: no error says it, and the bot's own token is not sent, since the callback needs no authority of the bot's. Discord
+ *   does not count an interaction against the bot's limits, so this call goes AROUND all of the rules below: it takes no place among the
+ *   calls a second, waits for no bucket and no global pause, is never tried again (a 429 is Upstream, and a bucket or a pause it says is
+ *   not remembered), and has a timeout of its own, `timeoutMs` (the client's `timeoutMs` when none is given), counted from the moment it is
+ *   sent. A reply that came late would be one Discord has already turned down, and the caller has little time: it must not queue.
  * autoModRules() → the guild's raw AutoMod rules (`GET /guilds/<id>/auto-moderation/rules`, which the bot may read with Manage Server).
  *   A site reply is checked against them before it is sent (librariusSend.js automodMatcher).
  * setArchived(threadId, archived) → true when the thread was set (`PATCH /channels/<id>` with `{ archived }`), false when
@@ -45,7 +49,7 @@
  * Ids are strings of 17 to 20 digits, a limit is a whole number from 1 to 100, and anything else is a TypeError or
  * RangeError before a request: an id goes into the url, so it must be nothing but digits.
  *
- * Rate limits, so the Librarius never crowds the other features off Discord's 50 calls a second:
+ * Rate limits, so the Librarius never crowds the other features off Discord's 50 calls a second (all but interactionCallback, above):
  * - At most `perSecond` calls in any second across the whole client, counting retries and calls that fail. A call
  *   that would be one too many waits for the oldest of the last `perSecond` to be a second old, unless that is more than
  *   `maxWaitMs` (5 seconds unless the options say otherwise) away: then it is an Upstream at once, which sends nothing
@@ -338,18 +342,22 @@ export function createLibrariusDiscord({
         throw refused(status, 'a command')
       },
 
-      async interactionCallback(interactionId, token, body) {
+      async interactionCallback(interactionId, token, body, { timeoutMs: ownTimeoutMs = timeoutMs } = {}) {
         needId(interactionId, 'interactionId')
         if (typeof token !== 'string' || !INTERACTION_TOKEN.test(token)) throw new TypeError('token must be an interaction token.')
         if (!isObject(body)) throw new TypeError('body must be an object.')
-        // The token is the credential of this one interaction: it goes in the address and nowhere else, and not into the route, which is
-        // what the limits are counted by. A callback has a bucket of its own for each interaction, so each interaction is its own route.
-        const { status } = await send('POST', `/v10/interactions/${interactionId}/${token}/callback`, {
-          route: `/v10/interactions/${interactionId}/:token/callback`,
+        if (!(Number.isFinite(ownTimeoutMs) && ownTimeoutMs > 0)) throw new RangeError('timeoutMs must be a number of milliseconds above 0.')
+        if (!configured) throw new Upstream('Librarius reads are not configured.')
+        // Around the limits (see the top): no turn, no bucket, no pause, no second try. The token is the credential of this one interaction:
+        // it goes in the address and nowhere else, and no Authorization header goes with it.
+        const res = await request(`${apiBase}/v10/interactions/${interactionId}/${token}/callback`, {
+          method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify(body),
+          signal: AbortSignal.timeout(ownTimeoutMs),
         })
-        if (status !== 204 && status !== 200) throw refused(status, 'an interaction reply')
+        await res.body?.cancel()
+        if (res.status !== 204 && res.status !== 200) throw refused(res.status, 'an interaction reply')
       },
 
       async setArchived(threadId, archived) {

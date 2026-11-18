@@ -7,8 +7,11 @@
  *   → { start(), stop(), status() → { state, lastReadyAt, lastError } }
  *
  * discord.gatewayBot() says where to connect and how many new sessions are left. onDispatch(t, d) is called, and
- * awaited, for every dispatch (READY and RESUMED included), one at a time and in the order Discord sent them. An
- * onDispatch that throws or rejects is recorded and never stops the connection. A missing or wrong option is a
+ * awaited, for every dispatch (READY and RESUMED included), one at a time and in the order Discord sent them, with one
+ * exception: INTERACTION_CREATE (the "Delete on site" command, which has to be answered within 3 seconds of the event) is
+ * handed over the moment it comes, outside that line, since waiting behind the events before it (each may take up to
+ * dispatchTimeoutMs) would be too late, and no event depends on one. It has its own dispatchTimeoutMs, as any handler has, and
+ * it is not waited for by the events after it. An onDispatch that throws or rejects is recorded and never stops the connection. A missing or wrong option is a
  * TypeError or RangeError here, since a client that cannot connect would only retry forever.
  *
  * A socket that has not said HELLO within helloTimeoutMs (30 seconds) of being made is taken to be dead, and is dropped
@@ -71,6 +74,9 @@ export const INTENTS = GUILDS | GUILD_EMOJIS_AND_STICKERS | GUILD_MESSAGES | GUI
 
 // Close codes after which connecting again cannot work: a bad token, bad shard or version, or intents Discord refuses.
 export const FATAL_CLOSE = new Set([4004, 4010, 4011, 4012, 4013, 4014])
+
+// The events that are handed over at once, outside the one-at-a-time line of the rest (see the top).
+const AT_ONCE = new Set(['INTERACTION_CREATE'])
 
 const OP_DISPATCH = 0
 const OP_HEARTBEAT = 1
@@ -378,11 +384,16 @@ export function createGateway({
     } else if (t === 'RESUMED') {
       becameReady()
     }
+    // What handle() cannot deal with is recorded here.
+    const unfinished = (err) => fault(`The Librarius gateway could not finish handling ${t}: ${words(err)}`)
+    // Not in the line: an answer that is due in 3 seconds does not wait for the events before it, and none waits for it.
+    if (AT_ONCE.has(t)) {
+      handle(t, d).catch(unfinished)
+      return
+    }
     // One at a time, in order: a later event can depend on an earlier one, and the sequence number has moved on already.
-    // Nothing may break the chain, or no later event would be handled: what handle() cannot deal with is recorded here.
-    handling = handling
-      .then(() => handle(t, d))
-      .catch((err) => fault(`The Librarius gateway could not finish handling ${t}: ${words(err)}`))
+    // Nothing may break the chain, or no later event would be handled.
+    handling = handling.then(() => handle(t, d)).catch(unfinished)
   }
 
   // Waits for onDispatch, for as long as dispatchTimeoutMs allows. Whatever the handler does is recorded, not thrown. Once

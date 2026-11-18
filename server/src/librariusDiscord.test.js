@@ -1,4 +1,4 @@
-import { describe, it, expect } from 'vitest'
+import { describe, it, expect, vi } from 'vitest'
 import * as fc from 'fast-check'
 import { createLibrariusDiscord } from './librariusDiscord.js'
 import { Upstream } from './discordRoles.js'
@@ -2138,9 +2138,14 @@ describe('interactionCallback', () => {
     expect(r.seen).toHaveLength(1)
     expect(r.seen[0].url).toBe(`${API}/v10/interactions/${INTERACTION}/${IToken}/callback`)
     expect(r.seen[0].method).toBe('POST')
-    expect(r.seen[0].headers['Content-Type']).toBe('application/json')
     expect(JSON.parse(r.seen[0].body)).toEqual(REPLY)
     expect(r.seen[0].signal).toBeInstanceOf(AbortSignal)
+  })
+
+  it('does not send the bot token: the token of the interaction is its credential, and Discord asks for no other', async () => {
+    const r = rig([{ status: 204, raw: '' }])
+    await r.discord.interactionCallback(INTERACTION, IToken, REPLY)
+    expect(r.seen[0].headers).toStrictEqual({ 'Content-Type': 'application/json' })
   })
 
   it('takes a 200 as done too', async () => {
@@ -2163,6 +2168,9 @@ describe('interactionCallback', () => {
       await expect(r.discord.interactionCallback(INTERACTION, bad, REPLY), String(bad)).rejects.toThrow(new TypeError('token must be an interaction token.'))
     }
     for (const bad of [null, undefined, 'x', 7, []]) await expect(r.discord.interactionCallback(INTERACTION, IToken, bad)).rejects.toThrow(new TypeError('body must be an object.'))
+    for (const bad of [0, -1, Number.NaN, Infinity, '1000', null, {}, true]) {
+      await expect(r.discord.interactionCallback(INTERACTION, IToken, REPLY, { timeoutMs: bad }), String(bad)).rejects.toThrow(new RangeError('timeoutMs must be a number of milliseconds above 0.'))
+    }
     expect(r.seen).toEqual([])
   })
 
@@ -2173,19 +2181,104 @@ describe('interactionCallback', () => {
     expect(r.seen).toHaveLength(2)
   })
 
-  it('keeps what a bucket says to its own interaction: the callback of another is not held up by it', async () => {
-    const r = rig([{ status: 204, raw: '', headers: bucket('cb', 0, 3) }, { status: 204, raw: '' }, { status: 204, raw: '' }])
-    await r.discord.interactionCallback(INTERACTION, IToken, REPLY)
-    await r.discord.interactionCallback('200000000000000491', 'another-token', REPLY)
-    expect(r.slept).toEqual([])
-    // The same interaction answered again waits for its own bucket, whatever token it comes with: that is its route.
-    await r.discord.interactionCallback(INTERACTION, 'a-second-token', REPLY)
-    expect(r.slept).toEqual([3000])
+  describe('it is not bound by the limits of the other calls: Discord does not count an interaction against the bot\'s', () => {
+    it('is sent at once when the client has used up its calls a second, and takes no place among them', async () => {
+      const r = rig([{ status: 204, raw: '' }, { status: 204, raw: '' }, { status: 204, raw: '' }, ok({ id: GUILD })], { perSecond: 1 })
+      for (let i = 0; i < 3; i++) await r.discord.interactionCallback(INTERACTION, `token-${i}`, REPLY)
+      // The callbacks used no turn: a call of the bot's own goes at once, though the limit is one a second.
+      await r.discord.guild()
+      expect(r.slept).toEqual([])
+      expect(r.seen.map((s) => s.at)).toEqual([0, 0, 0, 0])
+    })
+
+    it('is sent at once while the client waits out a global 429', async () => {
+      // A 429 that says it is global, and then a call that fails for the second 429, leave the pause on for 20 seconds.
+      const r = rig([{ status: 429, headers: { 'Retry-After': '20', 'X-RateLimit-Global': 'true' } }, { status: 429, headers: { 'Retry-After': '20', 'X-RateLimit-Global': 'true' } }, { status: 204, raw: '' }])
+      await expect(r.discord.guild()).rejects.toBeInstanceOf(Upstream)
+      const sleptBefore = r.slept.length
+      const before = r.clock.t
+      await r.discord.interactionCallback(INTERACTION, IToken, REPLY)
+      expect(r.slept).toHaveLength(sleptBefore)
+      expect(r.seen.at(-1).at).toBe(before)
+    })
+
+    it('keeps no bucket from what a callback says: neither its next call nor another\'s waits for it', async () => {
+      const r = rig([{ status: 204, raw: '', headers: bucket('cb', 0, 3) }, { status: 204, raw: '' }, { status: 204, raw: '' }])
+      await r.discord.interactionCallback(INTERACTION, IToken, REPLY)
+      await r.discord.interactionCallback('200000000000000491', 'another-token', REPLY)
+      await r.discord.interactionCallback(INTERACTION, 'a-second-token', REPLY)
+      expect(r.slept).toEqual([])
+    })
+
+    it('does not make a global pause of a 429 for itself: it is Upstream, once, with no retry and no wait', async () => {
+      const r = rig([{ status: 429, headers: { 'Retry-After': '5', 'X-RateLimit-Global': 'true' } }, ok({ id: GUILD })])
+      const err = await r.discord.interactionCallback(INTERACTION, IToken, REPLY).catch((e) => e)
+      expect(err).toBeInstanceOf(Upstream)
+      expect(err.message).toBe('Discord answered 429 for an interaction reply.')
+      expect(r.seen).toHaveLength(1)
+      expect(r.slept).toEqual([])
+      // And the calls of the bot go on as if nothing was said: the callback's 429 was not the bot's.
+      await r.discord.guild()
+      expect(r.slept).toEqual([])
+    })
+  })
+
+  describe('it has a timeout of its own', () => {
+    /** Makes the next AbortSignal.timeout a signal the test aborts, and says what it was asked for. */
+    function timedBy(test) {
+      const asked = []
+      const controller = new AbortController()
+      const spy = vi.spyOn(AbortSignal, 'timeout').mockImplementation((ms) => {
+        asked.push(ms)
+        return controller.signal
+      })
+      return { asked, expire: () => controller.abort(new DOMException('The operation timed out.', 'TimeoutError')), restore: () => spy.mockRestore(), test }
+    }
+    const hang = (url, init) => new Promise((_, reject) => init.signal.addEventListener('abort', () => reject(init.signal.reason)))
+
+    it('is the one the caller asks for, and is Upstream, with no retry and without the token, when it runs out', async () => {
+      const t = timedBy()
+      try {
+        const r = rig([], { fetchImpl: hang })
+        const sent = r.discord.interactionCallback(INTERACTION, IToken, REPLY, { timeoutMs: 1000 }).catch((e) => e)
+        await new Promise((resolve) => setImmediate(resolve))
+        t.expire()
+        const err = await sent
+        expect(t.asked).toEqual([1000])
+        expect(err).toBeInstanceOf(Upstream)
+        expect(err.message).toBe('Discord is unreachable.')
+        expect(err.message).not.toContain(IToken)
+      } finally {
+        t.restore()
+      }
+    })
+
+    it('is the client\'s own timeout when the caller asks for none, and counts from the moment of sending', async () => {
+      const t = timedBy()
+      try {
+        const r = rig([{ status: 204, raw: '' }], { timeoutMs: 7777 })
+        await r.discord.interactionCallback(INTERACTION, IToken, REPLY)
+        expect(t.asked).toEqual([7777])
+      } finally {
+        t.restore()
+      }
+    })
+
+    it('takes a fraction of a millisecond as a timeout, as a number above 0', async () => {
+      const t = timedBy()
+      try {
+        const r = rig([{ status: 204, raw: '' }])
+        await r.discord.interactionCallback(INTERACTION, IToken, REPLY, { timeoutMs: 0.5 })
+        expect(t.asked).toEqual([0.5])
+      } finally {
+        t.restore()
+      }
+    })
   })
 
   it('is Upstream, with no request, when the client is not configured, and Upstream when Discord cannot be reached, without the token', async () => {
     const off = rig([], { apiBase: '' })
-    await expect(off.discord.interactionCallback(INTERACTION, IToken, REPLY)).rejects.toThrow(Upstream)
+    await expect(off.discord.interactionCallback(INTERACTION, IToken, REPLY)).rejects.toThrow(new Upstream('Librarius reads are not configured.'))
     expect(off.seen).toEqual([])
     const down = rig([new Error(`connect to ${API}/${IToken}`)])
     const err = await down.discord.interactionCallback(INTERACTION, IToken, REPLY).catch((e) => e)
@@ -2193,7 +2286,7 @@ describe('interactionCallback', () => {
     expect(err.message).toBe('Discord is unreachable.')
   })
 
-  it('is sent on a client that waits only as long as it was told to: withMaxWait carries it too', async () => {
+  it('is on a client that waits only as long as it was told to too: withMaxWait carries it, as it is for them all', async () => {
     const r = rig([{ status: 204, raw: '' }])
     expect(await r.discord.withMaxWait(1000).interactionCallback(INTERACTION, IToken, REPLY)).toBeUndefined()
     expect(typeof r.discord.withMaxWait(1000).createMessageCommand).toBe('function')

@@ -69,14 +69,13 @@ function fakeTimers() {
 function rig(over = {}) {
   const ft = fakeTimers()
   const w = { messages: new Map([[MSG, stored()]]), commands: [], callbackFails: false, listFails: false, createAnswer: true, ...over }
-  const calls = { list: [], create: [], callbacks: [], waits: [], stored: [] }
-  const callbackDiscord = {
-    interactionCallback: async (id, token, body) => {
+  const calls = { list: [], create: [], callbacks: [], options: [], stored: [] }
+  const discord = {
+    interactionCallback: async (id, token, body, options) => {
       calls.callbacks.push({ id, token, body: structuredClone(body) })
+      calls.options.push(structuredClone(options))
       if (w.callbackFails) throw new Upstream('Discord answered 404 for an interaction reply.')
     },
-  }
-  const discord = {
     applicationCommands: async (app) => {
       calls.list.push(app)
       if (w.listFails) throw new Upstream('Discord answered 500 for the application\'s commands.')
@@ -86,10 +85,6 @@ function rig(over = {}) {
       calls.create.push([app, name])
       if (w.createFails) throw new Upstream('Discord answered 500 for a command.')
       return w.createAnswer
-    },
-    withMaxWait: (ms) => {
-      calls.waits.push(ms)
-      return callbackDiscord
     },
   }
   const store = {
@@ -108,14 +103,14 @@ function rig(over = {}) {
 const content = (t, i = 0) => t.calls.callbacks[i].body.data.content
 
 describe('createCommand: what it needs', () => {
-  const parts = () => ({ discord: { applicationCommands() {}, createMessageCommand() {}, interactionCallback() {}, withMaxWait() {} }, store: { outboxMessage() {} }, guildId: GUILD })
+  const parts = () => ({ discord: { applicationCommands() {}, createMessageCommand() {}, interactionCallback() {} }, store: { outboxMessage() {} }, guildId: GUILD })
 
   it('takes a Discord client and a store that have what it calls', () => {
     expect(() => createCommand(parts())).not.toThrow()
   })
 
   it('needs each function it calls', () => {
-    for (const name of ['applicationCommands', 'createMessageCommand', 'withMaxWait']) {
+    for (const name of ['applicationCommands', 'createMessageCommand', 'interactionCallback']) {
       for (const bad of [undefined, null, 5, 'x']) {
         const p = parts()
         p.discord[name] = bad
@@ -135,12 +130,12 @@ describe('createCommand: what it needs', () => {
     }
   })
 
-  it('needs a deadline of whole milliseconds from 1 to 2900, which is inside the three seconds Discord gives', () => {
-    for (const deadlineMs of [0, -1, 1.5, Number.NaN, Infinity, '2000', null, 2901]) {
-      expect(() => createCommand({ ...parts(), deadlineMs }), String(deadlineMs)).toThrow(new RangeError('deadlineMs must be a whole number of milliseconds from 1 to 2900.'))
+  it('needs a deadline of whole milliseconds from 1 to 1900, which leaves the second the callback may take inside the three seconds Discord gives', () => {
+    for (const deadlineMs of [0, -1, 1.5, Number.NaN, Infinity, '1500', null, 1901, 2900]) {
+      expect(() => createCommand({ ...parts(), deadlineMs }), String(deadlineMs)).toThrow(new RangeError('deadlineMs must be a whole number of milliseconds from 1 to 1900.'))
     }
     expect(() => createCommand({ ...parts(), deadlineMs: 1 })).not.toThrow()
-    expect(() => createCommand({ ...parts(), deadlineMs: 2900 })).not.toThrow()
+    expect(() => createCommand({ ...parts(), deadlineMs: 1900 })).not.toThrow()
   })
 
   it('needs a site that is an https address', () => {
@@ -249,7 +244,7 @@ describe('READY: the command is made when it is not there', () => {
   it('never overwrites the list: it only lists and creates one', async () => {
     const t = rig()
     await ready(t)
-    expect(Object.keys(t.discord).sort()).toStrictEqual(['applicationCommands', 'createMessageCommand', 'withMaxWait'])
+    expect(Object.keys(t.discord).sort()).toStrictEqual(['applicationCommands', 'createMessageCommand', 'interactionCallback'])
   })
 })
 
@@ -336,10 +331,10 @@ describe('INTERACTION_CREATE: the three answers', () => {
     }
   })
 
-  it('answers through a client that waits no longer than a second for its turn, since the three seconds are short', async () => {
+  it('answers with a callback that has a second of its own to be taken in, and waits for no turn among the other calls, since the three seconds are short', async () => {
     const t = rig()
     await t.command.dispatch('INTERACTION_CREATE', interaction())
-    expect(t.calls.waits).toStrictEqual([1000])
+    expect(t.calls.options).toStrictEqual([{ timeoutMs: 1000 }])
   })
 
   it('answers each interaction apart, when several come together', async () => {
@@ -404,6 +399,20 @@ describe('INTERACTION_CREATE: what is not its own', () => {
     expect(t.calls.stored).toStrictEqual([])
   })
 
+  it('puts a target that is no message id into no link, whatever the store does: it is told the plain answer, with no link and no id in it', async () => {
+    const hostile = ['1/../x', `${MSG}#m-1`, `${MSG}\n`, '../../x', 'javascript:alert(1)', `${MSG}/${MSG}`, '200000000000000430?x=1', `<@${ME}>`, '1'.repeat(17) + 'x']
+    for (const options of [{ storeFails: true }, { storeGate: new Promise(() => {}) }]) {
+      for (const target_id of hostile) {
+        const t = rig(options)
+        await t.command.dispatch('INTERACTION_CREATE', withData({ target_id, resolved: { messages: { [target_id]: { id: target_id, channel_id: OTHER_POST } } } }))
+        expect(content(t), target_id).toBe(COPY_OTHER)
+        expect(t.calls.stored, target_id).toStrictEqual([])
+        expect(t.calls.callbacks, target_id).toHaveLength(1)
+        expect(t.ft.pending(), target_id).toBe(0)
+      }
+    }
+  })
+
   it('does nothing for data that is no object at all, and never throws', async () => {
     const t = rig()
     for (const d of [undefined, null, 'x', 5, [], true]) await expect(t.command.dispatch('INTERACTION_CREATE', d)).resolves.toBeUndefined()
@@ -417,7 +426,7 @@ describe('INTERACTION_CREATE: the three seconds', () => {
     const t = rig({ storeGate: never })
     const done = t.command.dispatch('INTERACTION_CREATE', interaction())
     await flush()
-    await t.ft.advance(1_999)
+    await t.ft.advance(1_499)
     expect(t.calls.callbacks).toStrictEqual([])
     await t.ft.advance(1)
     await done
@@ -442,7 +451,7 @@ describe('INTERACTION_CREATE: the three seconds', () => {
     const t = rig({ storeGate: new Promise((resolve) => (release = resolve)) })
     const done = t.command.dispatch('INTERACTION_CREATE', interaction())
     await flush()
-    await t.ft.advance(1_999)
+    await t.ft.advance(1_499)
     release(stored({ origin: 'discord' }))
     await done
     expect(t.calls.callbacks.map((c) => c.body.data.content)).toStrictEqual([COPY_DISCORD])
@@ -456,7 +465,7 @@ describe('INTERACTION_CREATE: the three seconds', () => {
     const t = rig({ storeGate: new Promise((resolve) => (release = resolve)) })
     const done = t.command.dispatch('INTERACTION_CREATE', interaction())
     await flush()
-    await t.ft.advance(2_000)
+    await t.ft.advance(1_500)
     await done
     release(stored())
     await flush()
@@ -506,7 +515,7 @@ describe('INTERACTION_CREATE: the three seconds', () => {
     try {
       const t = rig({ storeGate: new Promise(() => {}), options: { timers: undefined } })
       const done = t.command.dispatch('INTERACTION_CREATE', interaction())
-      await vi.advanceTimersByTimeAsync(1_999)
+      await vi.advanceTimersByTimeAsync(1_499)
       expect(t.calls.callbacks).toHaveLength(0)
       await vi.advanceTimersByTimeAsync(1)
       await done
@@ -529,18 +538,16 @@ describe('INTERACTION_CREATE: when the answer cannot be given', () => {
     const t = rig({ options: { log: () => { throw new Error('the log is broken') } }, callbackFails: true })
     await expect(t.command.dispatch('INTERACTION_CREATE', interaction())).resolves.toBeUndefined()
     const odd = rig()
-    odd.discord.withMaxWait = () => ({ interactionCallback: () => Promise.reject(null) })
+    odd.discord.interactionCallback = () => Promise.reject(null)
     const own = createCommand({ discord: odd.discord, store: odd.store, guildId: GUILD, timers: odd.ft.timers, log: () => {} })
     await expect(own.dispatch('INTERACTION_CREATE', interaction())).resolves.toBeUndefined()
   })
 
   it('never leaves the token in what it logs, whatever Discord said', async () => {
     const t = rig()
-    t.discord.withMaxWait = () => ({
-      interactionCallback: async () => {
-        throw new Error(`https://discord.com/api/v10/interactions/${INTERACTION}/${TOKEN}/callback failed with ${TOKEN}`)
-      },
-    })
+    t.discord.interactionCallback = async () => {
+      throw new Error(`https://discord.com/api/v10/interactions/${INTERACTION}/${TOKEN}/callback failed with ${TOKEN}`)
+    }
     const logged = []
     const own = createCommand({ discord: t.discord, store: t.store, guildId: GUILD, timers: t.ft.timers, log: (line) => logged.push(line) })
     await own.dispatch('INTERACTION_CREATE', interaction())

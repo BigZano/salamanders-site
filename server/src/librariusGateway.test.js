@@ -1,6 +1,9 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import * as fc from 'fast-check'
 import { createGateway, INTENTS, FATAL_CLOSE } from './librariusGateway.js'
+import { createCommand } from './librariusCommand.js'
+import { alongside } from './librariusDispatch.js'
+import { createLibrariusDiscord } from './librariusDiscord.js'
 
 // Every id and name here is invented. The token is not a real one either.
 const TOKEN = 'secret-bot-token'
@@ -2136,6 +2139,246 @@ describe('a handler that takes too long', () => {
     expect(seen).toEqual(['FIRST_THING', 'SECOND_THING', 'THIRD_THING'])
     expect(r.gateway.status().lastError).toMatch(/THIRD_THING.*the timer is broken/)
     expect(r.gateway.status().state).toBe('connecting')
+  })
+})
+
+describe('INTERACTION_CREATE: handed over at once, outside the queue of the other events', () => {
+  // A client whose onDispatch holds HANG_THING until the test settles it, and answers everything else at once. It records when each event began.
+  function slow(over = {}) {
+    const began = []
+    const calls = []
+    const r = rig({
+      onDispatch: (t, d) => {
+        began.push([t, Date.now()])
+        if (t === 'HANG_THING') return new Promise((resolve, reject) => calls.push({ resolve, reject }))
+        if (t === 'HANG_INTERACTION') return new Promise((resolve, reject) => calls.push({ resolve, reject }))
+        if (t === 'INTERACTION_CREATE' && d?.fail) throw new Error('the command broke')
+      },
+      ...over,
+    })
+    return { r, began, calls }
+  }
+  const event = (sock, t, s, d = {}) => sock.receive({ op: 0, t, s, d })
+  const names = (began) => began.map(([t]) => t)
+
+  it('begins at once, with (t, d) as any event, while an earlier event is still being handled', async () => {
+    const { r, began } = slow()
+    const sock = await ready(r)
+    event(sock, 'HANG_THING', 2)
+    await tick(0)
+    event(sock, 'INTERACTION_CREATE', 3, { id: 'invented', type: 2 })
+    await tick(0)
+    expect(names(began)).toEqual(['READY', 'HANG_THING', 'INTERACTION_CREATE'])
+  })
+
+  it('begins at once behind a whole backlog: events that are each given up on only after 15 seconds', async () => {
+    const { r, began } = slow()
+    const sock = await ready(r)
+    event(sock, 'HANG_THING', 2)
+    event(sock, 'HANG_THING', 3)
+    event(sock, 'HANG_THING', 4)
+    await tick(5_000)
+    const at = Date.now()
+    event(sock, 'INTERACTION_CREATE', 5, {})
+    await tick(0)
+    const [, when] = began.find(([t]) => t === 'INTERACTION_CREATE')
+    expect(when).toBe(at)
+    // The queue itself is still where it was: the first hung event is the only one begun.
+    expect(names(began).filter((t) => t === 'HANG_THING')).toHaveLength(1)
+  })
+
+  it('does not hold up the events behind it, nor wait for them, and leaves the others in their order', async () => {
+    const order = []
+    const done = {}
+    const r = rig({
+      onDispatch: (t) =>
+        new Promise((resolve) => {
+          order.push(`${t} begins`)
+          done[t] = () => {
+            order.push(`${t} ends`)
+            resolve()
+          }
+        }),
+    })
+    const sock = await ready(r)
+    done.READY()
+    await tick(0)
+    event(sock, 'A_THING', 2)
+    event(sock, 'INTERACTION_CREATE', 3)
+    event(sock, 'B_THING', 4)
+    await tick(0)
+    // The interaction begins the moment it comes, and A_THING is begun and waited for; B_THING waits for A_THING, not for the interaction.
+    expect(order.slice(0, 2)).toEqual(['READY begins', 'READY ends'])
+    expect(order.slice(2).sort()).toEqual(['A_THING begins', 'INTERACTION_CREATE begins'])
+    done.A_THING()
+    await tick(0)
+    expect(order.slice(4)).toEqual(['A_THING ends', 'B_THING begins'])
+    done.INTERACTION_CREATE()
+    done.B_THING()
+    await tick(0)
+    expect(order.slice(6)).toEqual(['INTERACTION_CREATE ends', 'B_THING ends'])
+  })
+
+  it('begins each one at once, however many come together', async () => {
+    const { r, began } = slow()
+    const sock = await ready(r)
+    for (let i = 0; i < 5; i++) event(sock, 'INTERACTION_CREATE', 2 + i, { n: i })
+    await tick(0)
+    expect(names(began)).toEqual(['READY', ...Array(5).fill('INTERACTION_CREATE')])
+  })
+
+  it('is given up on after 15 seconds like any handler, which is recorded, and a hung event in the line does not stop it', async () => {
+    const { r, began } = slow()
+    const sock = await ready(r)
+    event(sock, 'HANG_THING', 2)
+    event(sock, 'INTERACTION_CREATE', 3, {})
+    await tick(DISPATCH_TIMEOUT - 1)
+    expect(r.gateway.status().lastError).toBeNull()
+    await tick(1)
+    expect(r.gateway.status().lastError).toMatch(/took too long on HANG_THING/)
+    expect(names(began).sort()).toEqual(['HANG_THING', 'INTERACTION_CREATE', 'READY'])
+  })
+
+  it('has its own 15 seconds, counted from when it begins, and says which event it is that took too long', async () => {
+    const r = rig({ onDispatch: (t) => (t === 'INTERACTION_CREATE' ? new Promise(() => {}) : undefined) })
+    const sock = await ready(r)
+    await tick(3_000)
+    event(sock, 'INTERACTION_CREATE', 2, {})
+    await tick(DISPATCH_TIMEOUT - 1)
+    expect(r.gateway.status().lastError).toBeNull()
+    await tick(1)
+    expect(r.gateway.status().lastError).toMatch(/took too long on INTERACTION_CREATE/)
+    expect(r.gateway.status().state).toBe('ready')
+  })
+
+  it('is recorded when its handler fails, and the events after it are handled all the same', async () => {
+    const { r, began } = slow()
+    const sock = await ready(r)
+    event(sock, 'INTERACTION_CREATE', 2, { fail: true })
+    event(sock, 'NEXT_THING', 3)
+    await tick(0)
+    expect(r.gateway.status().lastError).toMatch(/could not handle INTERACTION_CREATE: Error: the command broke/)
+    expect(names(began)).toEqual(['READY', 'INTERACTION_CREATE', 'NEXT_THING'])
+    expect(r.gateway.status().state).toBe('ready')
+  })
+
+  it('is recorded, without crashing, when the timers fail while its handler is waited for', async () => {
+    const jobs = []
+    const timers = {
+      setTimeout: (fn, ms) => jobs.push({ fn, ms }) - 1,
+      clearTimeout: (id) => {
+        if (jobs[id]?.ms === DISPATCH_TIMEOUT) throw new Error('the timer is broken')
+      },
+    }
+    const seen = []
+    const r = rig({ timers, onDispatch: (t) => seen.push(t) })
+    const sock = await opened(r)
+    hello(sock)
+    event(sock, 'INTERACTION_CREATE', 1)
+    await tick(0)
+    expect(seen).toEqual(['INTERACTION_CREATE'])
+    expect(r.gateway.status().lastError).toMatch(/could not finish handling INTERACTION_CREATE: Error: the timer is broken/)
+    expect(r.gateway.status().state).toBe('connecting')
+  })
+
+  it('moves the sequence number on like any event', async () => {
+    const r = rig({ onDispatch: () => new Promise(() => {}) })
+    const sock = await ready(r)
+    event(sock, 'INTERACTION_CREATE', 7)
+    await tick(FIRST_BEAT)
+    expect(heartbeats(sock).at(-1)).toEqual({ op: 1, d: 7 })
+  })
+
+  it('is handled after a stop when it came before it, as any event is', async () => {
+    const r = rig()
+    const sock = await ready(r)
+    event(sock, 'INTERACTION_CREATE', 2)
+    r.gateway.stop()
+    await tick(0)
+    expect(r.dispatched.map(([t]) => t)).toEqual(['READY', 'INTERACTION_CREATE'])
+  })
+
+  it('is the only type that does not wait: a type that only looks like it stands in the queue', async () => {
+    const { r, began } = slow()
+    const sock = await ready(r)
+    event(sock, 'HANG_THING', 2)
+    for (const [i, t] of ['INTERACTION_CREATE ', 'interaction_create', 'INTERACTION_UPDATE', 'MESSAGE_CREATE'].entries()) event(sock, t, 3 + i)
+    await tick(0)
+    expect(names(began)).toEqual(['READY', 'HANG_THING'])
+  })
+})
+
+describe('"Delete on site" is answered within its budget however busy the gateway and the client are', () => {
+  // The whole path: the gateway, the dispatch that runs the command beside the live feed, the command, and the real client of Discord's
+  // REST API, all on fake timers. Every id here is invented.
+  const APP_GUILD = '200000000000000400'
+  const POST = '200000000000000410'
+  const MSG = '200000000000000430'
+  const ME = '300000000000000101'
+  const SITE = 'https://sm2salamanders.site'
+  const interaction = () => ({
+    id: '200000000000000490',
+    application_id: '200000000000000480',
+    type: 2,
+    token: 'aW50ZXJhY3Rpb246_Invented-token.0123456789',
+    guild_id: APP_GUILD,
+    channel_id: POST,
+    member: { user: { id: ME } },
+    data: { id: '200000000000000481', name: 'Delete on site', type: 3, target_id: MSG, resolved: { messages: { [MSG]: { id: MSG, channel_id: POST } } } },
+  })
+
+  function wired({ store, ingest } = {}) {
+    const fetched = []
+    const fetchImpl = async (url, init) => {
+      const callback = String(url).includes('/callback')
+      fetched.push({ url: String(url), at: Date.now(), headers: init.headers, body: init.body })
+      return new Response(callback ? null : '{}', { status: callback ? 204 : 200 })
+    }
+    const discord = createLibrariusDiscord({ fetchImpl, apiBase: 'https://d.test/api', botToken: 'secret-bot-token', guildId: APP_GUILD, perSecond: 1 })
+    const command = createCommand({ discord, store: store ?? { outboxMessage: () => new Promise(() => {}) }, guildId: APP_GUILD })
+    const r = rig({ onDispatch: alongside(ingest ?? (() => undefined), command.dispatch, () => {}) })
+    // Saturate the client: 30 calls that may each wait up to two minutes for its turn, one a second, are queued ahead of the callback.
+    const busy = discord.withMaxWait(120_000)
+    for (let i = 0; i < 30; i++) busy.guild().catch(() => {})
+    return { r, fetched }
+  }
+  const callbacks = (fetched) => fetched.filter((f) => f.url.includes('/callback'))
+  const FALLBACK = `Couldn't check right now; open it on the site: ${SITE}/reliquarium/librarius/${POST}#m-${MSG}`
+
+  it('answers at 1.5 seconds with what it could not check and the link, with the store slow, the client saturated and the queue behind a backlog', async () => {
+    const { r, fetched } = wired({ ingest: (t) => (t === 'HANG_THING' ? new Promise(() => {}) : undefined) })
+    const sock = await ready(r)
+    for (let i = 0; i < 4; i++) sock.receive({ op: 0, t: 'HANG_THING', s: 2 + i, d: {} })
+    await tick(2_000)
+    const came = Date.now()
+    sock.receive({ op: 0, t: 'INTERACTION_CREATE', s: 6, d: interaction() })
+    await tick(1_499)
+    expect(callbacks(fetched)).toEqual([])
+    await tick(1)
+    const [answer] = callbacks(fetched)
+    expect(callbacks(fetched)).toHaveLength(1)
+    expect(answer.at - came).toBe(1_500)
+    expect(JSON.parse(answer.body)).toEqual({ type: 4, data: { content: FALLBACK, flags: 64, allowed_mentions: { parse: [] } } })
+    expect(answer.url).toBe('https://d.test/api/v10/interactions/200000000000000490/aW50ZXJhY3Rpb246_Invented-token.0123456789/callback')
+    expect(JSON.stringify(answer.headers)).not.toContain('secret-bot-token')
+    r.gateway.stop()
+  })
+
+  it('answers at once, with the answer the store has, when the store is quick, whatever the queue and the client are doing', async () => {
+    const { r, fetched } = wired({
+      store: { outboxMessage: async () => ({ id: MSG, postId: POST, authorId: ME, origin: 'site' }) },
+      ingest: (t) => (t === 'HANG_THING' ? new Promise(() => {}) : undefined),
+    })
+    const sock = await ready(r)
+    sock.receive({ op: 0, t: 'HANG_THING', s: 2, d: {} })
+    await tick(5_000)
+    const came = Date.now()
+    sock.receive({ op: 0, t: 'INTERACTION_CREATE', s: 3, d: interaction() })
+    await tick(0)
+    const [answer] = callbacks(fetched)
+    expect(answer.at).toBe(came)
+    expect(JSON.parse(answer.body).data.content).toBe(`This was written on the site. Delete it there: ${SITE}/reliquarium/librarius/${POST}#m-${MSG}`)
+    r.gateway.stop()
   })
 })
 
