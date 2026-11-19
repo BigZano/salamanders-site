@@ -80,6 +80,142 @@ const unbalanced = (text) => {
 }
 // The text of a part as the member reads it: its display texts in V2, its content in plain.
 const textOf = (part) => (part.components === null ? part.text : displays(part).join('\n'))
+// The texts of a part that Discord parses on their own: a V2 message is one Text Display at a time, a plain one its content.
+const textsOf = (part) => (part.components === null ? [part.text] : displays(part))
+
+// A model of how Discord shows a text, for what a spoiler hides. It reads left to right, each mark taking the first closing mark
+// that suits it (the lazy rules of simple-markdown, with Discord's spoiler rule `^\|\|([\s\S]+?)\|\|`), so that a `||` that
+// closes nothing the writer meant pairs with the next one, as it does in Discord.
+const RE = {
+  escape: /\\([^0-9A-Za-z\s])/y,
+  code: /(`+)([\s\S]*?[^`])\1(?!`)/y,
+  link: /\[((?:\[[^\]]*\]|[^[\]]|\](?=[^[]*\]))*)\]\(\s*<?((?:\([^)]*\)|[^\s\\]|\\.)*?)>?(?:\s+['"]([\s\S]*?)['"])?\s*\)/y,
+  angle: /<[^\s>]+>/y,
+  strong: /\*\*((?:\\[\s\S]|[^\\])+?)\*\*(?!\*)/y,
+  underline: /__((?:\\[\s\S]|[^\\])+?)__(?!_)/y,
+  star: /\*(?=\S)((?:\*\*|\\[\s\S]|\s+(?:\\[\s\S]|[^\s*\\]|\*\*)|[^\s*\\])+?)\*(?!\*)/y,
+  score: /\b_((?:__|\\[\s\S]|[^\\_])+?)_\b/y,
+  strike: /~~(?=\S)((?:\\[\s\S]|~(?!~)|[^\s~]|\s(?!~~))+?)~~/y,
+  spoiler: /\|\|([\s\S]+?)\|\|/y,
+}
+// The rules to try at a character, in order.
+const RULES_AT = { '\\': ['escape'], '`': ['code'], '<': ['angle'], '[': ['link'], '*': ['strong', 'star'], _: ['underline', 'score'], '~': ['strike'], '|': ['spoiler'] }
+// → [character, hidden][] of an inline run, pushed on `out`.
+function showInline(s, hidden, out) {
+  const push = (text, h) => {
+    for (const ch of text.split('')) out.push([ch, h])
+  }
+  for (let i = 0; i < s.length; ) {
+    const tried = (RULES_AT[s[i]] ?? []).map((name) => {
+      RE[name].lastIndex = i
+      return { name, found: RE[name].exec(s) }
+    })
+    const rule = tried.find((t) => t.found !== null)
+    if (rule === undefined) {
+      push(s[i], hidden)
+      i++
+      continue
+    }
+    const { name, found } = rule
+    if (name === 'escape') push(found[1], hidden)
+    else if (name === 'code') push(found[2].trim(), hidden)
+    else if (name === 'angle') push(found[0], hidden)
+    else showInline(found[1], hidden || name === 'spoiler', out)
+    i += found[0].length
+  }
+  return out
+}
+// The blocks of a text, as the runs of text that Discord reads each as one: a paragraph (its lines together), a heading, a list
+// item, a quote. Code is no run: what is in a fence is shown as it is.
+function showBlocks(text) {
+  const runs = []
+  let cur = []
+  let depth = 0
+  let fenced = false
+  const flush = () => {
+    if (cur.length > 0) runs.push({ run: cur.join('\n') })
+    cur = []
+  }
+  for (const raw of text.split('\n')) {
+    if (/^(?:[ \t]*>)*[ \t]*```/.test(raw)) {
+      flush()
+      fenced = !fenced
+      continue
+    }
+    if (fenced) {
+      runs.push({ code: raw })
+      continue
+    }
+    let line = raw
+    let d = 0
+    for (let q = /^[ \t]*> ?/.exec(line); q !== null; q = /^[ \t]*> ?/.exec(line)) {
+      d++
+      line = line.slice(q[0].length)
+    }
+    if (d !== depth) flush()
+    depth = d
+    const head = /^ *#{1,3} +/.exec(line) ?? /^ *-# +/.exec(line)
+    const item = /^[ \t]*(?:[-*]|\d+\.) +/.exec(line)
+    if (line.trim() === '') flush()
+    else if (head !== null) {
+      flush()
+      runs.push({ run: line.slice(head[0].length) })
+    } else if (item !== null) {
+      flush()
+      cur.push(line.slice(item[0].length))
+    } else cur.push(line)
+  }
+  flush()
+  return runs
+}
+// → the words of a text as Discord shows it, each with whether all, some or none of its characters are hidden.
+const discordWords = (text) => {
+  const chars = []
+  for (const block of showBlocks(text)) {
+    if (block.code !== undefined) for (const ch of block.code.split('')) chars.push([ch, false])
+    else showInline(block.run, false, chars)
+    chars.push([' ', false])
+  }
+  const shown = chars.map((c) => c[0]).join('')
+  return [...shown.matchAll(/[A-Za-z][A-Za-z0-9]*/g)].map((w) => {
+    const flags = chars.slice(w.index, w.index + w[0].length).map((c) => c[1])
+    return { word: w[0], hidden: flags.every(Boolean) ? 'all' : flags.some(Boolean) ? 'some' : 'none' }
+  })
+}
+// The words of a source that the parser puts in a spoiler, and those it puts outside one (a word that is both is in neither).
+function wordClasses(src) {
+  const inside = new Set()
+  const outside = new Set()
+  const take = (text, hidden) => {
+    for (const w of text.match(/[A-Za-z][A-Za-z0-9]*/g) ?? []) (hidden ? inside : outside).add(w)
+  }
+  const visit = (nodes, hidden) => {
+    for (const n of nodes) {
+      if (n.type === 'text') take(n.value, hidden)
+      else if (n.type === 'code') take(n.text, hidden)
+      else if (n.type === 'codeblock') take(n.text, false)
+      visit(n.children ?? [], hidden || n.type === 'spoiler')
+      for (const item of n.items ?? []) visit(item.children, hidden)
+    }
+  }
+  visit(parse(src, { dialect: 'extended' }), false)
+  return { spoiler: new Set([...inside].filter((w) => !outside.has(w))), plain: new Set([...outside].filter((w) => !inside.has(w))) }
+}
+// → what is wrong with the parts of a reply as Discord shows them: a word the parser puts in a spoiler that a part shows, or a
+// word it puts outside one that a part hides.
+const leaks = (src, parts) => {
+  const classes = wordClasses(src)
+  const found = []
+  for (const part of parts) {
+    for (const text of textsOf(part)) {
+      for (const { word, hidden } of discordWords(text)) {
+        if (classes.spoiler.has(word) && hidden !== 'all') found.push(`shows ${word}: ${JSON.stringify(text.slice(0, 200))}`)
+        else if (classes.plain.has(word) && hidden !== 'none') found.push(`hides ${word}: ${JSON.stringify(text.slice(0, 200))}`)
+      }
+    }
+  }
+  return found.slice(0, 4)
+}
 
 describe('constants', () => {
   it('names the forms, the default and the limits of the plan', () => {
@@ -1702,6 +1838,382 @@ describe('toDiscord: a mark that a cut falls in', () => {
     expect(r.parts.length).toBeGreaterThan(1)
     for (const part of r.parts) expect(unbalanced(part.text)).toEqual([])
   })
+})
+
+describe('toDiscord: where the room runs out in a fence that comes right after another, with notes to carry', () => {
+  // Three lines that cite a note each, and the notes (385 characters each) that every part with a citing line lists: the tail of
+  // part 1 is over its half, so a cut at a boundary is not taken for the fill and the cut falls inside a row.
+  const cites = (k) => Array.from({ length: k }, (_, i) => `line ${i} cites [^n${i}]`).join('\n')
+  const notes = (k, n) => Array.from({ length: k }, (_, i) => `[^n${i}]: ${'z'.repeat(n)}`).join('\n')
+  const NOTE_LINES = [0, 1, 2].map((i) => `-# \\[^n${i}]: ${'z'.repeat(385)}`).join('\n')
+  const CITING = [0, 1, 2].map((i) => `line ${i} cites \\[^n${i}]`).join('\n')
+
+  it('moves a block that would open and close empty after another to the next part, whole', () => {
+    // The first block is 509 of the room that is left, and the next one's opening fence has none: it is left for part 2.
+    const r = plain(`${cites(3)}\n\`\`\`\n${'a'.repeat(505)}\n\`\`\`\n\`\`\`\nb\n\`\`\`\n\n${'y'.repeat(2500)}\n\n${notes(3, 385)}`)
+    expect(r.parts.map((p) => p.text)).toEqual([
+      `**1/3** ${CITING}\n\`\`\`\n${'a'.repeat(505)}\n\`\`\`\n${NOTE_LINES}`,
+      `**2/3**\n\`\`\`\nb\n\`\`\`\n\n${'y'.repeat(1870)}`,
+      `**3/3** ${'y'.repeat(630)}\n${PLAIN_FOOTER}`,
+    ])
+  })
+
+  it('cuts cleanly between two blocks, whichever of them the room runs out in', () => {
+    const r = plain(`${cites(3)}\n\`\`\`\n${'a'.repeat(511)}\n\`\`\`\n\`\`\`\nb\n\`\`\`\n\n${'y'.repeat(2500)}\n\n${notes(3, 385)}`)
+    expect(r.parts.map((p) => p.text)).toEqual([
+      `**1/3** ${CITING}\n\`\`\`\n${'a'.repeat(511)}\n\`\`\`\n${NOTE_LINES}`,
+      `**2/3**\n\`\`\`\nb\n\`\`\`\n\n${'y'.repeat(1870)}`,
+      `**3/3** ${'y'.repeat(630)}\n${PLAIN_FOOTER}`,
+    ])
+  })
+
+  it('cuts raw text before a closing fence with text on its line, and not inside the fence', () => {
+    // The code fits the part, the fence line does not, and a split that closes no fence leaves it whole for the next part.
+    expect(split(`\`\`\`\n${'x'.repeat(18)}\n\`\`\`${'z'.repeat(10)}`, 33)).toEqual([`**1/2**\n\`\`\`\n${'x'.repeat(18)}\n`, `**2/2**\n\`\`\`${'z'.repeat(10)}`])
+  })
+
+  it('splits raw text that opens a fence in the line a part would end in, as 3 parts', () => {
+    expect(split('d\n```jjjjjjjjjjjjjjjjjj\n---\n---\n---', 32)).toEqual(['**1/3** d\n', '**2/3**\n```jjjjjjjjjjjjjjjjjj\n--', '**3/3** -\n---\n---'])
+  })
+})
+
+describe('toDiscord: the start of a line after a line break inside a spoiler', () => {
+  it('keeps the backslash of a line start that a member escaped after a break in a spoiler', () => {
+    for (const mark of ['\\#', '\\>', '\\-', '\\-#']) {
+      const r = plain(`||first line\n${mark} not a mark||`)
+      expect(r.parts[0].text).toBe(`||first line\n${mark} not a mark||\n${PLAIN_FOOTER}`)
+    }
+    const quoted = plain('> ||first line\n> \\# not a heading||')
+    expect(quoted.parts[0].text).toBe(`> ||first line\n> \\# not a heading||\n${PLAIN_FOOTER}`)
+  })
+
+  it('does so after a break that follows other marks, and after more than one', () => {
+    const r = plain('||**bold** first\n\\# one\n\\> two\n\\-# three||')
+    expect(r.parts[0].text).toBe(`||**bold** first\n\\# one\n\\> two\n\\-# three||\n${PLAIN_FOOTER}`)
+  })
+
+  it('does not escape a text that follows a break but is no line start, or one that follows other text on its line', () => {
+    const r = plain('||first line\nsecond # line - not > a start||')
+    expect(r.parts[0].text).toBe(`||first line\nsecond # line - not > a start||\n${PLAIN_FOOTER}`)
+  })
+
+  it('writes the same text in V2 as in plain', () => {
+    expect(displays(v2('||first line\n\\# not a heading||').parts[0])).toEqual([`||first line\n\\# not a heading||\n${FOOTER}`])
+  })
+})
+
+describe('toDiscord: a part that starts inside a line', () => {
+  // `rank N - brother` is prose: no part of it may start a bullet, a heading, a quote or a numbered list that the source had not.
+  const startsBlock = (text) => text.split('\n').some((line) => /^\s*(?:[-*] |-# |#{1,6} |>|\d{1,9}\. )/.test(line))
+
+  it('never starts a bullet, a heading, a quote or a numbered list that the prose it cuts had not', () => {
+    // A sentence end is the best place to cut, so a number with a full stop is cut in front of after a sentence, not after a space.
+    const pieces = [
+      ['- brother', '\\- brother'],
+      ['-# brother', '\\-# brother'],
+      ['## brother', '\\## brother'],
+      ['> brother', '\\> brother'],
+      ['it. 1. brother', '1\\. brother'],
+      ['it. 12. brother', '12\\. brother'],
+    ]
+    for (const [piece, written] of pieces) {
+      let cutBefore = 0
+      for (let pad = 0; pad < 30; pad++) {
+        const src = `${'p'.repeat(pad)}${Array.from({ length: 400 }, (_, i) => `rank ${i} ${piece}`).join(' ')}`
+        for (const form of FORMS) {
+          const r = toDiscord(src, opts({ form }))
+          expect(r.parts.length).toBeGreaterThan(1)
+          for (const part of r.parts) {
+            expect(startsBlock(textOf(part).replace(PLAIN_FOOTER, '').replace(FOOTER, ''))).toBe(false)
+            if (textsOf(part)[0].startsWith(`**${r.parts.indexOf(part) + 1}/${r.parts.length}** ${written}`)) cutBefore++
+          }
+        }
+      }
+      // The cut fell before the piece in some of the texts, or the test says nothing.
+      expect(cutBefore).toBeGreaterThan(0)
+    }
+  })
+
+  it('writes the start of a part that starts inside a line after its mark on the same line, escaped as a line start is', () => {
+    // 1774 characters of part 1 are `rank NNN - brother ` of 19: the cut before `- brother` comes after `rank 0.. `.
+    const pad = (n) => 'p'.repeat(n)
+    const seen = new Set()
+    for (let n = 0; n < 20; n++) {
+      const r = plain(`${pad(n)} ${Array.from({ length: 300 }, (_, i) => `rank ${String(i).padStart(3, '0')} - brother`).join(' ')}`)
+      const second = r.parts[1].text
+      if (/^\*\*2\/\d\*\* \\- brother/.test(second)) seen.add('escaped')
+      expect(second).not.toMatch(/^\*\*2\/\d\*\*\n/)
+    }
+    expect([...seen]).toEqual(['escaped'])
+  })
+
+  it('still puts a line end after the mark when the part starts at a row start with block syntax', () => {
+    const rows = Array.from({ length: 80 }, (_, i) => `- item ${String(i).padStart(2, '0')} ${'a'.repeat(40)}`)
+    const r = plain(rows.join('\n'))
+    expect(r.parts.length).toBeGreaterThan(1)
+    expect(r.parts[1].text).toMatch(/^\*\*2\/\d\*\*\n- item /)
+  })
+
+  it('does not put a line end after the mark of a raw split part that starts inside a line', () => {
+    // The room of a part is 32 (40 less the mark): the cut is after the space at 31, in front of the `-`.
+    const text = `${'a'.repeat(31)} - brother ${'b'.repeat(40)}`
+    const parts = split(text, 40)
+    expect(parts[1]).toBe(`**2/3** - brother ${'b'.repeat(22)}`)
+    expect(parts.map(unmark).join('')).toBe(text)
+  })
+
+  it('keeps the line end after the mark of a raw split part that starts at a row start with block syntax', () => {
+    const parts = split(`${'a'.repeat(30)}\n- ${'b'.repeat(30)}`, 40)
+    expect(parts[1]).toBe(`**2/2**\n- ${'b'.repeat(30)}`)
+  })
+
+  it('does not escape what a code line that a fence is cut in starts with after the cut', () => {
+    let at = 0
+    for (let pad = 0; pad < 20; pad++) {
+      const r = plain(`\`\`\`\n${'p'.repeat(pad)} ${Array(250).fill('rank - brother').join(' ')}\n\`\`\``)
+      for (const part of r.parts) {
+        expect(part.text).not.toContain('\\-')
+        if (/^\*\*\d\/\d\*\*\n```\n- brother/.test(part.text)) at++
+      }
+    }
+    // Some of the cuts fell in front of a `-`, or the test says nothing.
+    expect(at).toBeGreaterThan(0)
+  })
+})
+
+describe('toDiscord: emphasis that is written twice in a row', () => {
+  it('joins an emphasis that follows another, so that no `**` is written between two italics', () => {
+    expect(plain('*so*_very_').parts[0].text).toBe(`*sovery*\n${PLAIN_FOOTER}`)
+    expect(plain('I was *so*_very_ moved').parts[0].text).toBe(`I was *sovery* moved\n${PLAIN_FOOTER}`)
+    expect(plain('*a*_b_*c*').parts[0].text).toBe(`*abc*\n${PLAIN_FOOTER}`)
+  })
+
+  it('joins them across what shows nothing between them, a picture that is attached', () => {
+    const r = plain('*so*![p](upload:1)_very_', { images: [{ ref: 1, name: 'u1.png' }] })
+    expect(r.parts[0].text).toBe(`*sovery*\n${PLAIN_FOOTER}`)
+    expect(r.parts[0].files).toEqual(['u1.png'])
+  })
+
+  it('keeps the closing mark of an italic that an italic with nothing in it but a picture follows', () => {
+    const r = plain('*a*_![p](upload:1)_', { images: [{ ref: 1, name: 'u1.png' }] })
+    expect(r.parts[0].text).toBe(`*a*\n${PLAIN_FOOTER}`)
+    expect(r.parts[0].files).toEqual(['u1.png'])
+  })
+
+  it('writes bold that touches an italic, before it or after it, as bold and as an italic, and joins neither', () => {
+    expect(plain('**a***b*').parts[0].text).toBe(`**a***b*\n${PLAIN_FOOTER}`)
+    expect(plain('*a***b**').parts[0].text).toBe(`*a***b**\n${PLAIN_FOOTER}`)
+    expect(plain('_a_**b**').parts[0].text).toBe(`*a***b**\n${PLAIN_FOOTER}`)
+    expect(plain('**a**_b_').parts[0].text).toBe(`**a***b*\n${PLAIN_FOOTER}`)
+  })
+
+  it('writes an italic of nothing but a space, which has no mark to join, as the space', () => {
+    expect(plain('*a*_![ ](upload:2)_.').parts[0].text).toBe(`*a* .\n${PLAIN_FOOTER}`)
+  })
+
+  it('leaves two italics that something shows between as two', () => {
+    expect(plain('*so* _very_').parts[0].text).toBe(`*so* *very*\n${PLAIN_FOOTER}`)
+    expect(plain('*so*x _very_').parts[0].text).toBe(`*so*x *very*\n${PLAIN_FOOTER}`)
+    expect(plain('*so*![p](upload:2)_very_').parts[0].text).toBe(`*so*p*very*\n${PLAIN_FOOTER}`)
+  })
+
+  it('joins italics that hold other marks', () => {
+    expect(plain('_a **b** c_*d*').parts[0].text).toBe(`*a **b** cd*\n${PLAIN_FOOTER}`)
+    expect(plain('||*a*_b_||').parts[0].text).toBe(`||*ab*||\n${PLAIN_FOOTER}`)
+  })
+
+  it('carries no stray bold through a long reply, and shows no spoiler of it (the repro of the re-review)', () => {
+    const src = `I was *so*_very_ moved by this.\n\n${Array.from({ length: 60 }, (_, i) => `Filler line number ${i} of the long reply.`).join('\n')}\n${Array.from({ length: 30 }, (_, i) => `Thoughts ${i}: ||SECRET${i} the **captain** falls||.`).join('\n')}`
+    const r = plain(src)
+    expect(r.parts.length).toBeGreaterThan(1)
+    expect(leaks(src, r.parts)).toEqual([])
+    for (const part of r.parts) {
+      expect(unbalanced(part.text)).toEqual([])
+      expect(part.text.replace(/\*\*(?:\d\/\d|captain)\*\*/g, '')).not.toContain('**')
+    }
+  })
+})
+
+describe('toDiscord: what Discord shows of the spoilers of a reply that is cut', () => {
+  const hiddenOf = (text) => Object.fromEntries(discordWords(text).map((w) => [w.word, w.hidden]))
+  const spaced = (n) => Array(n).fill('a').join(' ')
+
+  it('has a model of Discord that shows what a spoiler hides as hidden, and a pair of bars that closes nothing as pairing with the next', () => {
+    expect(hiddenOf('a ||SECRET|| b')).toEqual({ a: 'none', SECRET: 'all', b: 'none' })
+    expect(hiddenOf('||ONE two|| three ||FOUR||')).toEqual({ ONE: 'all', two: 'all', three: 'none', FOUR: 'all' })
+    // A part that starts with `||` opened again and then the bars that close it: they pair with the next spoiler's bars.
+    expect(hiddenOf('**2/3** |||| a || b ||')).toEqual({ a: 'all', b: 'none' })
+    // Bold takes the first closing `**`, and so a spoiler in it that its text closes is left open.
+    expect(hiddenOf('**Thoughts ||SECRET the **captain** falls||')).toEqual({ Thoughts: 'none', SECRET: 'none', the: 'none', captain: 'none', falls: 'none' })
+    expect(hiddenOf('**bold ||SECRET|| bold**')).toEqual({ bold: 'none', SECRET: 'all' })
+    expect(hiddenOf('> ||ONE\n> two|| three')).toEqual({ ONE: 'all', two: 'all', three: 'none' })
+    expect(hiddenOf('```\n||code||\n```\nafter')).toEqual({ code: 'none', after: 'none' })
+    expect(hiddenOf('\\|\\|not\\|\\| `||code||` [t](<https://a.example/x||y>) ||HIDDEN||')).toEqual({ not: 'none', code: 'none', t: 'none', HIDDEN: 'all' })
+  })
+
+  // The marks that a cut keeps from leaving a pair of them with nothing in: each is read as the mark of what it holds.
+  const PAIRS = ['||', '**', '__', '~~', '`', '***']
+
+  for (const mark of PAIRS) {
+    it(`cuts ${mark} that ends in a space before the space, so that no part starts with the ${mark} that closes it`, () => {
+      // The closing mark starts at 1701 or so, where the room of part 1 (1774, less the mark it closes with) takes a cut at its end.
+      const r = plain(`${mark} ${'a '.repeat(849)}${mark}${'b'.repeat(500)}`)
+      expect(r.parts.map((p) => p.text)).toEqual([m(1, 2, `${mark} ${'a '.repeat(847)}a${mark}`), `${m(2, 2, `${mark}a ${mark}${'b'.repeat(500)}`)}\n${PLAIN_FOOTER}`])
+    })
+
+    it(`does not cut ${mark} right after its opening mark and the space after it, which would leave a pair of them at the end of the part`, () => {
+      const r = plain(`${'q '.repeat(850)}${mark} ${'z'.repeat(2000)}${mark}`)
+      expect(r.parts).toHaveLength(3)
+      expect(r.parts[0].text).toBe(m(1, 3, `${'q '.repeat(849)}q`))
+      expect(r.parts[1].text.startsWith(`**2/3** ${mark} zzz`)).toBe(true)
+      for (const part of r.parts) expect(part.text).not.toContain(`${mark}${mark}`)
+    })
+  }
+
+  it('cuts in front of an escape that a spoiler holds, and after one, as at any other character', () => {
+    expect(plain(`||${'a '.repeat(849)}\\*${'b'.repeat(500)}||`).parts.map((p) => p.text)).toEqual([m(1, 2, `||${'a '.repeat(848)}a||`), `${m(2, 2, `||\\*${'b'.repeat(500)}||`)}\n${PLAIN_FOOTER}`])
+    const r = plain(`||${'a '.repeat(840)}\\* ${'z'.repeat(2000)}||`)
+    expect(r.parts.map((p) => p.text)).toEqual([m(1, 3, `||${'a '.repeat(840)}\\*||`), m(2, 3, `||${'z'.repeat(1877)}||`), `${m(3, 3, `||${'z'.repeat(123)}||`)}\n${PLAIN_FOOTER}`])
+  })
+
+  it('cuts bold that ends in a space before the last word, where the cut that the room allows is right before that space', () => {
+    // The closing bars start at 1773 and take 2 of the room, so a cut at 1772 would fit, in front of the space and no mark: but only
+    // spaces lie between it and the mark.
+    const r = plain(`**${'a'.repeat(1770)} **${'b'.repeat(500)}`)
+    expect(r.parts.map((p) => p.text)).toEqual([m(1, 2, `**${'a'.repeat(1769)}**`), `${m(2, 2, `**a **${'b'.repeat(500)}`)}\n${PLAIN_FOOTER}`])
+  })
+
+  it('looks over more than one space between a cut and the mark that closes, and between the mark that opens and a cut', () => {
+    const r = plain(`|| ${'a  '.repeat(566)}||${'b'.repeat(500)}`)
+    expect(r.parts.map((p) => p.text)).toEqual([m(1, 2, `|| ${'a  '.repeat(564)}a||`), `${m(2, 2, `||a  ||${'b'.repeat(500)}`)}\n${PLAIN_FOOTER}`])
+    const q = plain(`${'q '.repeat(850)}||   ${'z'.repeat(2000)}||`)
+    expect(q.parts[0].text).toBe(m(1, 3, `${'q '.repeat(849)}q`))
+    for (const part of q.parts) expect(part.text).not.toContain('||||')
+  })
+
+  it('cuts a spoiler that ends a sentence before that sentence, as the next best end', () => {
+    const r = plain(`||${'abc. '.repeat(340)}||${'b'.repeat(500)}`)
+    expect(r.parts.map((p) => p.text)).toEqual([m(1, 2, `||${'abc. '.repeat(338)}abc.||`), `${m(2, 2, `||abc. ||${'b'.repeat(500)}`)}\n${PLAIN_FOOTER}`])
+  })
+
+  it('does not cut between the lines of a spoiler right before the line that starts with the bars that close it', () => {
+    const rows = Array.from({ length: 17 }, (_, i) => `${String(i).padStart(2, '0')}${'a'.repeat(96)}`)
+    const r = plain(`||${rows.join('\n')}\n|| ${'y'.repeat(400)} ||SECRET|| tail`)
+    expect(r.parts.map((p) => p.text)).toEqual([m(1, 2, `||${rows.slice(0, 16).join('\n')}||`), `${m(2, 2, `||${rows[16]}\n|| ${'y'.repeat(400)} ||SECRET|| tail`)}\n${PLAIN_FOOTER}`])
+    expect(leaks(`||${rows.join('\n')}\n|| ${'y'.repeat(400)} ||SECRET|| tail`, r.parts)).toEqual([])
+  })
+
+  it('does the same for a spoiler in a quote, where the line with the closing bars starts with the quote mark', () => {
+    const rows = Array.from({ length: 18 }, (_, i) => `${String(i).padStart(2, '0')}${'a'.repeat(94)}`)
+    const src = `> ||${rows.join('\n> ')}\n> || ${'y'.repeat(400)} ||SECRET|| tail`
+    const r = plain(src)
+    expect(r.parts.map((p) => p.text)).toEqual([`**1/2**\n> ||${rows.slice(0, 17).join('\n> ')}||`, `**2/2**\n> ||${rows[17]}\n> || ${'y'.repeat(400)} ||SECRET|| tail\n${PLAIN_FOOTER}`])
+    expect(leaks(src, r.parts)).toEqual([])
+  })
+
+  it('does not cut between the lines of a spoiler right after the line that ends with the bars that open it', () => {
+    // Row 1 has 80 characters of room in part 1, and the closing bars (2) take two of them.
+    const r = plain(`${'x'.repeat(1690)} ||\n${'c'.repeat(300)}||`)
+    expect(r.parts.map((p) => p.text)).toEqual([m(1, 2, `${'x'.repeat(1690)} ||\n${'c'.repeat(78)}||`), `${m(2, 2, `||${'c'.repeat(222)}||`)}\n${PLAIN_FOOTER}`])
+  })
+
+  it('cuts a spoiler of nothing but spaces anywhere that leaves room, where no cut leaves it without bars that hide nothing', () => {
+    // Every place in the spaces is right after the opening bars, and the last is right before the closing ones, so none is clean.
+    expect(plain(`||${' '.repeat(3000)}w||`).parts.map((p) => p.text)).toEqual(['**1/2** ||||', `${m(2, 2, '||w||')}\n${PLAIN_FOOTER}`])
+    const r = plain(`||${' '.repeat(5000)}w||tail`)
+    expect(r.parts.map((p) => p.text)).toEqual(['**1/3** ||||', '**2/3** ||||', `${m(3, 3, '||w||tail')}\n${PLAIN_FOOTER}`])
+  })
+
+  it('cuts a long run of spaces in a spoiler in time that is linear in its length', () => {
+    // A cut that looks over the spaces to the next mark at each place in them took 28 s for 15,000 of them.
+    const start = performance.now()
+    for (const form of FORMS) expect(toDiscord(`||${' '.repeat(15_000)}w||`, opts({ form })).parts.length).toBeGreaterThan(1)
+    expect(performance.now() - start).toBeLessThan(globalThis.__stryker__ ? 30_000 : 2000)
+  })
+
+  it('keeps the spoilers of a reply of spaced spoilers hidden, in both forms (the first repro of the re-review)', () => {
+    const src = `Intro. ${Array.from({ length: 200 }, (_, i) => `|| SECRET${i} dies. || Then a plain sentence ${i}. `).join('')}`
+    for (const form of FORMS) {
+      const r = toDiscord(src, opts({ form }))
+      expect(r.parts.length).toBeGreaterThan(1)
+      expect(leaks(src, r.parts)).toEqual([])
+      for (const part of r.parts) expect(textOf(part)).not.toContain('||||')
+    }
+  })
+
+  it('keeps the other twist of a spoiler that closes at the start of a line hidden, in both forms (the second repro of the re-review)', () => {
+    const body = (n) => Array.from({ length: n }, (_, i) => `In chapter five the captain falls at gate ${i}.`).join('\n')
+    for (const [form, n] of [['plain', 76], ['v2', 162]]) {
+      const src = `Spoilers for the finale below.\n\n||${body(n)}\n|| What a finale. And the other twist: ||SECRET_TWO is the traitor|| and that is all.`
+      const r = toDiscord(src, opts({ form }))
+      expect(r.parts).toHaveLength(3)
+      expect(leaks(src, r.parts)).toEqual([])
+      for (const part of r.parts) expect(textOf(part)).not.toContain('||||')
+    }
+  })
+
+  // Words of a spoiler are capitals and the rest are lower case, so a word says what it is; the parser says it again (wordClasses).
+  const LOWER = 'alpha bravo cargo delta ember frost gamma haven ivory jewel karst lunar mango noble ocean piper quartz raven sable tango umber vigil wharf xenon yacht zephyr bison cedar dune finch grove'.split(' ')
+  const lw = fc.constantFrom(...LOWER)
+  const sw = fc.constantFrom(...LOWER.map((w) => w.toUpperCase()))
+  const some = (item, least, most) => fc.array(item, { minLength: least, maxLength: most }).map((a) => a.join(' '))
+  const sentence = some(lw, 1, 8).map((s) => `${s}.`)
+  const secret = some(sw, 1, 6)
+  const unit = fc.oneof(
+    { weight: 8, arbitrary: sentence },
+    { weight: 3, arbitrary: secret.map((s) => `||${s}||`) },
+    { weight: 4, arbitrary: secret.map((s) => `|| ${s} ||`) },
+    { weight: 3, arbitrary: secret.map((s) => `|| ${s}. ||`) },
+    { weight: 2, arbitrary: secret.map((s) => `||${s}.||`) },
+    { weight: 2, arbitrary: fc.array(secret, { minLength: 2, maxLength: 5 }).map((l) => `||${l.join('\n')}||`) },
+    { weight: 2, arbitrary: fc.tuple(secret, secret, sentence, secret).map(([a, b, p, c]) => `||${a}\n${b}\n|| ${p} ||${c}||`) },
+    { weight: 2, arbitrary: fc.tuple(sw, sw, sw).map(([a, b, c]) => `||${a} **${b}** ${c}||`) },
+    { weight: 2, arbitrary: fc.tuple(lw, sw, lw).map(([a, b, c]) => `**${a} ||${b}|| ${c}**`) },
+    { weight: 1, arbitrary: secret.map((s) => `||**${s}**||`) },
+    { weight: 2, arbitrary: fc.tuple(lw, lw).map(([a, b]) => `*${a}*_${b}_`) },
+    { weight: 1, arbitrary: fc.tuple(sw, sw).map(([a, b]) => `||*${a}*_${b}_||`) },
+    // Marks of other kinds that touch. An italic right before or after a bold (`*a***b**`) is not among them: Discord's rules pair
+    // the bold's marks with later ones, and that is so in a reply of one part, where no cut is made (a known limit, not this property's).
+    { weight: 1, arbitrary: fc.tuple(lw, lw).map(([a, b]) => `**${a}**__${b}__`) },
+    { weight: 1, arbitrary: fc.tuple(lw, lw).map(([a, b]) => `~~${a}~~**${b}**`) },
+    { weight: 1, arbitrary: fc.tuple(sw, sw).map(([a, b]) => `||${a}||||${b}||`) },
+  )
+  // A paragraph of units, on one line or on a few: a spoiler that is cut can fall anywhere in it.
+  const paragraph = (least, most) =>
+    fc
+      .array(fc.tuple(unit, fc.constantFrom(' ', ' ', ' ', ' ', '\n')), { minLength: least, maxLength: most })
+      .map((units) => units.map(([u, join], i) => (i === 0 ? '' : join) + u).join(''))
+  const quoted = (text) => text.split('\n').map((line) => `> ${line}`).join('\n')
+  const docOf = (form) => {
+    const para = form === 'v2' ? paragraph(100, 300) : paragraph(50, 160)
+    return fc.array(fc.oneof({ weight: 5, arbitrary: para }, { weight: 1, arbitrary: para.map(quoted) }), { minLength: 1, maxLength: 3 }).map((paras) => paras.join('\n\n'))
+  }
+  const replyTos = fc.constantFrom(null, { authorId: REPLIED, url: JUMP }, { authorId: WORST_ID, url: `https://${'a'.repeat(192)}` })
+  const threads = fc.constantFrom(undefined, { urlBase: BASE, partIds: MSG }, { urlBase: WORST_BASE, partIds: [WORST_ID, WORST_ID, WORST_ID] }, { urlBase: BASE, partIds: [MSG[0], null, null] })
+
+  for (const form of FORMS) {
+    it(`shows no word of a spoiler and hides no other word, in whatever part a cut puts them (${form}, with and without the reply line)`, () => {
+      let cut = 0
+      fc.assert(
+        fc.property(docOf(form), replyTos, threads, (src, replyTo, thread) => {
+          const r = toDiscord(src, opts({ form, replyTo, thread }))
+          if (r.parts.length > 1) cut++
+          const found = leaks(src, r.parts)
+          if (found.length > 0) throw new Error(found.join('\n'))
+        }),
+        // A reply is thousands of characters long, so what is said of a failure is the leaks and the start of the reply, not all of it.
+        {
+          numRuns: 1000,
+          interruptAfterTimeLimit: 90_000,
+          reporter: (d) => {
+            if (d.failed) throw new Error(`seed ${d.seed} after ${d.numRuns} runs and ${d.numShrinks} shrinks: ${d.errorInstance?.message}\nreply: ${JSON.stringify(d.counterexample[0]).slice(0, 1200)}`)
+          },
+        },
+      )
+      // Most of the replies are cut, or the property says nothing of cuts.
+      expect(cut).toBeGreaterThan(500)
+    }, 180_000)
+  }
 })
 
 describe('budget', () => {

@@ -34,7 +34,13 @@
  *   last word, not a space) and opens again where the next part starts, after the mark of the part and a quote's mark. A
  *   spoiler is never left open at the end of a part, for Discord would show the bars and hide nothing. A cut between the
  *   lines of a spoiler is one of the last choices among the line ends, the way one inside a code block is, and none falls
- *   inside a mark or an escape.
+ *   inside a mark or an escape. None falls right before the mark that closes one that is open (spaces left out), for the next
+ *   part would open it again and start with bars that close nothing, which Discord pairs with the next ones, showing every
+ *   spoiler between them; nor right after the mark that opens one, for its part would end with bars that hide nothing;
+ * - an italic that comes right after another is written as one, since `*a**b*` is not two italics;
+ * - the text that starts a line is escaped (`\#`, `\-`, `1\.`) after a line break inside a spoiler too, and at the start of a part
+ *   that starts inside a line, where its mark is followed by a space and not a line end: what was in the middle of a line is no
+ *   heading, list item or quote.
  *
  * Limits. Discord counts every displayable character of a V2 message, button label included, against 4000 (measured), and
  * the content of a plain message against 2000. The body of a part is cut at the lesser of PRIMARY_LIMIT (PLAIN_LIMIT)
@@ -47,7 +53,8 @@
  * than one, and put back together once the marks are off. A part ends at the latest blank line that fits; else at the latest
  * line end outside a code fence, list or table; else between the lines of one; else at a sentence end (`. `, `! ` or `? `),
  * else after a space, else anywhere, but never inside a surrogate pair. The mark is followed by a line end rather than a
- * space when its part starts with block syntax (a heading, list, quote or fence), which a space would turn into text.
+ * space when its part starts with block syntax (a heading, list, quote or fence), which a space would turn into text, but
+ * only where the part starts at the start of a line: one that starts inside a line has its text after a space, as it was.
  * A split of text that is no reply closes and opens nothing again.
  *
  * markers(partIds, threadUrlBase) → one line for each part: part 1's links forward and the others' link back, null where
@@ -263,8 +270,21 @@ const INLINE = {
 /** → inline nodes as Discord markdown. An image has no place in the text: `ic.images` collects it, to show after the line. */
 function inline(nodes, ic, atStart = false) {
   let out = ''
-  // The line starts where the first thing that is shown does: a picture shows nothing here, so what follows it is the start.
-  for (const node of nodes) out += INLINE[node.type](node, ic, atStart && out === '')
+  // A line starts where the first thing that is shown does, and after a line break: a picture shows nothing here, so what follows
+  // it is the start.
+  let start = atStart
+  // Whether `out` ends with the mark that closes an italic. An italic that comes next is joined to it, since `*a**b*` is not
+  // two italics but an italic with bold marks in it.
+  let italic = false
+  for (const node of nodes) {
+    const piece = INLINE[node.type](node, ic, start)
+    // An italic of nothing but spaces, or of a picture that is attached, is written as what it holds, with no mark.
+    const isItalic = node.type === 'em' && piece.trim() !== ''
+    out = isItalic && italic ? out.slice(0, -1) + piece.slice(1) : out + piece
+    if (isItalic) italic = true
+    else if (piece !== '') italic = false
+    start = node.type === 'br' || (start && piece === '')
+  }
   return out
 }
 
@@ -435,7 +455,6 @@ function toggled(stack, mark) {
  * that starts as a list item does not read its marker, which may be a `*`.
  */
 function scan(text, stack) {
-  // Stryker disable next-line ArrayDeclaration: a first entry that is no token has no `at`, which no search finds before an offset, and nothing else reads it
   const events = []
   let open = stack
   MARK_TOKEN.lastIndex = LIST_ROW.exec(text)?.[0].length ?? 0
@@ -445,12 +464,18 @@ function scan(text, stack) {
     const first = m[0][0]
     if (first === '`') {
       const ticks = m[0][1] === '`' ? '``' : '`'
-      events.push({ at, end: at + ticks.length, stack: toggled(open, ticks) }, { at: end - ticks.length, end, stack: open })
-    } else if (first === '\\') events.push({ at, end, stack: open })
+      events.push({ at, end: at + ticks.length, stack: toggled(open, ticks), shuts: false, opens: true }, { at: end - ticks.length, end, stack: open, shuts: true, opens: false })
+    } else if (first === '\\') events.push({ at, end, stack: open, shuts: false, opens: false })
     else if (first !== '<') {
+      let shuts = false
+      let opens = false
       // A run of asterisks is bold for each pair of them and italic for one over; the run does not tell which was opened first.
-      for (const mark of m[0].match(MARK)) open = toggled(open, mark)
-      events.push({ at, end, stack: open })
+      for (const mark of m[0].match(MARK)) {
+        if (open.marks.includes(mark)) shuts = true
+        else opens = true
+        open = toggled(open, mark)
+      }
+      events.push({ at, end, stack: open, shuts, opens })
     }
   }
   return events
@@ -458,8 +483,9 @@ function scan(text, stack) {
 
 /**
  * → what is open at each boundary between the rows (and at the two ends) as `states`, and what each row's text holds of it as
- * `scans`: { events, stack } with the stack that is open at the row's start. A row in a code fence, or that opens one, is code and
- * marks nothing (a closing fence is nothing but its fence). With no `repair` nothing is read, so no cut closes or opens a mark.
+ * `scans`: { events, stack, ends } with the stack that is open at the row's start (`ends` is visibleEnds of its text). A row
+ * in a code fence, or that opens one, is code and marks nothing (a closing fence is nothing but its fence). With no `repair`
+ * nothing is read, so no cut closes or opens a mark.
  */
 function markStates(rows, inside, repair) {
   const states = []
@@ -468,16 +494,15 @@ function markStates(rows, inside, repair) {
   rows.forEach((row, i) => {
     states.push(stack)
     const events = repair && inside[i + 1] === null ? scan(row.text, stack) : NONE
-    scans.push({ events, stack })
+    scans.push({ events, stack, ends: visibleEnds(row.text) })
     stack = events.at(-1)?.stack ?? stack
   })
   states.push(stack)
   return { states, scans }
 }
 
-/** → what is open at the offset in a row, or null where the offset falls between the characters of a token, which a cut keeps whole. */
-function marksAt(scan, off) {
-  const { events } = scan
+/** → the index of the first token that starts at the offset or after it. */
+function firstFrom(events, off) {
   let lo = 0
   let hi = events.length
   while (lo < hi) {
@@ -485,8 +510,38 @@ function marksAt(scan, off) {
     if (events[mid].at < off) lo = mid + 1
     else hi = mid
   }
+  return lo
+}
+
+/** → what is open at the offset in a row, or null where the offset falls between the characters of a token, which a cut keeps whole. */
+function marksAt(scan, off) {
+  const lo = firstFrom(scan.events, off)
   if (lo === 0) return scan.stack
-  return events[lo - 1].end > off ? null : events[lo - 1].stack
+  return scan.events[lo - 1].end > off ? null : scan.events[lo - 1].stack
+}
+
+/**
+ * → for each offset of the text, where the last character before it that is no space ends (0 where there is none). Only spaces
+ * lie between a token and an offset after it if it ends where that does, and between an offset and a token after it if the one
+ * of the token is no later than it: a cut looks over the spaces to the next token, or the last, at each place in them, which is
+ * found at once this way. Were every place to walk them, a hostile run of thousands of spaces would take the time of its square.
+ */
+function visibleEnds(text) {
+  const ends = [0]
+  for (let i = 1; i <= text.length; i++) ends.push(GAP.test(text[i - 1]) ? ends[i - 1] : i)
+  return ends
+}
+
+/** → the token that comes next from the offset on if nothing but spaces lie between, else null. */
+function tokenAfter(scan, off) {
+  const token = scan.events[firstFrom(scan.events, off)]
+  return token !== undefined && scan.ends[token.at] <= off ? token : null
+}
+
+/** → the token that comes last before the offset if nothing but spaces lie between, else null. */
+function tokenBefore(scan, off) {
+  const token = scan.events[firstFrom(scan.events, off) - 1]
+  return token !== undefined && scan.ends[off] === token.end ? token : null
 }
 
 // How good a place to cut a boundary is, the best first.
@@ -510,16 +565,19 @@ const isLow = (code) => code >= 0xdc00 && code <= 0xdfff
  * → where to cut `text` after `from`, at most `room` characters on, counting what a cut closes (`scan` says what is open
  * where), and at least `need` on (unless nothing is left to cut at but the end of the room): after a sentence end, else after a
  * space, else anywhere not inside a surrogate pair or a token of `scan`. Null when no place leaves room for what it closes.
+ * A `strict` cut is never right before the token that closes a mark that is open (spaces left out), for the next part would open
+ * that mark again and be left with a pair of bars that close nothing, which pair with the next ones, and never right after the
+ * token that opens one, for its part would end with a pair of bars that hide nothing.
  */
-function cutIn(text, from, room, need, scan) {
+function cutIn(text, from, room, need, scan, strict) {
   const top = Math.min(from + room, text.length - 1)
   const fits = (i) => {
     const open = marksAt(scan, i)
-    return open !== null && i - from + open.shut.length <= room
+    if (open === null || i - from + open.shut.length > room) return false
+    return !strict || !(tokenAfter(scan, i)?.shuts || tokenBefore(scan, i)?.opens)
   }
   for (let i = top; i - from >= Math.max(need, 2); i--) if (GAP.test(text[i - 1]) && '.!?'.includes(text[i - 2]) && fits(i)) return i
   for (let i = top; i - from >= Math.max(need, 1); i--) if (GAP.test(text[i - 1]) && fits(i)) return i
-  // Stryker disable next-line EqualityOperator: a place above `from` is found whenever one is, for the room is far more than a closing mark takes, and `from` itself would be the boundary before the row, which the plan cuts at first
   for (let i = top; i > from; i--) if (!(isLow(text.charCodeAt(i)) && isHigh(text.charCodeAt(i - 1))) && fits(i)) return i
   return null
 }
@@ -527,10 +585,10 @@ function cutIn(text, from, room, need, scan) {
 /**
  * Cuts rows into parts. spec: cap(p, last) the room of part p (as the last part, and as one with another after it),
  * noteCost(label), maxSpecials, and repair (whether a cut inside a code fence, or inside a spoiler or another mark, closes it,
- * and opens it in the next part, for which the room is kept). → [{ from, to, reopen, closer, resume, leave }]: from and to are
- * { row, off } positions, `reopen` the fence to open at the start of the part and `closer` the line that closes one at its end,
- * or null; `resume` the marks that are open at its start, to be opened again there, and `leave` those open at its end, to be
- * closed there (EMPTY for none).
+ * and opens it in the next part, for which the room is kept). → [{ from, to, reopen, closing, resume, leave }]: from and to are
+ * { row, off } positions, `reopen` the fence to open at the start of the part, or null, `closing` the lines that close one at its
+ * end (none, or the line of the fence); `resume` the marks that are open at its start, to be opened again there, and `leave` those
+ * open at its end, to be closed there (EMPTY for none).
  * A part takes the rest of the rows when they fit. Else it ends at a boundary between rows, the latest of the best kind
  * that fits and fills the part to half its room at least (blank line, line end, line end inside a fence, list or table, in
  * that order), or inside a row, the latest sentence end, else space, that fills it so, else the room's end (a row cut after
@@ -539,6 +597,9 @@ function cutIn(text, from, room, need, scan) {
  * boundary right after a fence opens or right before it closes is cut at only when nothing else can be, so that no part
  * has a fence with nothing in it. These are the parts that may be under half full. A part looks no further on than its room
  * goes, so the walk is linear.
+ * A cut never leaves bars with nothing in them: not right before the token that closes a mark that is open (the next part would
+ * open it again, and be left with bars that close nothing, which Discord pairs with the next ones, showing every spoiler between
+ * them), nor right after the token that opens one. Where no such place is left in a row, it is cut anywhere that leaves room.
  */
 function plan(rows, spec) {
   const n = rows.length
@@ -546,6 +607,10 @@ function plan(rows, spec) {
   const { states, scans } = markStates(rows, inside, spec.repair)
   const fenceCost = (e) => (spec.repair && inside[e] !== null ? inside[e].closer.length + 1 : 0)
   const tailOf = (row) => row.cites.reduce((sum, label) => sum + spec.noteCost(label), 0)
+  // A boundary right before the row that starts with the token that closes a mark that is open there, or right after the row that
+  // ends with the token that opens one, is no place to cut: the part that starts or ends there would have bars with nothing in.
+  const shutsAfter = (e) => tokenAfter(scans[e], QUOTE.exec(rows[e].text)[0].length)?.shuts === true
+  const opensBefore = (e) => tokenBefore(scans[e - 1], rows[e - 1].text.length)?.opens === true
   const parts = []
   let at = { row: 0, off: 0 }
   let reopen = null
@@ -583,11 +648,11 @@ function plan(rows, spec) {
       if (e === n || total > capMid) {
         // The room of the last part is no more than that of the others, so a total over the latter is over the former too.
         done = total <= capLast
-        // Stryker disable next-line ConditionalExpression: the room of a part cannot run out in a row with no text, but for the last, and then the part before it is half full
-        if (row.special === null) over = { row: e - 1, before, tail }
+        over = { row: e - 1, before, tail }
         break
       }
       if (total + fenceCost(e) + states[e].shut.length > capMid) continue
+      if (shutsAfter(e) || opensBefore(e)) continue
       if (inside[e] !== null && (inside[e - 1] === null || inside[e + 1] === null)) {
         edge = { e, before: cost, tail }
         continue
@@ -596,15 +661,15 @@ function plan(rows, spec) {
       latest[classOf(rows, inside, states, e)] = { e, fill: cost }
     }
     if (done) {
-      parts.push({ from: at, to: { row: n, off: 0 }, reopen, closer: null, resume, leave: EMPTY })
+      parts.push({ from: at, to: { row: n, off: 0 }, reopen, closing: NONE, resume, leave: EMPTY })
       return parts
     }
     // Where the part is cut inside a row, and the room it has there for the piece, of which `need` fill it to its half.
     const room = (t) => capMid - t.before - t.tail - fenceCost(t.row)
-    const cutRow = (t, from) => {
+    const cutRow = (t, from, strict = true) => {
       const text = rows[t.row].text
       const need = Math.ceil(capMid / 2 - t.before)
-      const off = cutIn(text, from, room(t), need, scans[t.row])
+      const off = cutIn(text, from, room(t), need, scans[t.row], strict)
       return off === null ? null : { row: t.row, off }
     }
     const best = latest.find((c) => c !== null && c.fill * 2 >= capMid)
@@ -613,21 +678,21 @@ function plan(rows, spec) {
     let spill = over
     if (over !== null && FENCE.test(rows[over.row].text)) {
       const code = over.row - 1
-      // Stryker disable next-line ConditionalExpression: a fence's line that the room runs out in, with no boundary before it that fills the part to its half, can only be a closing fence after a line of code: a boundary before an opening one has no fence to close and so fits, and a fence with no line in it is too short to be the cause
-      spill = spec.repair && inside[code] !== null && inside[over.row] !== null ? { row: code, before: over.before - sizeOf(code), tail: over.tail } : null
+      spill = spec.repair && inside[over.row] !== null ? { row: code, before: over.before - sizeOf(code), tail: over.tail } : null
     }
     let next = best === undefined ? null : { row: best.e, off: 0 }
     if (next === null && spill !== null) next = cutRow(spill, spill.row === at.row ? at.off : 0)
     if (next === null && any !== null) next = { row: any.e, off: 0 }
     // A fence cut right after it opens would be left with nothing in it, so the line of code that comes next is cut instead.
-    // Stryker disable next-line ConditionalExpression: with a fence to close, the boundary after the closing fence fits whenever the one before it does, so a boundary next to a fence's edge is the last one only after an opening fence
-    if (next === null && spec.repair && edge !== null && inside[edge.e + 1] !== null) next = cutRow({ row: edge.e, before: edge.before, tail: edge.tail + tailOf(rows[edge.e]) }, 0)
+    if (next === null && spec.repair && edge !== null) next = cutRow({ row: edge.e, before: edge.before, tail: edge.tail + tailOf(rows[edge.e]) }, 0)
     if (next === null && edge !== null) next = { row: edge.e, off: 0 }
-    if (next === null) next = cutRow({ row: at.row, before: start, tail: tailOf(rows[at.row]) }, at.off)
+    // A row with nowhere to cut that leaves no bars with nothing in is cut anywhere that leaves room.
+    const whole = { row: at.row, before: start, tail: tailOf(rows[at.row]) }
+    if (next === null) next = cutRow(whole, at.off) ?? cutRow(whole, at.off, false)
     const open = inside[next.row]
     const cut = spec.repair && open !== null
     const leave = marksAt(scans[next.row], next.off)
-    parts.push({ from: at, to: next, reopen, closer: cut ? open.closer : null, resume, leave })
+    parts.push({ from: at, to: next, reopen, closing: cut ? [open.closer] : NONE, resume, leave })
     reopen = cut ? open : null
     resume = leave
     at = next
@@ -646,7 +711,8 @@ function piecesOf(rows, from, to) {
   return out
 }
 
-const marked = (k, n, body) => `**${k}/${n}**${BLOCK_START.test(body) ? '\n' : ' '}${body}`
+// A part that starts inside a line has its mark and the text on one line, which is no start of a line.
+const marked = (k, n, body, inRow) => `**${k}/${n}**${!inRow && BLOCK_START.test(body) ? '\n' : ' '}${body}`
 
 export function split(text, limit) {
   if (typeof text !== 'string') throw new TypeError('the text must be a string')
@@ -660,7 +726,7 @@ export function split(text, limit) {
     const parts = plan(rows, { cap: () => limit - width, maxSpecials: Infinity, repair: false })
     const needed = markWidth(parts.length)
     if (needed <= width) {
-      return parts.map((part, i) => marked(i + 1, parts.length, piecesOf(rows, part.from, part.to).map((row) => row.text + (row.eol ? '\n' : '')).join('')))
+      return parts.map((part, i) => marked(i + 1, parts.length, piecesOf(rows, part.from, part.to).map((row) => row.text + (row.eol ? '\n' : '')).join(''), part.from.off > 0))
     }
     width = needed
   }
@@ -682,19 +748,21 @@ const PLACE = {
 function assemble(c, cut, k) {
   const { o, n } = c
   const pieces = piecesOf(c.rows, cut.from, cut.to)
+  const first = pieces[0]
   if (cut.resume.open !== '') {
-    const first = pieces[0]
     // A quote's mark stays in front of what is opened again, and a cut inside a row starts after no mark.
     const quote = cut.from.off === 0 ? QUOTE.exec(first.text)[0] : ''
     first.text = quote + cut.resume.open + first.text.slice(quote.length).trimStart()
+  } else if (cut.from.off > 0 && cut.reopen === null) {
+    // A part that starts inside a line starts with what was in the middle of it, which was no line start and must not become one.
+    first.text = first.text.replace(LINE_START, '$1\\')
   }
   if (cut.leave.shut !== '') {
     const last = pieces.at(-1)
     last.text = last.text.trimEnd() + cut.leave.shut
   }
   if (cut.reopen !== null) pieces.unshift(textRow(cut.reopen.opener))
-  // Stryker disable next-line ConditionalExpression: a null line joins as an empty one, which the trim of the run takes off
-  if (cut.closer !== null) pieces.push(textRow(cut.closer))
+  for (const line of cut.closing) pieces.push(textRow(line))
 
   const files = []
   const body = []
