@@ -54,8 +54,11 @@
  * message it has made), then reads the thread's messages from 5 s before the send began (progress.inflightAt is written with `inflight`,
  * and the read is messagesAfter of the snowflake of that time) and looks, among those of our webhook, for one whose text is the part's
  * and which no reply has taken as its part yet. (A part's text names the part before it, so no part matches another's.) One found is
- * adopted as the part. Only when there is none is the part sent again, once; a second unknown ends the attempt, and
- * the next attempt looks again before it sends. A failed look is a failed attempt, never a resend.
+ * adopted as the part. Only when there is none is the part sent again, once. A second unknown is looked for in the same way,
+ * because no attempt may come after it (the ladder's last): a part it made is adopted, so that an end for good removes it with the
+ * rest. When that look finds none, the attempt ends, and the next attempt looks again before it sends. A failed look is a failed
+ * attempt, never a resend. (So the one part the worker cannot know of is one that a look which failed, on the ladder's last attempt,
+ * could not find: an end for good cannot remove what it has no id for.)
  *
  * Another webhook. A reply keeps the id of the webhook that sent it (progress.webhookId while it is sent, then the message's webhook_id,
  * and each part's). The webhook of an address that was made again is another one, and Discord lets a webhook edit and delete only its own
@@ -369,11 +372,13 @@ export function createOutbox({ store, webhook, discord, form = DEFAULT_FORM, gui
       try {
         return await adopt(await sendCall(ctx, body, files))
       } catch (err) {
-        // Only a send that may have landed is looked for, and sent again once.
-        if (!(err instanceof WebhookError) || !err.unknown || sent === 1) throw err
+        // Only a send that may have landed is looked for. It is looked for after every one, the second too: no attempt may come after
+        // this one to look, and a part that is found is adopted, so that an end for good removes it with the rest. It is sent again once.
+        if (!(err instanceof WebhookError) || !err.unknown) throw err
+        const found = await lookup(ctx, built.text, look(now() + LOOK_WAIT_MS))
+        if (found !== null) return adopt(found)
+        if (sent === 1) throw err
       }
-      const found = await lookup(ctx, built.text, look(now() + LOOK_WAIT_MS))
-      if (found !== null) return adopt(found)
     }
   }
 

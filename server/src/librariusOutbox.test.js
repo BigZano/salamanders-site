@@ -39,6 +39,13 @@ function makeWorld() {
     bot: [], // every call of the bot: { kind, ... }
     script: [], // what the next webhook requests answer: null (as Discord would), a response, or { throws, lands }
     lookFails: [],
+    // What may leave a part in Discord that the store has no id for, in the order it happened (`seq`): `made`, the seq of each message a
+    // send made, by its id; `doubts`, each look at the thread that threw (Discord's read, or the store's knownPartIds) and each note of
+    // progress the store did not take, with the parts the look would have seen or the note told of (`covers(message, entry)`). An entry
+    // that ends for good has the seq of its end (`endSeq`).
+    made: new Map(),
+    doubts: [],
+    seq: 0,
     // What the worker holds in the store (ISO text or null), whether the lock is free for it, and what it did with the lock.
     holds: { pausedUntil: null, globalUntil: null },
     lockFree: true,
@@ -137,7 +144,13 @@ function makeWorld() {
       return pending.length === 0 ? null : new Date(Math.min(...pending.map((e) => e.nextAt))).toISOString()
     },
     async outboxProgress(id, progress) {
-      maybeFail('outboxProgress')
+      try {
+        maybeFail('outboxProgress')
+      } catch (err) {
+        const parts = (progress.parts ?? []).map((part) => part.id)
+        w.doubts.push({ seq: w.seq++, covers: (m, entry) => entry.id === id && parts.includes(m.id) })
+        throw err
+      }
       const e = w.entries.get(id)
       if (e !== undefined && e.state === 'sending') e.payload.progress = clone(progress)
     },
@@ -147,6 +160,7 @@ function makeWorld() {
       // As the real store: an entry that is not sending is left as it is, and nothing is written for it.
       if (e === undefined || e.state !== 'sending') return
       if (hold !== undefined) w.hold(hold)
+      if (state === 'failed' || state === 'blocked') e.endSeq = w.seq++
       e.state = state
       if (attempts !== undefined) e.attempts = attempts
       if (nextAt !== undefined) e.nextAt = asMs(nextAt)
@@ -213,7 +227,12 @@ function makeWorld() {
       return ids.filter((id) => w.uploads.get(id)?.authorId === authorId).map((id) => w.uploads.get(id))
     },
     async knownPartIds(ids) {
-      maybeFail('knownPartIds')
+      try {
+        maybeFail('knownPartIds')
+      } catch (err) {
+        w.doubts.push({ seq: w.seq++, covers: (m) => ids.includes(m.id) })
+        throw err
+      }
       return new Set(ids.filter((id) => partOwner(id) !== null))
     },
     async blockedSince(since) {
@@ -286,6 +305,7 @@ function makeWorld() {
         timestamp: new Date(Date.now()).toISOString(),
       }
       w.thread.push(message)
+      w.made.set(id, w.seq++)
       return answer(200, message)
     }
     const at = w.thread.findIndex((m) => m.id === messageId)
@@ -327,10 +347,13 @@ function makeWorld() {
     },
     async messagesAfter(threadId, afterId, limit = 100) {
       w.looks.push({ threadId, afterId, limit, at: Date.now() })
-      const fail = w.lookFails.shift()
-      if (fail !== undefined) throw fail
       // The snowflake holds a time: what is after it is what came later, and a message with no time is taken as recent.
       const since = Number(BigInt(afterId) >> 22n) + 1420070400000
+      const fail = w.lookFails.shift()
+      if (fail !== undefined) {
+        w.doubts.push({ seq: w.seq++, covers: (m) => Date.parse(m.timestamp) > since })
+        throw fail
+      }
       return w.thread.filter((m) => m.timestamp === undefined || Date.parse(m.timestamp) > since).slice(0, limit)
     },
     async setArchived(threadId, archived) {
@@ -947,34 +970,99 @@ describe('no blind resend: a send that may have landed is looked for before it i
     expect(w.sends().length).toBeGreaterThanOrEqual(2)
   })
 
-  it('adopts it when the second send is the one that did land, with the attempt after it', async () => {
+  it('adopts it when the second send is the one that did land, at the look after it, in the same attempt', async () => {
     w.script.push(lost, landed)
     const id = w.enqueue({ payload: sendPayload() })
     await run()
     expect(w.sends().map((c) => c.at - T0)).toEqual([0, 5000])
+    expect(w.looks.map((l) => l.at - T0)).toEqual([5000, 10_000])
     expect(w.ours()).toHaveLength(1)
-    expect(w.entry(id)).toMatchObject({ state: 'sent', attempts: 1 })
+    expect(w.entry(id)).toMatchObject({ state: 'sent', attempts: 0 })
   })
 
-  it('goes to the ladder after two unknowns, and looks first at the next attempt, which sends once', async () => {
+  it('goes to the ladder after two unknowns and a look after each, and looks first at the next attempt, which sends once', async () => {
     w.script.push(lost, lost)
     const id = w.enqueue({ payload: sendPayload() })
-    await run(5000)
+    await run(10_000)
     expect(w.entry(id)).toMatchObject({ state: 'pending', attempts: 1 })
-    expect(w.entry(id).nextAt).toBe(T0 + 5000 + 5000)
-    await later(10_000)
-    expect(w.sends().map((c) => c.at - T0)).toEqual([0, 5000, 10_000])
+    expect(w.entry(id).nextAt).toBe(T0 + 10_000 + 5000)
+    await later(5000)
+    expect(w.sends().map((c) => c.at - T0)).toEqual([0, 5000, 15_000])
+    expect(w.looks.map((l) => l.at - T0)).toEqual([5000, 10_000, 15_000])
     expect(w.ours()).toHaveLength(1)
     expect(w.entry(id).state).toBe('sent')
   })
 
-  it('finds, at the next attempt, a message that landed after the answer was lost for good', async () => {
+  describe('at the end of the ladder, where no attempt comes after to look', () => {
+    // Every attempt sends twice, and each send is a 502, until the very last of the last attempt, which lands.
+    const ladder = () => [...Array.from({ length: 9 }, () => answer(502)), { ...answer(502), lands: true }]
+    const forbidden = () => answer(403, { code: 50013, message: 'Missing Permissions' })
+
+    it('looks after the second unknown too, and takes the part the last send made: the reply is there once, and stored', async () => {
+      w.script.push(...ladder())
+      const id = w.enqueue({ payload: sendPayload() })
+      await run(2_000_000)
+      expect(w.sends()).toHaveLength(10)
+      expect(w.ours()).toHaveLength(1)
+      expect(w.entry(id)).toMatchObject({ state: 'sent', attempts: 4 })
+      expect([...w.messages.keys()]).toEqual([w.ours()[0].id])
+      expect(w.parts.get(w.ours()[0].id)).toEqual([w.ours()[0].id])
+    })
+
+    it('removes that part with the rest of the reply when the reply then ends for good', async () => {
+      w.script.push(...ladder(), forbidden())
+      const id = w.enqueue({ payload: sendPayload({ source: TWO() }) })
+      await run(2_000_000)
+      expect(w.entry(id)).toMatchObject({ state: 'failed', lastError: COPY.locked })
+      expect(w.sends()).toHaveLength(11)
+      expect(w.ours()).toEqual([])
+      expect(w.messages.size).toBe(0)
+      // The part the last send made is the one the cleanup named and removed.
+      const landed = w.entry(id).payload.progress.parts.map((part) => part.id)
+      expect(landed).toHaveLength(1)
+      const deletes = [...w.entries.values()].filter((e) => e.kind === 'delete')
+      expect(deletes.map((e) => [e.state, e.payload.partIds])).toEqual([['sent', landed]])
+      expect(w.calls.filter((c) => c.kind === 'remove').map((c) => c.messageId)).toEqual(landed)
+    })
+
+    it('removes a part an edit added with the last send of the ladder, when the edit then ends for good, and puts the reply back', async () => {
+      const id = await sentReply('Short.')
+      w.calls.length = 0
+      w.script.push(null, ...ladder(), forbidden())
+      const e = w.enqueue({ kind: 'edit', key: id, payload: { postId: THREAD, source: TWO('a', 'b'), mentions: [] } })
+      outbox.kick()
+      await later(2_000_000)
+      expect(w.entry(e)).toMatchObject({ state: 'failed', lastError: COPY.locked })
+      expect(w.sends()).toHaveLength(10)
+      expect(w.ours().map((m) => m.id)).toEqual([id])
+      expect(w.textOf(w.ours()[0])).toBe(`Short.\n-# <@${MEMBER}>`)
+      expect(w.messages.get(id)).toMatchObject({ source: 'Short.', state: null })
+      expect(w.parts.get(id)).toEqual([id])
+    })
+
+    it('ends the attempt with the second send\'s own error when the look after it finds nothing, and sends no third', async () => {
+      w.script.push(answer(502), answer(500))
+      const id = w.enqueue({ payload: sendPayload() })
+      await run(10_000)
+      // Two sends, a look after each, and then the ladder: the next attempt is 5 s after the second look.
+      expect(w.sends().map((c) => c.at - T0)).toEqual([0, 5000])
+      expect(w.looks.map((l) => l.at - T0)).toEqual([5000, 10_000])
+      expect(w.entry(id)).toMatchObject({ state: 'pending', attempts: 1, lastError: 'WebhookError: Discord answered 500 to the webhook send.' })
+      expect(w.entry(id).nextAt).toBe(T0 + 15_000)
+    })
+  })
+
+  it('finds, at the next attempt, a message that landed when the look after it could not be made', async () => {
     w.script.push(lost, landed)
-    w.script.push(lost) // never reached: the second send's answer ends the attempt
+    w.script.push(lost) // never reached: the part is found, and not sent a third time
+    // The look after the first send is made; the one after the second fails.
+    w.lookFails.push(undefined, new Upstream('Discord is unreachable.'))
     const id = w.enqueue({ payload: sendPayload() })
     await run()
+    expect(w.sends()).toHaveLength(2)
+    expect(w.looks.map((l) => l.at - T0)).toEqual([5000, 10_000, 15_000])
     expect(w.ours()).toHaveLength(1)
-    expect(w.entry(id).state).toBe('sent')
+    expect(w.entry(id)).toMatchObject({ state: 'sent', attempts: 1 })
   })
 
   it('does not take for its own a message that is a part of another reply, though the words are the same', async () => {
@@ -3281,6 +3369,18 @@ describe('a try of the ladder goes on from what the one before it did', () => {
   })
 })
 
+/**
+ * Whether a message that an entry which ended for good left in Discord is a part the outbox cannot know of: one whose id the store never
+ * got (it is not among the entry's parts), and which, between the send that made it and the entry's end, a look at the thread that threw
+ * would have seen, or a note of progress that the store did not take would have told of. The look is the only way to learn of such a
+ * part, so one that no look could find is left. Any other part left behind is a fault: a part with no doubt on it is always found.
+ */
+function unknowable(entry, message) {
+  const made = w.made.get(message.id)
+  if (made === undefined || (entry.payload.progress?.parts ?? []).some((part) => part.id === message.id)) return false
+  return w.doubts.some((d) => d.seq > made && d.seq < entry.endSeq && d.covers(message, entry))
+}
+
 describe('never twice, never lost (property)', () => {
   const OUTCOMES = {
     ok: () => null,
@@ -3352,10 +3452,9 @@ describe('never twice, never lost (property)', () => {
             } else {
               // A reply that did not go leaves no message of the site behind...
               expect([...w.messages.values()].filter((m) => m.source === sourceOf(i, n))).toHaveLength(0)
-              // ...and, once what was queued for it has run, no part of it in Discord. (A part that may have landed, which no look
-              // found, is not known to the worker: an entry that ends with one in doubt is left out.)
+              // ...and, once what was queued for it has run, no part of it in Discord, but for one the worker cannot know of (unknowable).
               const cleaned = [...w.entries.values()].filter((e) => e.kind === 'delete').every((e) => e.state === 'sent')
-              if (cleaned && entry.payload.progress?.inflight == null) for (let k = 1; k <= n; k++) expect(holders(i, k)).toHaveLength(0)
+              if (cleaned) for (let k = 1; k <= n; k++) for (const m of holders(i, k)) expect(unknowable(entry, m)).toBe(true)
             }
           })
           // The limits hold within one run of the worker.
@@ -3393,7 +3492,8 @@ describe('edits and deletes never leave a part twice, nor a reply that is gone h
     fc.record({ type: fc.constant('wait'), ms: fc.integer({ min: 0, max: 30_000 }) }),
     fc.record({ type: fc.constant('wait'), ms: fc.integer({ min: 0, max: 3000 }) }),
     fc.record({ type: fc.constant('restart') }),
-    fc.record({ type: fc.constant('storefail'), name: fc.constantFrom('outboxProgress', 'finishEdit', 'finishDelete', 'outboxMessage', 'claimOutbox') }),
+    fc.record({ type: fc.constant('storefail'), name: fc.constantFrom('outboxProgress', 'finishEdit', 'finishDelete', 'outboxMessage', 'claimOutbox', 'knownPartIds') }),
+    fc.record({ type: fc.constant('looksfail') }),
   )
   const op = fc.record({ kind: fc.constantFrom('edit', 'edit', 'delete', 'none'), n2: fc.integer({ min: 1, max: 3 }) })
   const scenario = fc.record({
@@ -3435,7 +3535,8 @@ describe('edits and deletes never leave a part twice, nor a reply that is gone h
               w.life++
               outbox = make()
               outbox.start()
-            } else (w.storeFails[a.name] ??= []).push(new Error('connection lost'))
+            } else if (a.type === 'storefail') (w.storeFails[a.name] ??= []).push(new Error('connection lost'))
+            else w.lookFails.push(new Upstream('Discord is unreachable.'))
           }
           for (let i = 0; i < 12; i++) await vi.advanceTimersByTimeAsync(1_200_000)
 
@@ -3467,12 +3568,12 @@ describe('edits and deletes never leave a part twice, nor a reply that is gone h
               // An edit that ended for good, and whose restore went through, left the message as it was: its source, and every part, in Discord.
               const restores = [...w.entries.values()].filter((e) => e.kind === 'edit' && e.payload.restore === true)
               const cleaned = [...w.entries.values()].filter((e) => e.kind === 'delete').every((e) => e.state === 'sent')
-              // (A part that may have landed, which no look found, is not known to the worker, so it cannot be removed: an edit that ends for good
-              // with one in doubt, `inflight` set, is left out, as it is in the property above. It is a known limit of the outbox.)
-              if (kind === 'edit' && entry.state !== 'sent' && restores.every((e) => e.state === 'sent') && cleaned && row.state === null && entry.payload.progress?.inflight == null) {
+              if (kind === 'edit' && entry.state !== 'sent' && restores.every((e) => e.state === 'sent') && cleaned && row.state === null) {
                 expect(row.source).toBe(sourceOf(i, n, 1))
-                for (let k = 1; k <= 3; k++) expect(holders(i, k)).toHaveLength(k <= n ? 1 : 0)
+                for (let k = 1; k <= n; k++) expect(holders(i, k)).toHaveLength(1)
                 for (let k = 1; k <= n; k++) expect(w.textOf(holders(i, k)[0])).toContain(n === 1 ? 'short 1' : x(3000))
+                // No part the edit added is left, but for one the worker cannot know of (unknowable), as in the property above.
+                for (let k = n + 1; k <= 3; k++) for (const m of holders(i, k)) expect(unknowable(entry, m)).toBe(true)
               }
             }
             if (row !== undefined && (kind === 'none' || entry.state === 'sent' || entry.state === 'failed' || entry.state === 'blocked')) expect(w.messages.get(keys[i]).state === 'sending').toBe(false)
