@@ -29,6 +29,9 @@ const png = (...bytes) => Uint8Array.from([137, 80, 78, 71, ...bytes])
 
 /** A WebhookError as the client makes it, for a script to answer with. */
 const answer = (status, body = {}, headers = {}) => ({ status, body, headers })
+/** What the bot client throws for a refusal of Discord's: an Upstream with the status and Discord's code. */
+const botRefusal = (status, code) => Object.assign(new Upstream(`Discord answered ${status} for a message delete.`), { status, code })
+const archivedRefusal = () => botRefusal(400, 50083)
 
 function makeWorld() {
   let counter = 0
@@ -41,14 +44,19 @@ function makeWorld() {
     lookFails: [],
     // What may leave a part in Discord that the store has no id for, in the order it happened (`seq`): `made`, the seq of each message a
     // send made, by its id; `doubts`, each look at the thread that threw (Discord's read, or the store's knownPartIds) and each note of
-    // progress the store did not take, with the parts the look would have seen or the note told of (`covers(message, entry)`). An entry
-    // that ends for good has the seq of its end (`endSeq`).
+    // progress the store did not take, with the parts the look would have seen or the note told of (`covers(message, entry)`). A note
+    // the store did not take is a doubt only when the worker that held it was gone before the store had it (`takes`, the seq of each
+    // time the lock was taken afresh: a stop and a start, or a lock that was lost). An entry that ends for good has the seq of its end
+    // (`endSeq`), and an entry it queued to put Discord right names it (`origin`).
     made: new Map(),
     doubts: [],
+    takes: [],
     seq: 0,
-    // What the worker holds in the store (ISO text or null), whether the lock is free for it, and what it did with the lock.
+    // What the worker holds in the store (ISO text or null), whether the lock is free for it, whether it holds it, and what it did with
+    // the lock. A test takes the lock away with `lockHeld = false` (and gives it to another worker with `lockFree = false`).
     holds: { pausedUntil: null, globalUntil: null },
     lockFree: true,
+    lockHeld: false,
     lockCalls: [],
     looks: [],
     archived: false,
@@ -86,9 +94,9 @@ function makeWorld() {
     }
   }
 
-  w.enqueue = ({ kind = 'send', key, authorId = MEMBER, payload, nextAt = Date.now(), state = 'pending', attempts = 0 }) => {
+  w.enqueue = ({ kind = 'send', key, authorId = MEMBER, payload, nextAt = Date.now(), state = 'pending', attempts = 0, origin = null }) => {
     const id = String(w.nextEntry++)
-    w.entries.set(id, { id, kind, messageKey: key ?? `${id}`.padStart(32, 'a'), authorId, payload: clone(payload), state, attempts, nextAt: asMs(nextAt), lastError: null })
+    w.entries.set(id, { id, kind, messageKey: key ?? `${id}`.padStart(32, 'a'), authorId, payload: clone(payload), state, attempts, nextAt: asMs(nextAt), lastError: null, origin })
     if (kind !== 'send') {
       const m = w.messages.get(key)
       if (m !== undefined) m.state = 'sending'
@@ -100,11 +108,20 @@ function makeWorld() {
     async takeWorkerLock() {
       maybeFail('takeWorkerLock')
       w.lockCalls.push('take')
-      return w.lockFree
+      // As the real store: a lock that is held is held, and one that is free is taken.
+      if (!w.lockHeld && w.lockFree) {
+        w.lockHeld = true
+        w.takes.push(w.seq++)
+      }
+      return w.lockHeld
     },
     async releaseWorkerLock() {
       maybeFail('releaseWorkerLock')
       w.lockCalls.push('release')
+      w.lockHeld = false
+    },
+    holdsWorkerLock() {
+      return w.lockHeld
     },
     async outboxHold() {
       maybeFail('outboxHold')
@@ -144,15 +161,20 @@ function makeWorld() {
       return pending.length === 0 ? null : new Date(Math.min(...pending.map((e) => e.nextAt))).toISOString()
     },
     async outboxProgress(id, progress) {
+      const parts = (progress.parts ?? []).map((part) => part.id)
       try {
         maybeFail('outboxProgress')
       } catch (err) {
-        const parts = (progress.parts ?? []).map((part) => part.id)
-        w.doubts.push({ seq: w.seq++, covers: (m, entry) => entry.id === id && parts.includes(m.id) })
+        // The worker keeps the note: the parts it told of are unknown to the store only if that worker is gone (the lock was taken afresh)
+        // before a later note of the entry told the store of them.
+        const doubt = { seq: w.seq++, entryId: id, parts, taken: false }
+        doubt.covers = (m, entry) => entry.id === id && parts.includes(m.id) && !doubt.taken && w.takes.some((t) => t > doubt.seq && t < entry.endSeq)
+        w.doubts.push(doubt)
         throw err
       }
       const e = w.entries.get(id)
       if (e !== undefined && e.state === 'sending') e.payload.progress = clone(progress)
+      for (const d of w.doubts) if (d.entryId === id && !d.taken && !w.takes.some((t) => t > d.seq) && d.parts.every((part) => parts.includes(part))) d.taken = true
     },
     async outboxSet(id, { state, attempts, nextAt, error = null, messageState, event, queue = [], hold }) {
       maybeFail('outboxSet')
@@ -167,7 +189,7 @@ function makeWorld() {
       e.lastError = error === null ? null : error.slice(0, 500)
       if (messageState !== undefined && e.kind !== 'send' && w.messages.has(e.messageKey)) w.messages.get(e.messageKey).state = messageState
       if (event !== undefined) w.events.push({ at: Date.now(), actor: e.authorId, ...event })
-      for (const item of queue) w.enqueue({ kind: item.kind, key: item.messageKey, authorId: e.authorId, payload: item.payload })
+      for (const item of queue) w.enqueue({ kind: item.kind, key: item.messageKey, authorId: e.authorId, payload: item.payload, origin: id })
     },
     async finishSend(id, { message, partIds, uploadIds, event }) {
       maybeFail('finishSend')
@@ -242,7 +264,7 @@ function makeWorld() {
   }
 
   // A write that was made, and whose answer was lost: the store applied it, and the worker is told it failed.
-  for (const name of ['outboxSet', 'finishSend', 'finishEdit', 'finishDelete']) {
+  for (const name of ['outboxSet', 'finishSend', 'finishEdit', 'finishDelete', 'claimOutbox']) {
     const inner = w.store[name]
     w.store[name] = async (...args) => {
       const out = await inner(...args)
@@ -283,7 +305,7 @@ function makeWorld() {
       body = JSON.parse(init.body.get('payload_json'))
       files = [...init.body.entries()].filter(([k]) => k.startsWith('files[')).map(([, f]) => ({ name: f.name, type: f.type, size: f.size }))
     }
-    w.calls.push({ kind, at: Date.now(), thread, messageId, body, files, life: w.life })
+    w.calls.push({ kind, at: Date.now(), thread, messageId, body, files, life: w.life, held: w.lockHeld })
     return { kind, thread, messageId, body, files }
   }
 
@@ -363,7 +385,9 @@ function makeWorld() {
       return true
     },
     async deleteMessage(threadId, messageId) {
-      w.bot.push({ kind: 'delete', threadId, messageId, at: Date.now() })
+      w.bot.push({ kind: 'delete', threadId, messageId, at: Date.now(), held: w.lockHeld })
+      // As Discord answers a delete in a thread that is archived, and the bot client carries its status and code.
+      if (w.archived) throw archivedRefusal()
       const at = w.thread.findIndex((m) => m.id === messageId)
       if (at !== -1) w.thread.splice(at, 1)
     },
@@ -477,7 +501,7 @@ describe('createOutbox: the options', () => {
   it.each([
     ['a store without a method', () => ({ ...ok(), store: { ...w.store, finishSend: undefined } }), 'store.finishSend must be a function.'],
     ['no store', () => ({ ...ok(), store: undefined }), 'store.takeWorkerLock must be a function.'],
-    ...['takeWorkerLock', 'releaseWorkerLock', 'outboxHold', 'noteBlock', 'sendTimesSince', 'outboxInterrupted', 'claimOutbox', 'outboxNextAt', 'outboxProgress', 'outboxSet', 'finishSend', 'finishEdit', 'finishDelete', 'outboxMessage', 'uploadsFor', 'knownPartIds', 'blockedSince'].map((name) => [
+    ...['takeWorkerLock', 'releaseWorkerLock', 'holdsWorkerLock', 'outboxHold', 'noteBlock', 'sendTimesSince', 'outboxInterrupted', 'claimOutbox', 'outboxNextAt', 'outboxProgress', 'outboxSet', 'finishSend', 'finishEdit', 'finishDelete', 'outboxMessage', 'uploadsFor', 'knownPartIds', 'blockedSince'].map((name) => [
       `a store with no ${name}`,
       () => ({ ...ok(), store: { ...w.store, [name]: 'x' } }),
       `store.${name} must be a function.`,
@@ -934,6 +958,48 @@ describe('what a reply may be', () => {
   })
 })
 
+describe('the form a reply was checked in', () => {
+  // The route checks a reply in the form the site sends in at the time, and says which in the entry (payload.form). The worker sends it in
+  // that form, whatever form it sends new replies in by the time it takes the entry.
+  it.each([
+    ['v2', 'plain', 32768],
+    ['plain', 'v2', 4],
+  ])('sends a reply checked in %s in that form, though the worker sends new replies in %s now', async (checked, current, flags) => {
+    outbox = make({ form: current })
+    const id = w.enqueue({ payload: sendPayload({ form: checked }) })
+    await run()
+    expect(w.entry(id).state).toBe('sent')
+    expect(w.calls[0].body.flags).toBe(flags)
+    expect(w.messages.get(w.ours()[0].id).layout.form).toBe(checked)
+  })
+
+  it.each([
+    ['no form, as an entry queued before the route said', undefined],
+    ['null', null],
+    ['a form in capitals', 'V2'],
+    ['a form that is no form', 'html'],
+    ['an empty text', ''],
+    ['a number', 2],
+    ['a list with a form in it', ['plain']],
+    ['an object with a form in it', { form: 'plain' }],
+  ])('sends a reply whose entry says %s in the form the worker sends new replies in', async (_, form) => {
+    outbox = make({ form: 'plain' })
+    const id = w.enqueue({ payload: sendPayload({ form }) })
+    await run()
+    expect(w.entry(id).state).toBe('sent')
+    expect(w.calls[0].body.flags).toBe(4)
+    expect(w.messages.get(w.ours()[0].id).layout.form).toBe('plain')
+  })
+
+  it('keeps the form a reply began in when it is taken up again, whatever its entry and the worker say', async () => {
+    const id = w.enqueue({ state: 'sending', payload: sendPayload({ form: 'v2', progress: { form: 'plain', parts: [], inflight: null } }) })
+    await run()
+    expect(w.entry(id).state).toBe('sent')
+    expect(w.calls[0].body.flags).toBe(4)
+    expect(w.messages.get(w.ours()[0].id).layout.form).toBe('plain')
+  })
+})
+
 describe('no blind resend: a send that may have landed is looked for before it is sent again', () => {
   const lost = { throws: true }
   const landed = { throws: true, lands: true }
@@ -1259,17 +1325,55 @@ describe('a stop and a restart never lose a part and never send one twice', () =
     expect(w.entry(id).state).toBe('sent')
   })
 
-  it('looks for the part again when writing it down fails, and does not send it again', async () => {
+  it('writes down a part whose note the store did not take before the step of the ladder, and the next try goes on from it, with no look', async () => {
     w.storeFails.outboxProgress = [false, new Error('connection lost')]
     const id = w.enqueue({ payload: sendPayload() })
     await run(4000)
     expect(w.ours()).toHaveLength(1)
-    // The note of the part never reached the store, so the entry is tried again on the ladder, and finds the part by its text.
+    // The note of the part did not reach the store when the part landed: it is written before the entry goes back on the ladder.
     expect(w.entry(id)).toMatchObject({ state: 'pending', attempts: 1 })
+    expect(w.entry(id).payload.progress).toMatchObject({ inflight: null, parts: [{ id: w.ours()[0].id }] })
     await later(2000)
     expect(w.sends()).toHaveLength(1)
+    expect(w.looks).toEqual([])
     expect(w.entry(id).state).toBe('sent')
     expect(w.ours()).toHaveLength(1)
+  })
+
+  it('removes a part whose note the store did not take when the reply then ends for good, though no look at the thread can be made', async () => {
+    w.storeFails.outboxProgress = [false, new Error('connection lost')]
+    w.lookFails.push(...Array.from({ length: 10 }, () => new Upstream('Discord is unreachable.')))
+    w.script.push(null, answer(403, { code: 50001 }))
+    const id = w.enqueue({ payload: sendPayload({ source: TWO() }) })
+    await run(86_400_000)
+    expect(w.entry(id)).toMatchObject({ state: 'failed', lastError: 'This post is locked in Discord.' })
+    expect(w.ours()).toEqual([])
+    expect(w.messages.size).toBe(0)
+  })
+
+  it('writes that note once, and not again when the write of the step itself is made again', async () => {
+    w.storeFails.outboxProgress = [false, new Error('connection lost')]
+    w.storeFails.outboxSet = [new Error('connection lost')]
+    const writes = vi.spyOn(w.store, 'outboxProgress')
+    const id = w.enqueue({ payload: sendPayload() })
+    await run(4000)
+    // Before the send, after it (lost), and before the step (whose own write is lost).
+    expect(writes).toHaveBeenCalledTimes(3)
+    expect(w.entry(id).state).toBe('sending')
+    expect(w.entry(id).payload.progress.parts).toHaveLength(1)
+    await later(10_000)
+    expect(writes).toHaveBeenCalledTimes(3)
+    expect(w.entry(id)).toMatchObject({ state: 'sent', attempts: 1 })
+    expect(w.sends()).toHaveLength(1)
+  })
+
+  it('writes no note with the step of the ladder when the store took every note already', async () => {
+    w.script.push(answer(400, { code: 50035 }))
+    const writes = vi.spyOn(w.store, 'outboxProgress')
+    const id = w.enqueue({ payload: sendPayload() })
+    await run(4000)
+    expect(w.entry(id)).toMatchObject({ state: 'pending', attempts: 1 })
+    expect(writes).toHaveBeenCalledTimes(1)
   })
 
   it('looks again for a part that landed, at an attempt after a note that never reached the store', async () => {
@@ -1285,7 +1389,8 @@ describe('a stop and a restart never lose a part and never send one twice', () =
   })
 
   it('finds a part that landed when the worker died before it could write it down', async () => {
-    w.storeFails.outboxProgress = [false, new Error('connection lost')]
+    // The note fails when the part lands, and again when the entry is settled: the worker is stopped before the store takes it.
+    w.storeFails.outboxProgress = [false, new Error('connection lost'), new Error('connection lost')]
     const id = w.enqueue({ payload: sendPayload() })
     await run(1000)
     await outbox.stop()
@@ -1714,7 +1819,7 @@ describe('blocked: never tried again, and two in an hour stop everything for an 
 })
 
 describe('fatal: the webhook itself is refused', () => {
-  const REFUSED = 'The Librarius webhook was refused (status 401): create it again with librariusWebhookSetupRun.'
+  const REFUSED = 'The Librarius webhook was refused (status 401): run librariusWebhookSetupRun to check it.'
 
   it('stops everything, keeps the entry as it was, and says so', async () => {
     w.script.push(answer(401, { code: 0, message: '401: Unauthorized' }))
@@ -1734,7 +1839,7 @@ describe('fatal: the webhook itself is refused', () => {
     w.script.push(answer(404, { code: 10015, message: 'Unknown Webhook' }))
     w.enqueue({ payload: sendPayload() })
     await run(5000)
-    expect(outbox.webhookRefused()).toEqual({ status: 404, text: 'The Librarius webhook was refused (status 404): create it again with librariusWebhookSetupRun.' })
+    expect(outbox.webhookRefused()).toEqual({ status: 404, text: 'The Librarius webhook was refused (status 404): run librariusWebhookSetupRun to check it.' })
   })
 
   it('also stops for a refusal of an edit or a delete', async () => {
@@ -1992,6 +2097,153 @@ describe('a thread that is archived', () => {
     expect(w.entry(id).attempts).toBe(1)
     expect(w.bot.map((b) => b.archived)).toEqual([false, true])
   })
+
+  describe('for a message the bot deletes there', () => {
+    // The bot's deletes are unarchived for as the webhook's calls are: a message a person wrote, the parts of a reply of an older webhook, and
+    // what an old webhook sent of a reply that is begun again.
+    const remove = (key) => w.enqueue({ kind: 'delete', key, payload: { postId: THREAD } })
+    const person = () => {
+      const human = w.nextId()
+      w.thread.push({ id: human, webhook_id: null, content: 'A person wrote this.', attachments: [] })
+      w.messages.set(human, { id: human, origin: 'discord', postId: THREAD, authorId: MEMBER_2, source: null, layout: null, state: null })
+      return human
+    }
+    async function olderReply() {
+      const id = await sentReply(TWO())
+      w.messages.get(id).webhookId = OLD_HOOK
+      for (const m of w.thread) if (w.parts.get(id).includes(m.id)) m.webhook_id = OLD_HOOK
+      w.calls.length = 0
+      w.bot.length = 0
+      return id
+    }
+    /** A reply that an old webhook began: its first part is in the thread. */
+    const begunElsewhere = () => {
+      const first = { id: w.nextId(), webhook_id: OLD_HOOK, content: '', components: [{ type: 17, components: [{ type: 10, content: 'old words' }] }], timestamp: new Date(T0).toISOString(), attachments: [] }
+      w.thread.push(first)
+      const id = w.enqueue({ state: 'sending', payload: sendPayload({ progress: { form: 'v2', webhookId: OLD_HOOK, parts: [{ id: first.id, at: first.timestamp, attachments: [] }], inflight: null } }) })
+      return { id, first }
+    }
+    const botLog = () => w.bot.map((b) => (b.kind === 'archive' ? ['archive', b.archived] : ['delete', b.messageId]))
+
+    it('unarchives the post to delete a message a person wrote, deletes it, and archives the post again', async () => {
+      const human = person()
+      w.archived = true
+      const d = remove(human)
+      await run(5000)
+      expect(botLog()).toEqual([
+        ['delete', human],
+        ['archive', false],
+        ['delete', human],
+        ['archive', true],
+      ])
+      expect(w.thread).toEqual([])
+      expect(w.messages.has(human)).toBe(false)
+      expect(w.entry(d)).toMatchObject({ state: 'sent', attempts: 0 })
+      expect(w.archived).toBe(true)
+      expect(w.calls).toEqual([])
+    })
+
+    it('unarchives once for every part of a reply of an older webhook, and archives once at the end', async () => {
+      const id = await olderReply()
+      const parts = [...w.parts.get(id)]
+      w.archived = true
+      const d = remove(id)
+      outbox.kick()
+      await later(30_000)
+      expect(botLog()).toEqual([
+        ['delete', parts[0]],
+        ['archive', false],
+        ['delete', parts[0]],
+        ['delete', parts[1]],
+        ['archive', true],
+      ])
+      expect(w.thread.filter((m) => parts.includes(m.id))).toEqual([])
+      expect(w.messages.has(id)).toBe(false)
+      expect(w.entry(d)).toMatchObject({ state: 'sent', attempts: 0 })
+      expect(w.archived).toBe(true)
+      expect(w.calls).toEqual([])
+    })
+
+    it('unarchives to remove what an old webhook sent of a reply that is begun again, sends the reply, and archives once at the end', async () => {
+      const { id, first } = begunElsewhere()
+      w.archived = true
+      await run(30_000)
+      expect(botLog()).toEqual([
+        ['delete', first.id],
+        ['archive', false],
+        ['delete', first.id],
+        ['archive', true],
+      ])
+      expect(w.thread.some((m) => m.id === first.id)).toBe(false)
+      expect(w.entry(id)).toMatchObject({ state: 'sent', attempts: 0 })
+      expect(w.ours()).toHaveLength(1)
+      expect(w.archived).toBe(true)
+    })
+
+    it.each([
+      ['a message a person wrote', async () => ({ d: remove(person()) })],
+      ['the parts of a reply of an older webhook', async () => ({ d: remove(await olderReply()) })],
+      ['what an old webhook sent of a reply that is begun again', async () => ({ d: begunElsewhere().id })],
+    ])('fails for good, with the words of a locked post, when the bot may not unarchive the post: %s', async (_, queue) => {
+      const { d } = await queue()
+      const before = [...w.thread]
+      w.archived = true
+      w.locked = true
+      await run(86_400_000)
+      expect(w.entry(d)).toMatchObject({ state: 'failed', attempts: 0, lastError: 'This post is locked in Discord.' })
+      // Asked to unarchive, refused, and so never archived again. (The cleanup of a reply begun again asks once more, and fails the same way.)
+      expect(botLog().slice(0, 2)).toEqual([
+        ['delete', expect.any(String)],
+        ['archive', false],
+      ])
+      expect(w.bot.filter((b) => b.kind === 'archive' && b.archived)).toEqual([])
+      expect(w.thread).toEqual(before)
+      expect(w.calls).toEqual([])
+    })
+
+    it('treats a post that is archived again at once as a failed attempt, and archives it again after it', async () => {
+      const human = person()
+      const real = w.discord.deleteMessage
+      let refusals = 2
+      w.discord.deleteMessage = async (...args) => {
+        if (refusals-- > 0) throw archivedRefusal()
+        return real(...args)
+      }
+      const d = remove(human)
+      await run(2000)
+      expect(w.entry(d)).toMatchObject({ state: 'pending', attempts: 1 })
+      expect(botLog()).toEqual([
+        ['archive', false],
+        ['archive', true],
+      ])
+      await later(10_000)
+      expect(w.entry(d).state).toBe('sent')
+      expect(w.thread).toEqual([])
+      expect(w.archived).toBe(true)
+    })
+
+    it.each([
+      ['another refusal of a 400', () => botRefusal(400, 50035)],
+      ['the code of an archived post with another status', () => botRefusal(403, 50083)],
+      ['a refusal with no code', () => new Upstream('Discord answered 400 for a message delete.')],
+      ['an error that is no Upstream, with that status and code', () => Object.assign(new Error('Discord answered 400 for a message delete.'), { status: 400, code: 50083 })],
+    ])('does not take %s for an archived post: nothing is unarchived, and the attempt fails', async (_, refusal) => {
+      const human = person()
+      const real = w.discord.deleteMessage
+      let refusals = 1
+      w.discord.deleteMessage = async (...args) => {
+        if (refusals-- > 0) throw refusal()
+        return real(...args)
+      }
+      const d = remove(human)
+      await run(2000)
+      expect(w.bot).toEqual([])
+      expect(w.entry(d)).toMatchObject({ state: 'pending', attempts: 1 })
+      await later(10_000)
+      expect(w.entry(d).state).toBe('sent')
+      expect(w.thread).toEqual([])
+    })
+  })
 })
 
 describe('the store failing under the worker', () => {
@@ -2041,6 +2293,50 @@ describe('the store failing under the worker', () => {
     await run(6000)
     expect(w.entry(id).state).toBe('blocked')
     expect(w.sends()).toHaveLength(1)
+  })
+
+  it('takes up a reply whose claim was made when the answer to it was lost, at its next look, with no restart', async () => {
+    w.storeFailsAfter.claimOutbox = [new Error('connection lost')]
+    const id = w.enqueue({ payload: sendPayload() })
+    outbox = make()
+    outbox.start()
+    await later(4999)
+    expect(w.entry(id).state).toBe('sending')
+    expect(w.calls).toEqual([])
+    await later(1)
+    expect(w.entry(id)).toMatchObject({ state: 'sent', attempts: 0 })
+    expect(w.ours()).toHaveLength(1)
+    expect(w.calls[0].at).toBe(T0 - 1500 + 5000)
+  })
+
+  it('does the same for an edit, whose message shows that it is on its way until it is done', async () => {
+    const key = await sentReply('Before.')
+    w.storeFailsAfter.claimOutbox = [new Error('connection lost')]
+    const id = w.enqueue({ kind: 'edit', key, payload: { postId: THREAD, source: 'After.', mentions: [] } })
+    outbox.kick()
+    await later(4999)
+    expect(w.messages.get(key).state).toBe('sending')
+    await later(1)
+    expect(w.entry(id)).toMatchObject({ state: 'sent', attempts: 0 })
+    expect(w.messages.get(key)).toMatchObject({ state: null, source: 'After.' })
+    expect(w.textOf(w.ours()[0])).toContain('After.')
+  })
+
+  it('reads the entries left sending again after a failure of the store, once, and not when it has just read them', async () => {
+    const reads = vi.spyOn(w.store, 'outboxInterrupted')
+    w.storeFails.outboxHold = [new Error('connection lost')]
+    outbox = make()
+    outbox.start()
+    await later(5100)
+    // The start failed before it read them, and read them when it was made again: once.
+    expect(reads).toHaveBeenCalledTimes(1)
+    w.storeFails.claimOutbox = [new Error('connection lost')]
+    outbox.kick()
+    await later(5100)
+    expect(reads).toHaveBeenCalledTimes(2)
+    outbox.kick()
+    await later(5100)
+    expect(reads).toHaveBeenCalledTimes(2)
   })
 
   it('starts again once the store can be read, and takes up what was left sending', async () => {
@@ -3375,6 +3671,30 @@ describe('a try of the ladder goes on from what the one before it did', () => {
  * would have seen, or a note of progress that the store did not take would have told of. The look is the only way to learn of such a
  * part, so one that no look could find is left. Any other part left behind is a fault: a part with no doubt on it is always found.
  */
+/**
+ * Whether what an entry queued to put Discord right when it ended for good is all done, and what that queued in its turn: only then is
+ * the entry held to have left nothing. A cleanup that failed excuses its own entry, and no other.
+ */
+function cleanedUp(entry) {
+  return [...w.entries.values()].filter((e) => e.origin === entry.id).every((e) => e.state === 'sent' && cleanedUp(e))
+}
+
+/** What an action of a property does to the world, other than a wait or a restart. */
+function disturb(a) {
+  if (a.type === 'storefail') (w.storeFails[a.name] ??= []).push(new Error('connection lost'))
+  // The claim is made, and its answer lost: the entry is 'sending' with no one at it.
+  else if (a.type === 'claimlost') (w.storeFailsAfter.claimOutbox ??= []).push(new Error('connection lost'))
+  // The connection that held the lock is gone: the worker must notice, and take it again.
+  else if (a.type === 'loselock') w.lockHeld = false
+  else w.lookFails.push(new Upstream('Discord is unreachable.'))
+}
+
+/** Nothing was done to Discord, by the webhook or the bot, while the worker did not hold the lock. */
+function onlyWithTheLock() {
+  expect(w.calls.filter((c) => !c.held)).toEqual([])
+  expect(w.bot.filter((b) => b.kind === 'delete' && !b.held)).toEqual([])
+}
+
 function unknowable(entry, message) {
   const made = w.made.get(message.id)
   if (made === undefined || (entry.payload.progress?.parts ?? []).some((part) => part.id === message.id)) return false
@@ -3401,6 +3721,8 @@ describe('never twice, never lost (property)', () => {
     fc.record({ type: fc.constant('restart') }),
     fc.record({ type: fc.constant('storefail'), name: fc.constantFrom('outboxProgress', 'finishSend', 'claimOutbox', 'outboxSet', 'knownPartIds') }),
     fc.record({ type: fc.constant('looksfail') }),
+    fc.record({ type: fc.constant('claimlost') }),
+    fc.record({ type: fc.constant('loselock') }),
   )
   const scenario = fc.record({
     parts: fc.array(fc.integer({ min: 1, max: 3 }), { minLength: 1, maxLength: 4 }),
@@ -3431,8 +3753,7 @@ describe('never twice, never lost (property)', () => {
               w.life++
               outbox = make()
               outbox.start()
-            } else if (a.type === 'storefail') (w.storeFails[a.name] ??= []).push(new Error('connection lost'))
-            else w.lookFails.push(new Upstream('Discord is unreachable.'))
+            } else disturb(a)
           }
           for (let i = 0; i < 12; i++) await vi.advanceTimersByTimeAsync(1_200_000)
 
@@ -3452,11 +3773,11 @@ describe('never twice, never lost (property)', () => {
             } else {
               // A reply that did not go leaves no message of the site behind...
               expect([...w.messages.values()].filter((m) => m.source === sourceOf(i, n))).toHaveLength(0)
-              // ...and, once what was queued for it has run, no part of it in Discord, but for one the worker cannot know of (unknowable).
-              const cleaned = [...w.entries.values()].filter((e) => e.kind === 'delete').every((e) => e.state === 'sent')
-              if (cleaned) for (let k = 1; k <= n; k++) for (const m of holders(i, k)) expect(unknowable(entry, m)).toBe(true)
+              // ...and, once what it queued has run, no part of it in Discord, but for one the worker cannot know of (unknowable).
+              if (cleanedUp(entry)) for (let k = 1; k <= n; k++) for (const m of holders(i, k)) expect(unknowable(entry, m)).toBe(true)
             }
           })
+          onlyWithTheLock()
           // The limits hold within one run of the worker.
           const byLife = Map.groupBy(w.calls, (c) => c.life)
           for (const calls of byLife.values()) {
@@ -3494,6 +3815,8 @@ describe('edits and deletes never leave a part twice, nor a reply that is gone h
     fc.record({ type: fc.constant('restart') }),
     fc.record({ type: fc.constant('storefail'), name: fc.constantFrom('outboxProgress', 'finishEdit', 'finishDelete', 'outboxMessage', 'claimOutbox', 'knownPartIds') }),
     fc.record({ type: fc.constant('looksfail') }),
+    fc.record({ type: fc.constant('claimlost') }),
+    fc.record({ type: fc.constant('loselock') }),
   )
   const op = fc.record({ kind: fc.constantFrom('edit', 'edit', 'delete', 'none'), n2: fc.integer({ min: 1, max: 3 }) })
   const scenario = fc.record({
@@ -3535,8 +3858,7 @@ describe('edits and deletes never leave a part twice, nor a reply that is gone h
               w.life++
               outbox = make()
               outbox.start()
-            } else if (a.type === 'storefail') (w.storeFails[a.name] ??= []).push(new Error('connection lost'))
-            else w.lookFails.push(new Upstream('Discord is unreachable.'))
+            } else disturb(a)
           }
           for (let i = 0; i < 12; i++) await vi.advanceTimersByTimeAsync(1_200_000)
 
@@ -3565,10 +3887,8 @@ describe('edits and deletes never leave a part twice, nor a reply that is gone h
               const stored = w.parts.get(keys[i])
               expect(stored).toBeDefined()
               expect(stored[0]).toBe(keys[i])
-              // An edit that ended for good, and whose restore went through, left the message as it was: its source, and every part, in Discord.
-              const restores = [...w.entries.values()].filter((e) => e.kind === 'edit' && e.payload.restore === true)
-              const cleaned = [...w.entries.values()].filter((e) => e.kind === 'delete').every((e) => e.state === 'sent')
-              if (kind === 'edit' && entry.state !== 'sent' && restores.every((e) => e.state === 'sent') && cleaned && row.state === null) {
+              // An edit that ended for good, and whose restore and cleanup went through, left the message as it was: its source, and every part, in Discord.
+              if (kind === 'edit' && entry.state !== 'sent' && cleanedUp(entry) && row.state === null) {
                 expect(row.source).toBe(sourceOf(i, n, 1))
                 for (let k = 1; k <= n; k++) expect(holders(i, k)).toHaveLength(1)
                 for (let k = 1; k <= n; k++) expect(w.textOf(holders(i, k)[0])).toContain(n === 1 ? 'short 1' : x(3000))
@@ -3578,6 +3898,7 @@ describe('edits and deletes never leave a part twice, nor a reply that is gone h
             }
             if (row !== undefined && (kind === 'none' || entry.state === 'sent' || entry.state === 'failed' || entry.state === 'blocked')) expect(w.messages.get(keys[i]).state === 'sending').toBe(false)
           })
+          onlyWithTheLock()
           const byLife = Map.groupBy(w.calls, (c) => c.life)
           for (const calls of byLife.values()) for (let j = 1; j < calls.length; j++) expect(calls[j].at - calls[j - 1].at).toBeGreaterThanOrEqual(SPACING)
         } finally {
@@ -3685,6 +4006,94 @@ describe('one worker sends at a time: the lock', () => {
     await later(20_000)
     expect(w.lockCalls).toEqual(['take', 'take'])
     expect(w.entry(id).state).toBe('sent')
+  })
+
+  describe('lost while it works', () => {
+    // The connection that held the lock may fail: another worker may take the lock then, and only that one may send.
+    it('sends nothing more when it loses the lock in the middle of the queue, leaves the entry for whoever holds it, and goes on once it has it again', async () => {
+      const a = w.enqueue({ payload: sendPayload({ source: THREE() }) })
+      const b = w.enqueue({ payload: sendPayload({ source: 'Second.' }) })
+      outbox = make()
+      outbox.start()
+      await later(SPACING + 100)
+      expect(w.sends()).toHaveLength(1)
+      w.lockHeld = false
+      w.lockFree = false
+      await later(120_000)
+      expect(w.calls).toHaveLength(1)
+      expect(w.entry(a)).toMatchObject({ state: 'sending', attempts: 0 })
+      expect(w.entry(b).state).toBe('pending')
+      w.lockFree = true
+      await later(60_000)
+      // Asked for again when it was lost (at the next call, 1500 ms after the first), then every 30 s until it was free.
+      expect(w.lockCalls).toEqual(['take', 'take', 'take', 'take', 'take', 'take'])
+      expect(w.calls.map((c) => c.at - T0)).toEqual([0, 123_000, 124_500, 126_000, 127_500])
+      expect(w.calls.every((c) => c.held)).toBe(true)
+      expect(w.entry(a)).toMatchObject({ state: 'sent', attempts: 0 })
+      expect(w.entry(b)).toMatchObject({ state: 'sent', attempts: 0 })
+      expect(w.ours()).toHaveLength(4)
+      for (const words of ['onexxx', 'twoxxx', 'threexxx', 'Second.']) expect(w.ours().filter((m) => w.textOf(m).includes(words))).toHaveLength(1)
+    })
+
+    it('takes the lock again at once when it is free, reads what the store keeps again, and goes on from what the store knows', async () => {
+      const reads = vi.spyOn(w.store, 'outboxInterrupted')
+      const a = w.enqueue({ payload: sendPayload({ source: TWO() }) })
+      outbox = make()
+      outbox.start()
+      await later(SPACING + 100)
+      w.lockHeld = false
+      await later(30_000)
+      expect(w.lockCalls).toEqual(['take', 'take'])
+      expect(reads).toHaveBeenCalledTimes(2)
+      expect(w.entry(a)).toMatchObject({ state: 'sent', attempts: 0 })
+      // The second part was noted as on its way when the lock went: it is looked for, 5 s after it was noted, and sent.
+      expect(w.sends().map((c) => c.at - T0)).toEqual([0, 5000])
+      expect(w.ours()).toHaveLength(2)
+    })
+
+    it('claims nothing while it does not hold the lock: an entry queued meanwhile waits for the worker that does', async () => {
+      outbox = make()
+      outbox.start()
+      await later(100)
+      w.lockHeld = false
+      w.lockFree = false
+      const id = w.enqueue({ payload: sendPayload() })
+      outbox.kick()
+      await later(10_000)
+      expect(w.entry(id).state).toBe('pending')
+      expect(w.calls).toEqual([])
+      w.lockFree = true
+      await later(30_000)
+      expect(w.entry(id).state).toBe('sent')
+      expect(w.calls.every((c) => c.held)).toBe(true)
+    })
+
+    it('makes no delete through the bot once it has lost the lock, and makes the rest, once each, when it holds it again', async () => {
+      const id = await sentReply(TWO())
+      w.messages.get(id).webhookId = OLD_HOOK
+      const parts = [...w.parts.get(id)]
+      for (const m of w.thread) if (parts.includes(m.id)) m.webhook_id = OLD_HOOK
+      w.bot.length = 0
+      const real = w.discord.deleteMessage
+      w.discord.deleteMessage = async (...args) => {
+        await real(...args)
+        // The lock goes with the first delete, to another worker.
+        w.lockHeld = false
+        w.lockFree = false
+        w.discord.deleteMessage = real
+      }
+      const d = w.enqueue({ kind: 'delete', key: id, payload: { postId: THREAD } })
+      outbox.kick()
+      await later(60_000)
+      expect(w.bot.map((b) => b.messageId)).toEqual([parts[0]])
+      expect(w.entry(d).state).toBe('sending')
+      w.lockFree = true
+      await later(30_000)
+      expect(w.bot.map((b) => b.messageId)).toEqual(parts)
+      expect(w.bot.every((b) => b.held)).toBe(true)
+      expect(w.entry(d).state).toBe('sent')
+      expect(w.messages.has(id)).toBe(false)
+    })
   })
 
   it('says which webhook it sends through, for a route that refuses what it cannot edit', () => {
