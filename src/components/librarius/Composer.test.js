@@ -11,6 +11,7 @@ import { parse } from '../../lib/archive/markdown'
 import { createRenderCtx } from '../../lib/librarius/render'
 import { ACTIONS, apply, draftKey } from '../../lib/librarius/composer'
 import { MAX_PARTS, budget, limitFor, toDiscord } from '../../../server/src/librariusForm.js'
+import { SEARCHES } from '../../lib/librarius/requests'
 import { useAuth } from '../../stores/auth'
 
 // Invented ids only (the 200000000000000400 range), and invented names.
@@ -55,8 +56,8 @@ const NAMES = {
   emoji: 'Emoji',
   subtext: 'Small text',
 }
-// The three that slice C3 fills in: for now each tells the page it was pressed, and changes nothing.
-const STUBS = { image: 'picture', mention: 'mention', emoji: 'emoji' }
+// The three that open something of their own (the file chooser, the member search, the emoji picker) and insert from it.
+const OPENERS = ['image', 'mention', 'emoji']
 
 let pinia
 let mounted = []
@@ -127,7 +128,7 @@ describe('Composer: the toolbar', () => {
     }
   })
 
-  it.each(ACTIONS.filter((a) => !(a in STUBS)))('%s changes the text and the selection as apply() says', async (action) => {
+  it.each(ACTIONS.filter((a) => !OPENERS.includes(a)))('%s changes the text and the selection as apply() says', async (action) => {
     const w = mountComposer()
     const text = 'Ash plain\nSouth of the road **cool season**'
     await type(w, text, 4, 25)
@@ -137,14 +138,6 @@ describe('Composer: the toolbar', () => {
     expect(area(w).element.value).toBe(want.text)
     expect(selection(w)).toEqual(want.selection)
     expect(document.activeElement).toBe(area(w).element)
-  })
-
-  it.each(Object.entries(STUBS))('%s tells the page it was pressed, and leaves the text alone', async (action, event) => {
-    const w = mountComposer()
-    await type(w, 'Ash plain', 0, 3)
-    await button(w, NAMES[action]).trigger('click')
-    expect(w.emitted(event)).toHaveLength(1)
-    expect(area(w).element.value).toBe('Ash plain')
   })
 
   it('applies an action the page gives it, at the selection, as a picture, a mention or an emoji will be', async () => {
@@ -158,6 +151,19 @@ describe('Composer: the toolbar', () => {
     await w.vm.act({ type: 'emoji', text: `<:fire:${EMOJI}>` })
     await flushPromises()
     expect(area(w).element.value).toBe(apply(want.text, want.selection, { type: 'emoji', text: `<:fire:${EMOJI}>` }).text)
+  })
+
+  it('applies one action at a time, and one that is refused stops none after it', async () => {
+    const w = mountComposer()
+    await type(w, 'Ask ', 4)
+    const first = w.vm.act({ type: 'emoji', text: '🔥' })
+    const refused = w.vm.act({ type: 'mention', id: 'not an id' })
+    const last = w.vm.act({ type: 'emoji', text: '🐉' })
+    await first
+    await expect(refused).rejects.toThrow(RangeError)
+    await last
+    expect(area(w).element.value).toBe('Ask 🔥🐉')
+    expect(selection(w)).toEqual({ start: 'Ask 🔥🐉'.length, end: 'Ask 🔥🐉'.length })
   })
 
   it('moves along itself with the arrow keys, Home and End, one button at a time taking the tab stop', async () => {
@@ -586,7 +592,7 @@ describe('Composer: sending', () => {
     window.dispatchEvent(new Event('pagehide'))
     expect(localStorage.getItem(draftKey(POST, MSG))).toBe('Sent words')
     await replyButton(w).trigger('click')
-    expect(onSend).toHaveBeenCalledWith({ source: 'Sent words', replyTo: MSG, pingReply: true })
+    expect(onSend).toHaveBeenCalledWith({ source: 'Sent words', replyTo: MSG, pingReply: true, mentions: [] })
     expect(replyButton(w).attributes('disabled')).toBeDefined()
     expect(area(w).attributes('readonly')).toBeDefined()
     expect(w.get('[role="toolbar"]').findAll('button').every((b) => b.attributes('disabled') !== undefined)).toBe(true)
@@ -607,7 +613,7 @@ describe('Composer: sending', () => {
     const w = mountComposer({ onSend })
     await type(w, 'To the post')
     await replyButton(w).trigger('click')
-    expect(onSend).toHaveBeenCalledWith({ source: 'To the post', replyTo: null, pingReply: false })
+    expect(onSend).toHaveBeenCalledWith({ source: 'To the post', replyTo: null, pingReply: false, mentions: [] })
   })
 
   it('keeps no draft of a reply that was sent, however late the last save would have been', async () => {
@@ -770,7 +776,7 @@ describe('Composer: around the text', () => {
     expect(ping.text()).toBe('@ off')
     await type(w, 'Quietly')
     await replyButton(w).trigger('click')
-    expect(onSend).toHaveBeenCalledWith({ source: 'Quietly', replyTo: MSG, pingReply: false })
+    expect(onSend).toHaveBeenCalledWith({ source: 'Quietly', replyTo: MSG, pingReply: false, mentions: [] })
     await button(w, 'Stop replying to Ixen Calloway').trigger('click')
     expect(w.emitted('update:replyTo')).toEqual([[null]])
   })
@@ -802,5 +808,393 @@ describe('Composer: around the text', () => {
     expect(w.classes()).not.toContain('lb-composer-full')
     await area(w).trigger('keydown', { key: 'Escape' })
     expect(w.classes()).not.toContain('lb-composer-full')
+  })
+})
+
+// --- slice C3: mentions, emoji and pictures ---
+
+const SEFA = '200000000000000412'
+const ORRIN = '200000000000000413'
+const SEFA_FOUND = { id: SEFA, name: 'Sefa Orrin', avatar: null }
+// Timers and the clock that a test moves on itself (the member search is paced by the clock).
+const fakeClock = () => vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'Date'] })
+const settled = async () => {
+  await settle()
+  await nextTick()
+}
+const dialog = (w, name) => w.find(`[role="dialog"][aria-label="${name}"]`)
+const picture = (name = 'map.png') => new File(['not really a picture'], name, { type: 'image/png' })
+const fileInput = (w) => w.get('input[type="file"]')
+async function choose(w, files) {
+  Object.defineProperty(fileInput(w).element, 'files', { value: files, configurable: true })
+  await fileInput(w).trigger('change')
+}
+// An upload the test answers when it likes: what each call was given, and how to answer it.
+function uploads() {
+  const calls = []
+  const upload = (file, n) =>
+    new Promise((resolve) => {
+      calls.push({ file, n, resolve })
+    })
+  return { calls, upload, places: () => calls.map((c) => c.n) }
+}
+// An event the page would get from the browser with files on it (jsdom has no DataTransfer).
+function withFiles(type, field, files, types = files.length ? ['Files'] : ['text/plain']) {
+  const event = new Event(type, { bubbles: true, cancelable: true })
+  Object.defineProperty(event, field, { value: { files, types } })
+  return event
+}
+
+describe('Composer: @ mentions', () => {
+  async function openSearch(w) {
+    await button(w, 'Mention someone').trigger('click')
+    await nextTick()
+    return dialog(w, 'Mention someone')
+  }
+
+  it('@ opens the member search, and the member picked goes in as <@id> at the selection, named in the preview', async () => {
+    fakeClock()
+    const asked = []
+    const w = mountComposer({ searchMembers: async (q) => (asked.push(q), [SEFA_FOUND]) })
+    await type(w, 'Ask  now', 4)
+    const search = await openSearch(w)
+    expect(search.exists()).toBe(true)
+    expect(document.activeElement).toBe(search.get('input').element)
+    await search.get('input').setValue('Se')
+    await vi.advanceTimersByTimeAsync(250)
+    await settled()
+    expect(asked).toEqual(['Se'])
+    await search.get('input').trigger('keydown', { key: 'Enter' })
+    await settled()
+    const want = apply('Ask  now', { start: 4, end: 4 }, { type: 'mention', id: SEFA })
+    expect(area(w).element.value).toBe(want.text)
+    expect(selection(w)).toEqual(want.selection)
+    expect(document.activeElement).toBe(area(w).element)
+    expect(dialog(w, 'Mention someone').exists()).toBe(false)
+    // Sefa is in nobody's message on the page, so only the pick can name her.
+    expect(w.get('.lb-tabpanel').text()).toContain('@Sefa Orrin')
+    expect(w.get('.lb-tabpanel').text()).not.toContain('unknown-member')
+  })
+
+  it('names someone the page knows as the page does, and leaves anyone else to the page', async () => {
+    const w = mountComposer({ searchMembers: async () => [] })
+    await type(w, `<@${IXEN}> and <@${ORRIN}>`)
+    const shown = w.get('.lb-tabpanel').text()
+    expect(shown).toContain('@Ixen Calloway')
+    expect(shown).toContain('@unknown-member')
+  })
+
+  it('sends as mentions the people picked whose mention is still in the text, once each, and no one typed in by hand', async () => {
+    fakeClock()
+    const onSend = vi.fn(async () => ({}))
+    const found = [SEFA_FOUND, { id: ORRIN, name: 'Orrin Vale', avatar: null }]
+    const w = mountComposer({ onSend, searchMembers: async () => found })
+    for (const key of ['Enter', 'ArrowDown']) {
+      const search = await openSearch(w)
+      await search.get('input').setValue('Or')
+      await vi.advanceTimersByTimeAsync(250)
+      await settled()
+      if (key === 'ArrowDown') await search.get('input').trigger('keydown', { key: 'ArrowDown' })
+      await search.get('input').trigger('keydown', { key: 'Enter' })
+      await settled()
+    }
+    expect(area(w).element.value).toBe(`<@${SEFA}><@${ORRIN}>`)
+    await type(w, `Hail <@${ORRIN}>, <@${IXEN}> and <@${ORRIN}> again`)
+    await replyButton(w).trigger('click')
+    await settled()
+    expect(onSend).toHaveBeenCalledWith({ source: `Hail <@${ORRIN}>, <@${IXEN}> and <@${ORRIN}> again`, replyTo: null, pingReply: false, mentions: [ORRIN] })
+  })
+
+  it('takes the mentions of a draft it opens as picked: they were picked when it was written', async () => {
+    const onSend = vi.fn(async () => ({}))
+    localStorage.setItem(draftKey(POST), `For <@${SEFA}>`)
+    localStorage.setItem(draftKey(POST, MSG), `And <@${ORRIN}>`)
+    const w = mountComposer({ onSend })
+    await w.setProps({ replyTo: IXEN_REPLY })
+    expect(area(w).element.value).toBe(`And <@${ORRIN}>`)
+    await w.setProps({ replyTo: null })
+    await replyButton(w).trigger('click')
+    await settled()
+    expect(onSend).toHaveBeenCalledWith({ source: `For <@${SEFA}>`, replyTo: null, pingReply: false, mentions: [SEFA] })
+  })
+
+  it('searches once a pause in the typing, and never more than the server allows in a minute, however it is typed', async () => {
+    fakeClock()
+    const asked = []
+    const w = mountComposer({ searchMembers: async (q) => (asked.push({ q, at: Date.now() }), []) })
+    const input = (await openSearch(w)).get('input')
+    for (const q of ['Ix', 'Ixe', 'Ixen', 'Ixen ', 'Ixen C']) {
+      await input.setValue(q)
+      await vi.advanceTimersByTimeAsync(100)
+    }
+    await vi.advanceTimersByTimeAsync(150)
+    expect(asked.map((a) => a.q)).toEqual(['Ixen C'])
+    // A query every 300 ms for half a minute and more: each is a pause, and the pace holds them to the limit.
+    for (let i = 0; i < 120; i++) {
+      await input.setValue(`Name ${i}`)
+      await vi.advanceTimersByTimeAsync(300)
+    }
+    await vi.advanceTimersByTimeAsync(60_000)
+    expect(asked.length).toBeGreaterThan(SEARCHES.limit)
+    for (let i = SEARCHES.limit; i < asked.length; i++) expect(asked[i].at - asked[i - SEARCHES.limit].at).toBeGreaterThanOrEqual(60_000)
+    expect(asked.filter((a) => a.at - asked[0].at < 60_000)).toHaveLength(SEARCHES.limit)
+    expect(SEARCHES.limit).toBeLessThan(30)
+    expect(asked.at(-1).q).toBe('Name 119')
+  })
+
+  it('closes on Escape without leaving full screen, on a press outside it, and by @ again', async () => {
+    const w = mountComposer({ searchMembers: async () => [] })
+    await button(w, 'Full screen').trigger('click')
+    let search = await openSearch(w)
+    await search.get('input').trigger('keydown', { key: 'Escape' })
+    expect(dialog(w, 'Mention someone').exists()).toBe(false)
+    expect(w.classes()).toContain('lb-composer-full')
+    expect(document.activeElement).toBe(area(w).element)
+    search = await openSearch(w)
+    search.get('input').element.dispatchEvent(new MouseEvent('mousedown', { bubbles: true }))
+    await nextTick()
+    expect(dialog(w, 'Mention someone').exists()).toBe(true)
+    document.body.dispatchEvent(new MouseEvent('mousedown', { bubbles: true }))
+    await nextTick()
+    expect(dialog(w, 'Mention someone').exists()).toBe(false)
+    await openSearch(w)
+    await button(w, 'Mention someone').trigger('click')
+    expect(dialog(w, 'Mention someone').exists()).toBe(false)
+    await openSearch(w)
+    await button(w, 'Emoji').trigger('click')
+    expect(dialog(w, 'Mention someone').exists()).toBe(false)
+    expect(dialog(w, 'Emoji').exists()).toBe(true)
+  })
+
+  it('cannot be opened when the page gives no search', async () => {
+    const w = mountComposer()
+    expect(button(w, 'Mention someone').attributes('aria-disabled')).toBe('true')
+    await button(w, 'Mention someone').trigger('click')
+    expect(dialog(w, 'Mention someone').exists()).toBe(false)
+  })
+})
+
+describe('Composer: emoji', () => {
+  it('😀 opens the picker with the server\'s own emoji, and the one pressed goes in at the selection', async () => {
+    const w = mountComposer({ customEmoji: [{ id: EMOJI, name: 'fire', animated: false }] })
+    await type(w, 'Hot  day', 4)
+    await button(w, 'Emoji').trigger('click')
+    const picker = dialog(w, 'Emoji')
+    expect(document.activeElement).toBe(picker.get('input').element)
+    await picker.get('button[aria-label="This server"]').trigger('click')
+    await picker.get('button[aria-label=":fire:"]').trigger('click')
+    await settled()
+    const want = apply('Hot  day', { start: 4, end: 4 }, { type: 'emoji', text: `<:fire:${EMOJI}>` })
+    expect(area(w).element.value).toBe(want.text)
+    expect(selection(w)).toEqual(want.selection)
+    expect(document.activeElement).toBe(area(w).element)
+    expect(dialog(w, 'Emoji').exists()).toBe(false)
+    await button(w, 'Emoji').trigger('click')
+    await dialog(w, 'Emoji').get('button[aria-label="grinning face"]').trigger('click')
+    await settled()
+    expect(area(w).element.value).toBe(apply(want.text, want.selection, { type: 'emoji', text: '😀' }).text)
+  })
+
+  it('closes on Escape without leaving full screen', async () => {
+    const w = mountComposer()
+    await button(w, 'Full screen').trigger('click')
+    await button(w, 'Emoji').trigger('click')
+    await dialog(w, 'Emoji').get('input').trigger('keydown', { key: 'Escape' })
+    expect(dialog(w, 'Emoji').exists()).toBe(false)
+    expect(w.classes()).toContain('lb-composer-full')
+    expect(document.activeElement).toBe(area(w).element)
+  })
+})
+
+describe('Composer: pictures', () => {
+  it('🖼 opens the file chooser, for the four kinds the server takes', async () => {
+    const w = mountComposer({ upload: uploads().upload })
+    let opened = 0
+    fileInput(w).element.addEventListener('click', () => opened++)
+    await button(w, 'Add a picture').trigger('click')
+    expect(opened).toBe(1)
+    expect(fileInput(w).attributes('accept')).toBe('image/png,image/jpeg,image/webp,image/gif')
+    expect(fileInput(w).attributes('multiple')).toBeDefined()
+  })
+
+  it('uploads each file chosen at the first free place, and puts it in as ![name](upload:N) once it is held', async () => {
+    const up = uploads()
+    const w = mountComposer({ upload: up.upload })
+    await type(w, 'See the map', 3)
+    const file = picture('map.png')
+    await choose(w, [file])
+    await settled()
+    expect(up.calls.map((c) => [c.file, c.n])).toEqual([[file, 1]])
+    expect(w.get('.lb-uploading').text()).toBe('Adding 1 picture…')
+    await type(w, 'Words', 0)
+    expect(replyButton(w).attributes('disabled')).toBeDefined()
+    up.calls[0].resolve({ n: 1, name: 'map.png' })
+    await settled()
+    const want = apply('Words', { start: 0, end: 0 }, { type: 'image', name: 'map.png', n: 1 })
+    expect(area(w).element.value).toBe(want.text)
+    expect(selection(w)).toEqual(want.selection)
+    expect(w.find('.lb-uploading').exists()).toBe(false)
+    expect(replyButton(w).attributes('disabled')).toBeUndefined()
+    expect(fileInput(w).element.value).toBe('')
+    await choose(w, [picture('second.png')])
+    await settled()
+    expect(up.places()).toEqual([1, 2])
+  })
+
+  it('has two pictures in flight at most; the next goes when one is held', async () => {
+    const up = uploads()
+    const w = mountComposer({ upload: up.upload })
+    await choose(w, [picture('a.png'), picture('b.png'), picture('c.png')])
+    await settled()
+    expect(up.places()).toEqual([1, 2])
+    expect(w.get('.lb-uploading').text()).toBe('Adding 3 pictures…')
+    up.calls[1].resolve({ n: 2, name: 'b.png' })
+    await settled()
+    expect(up.places()).toEqual([1, 2, 3])
+    up.calls[0].resolve({ n: 1, name: 'a.png' })
+    up.calls[2].resolve({ n: 3, name: 'c.png' })
+    await settled()
+    expect(area(w).element.value.match(/upload:\d+/g).sort()).toEqual(['upload:1', 'upload:2', 'upload:3'])
+  })
+
+  it('holds 10 at most, those in the text and those on their way, and a picture taken out of the text frees its place', async () => {
+    const up = uploads()
+    const w = mountComposer({ upload: up.upload })
+    const nine = Array.from({ length: 9 }, (_, i) => `![p${i + 1}](upload:${i + 1})`).join('\n')
+    await type(w, nine)
+    await choose(w, [picture('ten.png'), picture('eleven.png')])
+    await settled()
+    expect(up.places()).toEqual([10])
+    expect(w.get('[role="alert"]').text()).toBe('A reply can hold 10 pictures at most.')
+    await choose(w, [picture('twelve.png')])
+    await settled()
+    expect(up.places()).toEqual([10])
+    up.calls[0].resolve({ n: 10, name: 'ten.png' })
+    await settled()
+    await choose(w, [picture('again.png')])
+    await settled()
+    expect(up.places()).toEqual([10])
+    await type(w, area(w).element.value.replace('![p4](upload:4)', ''))
+    await choose(w, [picture('four.png')])
+    await settled()
+    expect(up.places()).toEqual([10, 4])
+  })
+
+  it.each([
+    [429, 'One picture at a time, please.'],
+    [503, 'Too many pictures are being sent right now.'],
+  ])('on a %i shows the server\'s copy and tries again a moment later', async (status, copy) => {
+    fakeTimers()
+    const up = uploads()
+    const w = mountComposer({ upload: up.upload })
+    await choose(w, [picture()])
+    await settled()
+    up.calls[0].resolve({ status, error: copy })
+    await settled()
+    expect(w.get('.lb-uploading').text()).toBe(`${copy} Trying again in a moment.`)
+    await vi.advanceTimersByTimeAsync(999)
+    expect(up.calls).toHaveLength(1)
+    await vi.advanceTimersByTimeAsync(1)
+    expect(up.places()).toEqual([1, 1])
+    up.calls[1].resolve({ n: 1, name: 'map.png' })
+    await settled()
+    expect(area(w).element.value).toBe('![map.png](upload:1)')
+    expect(w.find('.lb-uploading').exists()).toBe(false)
+    expect(w.find('[role="alert"]').exists()).toBe(false)
+  })
+
+  it.each([
+    [413, 'That picture is too large (10 MB at most).'],
+    [400, 'That picture took too long to arrive.'],
+    [408, 'That picture took too long to arrive.'],
+  ])('on a %i shows the server\'s copy, tries no more, and frees the place', async (status, copy) => {
+    fakeTimers()
+    const up = uploads()
+    const w = mountComposer({ upload: up.upload })
+    await choose(w, [picture()])
+    await settled()
+    up.calls[0].resolve({ status, error: copy })
+    await settled()
+    expect(w.get('[role="alert"]').text()).toBe(copy)
+    await vi.advanceTimersByTimeAsync(60_000)
+    expect(up.calls).toHaveLength(1)
+    expect(area(w).element.value).toBe('')
+    await choose(w, [picture('next.png')])
+    await settled()
+    expect(up.places()).toEqual([1, 1])
+    expect(w.find('[role="alert"]').exists()).toBe(false)
+  })
+
+  it('says it could not add a picture when the upload fails without the server\'s words', async () => {
+    const w = mountComposer({ upload: async () => { throw new TypeError('Failed to fetch') } })
+    await choose(w, [picture()])
+    await settled()
+    expect(w.get('[role="alert"]').text()).toBe("Couldn't add that picture. Try again.")
+    expect(area(w).element.value).toBe('')
+  })
+
+  it('takes pictures pasted or dropped into it, and leaves pasted text and dragged text to the browser', async () => {
+    const up = uploads()
+    const w = mountComposer({ upload: up.upload })
+    const pasted = picture('pasted.png')
+    const paste = withFiles('paste', 'clipboardData', [pasted])
+    area(w).element.dispatchEvent(paste)
+    await settled()
+    expect(paste.defaultPrevented).toBe(true)
+    expect(up.calls.map((c) => c.file)).toEqual([pasted])
+    const words = withFiles('paste', 'clipboardData', [])
+    area(w).element.dispatchEvent(words)
+    expect(words.defaultPrevented).toBe(false)
+    const body = w.get('.lb-compose-body').element
+    const over = withFiles('dragover', 'dataTransfer', [])
+    body.dispatchEvent(over)
+    expect(over.defaultPrevented).toBe(false)
+    const overFiles = withFiles('dragover', 'dataTransfer', [], ['Files'])
+    body.dispatchEvent(overFiles)
+    expect(overFiles.defaultPrevented).toBe(true)
+    const dropped = picture('dropped.png')
+    const drop = withFiles('drop', 'dataTransfer', [dropped])
+    area(w).element.dispatchEvent(drop)
+    await settled()
+    expect(drop.defaultPrevented).toBe(true)
+    expect(up.calls.map((c) => c.file)).toEqual([pasted, dropped])
+    const dropWords = withFiles('drop', 'dataTransfer', [])
+    body.dispatchEvent(dropWords)
+    expect(dropWords.defaultPrevented).toBe(false)
+  })
+
+  it('takes no pictures when the page gives no upload, or while a reply is being sent', async () => {
+    const plain = mountComposer()
+    expect(button(plain, 'Add a picture').attributes('aria-disabled')).toBe('true')
+    let opened = 0
+    fileInput(plain).element.addEventListener('click', () => opened++)
+    await button(plain, 'Add a picture').trigger('click')
+    expect(opened).toBe(0)
+    const paste = withFiles('paste', 'clipboardData', [picture()])
+    area(plain).element.dispatchEvent(paste)
+    expect(paste.defaultPrevented).toBe(false)
+
+    const up = uploads()
+    const w = mountComposer({ upload: up.upload, onSend: () => new Promise(() => {}) })
+    await type(w, 'Sending now')
+    await replyButton(w).trigger('click')
+    const late = withFiles('paste', 'clipboardData', [picture()])
+    area(w).element.dispatchEvent(late)
+    await choose(w, [picture()])
+    await settled()
+    expect(up.calls).toEqual([])
+  })
+
+  it('tries nothing more once it is closed', async () => {
+    fakeTimers()
+    const up = uploads()
+    const w = mountComposer({ upload: up.upload })
+    await choose(w, [picture()])
+    await settled()
+    up.calls[0].resolve({ status: 429, error: 'One picture at a time, please.' })
+    await settled()
+    close(w)
+    await vi.advanceTimersByTimeAsync(60_000)
+    expect(up.calls).toHaveLength(1)
   })
 })

@@ -899,6 +899,9 @@ a.lb-file {
 .lb-draft-saved,
 .lb-budget,
 .lb-sending,
+.lb-uploading,
+.lb-mention-status,
+.lb-picker-empty,
 .lb-pane-note,
 .lb-dv-head,
 .lb-dv-files {
@@ -953,13 +956,95 @@ a.lb-file {
   padding-left: 0.6rem;
   border-left: 1px solid var(--color-ash);
 }
-.lb-tool:disabled {
+.lb-tool:disabled,
+.lb-tool[aria-disabled='true'] {
   opacity: 0.5;
   cursor: default;
 }
 .lb-compose-body {
   display: grid;
   gap: 0.6rem;
+}
+/* The member search and the emoji picker open under the toolbar, in the flow, so a phone has room for them. */
+.lb-popover {
+  max-width: 22rem;
+  padding: 0.5rem;
+  background: var(--color-basalt-3);
+  border: 1px solid var(--color-ash-2);
+  border-radius: var(--radius-sm);
+}
+.lb-mention,
+.lb-picker {
+  display: grid;
+  gap: 0.4rem;
+}
+.lb-mention-search,
+.lb-picker-search {
+  width: 100%;
+  min-height: var(--tap);
+  padding: 0.3rem 0.5rem;
+  font: inherit;
+  font-size: var(--text-md);
+  color: var(--color-bone);
+  background: var(--color-pitch);
+  border: 1px solid var(--color-ash);
+  border-radius: var(--radius-sm);
+}
+.lb-mention-list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.lb-mention-option {
+  min-height: var(--tap);
+  padding: 0.3rem 0.5rem;
+  font-size: var(--text-md);
+  color: var(--color-bone);
+  overflow-wrap: anywhere;
+  unicode-bidi: isolate;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+}
+.lb-mention-option[aria-selected='true'] {
+  background: var(--color-basalt-2);
+  outline: 1px solid var(--color-drake-deep);
+}
+.lb-picker-kinds {
+  display: flex;
+  gap: 0.2rem;
+  overflow-x: auto;
+}
+.lb-picker-kind,
+.lb-picker-emoji {
+  min-height: var(--tap);
+  min-width: var(--tap);
+  padding: 0.2rem;
+  font: inherit;
+  font-size: var(--text-md);
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+}
+.lb-picker-kind[aria-pressed='true'] {
+  border-color: var(--color-drake-deep);
+}
+.lb-picker-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(2.2rem, 1fr));
+  gap: 0.2rem;
+  max-height: 15rem;
+  overflow-y: auto;
+}
+.lb-picker-emoji img {
+  display: block;
+  width: 1.4rem;
+  height: 1.4rem;
+  margin: auto;
+  object-fit: contain;
+}
+.lb-picker-empty {
+  grid-column: 1 / -1;
 }
 .lb-source {
   width: 100%;
@@ -1073,6 +1158,9 @@ a.lb-file {
 }
 @media (hover: hover) and (pointer: fine) {
   .lb-tool:hover:not(:disabled),
+  .lb-picker-kind:hover,
+  .lb-picker-emoji:hover,
+  .lb-mention-option:hover,
   .lb-tab:hover,
   .lb-ping:hover,
   .lb-unreply:hover {
