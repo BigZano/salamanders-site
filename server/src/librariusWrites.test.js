@@ -1,4 +1,4 @@
-import { describe, it, expect } from 'vitest'
+import { afterEach, describe, it, expect, vi } from 'vitest'
 import * as fc from 'fast-check'
 import { createLibrariusWrites } from './librariusWrites.js'
 import { createLimits, tooFast } from './librariusLimits.js'
@@ -134,6 +134,8 @@ function world(over = {}) {
       return new Set(ids.filter((id) => w.uploads.get(id)?.authorId === authorId))
     },
     addUpload: async (upload) => {
+      // `stall`, while set, keeps every picture that reaches the store waiting: pictures being worked, each with a place for all.
+      if (w.stall) await w.stall
       if (w.failures.addUpload) throw new Error('the table is gone')
       w.asked.added.push({ authorId: upload.authorId, maxHeldBytes: upload.maxHeldBytes })
       // `extraHeld` is what an author is taken to hold already, so that a test need not make 100 MB of pictures.
@@ -258,6 +260,7 @@ describe('reply: a reply is queued for Discord', () => {
           username: 'Mira Invented',
           avatarUrl: AVATAR,
           siteUrl: POST_URL,
+          form: 'v2',
         },
       },
     ])
@@ -294,6 +297,25 @@ describe('reply: a reply is queued for Discord', () => {
     const plain = world({ options: { form: 'plain' } })
     expect(await out(await plain.writes.reply(POST, json({ source: seven }), verdictOf()))).toMatchObject({ status: 413, body: { error: "That's longer than Discord can carry in 3 messages." } })
     expect(plain.queue).toStrictEqual([])
+  })
+
+  it('writes into the reply the form it was checked in, so the outbox sends it in that form whatever the form is by then (contract 1)', async () => {
+    const three = 'y'.repeat(3000) // one part of the primary form, two of the plain one: both forms take it
+    for (const [options, form] of [[{}, 'v2'], [{ form: 'v2' }, 'v2'], [{ form: 'plain' }, 'plain']]) {
+      const t = world({ options })
+      expect((await t.writes.reply(POST, json({ source: three }), verdictOf())).status, form).toBe(202)
+      expect(t.queue, form).toHaveLength(1)
+      expect(t.queue[0].kind, form).toBe('send')
+      expect(t.queue[0].payload.form, form).toBe(form)
+    }
+  })
+
+  it('writes the form the reply was checked in whatever the member sends, a form of their own included', async () => {
+    for (const form of ['v2', 'plain']) {
+      const t = world({ options: { form } })
+      await t.writes.reply(POST, json({ source: 'hello', form: form === 'v2' ? 'plain' : 'v2', payload: { form: 'v3' } }), verdictOf())
+      expect(t.queue[0].payload.form, form).toBe(form)
+    }
   })
 
   it('does not tell the outbox of a reply that was refused, nor queue it', async () => {
@@ -1499,7 +1521,7 @@ describe('every write try takes a place before its body is read (20 writes a min
   })
 })
 
-describe('upload: the pictures in flight (2 for a member, 4 in all)', () => {
+describe('upload: the pictures in flight (2 for a member from the moment one starts to arrive, 4 in all being worked)', () => {
   // A request whose body is not all sent until the test says: a picture that is still arriving.
   function arriving() {
     let control
@@ -1507,21 +1529,44 @@ describe('upload: the pictures in flight (2 for a member, 4 in all)', () => {
     const request = new Request(URL_, { method: 'POST', body, headers: { 'Content-Type': 'multipart/form-data; boundary=x' }, duplex: 'half' })
     return { request, done: () => control.close() }
   }
+  /** Keeps every picture that reaches the store waiting until the function it gives back is called. */
+  function stallStore(t) {
+    let open
+    t.w.stall = new Promise((resolve) => (open = resolve))
+    return () => {
+      t.w.stall = null
+      open()
+    }
+  }
+  /** Four other members' pictures, arrived and being worked (held at the store): every place for all is taken. */
+  async function fourWorked(t) {
+    const go = stallStore(t)
+    const running = ['300000000000000111', '300000000000000112', '300000000000000113', '300000000000000114'].map((id) => t.writes.upload(png(), by(id)))
+    await turns()
+    expect(t.limits.working()).toBe(4)
+    return async () => {
+      go()
+      expect((await Promise.all(running)).map((r) => r.status)).toStrictEqual([201, 201, 201, 201])
+    }
+  }
   const turns = async () => {
     for (let i = 0; i < 5; i++) await new Promise((resolve) => setImmediate(resolve))
   }
   const png = () => formOf([{ bytes: PNG_CLEAN }])
   const by = (id) => verdictOf({ user: { id, username: 'invented' } })
+  const places = (t) => [t.limits.holding(), t.limits.working()]
   const COPY_ONE = 'One picture at a time, please.'
   const COPY_BUSY = 'The site is busy with pictures; try again in a moment.'
+  const COPY_SLOW = 'Slow down a little: try again in 60 seconds.'
 
-  it('refuses a member\'s 3rd picture at once with 429 and "One picture at a time, please.", and takes it when one of the two is done', async () => {
+  it('refuses a member\'s 3rd picture at once with 429 and "One picture at a time, please." while two are still arriving, and takes it when one of the two is done', async () => {
     const t = world()
     const first = arriving()
     const second = arriving()
     const a = t.writes.upload(first.request, verdictOf())
     const b = t.writes.upload(second.request, verdictOf())
     await turns()
+    expect(places(t)).toStrictEqual([1, 0]) // on their way, and not worked yet
     expect(await out(await t.writes.upload(png(), verdictOf()))).toMatchObject({ status: 429, body: { error: COPY_ONE } })
     first.done()
     expect((await a).status).toBe(400) // an empty form, but it is done
@@ -1530,97 +1575,148 @@ describe('upload: the pictures in flight (2 for a member, 4 in all)', () => {
     await b
   })
 
-  it('refuses a 5th picture, of anyone, with 503 and "The site is busy with pictures; try again in a moment."', async () => {
+  it('keeps nobody waiting for pictures that are on their way: while four members have two arriving each, a fifth member\'s picture is taken', async () => {
     const t = world()
     const people = ['300000000000000111', '300000000000000112', '300000000000000113', '300000000000000114']
-    const waiting = people.map((id) => ({ id, ...arriving() }))
+    const waiting = people.flatMap((id) => [arriving(), arriving()].map((a) => ({ id, ...a })))
     const running = waiting.map((w) => t.writes.upload(w.request, by(w.id)))
     await turns()
-    expect(await out(await t.writes.upload(png(), by('300000000000000115')))).toMatchObject({ status: 503, body: { error: COPY_BUSY } })
-    waiting[0].done()
-    await running[0]
+    expect(places(t)).toStrictEqual([4, 0])
     expect((await t.writes.upload(png(), by('300000000000000115'))).status).toBe(201)
-    for (const w of waiting.slice(1)) w.done()
-    await Promise.all(running)
+    expect((await t.writes.upload(png(), verdictOf())).status).toBe(201)
+    // One by one: all eight at once would be eight worked at once, and the last four of them told the site is busy.
+    for (const [i, w] of waiting.entries()) {
+      w.done()
+      expect((await running[i]).status, String(i)).toBe(400)
+    }
+    expect(places(t)).toStrictEqual([0, 0])
   })
 
-  it('tells a member who has two in flight of that, not of the site being busy, whoever else is busy', async () => {
+  it('refuses a 5th picture being worked, of anyone, with 503 and "The site is busy with pictures; try again in a moment.", and takes it when one of the four is done', async () => {
     const t = world()
-    const waiting = [verdictOf(), verdictOf(), by('300000000000000111'), by('300000000000000111')].map((verdict) => ({ verdict, ...arriving() }))
-    const running = waiting.map((w) => t.writes.upload(w.request, w.verdict))
+    const finish = await fourWorked(t)
+    expect(await out(await t.writes.upload(png(), by('300000000000000115')))).toMatchObject({ status: 503, body: { error: COPY_BUSY } })
+    expect(places(t)).toStrictEqual([4, 4])
+    await finish()
+    expect(places(t)).toStrictEqual([0, 0])
+    expect((await t.writes.upload(png(), by('300000000000000115'))).status).toBe(201)
+  })
+
+  it('waits for the whole of a picture before it says the site is busy: one still arriving is not refused until it has come', async () => {
+    const t = world()
+    const finish = await fourWorked(t)
+    const slow = arriving()
+    let answer = null
+    const sent = t.writes.upload(slow.request, verdictOf()).then((r) => (answer = r))
+    await turns()
+    expect(answer).toBe(null)
+    expect(places(t)).toStrictEqual([5, 4])
+    slow.done()
+    await sent
+    expect(await out(answer)).toMatchObject({ status: 503, body: { error: COPY_BUSY } })
+    await finish()
+  })
+
+  it('tells a member who has two on their way of that, not of the site being busy, whoever else is busy', async () => {
+    const t = world()
+    const finish = await fourWorked(t)
+    const mine = [arriving(), arriving()]
+    const running = mine.map((a) => t.writes.upload(a.request, verdictOf()))
     await turns()
     expect((await out(await t.writes.upload(png(), verdictOf()))).body.error).toBe(COPY_ONE)
-    expect((await out(await t.writes.upload(png(), by('300000000000000111')))).body.error).toBe(COPY_ONE)
-    expect((await out(await t.writes.upload(png(), by('300000000000000112')))).body.error).toBe(COPY_BUSY)
-    for (const w of waiting) w.done()
-    await Promise.all(running)
+    expect((await out(await t.writes.upload(png(), by('300000000000000115')))).body.error).toBe(COPY_BUSY)
+    for (const a of mine) a.done()
+    expect((await Promise.all(running)).map((r) => r.status)).toStrictEqual([503, 503])
+    await finish()
   })
 
-  it('takes a place for a refused picture too: the try of the minute is taken before the place in flight', async () => {
+  it('takes no try for a 429 "One picture at a time, please.": the 10 tries of the minute are as they were', async () => {
     const t = world()
-    const waiting = [arriving(), arriving()]
-    const running = waiting.map((w) => t.writes.upload(w.request, verdictOf()))
+    const mine = [arriving(), arriving()]
+    const running = mine.map((a) => t.writes.upload(a.request, verdictOf()))
     await turns()
-    for (let i = 0; i < 8; i++) expect((await t.writes.upload(png(), verdictOf())).status).toBe(429)
-    const got = await out(await t.writes.upload(png(), verdictOf()))
-    expect(got.body.error).toBe('Slow down a little: try again in 60 seconds.') // the 11th try of the minute, not "one at a time"
-    for (const w of waiting) w.done()
-    await Promise.all(running)
+    for (let i = 0; i < 15; i++) expect((await out(await t.writes.upload(png(), verdictOf()))).body.error, String(i)).toBe(COPY_ONE)
+    for (const a of mine) a.done()
+    await Promise.all(running) // two tries, for two empty forms
+    for (let i = 0; i < 8; i++) expect((await t.writes.upload(png(), verdictOf())).status, String(i)).toBe(201)
+    expect(await out(await t.writes.upload(png(), verdictOf()))).toMatchObject({ status: 429, body: { error: COPY_SLOW } })
   })
 
-  it('does not take the place of a picture that is refused for a right, a limit, or an hour of uploads', async () => {
+  it('gives the try back for a 503 "busy": the 10 tries of the minute are as they were', async () => {
     const t = world()
-    const waiting = [arriving(), arriving()]
-    const running = waiting.map((w) => t.writes.upload(w.request, by('300000000000000111')))
-    await turns()
-    // Four are in flight at most; these are refused before they take a place, so the other members are let in.
+    const finish = await fourWorked(t)
+    for (let i = 0; i < 15; i++) expect((await out(await t.writes.upload(png(), verdictOf()))).body.error, String(i)).toBe(COPY_BUSY)
+    await finish()
+    for (let i = 0; i < 10; i++) expect((await t.writes.upload(png(), verdictOf())).status, String(i)).toBe(201)
+    expect(await out(await t.writes.upload(png(), verdictOf()))).toMatchObject({ status: 429, body: { error: COPY_SLOW } })
+  })
+
+  it('gives back only the try of the picture that was refused: a member\'s other tries are still counted', async () => {
+    const t = world()
+    for (let i = 0; i < 5; i++) expect((await t.writes.upload(formOf([]), verdictOf())).status).toBe(400)
+    const finish = await fourWorked(t)
+    for (let i = 0; i < 3; i++) expect((await t.writes.upload(png(), verdictOf())).status).toBe(503)
+    await finish()
+    for (let i = 0; i < 5; i++) expect((await t.writes.upload(png(), verdictOf())).status, String(i)).toBe(201)
+    expect((await t.writes.upload(png(), verdictOf())).status).toBe(429)
+  })
+
+  it('says what is wrong with a picture refused before it has come, never that the site is busy: a right, an hour of uploads, a type, a size', async () => {
+    const t = world()
+    const finish = await fourWorked(t)
     expect((await t.writes.upload(png(), verdictOf({ attach: false }))).status).toBe(403)
+    expect((await t.writes.upload(json({ file: 'x' }), verdictOf())).status).toBe(415)
+    const declared = streamed([new Uint8Array(5)], { 'Content-Type': 'multipart/form-data; boundary=x', 'Content-Length': String(MAX_PICTURE_BYTES + 65_537) })
+    expect((await t.writes.upload(declared.request, verdictOf())).status).toBe(413)
     for (let i = 0; i < 30; i++) t.limits.take('upload', OTHER)
     expect((await t.writes.upload(png(), verdictOf({ user: { id: OTHER, username: 'o' } }))).status).toBe(429)
-    expect((await t.writes.upload(png(), verdictOf())).status).toBe(201)
-    expect((await t.writes.upload(png(), verdictOf())).status).toBe(201)
-    for (const w of waiting) w.done()
-    await Promise.all(running)
+    expect(places(t)).toStrictEqual([4, 4])
+    await finish()
   })
 
-  it('frees its place whatever the picture comes to: refused for what it is, not a form, too large, a failure of the store, a body that breaks', async () => {
+  it('frees every place whatever the picture comes to, a failure of the store and a body that breaks included', async () => {
     const t = world()
     const big = new Uint8Array(MAX_PICTURE_BYTES + 1)
     big.set(PNG_SIGNATURE)
     const broken = () => new Request(URL_, { method: 'POST', body: new ReadableStream({ start: (c) => c.error(new Error('the connection dropped')) }), headers: { 'Content-Type': 'multipart/form-data; boundary=x' }, duplex: 'half' })
+    const overflowing = () => streamed(Array.from({ length: 20 }, () => new Uint8Array(1_000_000)), { 'Content-Type': 'multipart/form-data; boundary=x' }).request
     const ends = [
       [() => t.writes.upload(formOf([{ bytes: new Uint8Array([1, 2, 3]) }]), verdictOf()), 400],
       [() => t.writes.upload(formOf([]), verdictOf()), 400],
       [() => t.writes.upload(json({ file: 'x' }), verdictOf()), 415],
       [() => t.writes.upload(formOf([{ bytes: big }]), verdictOf()), 413],
+      [() => t.writes.upload(overflowing(), verdictOf()), 413],
+      [() => t.writes.upload(png(), verdictOf({ attach: false })), 403],
       [() => t.writes.upload(png(), verdictOf()), 201],
     ]
-    // Each of these, three times over, with nothing in flight at the end: a place that was kept would be a 429 by the third.
+    // Each of these, three times over, with nothing in flight after each.
     for (let round = 0; round < 3; round++) {
       for (const [send, status] of ends) {
         t.w.clock.t += 7_000
         expect((await send()).status).toBe(status)
+        expect(places(t), String(status)).toStrictEqual([0, 0])
       }
     }
+    for (let i = 0; i < 10; i++) t.limits.take('uploadTry', OTHER)
+    expect((await t.writes.upload(png(), verdictOf({ user: { id: OTHER, username: 'o' } }))).status).toBe(429)
+    expect(places(t)).toStrictEqual([0, 0])
+    t.w.extraHeld = { [ME]: 104_857_600 }
+    t.w.clock.t += 7_000
+    expect((await t.writes.upload(png(), verdictOf())).status).toBe(413)
+    expect(places(t)).toStrictEqual([0, 0])
+    t.w.extraHeld = undefined
     t.w.failures.addUpload = true
     for (let i = 0; i < 3; i++) {
       t.w.clock.t += 7_000
       await expect(t.writes.upload(png(), verdictOf())).rejects.toThrow('the table is gone')
+      expect(places(t)).toStrictEqual([0, 0])
     }
     t.w.failures.addUpload = false
     for (let i = 0; i < 3; i++) {
       t.w.clock.t += 7_000
       await expect(t.writes.upload(broken(), verdictOf())).rejects.toThrow('the connection dropped')
+      expect(places(t)).toStrictEqual([0, 0])
     }
-    // Nothing is left in flight: the member can have two at once, and not a third.
-    t.w.clock.t += 60_000
-    const [a, b] = [arriving(), arriving()]
-    const held = [t.writes.upload(a.request, verdictOf()), t.writes.upload(b.request, verdictOf())]
-    await turns()
-    expect((await out(await t.writes.upload(png(), verdictOf()))).body.error).toBe(COPY_ONE)
-    a.done()
-    b.done()
-    await Promise.all(held)
   })
 
   it('judges and holds two pictures of one member at the same time, both let through', async () => {
@@ -1628,6 +1724,146 @@ describe('upload: the pictures in flight (2 for a member, 4 in all)', () => {
     const results = await Promise.all([t.writes.upload(png(), verdictOf()), t.writes.upload(png(), verdictOf())])
     expect(results.map((r) => r.status)).toStrictEqual([201, 201])
     expect(t.uploads.size).toBe(2)
+  })
+})
+
+describe('upload: a picture has 30 seconds to arrive', () => {
+  afterEach(() => {
+    vi.useRealTimers()
+  })
+
+  const TYPE = 'multipart/form-data; boundary=x'
+  const COPY_LATE = 'That picture took too long to arrive.'
+
+  /**
+   * A request whose body comes in `steps`, each { afterMs, bytes } after the one before, and then ends; with `endless`, it sends
+   * `bytes` every `afterMs` and never ends. `seen.cancelled` says whether the stream was given up.
+   */
+  function timed({ steps = [], endless = null, type = TYPE }) {
+    const seen = { cancelled: false }
+    let i = 0
+    const body = new ReadableStream({
+      pull(c) {
+        if (endless === null && i >= steps.length) return c.close()
+        const { afterMs, bytes } = endless ?? steps[i++]
+        return new Promise((resolve) => {
+          setTimeout(() => {
+            if (!seen.cancelled) c.enqueue(bytes)
+            resolve()
+          }, afterMs)
+        })
+      },
+      cancel() {
+        seen.cancelled = true
+      },
+    }, { highWaterMark: 0 })
+    return { request: new Request(URL_, { method: 'POST', body, headers: { 'Content-Type': type }, duplex: 'half' }), seen }
+  }
+  /** The bytes and type of a form that holds one clean PNG, whole and cut in two. */
+  async function halves() {
+    const form = formOf([{ bytes: PNG_CLEAN }])
+    const bytes = new Uint8Array(await form.arrayBuffer())
+    const middle = Math.floor(bytes.length / 2)
+    return { type: form.headers.get('Content-Type'), bytes, first: bytes.slice(0, middle), second: bytes.slice(middle) }
+  }
+  const watch = (promise) => {
+    const state = { answer: null }
+    promise.then((r) => (state.answer = r))
+    return state
+  }
+
+  it('is 408 "That picture took too long to arrive." 30 s after it started, however steadily it trickles, and gives the stream up', async () => {
+    vi.useFakeTimers()
+    const t = world()
+    const { request, seen } = timed({ endless: { afterMs: 100, bytes: new Uint8Array(1024) } })
+    const state = watch(t.writes.upload(request, verdictOf()))
+    await vi.advanceTimersByTimeAsync(29_999)
+    expect(state.answer).toBe(null)
+    expect(seen.cancelled).toBe(false)
+    await vi.advanceTimersByTimeAsync(1)
+    expect(await out(state.answer)).toMatchObject({ status: 408, body: { error: COPY_LATE } })
+    expect(seen.cancelled).toBe(true)
+    expect([t.limits.holding(), t.limits.working()]).toStrictEqual([0, 0])
+    expect(t.uploads.size).toBe(0)
+  })
+
+  it('is 408 for a picture that stalls and never comes, and the member may send two again', async () => {
+    vi.useFakeTimers()
+    const t = world()
+    const stalls = [timed({ steps: [{ afterMs: 1, bytes: new Uint8Array(10) }, { afterMs: 3_600_000, bytes: new Uint8Array(10) }] }), timed({ steps: [{ afterMs: 3_600_000, bytes: new Uint8Array(10) }] })]
+    const states = stalls.map((s) => watch(t.writes.upload(s.request, verdictOf())))
+    await vi.advanceTimersByTimeAsync(30_000)
+    expect(states.map((s) => s.answer.status)).toStrictEqual([408, 408])
+    expect(t.limits.holding()).toBe(0)
+  })
+
+  it('takes a picture whose last byte comes at 29.999 s, and refuses one whose last byte would come at 30 s', async () => {
+    vi.useFakeTimers()
+    const { type, first, second } = await halves()
+    const t = world()
+    const inTime = timed({ type, steps: [{ afterMs: 1, bytes: first }, { afterMs: 29_998, bytes: second }] })
+    const late = timed({ type, steps: [{ afterMs: 1, bytes: first }, { afterMs: 29_999, bytes: second }] })
+    const states = [watch(t.writes.upload(inTime.request, verdictOf())), watch(t.writes.upload(late.request, verdictOf()))]
+    await vi.advanceTimersByTimeAsync(30_000)
+    expect(states.map((s) => s.answer?.status)).toStrictEqual([201, 408])
+    expect(t.uploads.size).toBe(1)
+  })
+
+  it('counts the 30 s from when the request came, for each picture apart', async () => {
+    vi.useFakeTimers()
+    const { type, first, second } = await halves()
+    const t = world()
+    const early = watch(t.writes.upload(timed({ endless: { afterMs: 1000, bytes: new Uint8Array(1) } }).request, verdictOf()))
+    await vi.advanceTimersByTimeAsync(20_000)
+    const later = watch(t.writes.upload(timed({ type, steps: [{ afterMs: 1, bytes: first }, { afterMs: 29_000, bytes: second }] }).request, verdictOf()))
+    await vi.advanceTimersByTimeAsync(10_000)
+    expect([early.answer?.status, later.answer]).toStrictEqual([408, null])
+    await vi.advanceTimersByTimeAsync(19_001)
+    expect(later.answer?.status).toBe(201)
+  })
+
+  it('counts a picture that came too late as a try: the 11th try of the minute is 429', async () => {
+    vi.useFakeTimers()
+    const t = world()
+    for (let i = 0; i < 10; i++) {
+      const state = watch(t.writes.upload(timed({ steps: [{ afterMs: 3_600_000, bytes: new Uint8Array(1) }] }).request, verdictOf()))
+      await vi.advanceTimersByTimeAsync(30_000)
+      expect(state.answer.status).toBe(408)
+      t.w.clock.t += 1_000
+    }
+    expect((await t.writes.upload(formOf([{ bytes: PNG_CLEAN }]), verdictOf())).status).toBe(429)
+  })
+
+  it('gives the work after the picture has come no deadline: a store that takes a minute still holds it', async () => {
+    vi.useFakeTimers()
+    const { type, bytes } = await halves()
+    const t = world()
+    let open
+    t.w.stall = new Promise((resolve) => (open = resolve))
+    // Bytes in memory, so that the picture has all come at once: a FormData body is read by the runtime in real time.
+    const state = watch(t.writes.upload(new Request(URL_, { method: 'POST', body: bytes, headers: { 'Content-Type': type } }), verdictOf()))
+    await vi.advanceTimersByTimeAsync(60_000)
+    expect(state.answer).toBe(null)
+    t.w.stall = null
+    open()
+    await vi.advanceTimersByTimeAsync(0)
+    expect(state.answer.status).toBe(201)
+    expect(t.uploads.size).toBe(1)
+  })
+
+  it('leaves no timer behind, whatever the picture comes to', async () => {
+    vi.useFakeTimers()
+    const t = world()
+    const sends = [
+      () => t.writes.upload(formOf([{ bytes: PNG_CLEAN }]), verdictOf()),
+      () => t.writes.upload(formOf([]), verdictOf()),
+      () => t.writes.upload(json({ file: 'x' }), verdictOf()),
+      () => t.writes.upload(formOf([{ bytes: PNG_CLEAN }]), verdictOf({ attach: false })),
+    ]
+    for (const send of sends) {
+      await send()
+      expect(vi.getTimerCount()).toBe(0)
+    }
   })
 })
 

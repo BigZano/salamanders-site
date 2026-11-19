@@ -2335,7 +2335,7 @@ describe('"Delete on site" is answered within its budget however busy the gatewa
       return new Response(callback ? null : '{}', { status: callback ? 204 : 200 })
     }
     const discord = createLibrariusDiscord({ fetchImpl, apiBase: 'https://d.test/api', botToken: 'secret-bot-token', guildId: APP_GUILD, perSecond: 1 })
-    const command = createCommand({ discord, store: store ?? { outboxMessage: () => new Promise(() => {}) }, guildId: APP_GUILD })
+    const command = createCommand({ discord, store: store ?? { outboxMessage: () => new Promise(() => {}) }, guildId: APP_GUILD, repliesOn: true })
     const r = rig({ onDispatch: alongside(ingest ?? (() => undefined), command.dispatch, () => {}) })
     // Saturate the client: 30 calls that may each wait up to two minutes for its turn, one a second, are queued ahead of the callback.
     const busy = discord.withMaxWait(120_000)
@@ -2379,6 +2379,125 @@ describe('"Delete on site" is answered within its budget however busy the gatewa
     expect(answer.at).toBe(came)
     expect(JSON.parse(answer.body).data.content).toBe(`This was written on the site. Delete it there: ${SITE}/reliquarium/librarius/${POST}#m-${MSG}`)
     r.gateway.stop()
+  })
+})
+
+describe('"Delete on site" with the replies on and with them off, through the gateway and the dispatch (Ruling B12)', () => {
+  // The gateway, the dispatch that runs the command beside the live feed, the command and the real client of Discord's REST API, on
+  // fake timers. Every id here is invented.
+  const APP_GUILD = '200000000000000400'
+  const APP = '200000000000000480'
+  const POST = '200000000000000410'
+  const MSG = '200000000000000430'
+  const ME = '300000000000000101'
+  const OTHER = '300000000000000102'
+  const SITE = 'https://sm2salamanders.site'
+  const OFF = 'Deleting from the site is switched off right now. A moderator can delete this in Discord.'
+  const DISCORD = "Written in Discord: use Discord's own Delete."
+  const interaction = (n = 0) => ({
+    id: `20000000000000049${n}`,
+    application_id: APP,
+    type: 2,
+    token: `aW50ZXJhY3Rpb246_Invented-token.${n}`,
+    guild_id: APP_GUILD,
+    channel_id: POST,
+    member: { user: { id: ME } },
+    data: { id: '200000000000000481', name: 'Delete on site', type: 3, target_id: MSG, resolved: { messages: { [MSG]: { id: MSG, channel_id: POST } } } },
+  })
+  const message = (over) => ({ id: MSG, postId: POST, authorId: ME, origin: 'site', ...over })
+
+  /** The whole path, with the store holding `held` (or never answering) and the guild holding `commands`. */
+  function wired({ repliesOn, held = message(), commands = [] }) {
+    const fetched = []
+    const fetchImpl = async (url, init) => {
+      const address = String(url)
+      const method = init.method ?? 'GET'
+      fetched.push({ address, method, at: Date.now(), body: init.body })
+      if (address.includes('/callback')) return new Response(null, { status: 204 })
+      if (method === 'POST') return Response.json({ id: '200000000000000481', name: 'Delete on site', type: 3 }, { status: 201 })
+      return Response.json(address.endsWith('/commands') ? commands : {})
+    }
+    const discord = createLibrariusDiscord({ fetchImpl, apiBase: 'https://d.test/api', botToken: 'secret-bot-token', guildId: APP_GUILD })
+    const store = { outboxMessage: held === 'never' ? () => new Promise(() => {}) : async (id) => (id === MSG ? held : null) }
+    const fed = []
+    const command = createCommand({ discord, store, guildId: APP_GUILD, repliesOn })
+    const r = rig({ onDispatch: alongside(async (t) => void fed.push(t), command.dispatch, () => {}) })
+    return { r, fetched, fed }
+  }
+  const COMMANDS = `https://d.test/api/v10/applications/${APP}/guilds/${APP_GUILD}/commands`
+  const commandCalls = (fetched) => fetched.filter((f) => f.address === COMMANDS).map((f) => [f.method, f.body === undefined ? null : JSON.parse(f.body)])
+  const answers = (fetched) => fetched.filter((f) => f.address.includes('/callback')).map((f) => JSON.parse(f.body))
+
+  /** Opens the socket and plays HELLO and a READY that names the application, as Discord's does. */
+  async function readyWithApplication(r) {
+    await r.gateway.start()
+    const sock = r.sockets.at(-1)
+    sock.open()
+    sock.receive({ op: 10, d: { heartbeat_interval: INTERVAL } })
+    sock.receive({ op: 0, t: 'READY', s: 1, d: { session_id: SESSION, resume_gateway_url: RESUME, application: { id: APP } } })
+    await tick(1_000)
+    return sock
+  }
+
+  it('with the replies on, makes the command at READY when the guild has none, and sends a member to the site to delete their own reply', async () => {
+    const { r, fetched, fed } = wired({ repliesOn: true })
+    const sock = await readyWithApplication(r)
+    expect(commandCalls(fetched)).toEqual([['GET', null], ['POST', { name: 'Delete on site', type: 3 }]])
+    sock.receive({ op: 0, t: 'INTERACTION_CREATE', s: 2, d: interaction() })
+    await tick(0)
+    expect(answers(fetched)).toEqual([
+      { type: 4, data: { content: `This was written on the site. Delete it there: ${SITE}/reliquarium/librarius/${POST}#m-${MSG}`, flags: 64, allowed_mentions: { parse: [] } } },
+    ])
+    expect(fed).toEqual(['READY', 'INTERACTION_CREATE'])
+    r.gateway.stop()
+  })
+
+  it('with the replies off, asks Discord nothing about the command at READY, and the live feed has READY all the same', async () => {
+    const { r, fetched, fed } = wired({ repliesOn: false })
+    await readyWithApplication(r)
+    await tick(5_000)
+    expect(commandCalls(fetched)).toEqual([])
+    expect(fetched.filter((f) => f.address.includes('/applications/'))).toEqual([])
+    expect(fed).toEqual(['READY'])
+    r.gateway.stop()
+  })
+
+  it('with the replies off, answers at once that deleting from the site is off, for the author of a reply of the site and for anyone else', async () => {
+    for (const authorId of [ME, OTHER]) {
+      const { r, fetched } = wired({ repliesOn: false, held: message({ authorId }) })
+      const sock = await readyWithApplication(r)
+      const came = Date.now()
+      sock.receive({ op: 0, t: 'INTERACTION_CREATE', s: 2, d: interaction() })
+      await tick(0)
+      expect(answers(fetched), authorId).toEqual([{ type: 4, data: { content: OFF, flags: 64, allowed_mentions: { parse: [] } } }])
+      expect(fetched.find((f) => f.address.includes('/callback')).at).toBe(came)
+      r.gateway.stop()
+    }
+  })
+
+  it('with the replies off, still tells anyone that a message written in Discord is for Discord\'s own Delete', async () => {
+    const { r, fetched } = wired({ repliesOn: false, held: message({ origin: 'discord', authorId: OTHER }) })
+    const sock = await readyWithApplication(r)
+    sock.receive({ op: 0, t: 'INTERACTION_CREATE', s: 2, d: interaction() })
+    await tick(0)
+    expect(answers(fetched).map((a) => a.data.content)).toEqual([DISCORD])
+    r.gateway.stop()
+  })
+
+  it('in both states, answers at 1.5 seconds with what it could not check and the link when the store does not answer, behind a feed that hangs', async () => {
+    for (const repliesOn of [true, false]) {
+      const { r, fetched } = wired({ repliesOn, held: 'never' })
+      const sock = await readyWithApplication(r)
+      const came = Date.now()
+      sock.receive({ op: 0, t: 'INTERACTION_CREATE', s: 2, d: interaction() })
+      await tick(1_499)
+      expect(answers(fetched), String(repliesOn)).toEqual([])
+      await tick(1)
+      const [callback] = fetched.filter((f) => f.address.includes('/callback'))
+      expect(callback.at - came, String(repliesOn)).toBe(1_500)
+      expect(answers(fetched).map((a) => a.data.content), String(repliesOn)).toEqual([`Couldn't check right now; open it on the site: ${SITE}/reliquarium/librarius/${POST}#m-${MSG}`])
+      r.gateway.stop()
+    }
   })
 })
 

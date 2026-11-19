@@ -119,7 +119,7 @@ describe('runSetup: the run', () => {
     expect(said).toContain('rebuild the API')
     expect(said).toContain('secret')
     // Lost: run it again, or copy it from Discord. Never delete the webhook for it: that strands every reply it sent.
-    expect(said).toContain('run this again (it prints the address of the webhook that is there)')
+    expect(said).toContain('run this again with --print-existing (it prints the address of the webhook that is there)')
     expect(said).toContain('Edit Channel → Integrations → Webhooks → Librarius → Copy Webhook URL')
     expect(said).toContain('Do not delete the webhook once the site has sent replies')
     expect(said).not.toContain('Delete Webhook')
@@ -166,18 +166,28 @@ describe('runSetup: the run', () => {
     }
   })
 
-  it('the dry run calls nothing, says what it would call, and prints no address', async () => {
-    const r = await run({ argv: ['--dry-run'] })
-    expect(r.code).toBe(0)
-    expect(r.seen).toEqual([])
-    expect(r.out.join('\n')).toContain('Dry run: nothing is called.')
-    expect(r.out).toContain('GET /v10/users/@me')
-    expect(r.out).toContain(`GET /v10/channels/${FORUM}`)
-    expect(r.out).toContain(`GET /v10/channels/${FORUM}/webhooks`)
-    expect(r.out).toContain(`POST /v10/channels/${FORUM}/webhooks  body: {"name":"Librarius"}`)
-    expect(r.out.at(-1)).toContain('Dry run: nothing was called.')
-    expect(r.all).not.toContain('LIBRARIUS_WEBHOOK_URL=https')
-    expect(r.all).not.toContain(BOT_TOKEN)
+  it('the dry run calls nothing, says on standard error what it would call, and prints nothing to standard output', async () => {
+    for (const argv of [['--dry-run'], ['--dry-run', '--print-existing'], ['--print-existing', '--dry-run'], ['--dry-run', '--dry-run']]) {
+      const r = await run({ argv })
+      expect(r.code, argv.join(' ')).toBe(0)
+      expect(r.seen).toEqual([])
+      expect(r.out).toEqual([])
+      expect(r.err[0]).toBe('Dry run: nothing is called. These are the calls the setup would make, in order, all as the bot.')
+      expect(r.err).toContain('GET /v10/users/@me')
+      expect(r.err).toContain(`GET /v10/channels/${FORUM}`)
+      expect(r.err).toContain(`GET /v10/channels/${FORUM}/webhooks`)
+      expect(r.err).toContain(`POST /v10/channels/${FORUM}/webhooks  body: {"name":"Librarius"}  (only when no webhook named "Librarius" that this bot made is there)`)
+      expect(r.err.at(-1)).toBe('Dry run: nothing was called.')
+      expect(r.all).not.toContain('LIBRARIUS_WEBHOOK_URL=https')
+      expect(r.all).not.toContain(BOT_TOKEN)
+    }
+  })
+
+  it('the dry run says whether the address of a webhook that is there would be printed', async () => {
+    const plain = await run({ argv: ['--dry-run'] })
+    expect(plain.err).toContain('Then it prints LIBRARIUS_WEBHOOK_URL= and the address of the webhook it made, on standard output. Of a webhook that is there already it prints the id, and the address only with --print-existing.')
+    const asked = await run({ argv: ['--dry-run', '--print-existing'] })
+    expect(asked.err).toContain('Then it prints LIBRARIUS_WEBHOOK_URL= and the address of the webhook it made, or of the one that is there already, on standard output.')
   })
 
   it('the dry run works with no network at all', async () => {
@@ -197,11 +207,13 @@ describe('runSetup: the run', () => {
   })
 
   it('refuses an argument it does not know, before any call', async () => {
-    for (const argv of [['--force'], ['--dry-run', '--force'], ['dry-run'], ['-n'], ['']]) {
+    const unknown = [['--force'], ['--dry-run', '--force'], ['dry-run'], ['-n'], [''], ['--print-existing=1'], ['--print'], ['--Print-Existing'], ['print-existing'], ['--print-existing', 'x']]
+    for (const argv of unknown) {
       const r = await run({ argv })
       expect(r.code, argv.join(' ')).toBe(2)
       expect(r.seen).toEqual([])
-      expect(r.err).toEqual(['Setup not run: Unknown argument. usage: bun src/librariusWebhookSetupRun.js [--dry-run]'])
+      expect(r.out).toEqual([])
+      expect(r.err).toEqual(['Setup not run: Unknown argument. usage: bun src/librariusWebhookSetupRun.js [--dry-run] [--print-existing]'])
     }
   })
 
@@ -265,6 +277,21 @@ describe('runSetup: the checks before it makes anything', () => {
     }
   })
 
+  it('names the status alone when what Discord answered is not JSON', async () => {
+    const r = await run({ routes: { [`GET /v10/channels/${FORUM}/webhooks`]: () => new Response('<html>bad gateway</html>', { status: 502 }) } })
+    expect(r.code).toBe(1)
+    expect(r.out).toEqual([])
+    expect(r.err).toEqual(['Setup stopped: the webhooks of the Librarius channel could not be listed (HTTP 502). Nothing was made.'])
+  })
+
+  it('throws, and calls nothing, for an environment it cannot read at all: that is no setting of the owner\'s', async () => {
+    const r = rig()
+    const out = []
+    await expect(runSetup({ env: null, fetchImpl: r.fetchImpl, log: (l) => out.push(l), warn: (l) => out.push(l) })).rejects.toThrow(TypeError)
+    expect(r.seen).toEqual([])
+    expect(out).toEqual([])
+  })
+
   it('names what Discord said, as a status and a code, and nothing that carries a link or a token', async () => {
     const r = await run({
       routes: { [`GET /v10/channels/${FORUM}/webhooks`]: () => json(403, { message: `Missing Permissions at https://discord.com/api/webhooks/${NEW_HOOK}/${HOOK_TOKEN} for ${BOT_TOKEN}`, code: 50013 }) },
@@ -294,11 +321,74 @@ describe('runSetup: the checks before it makes anything', () => {
   })
 })
 
-describe('runSetup: a webhook of the same name', () => {
+describe('runSetup: a webhook of the same name, without --print-existing', () => {
   const listed = (hooks) => ({ [`GET /v10/channels/${FORUM}/webhooks`]: () => json(200, hooks) })
+  const THERE = `A Librarius webhook is there (id ${OLD_HOOK}). Run again with --print-existing to print its address.`
+
+  it('makes nothing and prints no address: it gives the id on standard error, says how to print the address, and exits 0', async () => {
+    const r = await run({ routes: listed([hook()]) })
+    expect(r.code).toBe(0)
+    expect(r.seen.some((s) => s.key.startsWith('POST'))).toBe(false)
+    expect(r.out).toEqual([])
+    expect(r.err).toEqual([THERE, 'Nothing was made. Do not delete the webhook once the site has sent replies: a new webhook cannot edit or delete what this one sent.'])
+    expect(r.all).not.toContain(OLD_TOKEN)
+    expect(r.all).not.toContain('LIBRARIUS_WEBHOOK_URL')
+    expect(r.all).not.toContain(BOT_TOKEN)
+  })
+
+  it('says the same whether or not Discord gave a usable address for it: nothing of the token is read out', async () => {
+    for (const token of [undefined, null, 'short', `${OLD_TOKEN}/x`, 12345678, '']) {
+      const r = await run({ routes: listed([hook({ token })]) })
+      expect(r.code, JSON.stringify(token)).toBe(0)
+      expect(r.out).toEqual([])
+      expect(r.err[0]).toBe(THERE)
+    }
+  })
+
+  it('says its id is unknown when the webhook it found has none', async () => {
+    for (const id of [undefined, 'not an id', 12]) {
+      const r = await run({ routes: listed([hook({ id })]) })
+      expect(r.code).toBe(0)
+      expect(r.out).toEqual([])
+      expect(r.err[0]).toBe('A Librarius webhook is there (id unknown). Run again with --print-existing to print its address.')
+      expect(r.all).not.toContain('not an id')
+    }
+  })
+
+  it('finds it anywhere in the list, among other webhooks, and prints the address of none of them', async () => {
+    const others = [
+      hook({ id: '200000000000000472', name: 'Something else', token: 'token-of-another-hook-aaaa' }),
+      hook({ id: '200000000000000473', user: { id: OTHER_PERSON }, token: 'token-of-a-stranger-bbbb' }),
+      hook(),
+      hook({ id: '200000000000000474', name: 'Another', token: 'token-of-another-name-cccc' }),
+    ]
+    const r = await run({ routes: listed(others) })
+    expect(r.code).toBe(0)
+    expect(r.out).toEqual([])
+    expect(r.err[0]).toBe(THERE)
+    expect(r.all).not.toContain('token-')
+  })
+
+  it('no token of the webhook ever reaches either output, for any token it has (property)', async () => {
+    const token = fc.stringMatching(/^[A-Za-z0-9_-]{8,80}$/).map((s) => `zz${s}`)
+    await fc.assert(
+      fc.asyncProperty(token, async (secret) => {
+        const r = await run({ routes: listed([hook({ token: secret })]) })
+        expect(r.code).toBe(0)
+        expect(r.out).toEqual([])
+        expect(count(r.all, secret)).toBe(0)
+      }),
+      { numRuns: 40 },
+    )
+  })
+})
+
+describe('runSetup: a webhook of the same name, with --print-existing', () => {
+  const listed = (hooks) => ({ [`GET /v10/channels/${FORUM}/webhooks`]: () => json(200, hooks) })
+  const ask = (routes, env) => run({ argv: ['--print-existing'], routes, ...(env ? { env } : {}) })
 
   it('makes nothing and prints the address of the webhook that is there: exit 0, once, to standard output only', async () => {
-    const r = await run({ routes: listed([hook()]) })
+    const r = await ask(listed([hook()]))
     expect(r.code).toBe(0)
     expect(r.seen.some((s) => s.key.startsWith('POST'))).toBe(false)
     expect(r.out).toEqual([OLD_LINE])
@@ -308,27 +398,36 @@ describe('runSetup: a webhook of the same name', () => {
     expect(r.err).toHaveLength(1)
     expect(r.err[0]).toContain(`(id ${OLD_HOOK})`)
     expect(r.err[0].startsWith('A webhook named "Librarius" that this bot made is already on the Librarius forum')).toBe(true)
-    expect(r.err[0]).toContain('so none was made')
+    expect(r.err[0]).toContain('so none was made: the line above is its address, the address of the webhook this command made on an earlier run.')
+    expect(r.err[0]).not.toContain('the one the site uses')
+  })
+
+  it('takes the flag in any place, and with --dry-run calls nothing', async () => {
+    const r = await run({ argv: ['--print-existing', '--print-existing'], routes: listed([hook()]) })
+    expect(r.out).toEqual([OLD_LINE])
+    const dry = await run({ argv: ['--print-existing', '--dry-run'], routes: listed([hook()]) })
+    expect(dry.seen).toEqual([])
+    expect(dry.out).toEqual([])
   })
 
   it('never says to delete the webhook, and says not to once the site has sent replies', async () => {
-    const r = await run({ routes: listed([hook()]) })
+    const r = await ask(listed([hook()]))
     expect(r.err[0]).toContain('Do not delete the webhook once the site has sent replies')
     expect(r.err[0]).not.toContain('Delete Webhook')
-    const bare = await run({ routes: listed([hook({ token: undefined })]) })
+    const bare = await ask(listed([hook({ token: undefined })]))
     expect(bare.err[0]).toContain('Do not delete the webhook once the site has sent replies')
     expect(bare.err[0]).not.toContain('Delete Webhook')
   })
 
   it('prints the address of the API it was told of as Discord has it, and the mock address for an http base', async () => {
     const mock = { ...ENV, DISCORD_API_BASE: 'http://discord-mock:4400/api' }
-    const r = await run({ env: mock, routes: listed([hook()]) })
+    const r = await ask(listed([hook()]), mock)
     expect(r.out).toEqual([`LIBRARIUS_WEBHOOK_URL=http://discord-mock:4400/api/webhooks/${OLD_HOOK}/${OLD_TOKEN}`])
   })
 
   it('says it is the same one whatever its case or the space round its name', async () => {
     for (const name of ['Librarius', 'librarius', 'LIBRARIUS', ' Librarius ', 'Librarius\n']) {
-      const r = await run({ routes: listed([hook({ name })]) })
+      const r = await ask(listed([hook({ name })]))
       expect(r.code, JSON.stringify(name)).toBe(0)
       expect(r.out, JSON.stringify(name)).toEqual([OLD_LINE])
       expect(r.seen.some((s) => s.key.startsWith('POST'))).toBe(false)
@@ -337,7 +436,7 @@ describe('runSetup: a webhook of the same name', () => {
 
   it('knows the bot as the user that made the webhook, or as its application', async () => {
     for (const mine of [hook({ user: { id: BOT } }), hook({ user: { id: OTHER_PERSON }, application_id: BOT }), hook({ user: undefined, application_id: BOT })]) {
-      const r = await run({ routes: listed([mine]) })
+      const r = await ask(listed([mine]))
       expect(r.out).toEqual([OLD_LINE])
     }
   })
@@ -349,7 +448,7 @@ describe('runSetup: a webhook of the same name', () => {
       hook(),
       hook({ id: '200000000000000474', name: 'Another', token: 'token-of-another-name-cccc' }),
     ]
-    const r = await run({ routes: listed(others) })
+    const r = await ask(listed(others))
     expect(r.code).toBe(0)
     expect(r.out).toEqual([OLD_LINE])
     expect(r.all).not.toContain('token-of-')
@@ -373,18 +472,20 @@ describe('runSetup: a webhook of the same name', () => {
       'x',
       [],
     ]
-    for (const entry of theirs) {
-      const r = await run({ routes: listed([entry]) })
-      expect(r.code, JSON.stringify(entry)).toBe(0)
-      expect(r.seen.some((s) => s.key.startsWith('POST')), JSON.stringify(entry)).toBe(true)
-      // It made a new one: that is the address printed, never the stranger's.
-      expect(r.out, JSON.stringify(entry)).toEqual([`LIBRARIUS_WEBHOOK_URL=https://discord.com/api/webhooks/${NEW_HOOK}/${HOOK_TOKEN}`])
-      expect(r.all).not.toContain(OLD_TOKEN)
+    for (const argv of [[], ['--print-existing']]) {
+      for (const entry of theirs) {
+        const r = await run({ argv, routes: listed([entry]) })
+        expect(r.code, JSON.stringify(entry)).toBe(0)
+        expect(r.seen.some((s) => s.key.startsWith('POST')), JSON.stringify(entry)).toBe(true)
+        // It made a new one: that is the address printed, never the stranger's.
+        expect(r.out, JSON.stringify(entry)).toEqual([`LIBRARIUS_WEBHOOK_URL=https://discord.com/api/webhooks/${NEW_HOOK}/${HOOK_TOKEN}`])
+        expect(r.all).not.toContain(OLD_TOKEN)
+      }
     }
   })
 
   it('does not take a webhook of this name made by someone else for the bot, even when its id matches no one', async () => {
-    const r = await run({ routes: listed([hook({ user: { id: OTHER_PERSON }, application_id: OTHER_PERSON })]) })
+    const r = await ask(listed([hook({ user: { id: OTHER_PERSON }, application_id: OTHER_PERSON })]))
     expect(r.code).toBe(0)
     expect(r.seen.some((s) => s.key.startsWith('POST'))).toBe(true)
   })
@@ -399,7 +500,7 @@ describe('runSetup: a webhook of the same name', () => {
       hook({ token: '' }),
     ]
     for (const entry of bodies) {
-      const r = await run({ routes: listed([entry]) })
+      const r = await ask(listed([entry]))
       expect(r.code, JSON.stringify(entry)).toBe(1)
       expect(r.seen.some((s) => s.key.startsWith('POST'))).toBe(false)
       expect(r.out).toEqual([])
@@ -413,12 +514,12 @@ describe('runSetup: a webhook of the same name', () => {
   })
 
   it('says its id is unknown when the webhook it found has none, and so cannot give its address', async () => {
-    const r = await run({ routes: listed([hook({ id: undefined })]) })
+    const r = await ask(listed([hook({ id: undefined })]))
     expect(r.code).toBe(1)
     expect(r.out).toEqual([])
     expect(r.err[0]).toContain('(id unknown)')
     expect(r.all).not.toContain(OLD_TOKEN)
-    const odd = await run({ routes: listed([hook({ id: 'not an id' })]) })
+    const odd = await ask(listed([hook({ id: 'not an id' })]))
     expect(odd.code).toBe(1)
     expect(odd.err[0]).toContain('(id unknown)')
     expect(odd.err[0]).not.toContain('not an id')
@@ -428,7 +529,7 @@ describe('runSetup: a webhook of the same name', () => {
     const token = fc.stringMatching(/^[A-Za-z0-9_-]{8,80}$/).map((s) => `zz${s}`)
     await fc.assert(
       fc.asyncProperty(token, async (secret) => {
-        const r = await run({ routes: listed([hook({ token: secret })]) })
+        const r = await ask(listed([hook({ token: secret })]))
         expect(r.code).toBe(0)
         expect(count(r.all, secret)).toBe(1)
         expect(r.err.join('\n')).not.toContain(secret)
@@ -436,6 +537,102 @@ describe('runSetup: a webhook of the same name', () => {
         expect(r.out).toEqual([`LIBRARIUS_WEBHOOK_URL=https://discord.com/api/webhooks/${OLD_HOOK}/${secret}`])
       }),
       { numRuns: 40 },
+    )
+  })
+})
+
+describe('runSetup: two webhooks of the same name', () => {
+  const listed = (hooks) => ({ [`GET /v10/channels/${FORUM}/webhooks`]: () => json(200, hooks) })
+  const SECOND = '200000000000000475'
+  const SECOND_TOKEN = 'second-webhook-token-for-the-test_5d6e7f-QRS'
+
+  it('refuses, with exit 1: it lists their ids, prints no address and no token, and makes nothing, with the flag or without', async () => {
+    for (const argv of [[], ['--print-existing']]) {
+      const r = await run({ argv, routes: listed([hook(), hook({ id: SECOND, token: SECOND_TOKEN, name: 'librarius' })]) })
+      expect(r.code, argv.join(' ')).toBe(1)
+      expect(r.seen.some((s) => s.key.startsWith('POST'))).toBe(false)
+      expect(r.out).toEqual([])
+      expect(r.err).toEqual([
+        `Setup not run: 2 webhooks named "Librarius" that this bot made are on the Librarius forum (ids ${OLD_HOOK}, ${SECOND}), so it cannot tell which one the site uses. ` +
+          'Nothing was made and no address was printed. The site uses the one whose id is in LIBRARIUS_WEBHOOK_URL in server/.env (…/webhooks/<id>/…). ' +
+          'Do not delete one that the site has sent replies through: a new webhook cannot edit or delete what it sent.',
+      ])
+      expect(r.all).not.toContain(OLD_TOKEN)
+      expect(r.all).not.toContain(SECOND_TOKEN)
+      expect(r.all).not.toContain(BOT_TOKEN)
+    }
+  })
+
+  it('lists every one of them, in the order Discord gave, among webhooks that are not its own, and an id it cannot read as unknown', async () => {
+    const hooks = [
+      hook({ id: '200000000000000476', token: 'token-of-a-third-dddd', user: undefined, application_id: BOT }),
+      hook({ id: '200000000000000477', name: 'Something else', token: 'token-of-another-hook-eeee' }),
+      hook({ id: '200000000000000478', user: { id: OTHER_PERSON }, token: 'token-of-a-stranger-ffff' }),
+      hook({ token: undefined }),
+      hook({ id: 'not an id', token: 'token-of-a-bent-one-gggg', name: ' LIBRARIUS ' }),
+    ]
+    const r = await run({ argv: ['--print-existing'], routes: listed(hooks) })
+    expect(r.code).toBe(1)
+    expect(r.out).toEqual([])
+    expect(r.err).toHaveLength(1)
+    expect(r.err[0].startsWith(`Setup not run: 3 webhooks named "Librarius" that this bot made are on the Librarius forum (ids 200000000000000476, ${OLD_HOOK}, unknown), so`)).toBe(true)
+    expect(r.all).not.toContain('token-')
+    expect(r.all).not.toContain('not an id')
+    expect(r.all).not.toContain('200000000000000477')
+    expect(r.all).not.toContain('200000000000000478')
+  })
+
+  it('no token of any of them reaches either output, for any tokens they have (property)', async () => {
+    const token = fc.stringMatching(/^[A-Za-z0-9_-]{8,80}$/).map((s) => `zz${s}`)
+    await fc.assert(
+      fc.asyncProperty(fc.uniqueArray(token, { minLength: 2, maxLength: 4 }), fc.boolean(), async (secrets, flag) => {
+        const hooks = secrets.map((secret, i) => hook({ id: `20000000000000048${i}`, token: secret }))
+        const r = await run({ argv: flag ? ['--print-existing'] : [], routes: listed(hooks) })
+        expect(r.code).toBe(1)
+        expect(r.out).toEqual([])
+        for (const secret of secrets) expect(count(r.all, secret)).toBe(0)
+        expect(r.err[0]).toContain(`(ids ${hooks.map((h) => h.id).join(', ')})`)
+      }),
+      { numRuns: 40 },
+    )
+  })
+})
+
+describe('runSetup: standard output', () => {
+  it('carries the one address line or nothing, whatever the arguments, the webhooks there and what Discord answers (property)', async () => {
+    const SECRET = 'zz-a-token-for-the-property-0123456789'
+    const listing = fc.oneof(
+      fc.constant([]),
+      fc.constant([hook({ token: SECRET })]),
+      fc.constant([hook({ token: undefined })]),
+      fc.constant([hook({ token: SECRET }), hook({ id: '200000000000000479', token: SECRET })]),
+      fc.constant([hook({ user: { id: OTHER_PERSON }, token: SECRET })]),
+    )
+    const made = fc.constantFrom(
+      () => json(200, { id: NEW_HOOK, token: SECRET }),
+      () => json(200, { id: NEW_HOOK }),
+      () => json(403, { message: `no ${SECRET}`, code: 50013, token: SECRET }), // a refusal that carries the new webhook's token
+      () => new Error('ECONNRESET'),
+    )
+    const argv = fc.subarray(['--dry-run', '--print-existing'])
+    const step = fc.constantFrom('ok', 'me', 'channel', 'list')
+    await fc.assert(
+      fc.asyncProperty(argv, listing, made, step, async (args, hooks, post, broken) => {
+        const routes = {
+          [`GET /v10/channels/${FORUM}/webhooks`]: () => (broken === 'list' ? json(500, null) : json(200, hooks)),
+          [`POST /v10/channels/${FORUM}/webhooks`]: post,
+        }
+        if (broken === 'me') routes['GET /v10/users/@me'] = () => json(401, { message: '401: Unauthorized', code: 0 })
+        if (broken === 'channel') routes[`GET /v10/channels/${FORUM}`] = () => json(200, forum({ type: 0 }))
+        const r = await run({ argv: args, routes })
+        expect(r.out.length).toBeLessThanOrEqual(1)
+        for (const line of r.out) expect(line).toMatch(/^LIBRARIUS_WEBHOOK_URL=https:\/\/discord\.com\/api\/webhooks\/\d{17,20}\/[\w-]+$/)
+        // An address goes out only with exit 0, and never on standard error.
+        if (r.out.length === 1) expect(r.code).toBe(0)
+        expect(r.err.join('\n')).not.toContain(SECRET)
+        expect(r.all).not.toContain(BOT_TOKEN)
+      }),
+      { numRuns: 120 },
     )
   })
 })
@@ -463,7 +660,7 @@ describe('runSetup: when the webhook is made', () => {
     expect(r.code).toBe(1)
     expect(r.err).toEqual([
       'Setup stopped: the webhook could not be made (no answer (Error)).',
-      'If a webhook named "Librarius" is on the Librarius forum now, run this again: it finds that webhook and prints its address, and makes no second one.',
+      'If a webhook named "Librarius" is on the Librarius forum now, run this again with --print-existing: it finds that webhook and prints its address, and makes no second one.',
     ])
   })
 

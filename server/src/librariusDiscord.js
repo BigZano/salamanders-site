@@ -36,7 +36,9 @@
  *   unarchives a thread to edit in it, and archives it again.
  * deleteMessage(channelId, messageId) → undefined once the message is gone: deleted, or already not there (404 Unknown
  *   Message, code 10008). It is how a message that a person wrote in Discord is deleted from the site. Any other failure is
- *   Upstream, and so is a 404 of another code (Unknown Channel, say).
+ *   Upstream, and so is a 404 of another code (Unknown Channel, say). An Upstream for what Discord answered carries its
+ *   `status` and its `code` (undefined when it gave none) beside the message, which stays the same: 400 with code 50083 is
+ *   a thread that is archived.
  * refreshUrls(urls) → Map of each link Discord refreshed to its new one. At most 50 links, or RangeError. A link
  *   Discord did not refresh is not in the Map, and neither is one it answered with that is not on Discord's CDN
  *   attachments path: a refreshed link is stored and handed to a browser, so it has to pass the check an attachment's
@@ -378,7 +380,8 @@ export function createLibrariusDiscord({
         const { status, json } = await send('DELETE', `${messagesPath(channelId)}/${messageId}`, { route: `${messagesPath(channelId)}/:id` })
         // Gone is what a delete is for, but only a gone message: another 404 (Unknown Channel) is not one.
         if (status === 204 || (status === 404 && json?.code === UNKNOWN_MESSAGE)) return
-        throw refused(status, 'a message delete')
+        // The status and Discord's code go with it, so the outbox can tell an archived thread (400, code 50083) and open it.
+        throw Object.assign(refused(status, 'a message delete'), { status, code: json?.code })
       },
 
       async refreshUrls(urls) {

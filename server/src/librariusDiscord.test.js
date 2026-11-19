@@ -646,11 +646,33 @@ describe('deleteMessage', () => {
     ['a 500 whose code is 10008', { status: 500, body: { code: 10008 } }],
     ['a 200', { status: 200, body: {} }],
     ['a 400', { status: 400, body: { code: 50035 } }],
-  ])('throws Upstream on %s', async (_, reply) => {
+  ])('throws Upstream on %s, with the status and the code Discord gave', async (_, reply) => {
     const r = rig([reply])
     const err = await r.discord.deleteMessage(THREAD, MSG).catch((e) => e)
     expect(err).toBeInstanceOf(Upstream)
     expect(err.message).toBe(`Discord answered ${reply.status} for a message delete.`)
+    expect(err.status).toBe(reply.status)
+    expect(err.code).toBe(reply.body?.code)
+  })
+
+  it('says a thread that is archived (400, code 50083) in the status and code of its Upstream, and nothing of it in the message', async () => {
+    const r = rig([{ status: 400, body: { code: 50083, message: 'Thread is archived' } }])
+    const err = await r.discord.deleteMessage(THREAD, MSG).catch((e) => e)
+    expect(err).toBeInstanceOf(Upstream)
+    expect([err.status, err.code]).toEqual([400, 50083])
+    expect(err.message).toBe('Discord answered 400 for a message delete.')
+  })
+
+  it('gives the status and no code for a refusal that says none: a 403 with no body, or one that is not JSON', async () => {
+    for (const reply of [{ status: 403, raw: '' }, { status: 403, raw: 'Forbidden' }, { status: 403, body: { message: 'Missing Permissions' } }]) {
+      const r = rig([reply])
+      const err = await r.discord.deleteMessage(THREAD, MSG).catch((e) => e)
+      expect(err).toBeInstanceOf(Upstream)
+      expect(err.status).toBe(403)
+      expect(err.code).toBeUndefined()
+      expect('code' in err).toBe(true)
+      expect(err.message).toBe('Discord answered 403 for a message delete.')
+    }
   })
 
   it('refuses ids that are not ids, before any request', async () => {

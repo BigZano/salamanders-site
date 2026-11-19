@@ -21,6 +21,7 @@ const COPY_SITE = 'This was written on the site. Delete it there:'
 const COPY_DISCORD = "Written in Discord: use Discord's own Delete."
 const COPY_OTHER = 'Only the author can delete this, on the site.'
 const COPY_FALLBACK = "Couldn't check right now; open it on the site:"
+const COPY_OFF = 'Deleting from the site is switched off right now. A moderator can delete this in Discord.'
 
 const interaction = (over = {}) => ({
   id: INTERACTION,
@@ -96,14 +97,14 @@ function rig(over = {}) {
     },
   }
   const logged = []
-  const command = createCommand({ discord, store, guildId: GUILD, timers: ft.timers, log: (line) => logged.push(line), ...(w.options ?? {}) })
+  const command = createCommand({ discord, store, guildId: GUILD, repliesOn: true, timers: ft.timers, now: () => ft.now, log: (line) => logged.push(line), ...(w.options ?? {}) })
   return { command, calls, ft, w, logged, discord, store }
 }
 
 const content = (t, i = 0) => t.calls.callbacks[i].body.data.content
 
 describe('createCommand: what it needs', () => {
-  const parts = () => ({ discord: { applicationCommands() {}, createMessageCommand() {}, interactionCallback() {} }, store: { outboxMessage() {} }, guildId: GUILD })
+  const parts = () => ({ discord: { applicationCommands() {}, createMessageCommand() {}, interactionCallback() {} }, store: { outboxMessage() {} }, guildId: GUILD, repliesOn: true })
 
   it('takes a Discord client and a store that have what it calls', () => {
     expect(() => createCommand(parts())).not.toThrow()
@@ -145,6 +146,18 @@ describe('createCommand: what it needs', () => {
 
   it('needs a log that is a function', () => {
     for (const log of [null, 5, 'x']) expect(() => createCommand({ ...parts(), log }), String(log)).toThrow(new TypeError('log must be a function.'))
+  })
+
+  it('needs to be told whether the replies are on, as true or false and nothing that only looks like it', () => {
+    for (const repliesOn of [undefined, null, 0, 1, '', 'true', 'false', [], {}, () => true]) {
+      expect(() => createCommand({ ...parts(), repliesOn }), String(repliesOn)).toThrow(new TypeError('repliesOn must be true or false.'))
+    }
+    expect(() => createCommand({ ...parts(), repliesOn: false })).not.toThrow()
+  })
+
+  it('needs a clock that is a function, and takes the runtime\'s when it is given none', () => {
+    for (const now of [null, 5, 'x', {}]) expect(() => createCommand({ ...parts(), now }), String(now)).toThrow(new TypeError('now must be a function.'))
+    expect(() => createCommand({ ...parts(), now: undefined })).not.toThrow()
   })
 })
 
@@ -331,10 +344,10 @@ describe('INTERACTION_CREATE: the three answers', () => {
     }
   })
 
-  it('answers with a callback that has a second of its own to be taken in, and waits for no turn among the other calls, since the three seconds are short', async () => {
+  it('answers with a callback that has what is left of the three seconds to be taken in, and waits for no turn among the other calls, since the three seconds are short', async () => {
     const t = rig()
     await t.command.dispatch('INTERACTION_CREATE', interaction())
-    expect(t.calls.options).toStrictEqual([{ timeoutMs: 1000 }])
+    expect(t.calls.options).toStrictEqual([{ timeoutMs: 2800 }])
   })
 
   it('answers each interaction apart, when several come together', async () => {
@@ -347,6 +360,101 @@ describe('INTERACTION_CREATE: the three answers', () => {
     expect(byId[INTERACTION].body.data.content).toBe(`${COPY_SITE} ${LINK}`)
     expect(byId['200000000000000491'].token).toBe('second-token')
     expect(byId['200000000000000491'].body.data.content).toBe(COPY_DISCORD)
+  })
+})
+
+describe('with the replies off (Ruling B12): it is made nowhere, and still answers', () => {
+  const off = (over = {}) => rig({ ...over, options: { repliesOn: false, ...(over.options ?? {}) } })
+
+  it('makes no command at READY and asks Discord nothing, even when the guild has none', async () => {
+    const t = off()
+    for (let i = 0; i < 3; i++) await expect(t.command.dispatch('READY', { application: { id: APP } })).resolves.toBeUndefined()
+    expect(t.calls.list).toStrictEqual([])
+    expect(t.calls.create).toStrictEqual([])
+  })
+
+  it('still answers the command that was made while they were on: a message written in Discord is for Discord\'s own Delete, whoever asks', async () => {
+    for (const authorId of [ME, OTHER]) {
+      const t = off({ messages: new Map([[MSG, stored({ origin: 'discord', authorId })]]) })
+      await t.command.dispatch('INTERACTION_CREATE', interaction())
+      expect(t.calls.callbacks, authorId).toStrictEqual([
+        { id: INTERACTION, token: TOKEN, body: { type: 4, data: { content: COPY_DISCORD, flags: 64, allowed_mentions: { parse: [] } } } },
+      ])
+    }
+  })
+
+  it('tells whoever asks about a reply of the site, its author too, that deleting from the site is off and a moderator can delete it in Discord, with no link', async () => {
+    for (const [authorId, member] of [[ME, { user: { id: ME } }], [OTHER, { user: { id: ME } }], [undefined, { user: { id: ME } }], [ME, undefined]]) {
+      const t = off({ messages: new Map([[MSG, stored({ authorId })]]) })
+      await t.command.dispatch('INTERACTION_CREATE', interaction({ member }))
+      expect(content(t), String(authorId)).toBe(COPY_OFF)
+      expect(t.calls.stored).toStrictEqual([MSG])
+    }
+  })
+
+  it('answers the rest as when they are on: a message it does not hold, one of no known origin, and a target that is no message id', async () => {
+    const unknown = off({ messages: new Map() })
+    await unknown.command.dispatch('INTERACTION_CREATE', interaction())
+    expect(content(unknown)).toBe(COPY_OTHER)
+    for (const origin of [undefined, null, '', 'SITE', 'webhook', 5]) {
+      const t = off({ messages: new Map([[MSG, stored({ origin })]]) })
+      await t.command.dispatch('INTERACTION_CREATE', interaction())
+      expect(content(t), String(origin)).toBe(COPY_OTHER)
+    }
+    const noId = off()
+    await noId.command.dispatch('INTERACTION_CREATE', withData({ target_id: '../x', resolved: undefined }))
+    expect(content(noId)).toBe(COPY_OTHER)
+    expect(noId.calls.stored).toStrictEqual([])
+  })
+
+  it('answers within the deadline: what it could not check and the link at the deadline, at once when the store fails, and the callback has what is left', async () => {
+    const slow = off({ storeGate: new Promise(() => {}) })
+    const done = slow.command.dispatch('INTERACTION_CREATE', interaction())
+    await flush()
+    await slow.ft.advance(1_499)
+    expect(slow.calls.callbacks).toStrictEqual([])
+    await slow.ft.advance(1)
+    await done
+    expect(content(slow)).toBe(`${COPY_FALLBACK} ${LINK}`)
+    expect(slow.calls.options).toStrictEqual([{ timeoutMs: 1300 }])
+    const down = off({ storeFails: true })
+    await down.command.dispatch('INTERACTION_CREATE', interaction())
+    expect(content(down)).toBe(`${COPY_FALLBACK} ${LINK}`)
+    expect(down.calls.options).toStrictEqual([{ timeoutMs: 2800 }])
+    expect(down.ft.pending()).toBe(0)
+  })
+
+  it('answers only this command in this guild, as when they are on', async () => {
+    const t = off()
+    for (const d of [interaction({ guild_id: '200000000000000499' }), withData({ name: 'Other' }), interaction({ type: 3 }), interaction({ token: '' })]) {
+      await t.command.dispatch('INTERACTION_CREATE', d)
+    }
+    expect(t.calls.callbacks).toStrictEqual([])
+    expect(t.calls.stored).toStrictEqual([])
+  })
+
+  it('differs from the replies being on only for a reply of the site (property)', async () => {
+    await fc.assert(
+      fc.asyncProperty(
+        fc.constantFrom('site', 'discord', 'webhook', undefined),
+        fc.constantFrom(ME, OTHER, undefined),
+        fc.constantFrom(ME, OTHER),
+        fc.boolean(),
+        async (origin, authorId, asker, held) => {
+          const world = () => ({ messages: held ? new Map([[MSG, stored({ origin, authorId })]]) : new Map() })
+          const on = rig(world())
+          const offNow = off(world())
+          await on.command.dispatch('INTERACTION_CREATE', interaction({ member: { user: { id: asker } } }))
+          await offNow.command.dispatch('INTERACTION_CREATE', interaction({ member: { user: { id: asker } } }))
+          const isSite = held && origin === 'site'
+          expect(content(offNow)).toBe(isSite ? COPY_OFF : content(on))
+          expect(content(on)).toBe(!held ? COPY_OTHER : origin === 'discord' ? COPY_DISCORD : isSite && authorId === asker ? `${COPY_SITE} ${LINK}` : COPY_OTHER)
+          expect(offNow.calls.callbacks[0].body.data.flags).toBe(64)
+          expect(offNow.calls.callbacks[0].body.data.allowed_mentions).toStrictEqual({ parse: [] })
+        },
+      ),
+      { numRuns: 80 },
+    )
   })
 })
 
@@ -483,7 +591,7 @@ describe('INTERACTION_CREATE: the three seconds', () => {
 
   it('answers the fallback at once, with a link to the site, for a store that throws before it answers', async () => {
     const t = rig()
-    const own = createCommand({ discord: t.discord, store: { outboxMessage: () => { throw new Error('sync failure') } }, guildId: GUILD, timers: t.ft.timers, log: () => {} })
+    const own = createCommand({ discord: t.discord, store: { outboxMessage: () => { throw new Error('sync failure') } }, guildId: GUILD, repliesOn: true, timers: t.ft.timers, now: () => t.ft.now, log: () => {} })
     await own.dispatch('INTERACTION_CREATE', interaction())
     expect(t.calls.callbacks.map((c) => c.body.data.content)).toStrictEqual([`${COPY_FALLBACK} ${LINK}`])
   })
@@ -510,19 +618,114 @@ describe('INTERACTION_CREATE: the three seconds', () => {
     }
   })
 
-  it('uses the timers of the runtime when it is given none', async () => {
+  it('uses the timers and the clock of the runtime when it is given none', async () => {
     vi.useFakeTimers()
     try {
-      const t = rig({ storeGate: new Promise(() => {}), options: { timers: undefined } })
+      const t = rig({ storeGate: new Promise(() => {}), options: { timers: undefined, now: undefined } })
       const done = t.command.dispatch('INTERACTION_CREATE', interaction())
       await vi.advanceTimersByTimeAsync(1_499)
       expect(t.calls.callbacks).toHaveLength(0)
       await vi.advanceTimersByTimeAsync(1)
       await done
       expect(t.calls.callbacks).toHaveLength(1)
+      expect(t.calls.options).toStrictEqual([{ timeoutMs: 1300 }])
     } finally {
       vi.useRealTimers()
     }
+  })
+})
+
+describe('INTERACTION_CREATE: the callback has what is left of the three seconds (rB4 N3)', () => {
+  /** → the callback's timeout for a store that answers `elapsed` ms after the event came, with a deadline that lets it. */
+  async function timeoutAfter(elapsed, { deadlineMs = 1900, answer = stored() } = {}) {
+    let release
+    const t = rig({ storeGate: new Promise((resolve) => (release = resolve)), options: { deadlineMs } })
+    const done = t.command.dispatch('INTERACTION_CREATE', interaction())
+    await flush()
+    if (elapsed > 0) await t.ft.advance(elapsed)
+    release(answer)
+    await done
+    expect(t.calls.callbacks, String(elapsed)).toHaveLength(1)
+    return t.calls.options[0].timeoutMs
+  }
+
+  it('gives a callback sent 5 ms after the event 2,795 ms, so a slow connection is not cut off with time to spare', async () => {
+    expect(await timeoutAfter(5)).toBe(2795)
+  })
+
+  it('gives a callback sent 1,700 ms after the event 1,100 ms, so the answer is still due inside the three seconds', async () => {
+    expect(await timeoutAfter(1_700)).toBe(1100)
+  })
+
+  it('never gives it less than a second, however late it is sent: 1,799 ms in is 1,001, 1,800 is 1,000, and 1,900 is 1,000', async () => {
+    expect(await timeoutAfter(1_799)).toBe(1001)
+    expect(await timeoutAfter(1_800)).toBe(1000)
+    expect(await timeoutAfter(1_900)).toBe(1000)
+  })
+
+  it('gives the fallback sent at the store\'s deadline what is left after it', async () => {
+    for (const [deadlineMs, left] of [[1_500, 1300], [500, 2300], [1_900, 1000]]) {
+      const t = rig({ storeGate: new Promise(() => {}), options: { deadlineMs } })
+      const done = t.command.dispatch('INTERACTION_CREATE', interaction())
+      await flush()
+      await t.ft.advance(deadlineMs)
+      await done
+      expect(content(t), String(deadlineMs)).toBe(`${COPY_FALLBACK} ${LINK}`)
+      expect(t.calls.options, String(deadlineMs)).toStrictEqual([{ timeoutMs: left }])
+    }
+  })
+
+  it('counts from the moment the event came, not from when the command was made', async () => {
+    let release
+    const t = rig({ storeGate: new Promise((resolve) => (release = resolve)) })
+    await t.ft.advance(60_000)
+    const done = t.command.dispatch('INTERACTION_CREATE', interaction())
+    await flush()
+    await t.ft.advance(5)
+    release(stored())
+    await done
+    expect(t.calls.options).toStrictEqual([{ timeoutMs: 2795 }])
+  })
+
+  it('counts each interaction from its own coming, when several are being answered', async () => {
+    const gates = []
+    const t = rig({ storeGate: undefined })
+    t.store.outboxMessage = () => new Promise((resolve) => gates.push(resolve))
+    const own = createCommand({ discord: t.discord, store: t.store, guildId: GUILD, repliesOn: true, timers: t.ft.timers, now: () => t.ft.now, deadlineMs: 1900, log: () => {} })
+    const first = own.dispatch('INTERACTION_CREATE', interaction())
+    await flush()
+    await t.ft.advance(1_000)
+    const second = own.dispatch('INTERACTION_CREATE', interaction({ id: '200000000000000491', token: 'second-token' }))
+    await flush()
+    await t.ft.advance(200)
+    gates[0](stored())
+    gates[1](stored())
+    await Promise.all([first, second])
+    expect(t.calls.callbacks.map((c) => c.id)).toStrictEqual([INTERACTION, '200000000000000491'])
+    expect(t.calls.options).toStrictEqual([{ timeoutMs: 1600 }, { timeoutMs: 2600 }])
+  })
+
+  it('gives no more than 2,800 ms when the clock goes back while it waits', async () => {
+    let release
+    const clock = { at: 50_000 }
+    const t = rig({ storeGate: new Promise((resolve) => (release = resolve)), options: { now: () => clock.at } })
+    const done = t.command.dispatch('INTERACTION_CREATE', interaction())
+    await flush()
+    clock.at = 49_000
+    release(stored())
+    await done
+    expect(t.calls.options).toStrictEqual([{ timeoutMs: 2800 }])
+  })
+
+  it('always gives from 1,000 to 2,800 ms, what is left of 2,800 after the time spent but never less than a second (property)', async () => {
+    await fc.assert(
+      fc.asyncProperty(fc.integer({ min: 0, max: 1_900 }), async (elapsed) => {
+        const timeoutMs = await timeoutAfter(elapsed)
+        expect(timeoutMs).toBe(elapsed >= 1_800 ? 1000 : 2800 - elapsed)
+        expect(elapsed + timeoutMs).toBeLessThanOrEqual(2_900)
+      }),
+      { numRuns: 60 },
+    )
   })
 })
 
@@ -539,7 +742,7 @@ describe('INTERACTION_CREATE: when the answer cannot be given', () => {
     await expect(t.command.dispatch('INTERACTION_CREATE', interaction())).resolves.toBeUndefined()
     const odd = rig()
     odd.discord.interactionCallback = () => Promise.reject(null)
-    const own = createCommand({ discord: odd.discord, store: odd.store, guildId: GUILD, timers: odd.ft.timers, log: () => {} })
+    const own = createCommand({ discord: odd.discord, store: odd.store, guildId: GUILD, repliesOn: true, timers: odd.ft.timers, now: () => odd.ft.now, log: () => {} })
     await expect(own.dispatch('INTERACTION_CREATE', interaction())).resolves.toBeUndefined()
   })
 
@@ -549,7 +752,7 @@ describe('INTERACTION_CREATE: when the answer cannot be given', () => {
       throw new Error(`https://discord.com/api/v10/interactions/${INTERACTION}/${TOKEN}/callback failed with ${TOKEN}`)
     }
     const logged = []
-    const own = createCommand({ discord: t.discord, store: t.store, guildId: GUILD, timers: t.ft.timers, log: (line) => logged.push(line) })
+    const own = createCommand({ discord: t.discord, store: t.store, guildId: GUILD, repliesOn: true, timers: t.ft.timers, now: () => t.ft.now, log: (line) => logged.push(line) })
     await own.dispatch('INTERACTION_CREATE', interaction())
     expect(logged.length).toBeGreaterThan(0)
     for (const line of logged) expect(line).not.toContain(TOKEN)

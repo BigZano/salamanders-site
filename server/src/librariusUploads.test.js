@@ -100,6 +100,17 @@ const ADOBE = seg(0xee, [ascii('Adobe'), 0, 100, 0, 0, 0, 0, 1])
 const APP13 = seg(0xed, [ascii('Photoshop 3.0\0'), ascii('8BIM'), ascii('GPSLatitude caption')])
 const SCAN = cat([0x12, 0xff, 0x00, 0x56, 0xff, 0xd0, 0x78, 0xff, 0x00, 0xe1, 0x00, 0x08], TRAP, [0xff, 0xd3, 0x11])
 const BASE_HEADER = [JFIF, DQT, SOF0, DHT]
+/**
+ * An APP0 that is a JFXX extension with a thumbnail coded as a JPEG (code 0x10): a whole small picture inside the segment,
+ * with an EXIF of its own that holds an invented location.
+ */
+const jfxxThumbnail = () =>
+  seg(0xe0, [ascii('JFXX\0'), 0x10, SOI, seg(0xe1, [ascii('Exif\0\0'), LOCATION]), DQT, SOF0, DHT, SOS_HEADER, [0x12, 0x34], EOI])
+/** An APP0 that is a JFIF header with a thumbnail of its own, as RGB pixels: here the pixels spell an invented location. */
+const jfifThumbnail = () => {
+  const pixels = cat(LOCATION, new Array((3 - (LOCATION.length % 3)) % 3).fill(0))
+  return seg(0xe0, [ascii('JFIF\0'), 1, 2, 0, 0, 1, 0, 1, pixels.length / 3, 1, pixels])
+}
 
 /** A whole JPEG: the header segments, then one scan (its own SOS header and entropy data), then what follows it. */
 const jpeg = (header = BASE_HEADER, scan = SCAN, after = []) => cat(SOI, header, SOS_HEADER, scan, after, EOI)
@@ -290,6 +301,10 @@ const CONTAINERS = {
     ['an application extension with nothing in it', () => ext(0xff)],
   ],
   [JPEG]: [
+    ['APP0 of a JFXX extension, whose thumbnail is a JPEG with an EXIF of its own', jfxxThumbnail],
+    ['APP0 of a JFIF that carries a thumbnail', jfifThumbnail],
+    ['APP0 of a JFIF with more after its header', () => seg(0xe0, [ascii('JFIF\0'), 1, 2, 0, 0, 1, 0, 1, 0, 0, LOCATION])],
+    ['APP0 of an identifier nobody defined', () => seg(0xe0, [ascii('INVT\0'), LOCATION])],
     ['APP2 of FlashPix (FPXR)', () => seg(0xe2, [ascii('FPXR\0'), LOCATION])],
     ['APP2 of the Multi-Picture Format (MPF)', () => seg(0xe2, [ascii('MPF\0'), LOCATION])],
     ['APP2 with an empty payload', () => seg(0xe2)],
@@ -600,9 +615,9 @@ describe('strip: JPEG', () => {
     for (const payload of payloads) expectBytes(strip(jpeg([JFIF, seg(0xe1, payload), DQT]), JPEG), jpeg([JFIF, DQT]))
   })
 
-  it('treats every marker as the table says: APP0 and APP14 stay, so does an APP2 of an ICC profile, every other APPn and COM go', () => {
+  it('treats every marker as the table says: APP14 stays, so do a JFIF APP0 and an ICC APP2, every other APPn and COM go', () => {
     const OFF = new Set([0xd0, 0xd1, 0xd2, 0xd3, 0xd4, 0xd5, 0xd6, 0xd7, 0xd8, 0xd9, 0xff, 0x00, 0x01])
-    const GONE = new Set([0xe1, 0xe2, 0xe3, 0xe4, 0xe5, 0xe6, 0xe7, 0xe8, 0xe9, 0xea, 0xeb, 0xec, 0xed, 0xef, 0xfe])
+    const GONE = new Set([0xe0, 0xe1, 0xe2, 0xe3, 0xe4, 0xe5, 0xe6, 0xe7, 0xe8, 0xe9, 0xea, 0xeb, 0xec, 0xed, 0xef, 0xfe])
     for (let code = 0; code < 256; code++) {
       const input = jpeg([JFIF, seg(code, [0xaa, 0xbb, 0xcc]), DQT])
       const out = strip(input, JPEG)
@@ -613,9 +628,62 @@ describe('strip: JPEG', () => {
   })
 
   it('keeps the JFIF, ICC profile and Adobe segments, whose bytes the picture is read by', () => {
-    const kept = [JFIF, ICC, ADOBE, seg(0xe0, ascii('JFXX\0')), seg(0xe0), seg(0xee)]
+    const kept = [JFIF, ICC, ADOBE, seg(0xee)]
     for (const segment of kept) expectBytes(strip(jpeg([segment, DQT]), JPEG), jpeg([segment, DQT]))
     expectBytes(strip(jpeg([ADOBE, JFIF, ICC]), JPEG), jpeg([ADOBE, JFIF, ICC]))
+  })
+
+  it('keeps an APP0 only when it is a JFIF header with no thumbnail: JFIF and a zero byte, at a length of 16', () => {
+    const id = ascii('JFIF\0')
+    // whatever its version, units, densities and thumbnail size say: at this length there is no room for a thumbnail
+    const rests = [[1, 1, 0, 0, 1, 0, 1, 0, 0], [1, 2, 1, 0, 72, 0, 72, 0, 0], [0xff, 0xd9, 0xff, 0xd9, 0xff, 0xd9, 0xff, 0, 0], new Array(9).fill(0), [1, 2, 0, 0, 1, 0, 1, 4, 4]]
+    for (const rest of rests) {
+      const header = seg(0xe0, [id, rest])
+      expect(header.length).toBe(18) // the marker and a length of 16
+      expectBytes(strip(jpeg([header, DQT]), JPEG), jpeg([header, DQT]))
+      expectBytes(strip(jpeg([DQT, header, SOF0]), JPEG), jpeg([DQT, header, SOF0]))
+    }
+    // every way to be one byte off in the identifier
+    for (let at = 0; at < id.length; at++) {
+      for (const change of [(x) => x ^ 0x20, (x) => x ^ 0x01, (x) => (x === 0 ? 0xff : 0)]) {
+        const bent = Uint8Array.from(id)
+        bent[at] = change(bent[at])
+        expectBytes(strip(jpeg([JFIF, seg(0xe0, [bent, 1, 1, 0, 0, 1, 0, 1, 0, 0]), DQT]), JPEG), jpeg([JFIF, DQT]))
+      }
+    }
+    // the identifier a byte further in, or a JFXX, at the length of a JFIF with no thumbnail
+    expectBytes(strip(jpeg([JFIF, seg(0xe0, [0, id, 1, 0, 0, 1, 0, 1, 0, 0]), DQT]), JPEG), jpeg([JFIF, DQT]))
+    expectBytes(strip(jpeg([JFIF, seg(0xe0, [ascii('JFXX\0'), 0x10, 1, 1, 0, 0, 1, 0, 1]), DQT]), JPEG), jpeg([JFIF, DQT]))
+    // the identifier at any other length: cut short, or with more behind it (a thumbnail, a padding byte, anything)
+    for (let size = 0; size <= 40; size++) {
+      if (size === 9) continue
+      const other = seg(0xe0, [id, new Array(size).fill(0)])
+      expectBytes(strip(jpeg([JFIF, other, DQT]), JPEG), jpeg([JFIF, DQT]))
+    }
+    for (let keep = 0; keep < id.length; keep++) expectBytes(strip(jpeg([JFIF, seg(0xe0, id.subarray(0, keep)), DQT]), JPEG), jpeg([JFIF, DQT]))
+  })
+
+  it('drops an APP0 that is a JFXX extension, and the thumbnail inside it with its EXIF and its location', () => {
+    for (const header of [[JFIF, jfxxThumbnail(), DQT, SOF0, DHT], [jfxxThumbnail(), JFIF, DQT, SOF0, DHT]]) {
+      const input = jpeg(header)
+      expect(has(input, GPS_MARK)).toBe(true)
+      const out = strip(input, JPEG)
+      expectBytes(out, jpeg())
+      expect(has(out, GPS_MARK)).toBe(false)
+      expect(has(out, ascii('JFXX'))).toBe(false)
+      expect(has(out, ascii('Exif\0\0GPS'))).toBe(false)
+      expectBytes(strip(out, JPEG), out)
+    }
+  })
+
+  it('drops an APP0 that is a JFIF with a thumbnail, and keeps the JFIF with none beside it', () => {
+    const input = jpeg([JFIF, jfifThumbnail(), DQT, SOF0, DHT])
+    expect(has(input, GPS_MARK)).toBe(true)
+    const out = strip(input, JPEG)
+    expectBytes(out, jpeg())
+    expect(has(out, GPS_MARK)).toBe(false)
+    // a picture whose only APP0 has a thumbnail has no APP0 left, and decoders need none
+    expectBytes(strip(jpeg([jfifThumbnail(), DQT, SOF0, DHT]), JPEG), jpeg([DQT, SOF0, DHT]))
   })
 
   it('keeps an APP2 only when its payload starts with ICC_PROFILE and a zero byte, and whatever follows them', () => {
@@ -663,8 +731,8 @@ describe('strip: JPEG', () => {
     }
   })
 
-  it('drops every APPn but APP0, APP14 and an ICC APP2, and the comment, wherever they stand', () => {
-    for (const code of [0xe1, 0xe2, 0xe3, 0xe4, 0xe5, 0xe6, 0xe7, 0xe8, 0xe9, 0xea, 0xeb, 0xec, 0xed, 0xef, 0xfe]) {
+  it('drops every APPn but a JFIF APP0, APP14 and an ICC APP2, and the comment, wherever they stand', () => {
+    for (const code of [0xe0, 0xe1, 0xe2, 0xe3, 0xe4, 0xe5, 0xe6, 0xe7, 0xe8, 0xe9, 0xea, 0xeb, 0xec, 0xed, 0xef, 0xfe]) {
       const gone = seg(code, ascii('GPSLatitude=51.5'))
       const out = strip(cat(SOI, gone, JFIF, SOS_HEADER, SCAN, gone, EOI), JPEG)
       expectBytes(out, jpeg([JFIF]))
@@ -700,10 +768,10 @@ describe('strip: JPEG', () => {
   })
 
   it('does not stop at an EOI that sits inside a segment it keeps or drops', () => {
-    const inside = seg(0xe0, [1, 2, 0xff, 0xd9, 3, 4])
+    const inside = seg(0xe0, [ascii('JFIF\0'), 1, 2, 0, 0xff, 0xd9, 0xff, 0xd9, 0, 0])
     const insideIcc = seg(0xe2, [ascii('ICC_PROFILE\0'), 0xff, 0xd9, 3, 4])
-    const input = jpeg([JFIF, inside, APP1_EXIF, insideIcc, DQT, seg(0xe2, [1, 0xff, 0xd9, 2]), seg(0xfe, [1, 0xff, 0xd9, 2])])
-    expectBytes(strip(input, JPEG), jpeg([JFIF, inside, insideIcc, DQT]))
+    const input = jpeg([inside, seg(0xe0, [1, 0xff, 0xd9, 2]), APP1_EXIF, insideIcc, DQT, seg(0xe2, [1, 0xff, 0xd9, 2]), seg(0xfe, [1, 0xff, 0xd9, 2])])
+    expectBytes(strip(input, JPEG), jpeg([inside, insideIcc, DQT]))
   })
 
   it('drops what follows the final EOI: a hidden second picture, motion data, anything', () => {
@@ -749,7 +817,7 @@ describe('strip: JPEG', () => {
       expect(strip(bad, JPEG), `claim ${claim}`).toBeNull()
     }
     // the same lengths on a segment that would be kept
-    const kept = jpeg([JFIF, seg(0xe0, [1, 2, 3])])
+    const kept = jpeg([JFIF, seg(0xee, [1, 2, 3])])
     const keptAt = kept.length - EOI.length - SOS_HEADER.length - SCAN.length - 7
     const bad = Uint8Array.from(kept)
     bad.set(be16(0xffff), keptAt + 2)
@@ -765,9 +833,10 @@ describe('strip: JPEG', () => {
     }
   })
 
-  it('takes a segment of length 2, which holds nothing, and drops it when it is APP1', () => {
+  it('takes a segment of length 2, which holds nothing, and drops it when it is APP1 or APP0', () => {
     expectBytes(strip(jpeg([JFIF, seg(0xe1), DQT]), JPEG), jpeg([JFIF, DQT]))
-    expectBytes(strip(jpeg([JFIF, seg(0xe0), DQT]), JPEG), jpeg([JFIF, seg(0xe0), DQT]))
+    expectBytes(strip(jpeg([JFIF, seg(0xe0), DQT]), JPEG), jpeg([JFIF, DQT])) // an APP0 with nothing in it is no JFIF
+    expectBytes(strip(jpeg([JFIF, seg(0xee), DQT]), JPEG), jpeg([JFIF, seg(0xee), DQT]))
     expectBytes(strip(jpeg([JFIF, seg(0xe2), DQT]), JPEG), jpeg([JFIF, DQT])) // an APP2 with no profile is no ICC
   })
 
@@ -984,7 +1053,7 @@ describe('strip: a photo keeps which way up it goes (JPEG)', () => {
 
   it('does not read an Exif identifier that lies in the next segment, nor past its own end', () => {
     // an APP1 of length 2 followed by a segment that spells the identifier and holds an orientation is not an EXIF
-    const next = seg(0xe0, [ascii('Exif\0\0'), tiff({ entries: [orient(false, 6)] })])
+    const next = seg(0xee, [ascii('Exif\0\0'), tiff({ entries: [orient(false, 6)] })])
     expectBytes(strip(cat(SOI, JFIF, [0xff, 0xe1, 0x00, 0x02], next, SOS_HEADER, SCAN, EOI), JPEG), cat(SOI, JFIF, next, SOS_HEADER, SCAN, EOI))
     // a segment whose length ends in the middle of the identifier, and in the middle of the TIFF header
     for (const keep of [0, 3, 5, 6, 7, 10, 13]) {
@@ -1006,13 +1075,11 @@ describe('strip: a photo keeps which way up it goes (JPEG)', () => {
 
   it('writes nothing for an EXIF that sits in any other segment: only APP1 is an EXIF', () => {
     const t = tiff({ entries: [orient(false, 6)] })
-    for (const code of [0xe3, 0xe4, 0xe5, 0xe6, 0xe7, 0xe8, 0xe9, 0xea, 0xeb, 0xec, 0xed, 0xef, 0xfe]) {
+    for (const code of [0xe0, 0xe3, 0xe4, 0xe5, 0xe6, 0xe7, 0xe8, 0xe9, 0xea, 0xeb, 0xec, 0xed, 0xef, 0xfe]) {
       expectBytes(strip(jpeg([JFIF, seg(code, [ascii('Exif\0\0'), t]), DQT]), JPEG), jpeg([JFIF, DQT]))
     }
-    for (const code of [0xe0, 0xee]) {
-      const kept = seg(code, [ascii('Exif\0\0'), t])
-      expectBytes(strip(jpeg([kept, DQT]), JPEG), jpeg([kept, DQT])) // kept as they are, whatever they hold
-    }
+    const kept = seg(0xee, [ascii('Exif\0\0'), t])
+    expectBytes(strip(jpeg([kept, DQT]), JPEG), jpeg([kept, DQT])) // kept as it is, whatever it holds
     expectBytes(strip(jpeg([seg(0xe2, [ascii('Exif\0\0'), t]), DQT]), JPEG), jpeg([DQT])) // an APP2 that is no ICC profile is dropped
   })
 
@@ -1924,7 +1991,7 @@ describe('strip: a picture keeps only what it needs to be seen', () => {
       [PNG]: [chunk('pHYs', [1, 2, 3, 4]), chunk('iCCP', [ascii('icc\0\0'), 9, 9]), chunk('tIME', [1, 2, 3, 4, 5, 6, 7]), chunk('acTL', [be32(2), be32(0)])],
       [WEBP]: [riff('ICCP', [1, 2, 3]), riff('ANIM', [0, 0, 0, 0, 0, 0]), riff('ALPH', [1, 2, 3, 4, 5])],
       [GIF]: [NETSCAPE, ext(0xff, ascii('ANIMEXTS1.0'), [1, 0, 0]), ext(0xff, ascii('ICCRGBG1012'), [1, 2, 3, 4])],
-      [JPEG]: [JFIF, ICC, ADOBE, seg(0xe0, ascii('JFXX\0'))],
+      [JPEG]: [JFIF, ICC, ADOBE, seg(0xe0, [ascii('JFIF\0'), 1, 2, 1, 0, 72, 0, 72, 0, 0])],
     }
     const place = {
       [PNG]: (middle) => png(IHDR, middle, IDAT, IEND),
@@ -1982,6 +2049,13 @@ describe('strip: properties over generated pictures', () => {
     { weight: 1, arbitrary: entropy.map((data) => ({ kind: 'scan', data })) },
     // an APP2 that does hold an ICC profile: the one APP2 that stays
     { weight: 1, arbitrary: fc.record({ payload: dataBytes, fill: fillCount }).map(({ payload, fill }) => ({ kind: 'seg', code: 0xe2, payload: cat(ascii('ICC_PROFILE\0'), payload), fill })) },
+    // an APP0 that is a JFIF header with no thumbnail (9 bytes after the identifier), the one APP0 that stays, or one near it
+    {
+      weight: 1,
+      arbitrary: fc
+        .record({ id: fc.constantFrom('JFIF\0', 'JFIF\0', 'JFXX\0', 'JFIF '), rest: fc.oneof(fc.uint8Array({ minLength: 9, maxLength: 9 }), dataBytes), fill: fillCount })
+        .map(({ id, rest, fill }) => ({ kind: 'seg', code: 0xe0, payload: cat(ascii(id), rest), fill })),
+    },
   )
   const jpegCase = fc
     .record({ head: fc.array(jpegPiece, { maxLength: 8 }), scan: entropy, tail: fc.array(jpegPiece, { maxLength: 6 }), junk: dataBytes })
@@ -1989,6 +2063,9 @@ describe('strip: properties over generated pictures', () => {
   const JPEG_GONE = new Set([0xe1, 0xe2, 0xe3, 0xe4, 0xe5, 0xe6, 0xe7, 0xe8, 0xe9, 0xea, 0xeb, 0xec, 0xed, 0xef, 0xfe])
   const ICC_ID = ascii('ICC_PROFILE\0')
   const isIcc = (p) => p.code === 0xe2 && ICC_ID.every((x, i) => p.payload[i] === x)
+  const JFIF_ID = ascii('JFIF\0')
+  const isJfif = (p) => p.code === 0xe0 && p.payload.length === 14 && JFIF_ID.every((x, i) => p.payload[i] === x)
+  const goes = (p) => (JPEG_GONE.has(p.code) && !isIcc(p)) || (p.code === 0xe0 && !isJfif(p))
   const jpegOf = (pieces, keep, junk = []) => {
     let written = false
     return cat(
@@ -2003,7 +2080,7 @@ describe('strip: properties over generated pictures', () => {
           written = true // the first usable EXIF stands for all of them
           return [fill, MIN_APP1(p.little, p.orientation)]
         }
-        return [fill, keep && JPEG_GONE.has(p.code) && !isIcc(p) ? [] : seg(p.code, p.payload)]
+        return [fill, keep && goes(p) ? [] : seg(p.code, p.payload)]
       }),
       EOI,
       junk,
@@ -2079,7 +2156,7 @@ describe('strip: properties over generated pictures', () => {
       junk,
     )
 
-  it('JPEG: what comes out is the input minus every APPn but 0, 14 and an ICC profile in 2, the comments, what follows the EOI, and an EXIF cut down to its orientation', () => {
+  it('JPEG: what comes out is the input minus every APPn but a JFIF in 0, 14 and an ICC profile in 2, the comments, what follows the EOI, and an EXIF cut down to its orientation', () => {
     fc.assert(
       fc.property(jpegCase, ({ pieces, junk }) => {
         const input = jpegOf(pieces, false, junk)

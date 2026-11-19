@@ -10,20 +10,27 @@
  * not free (a picture of 10 MB that is refused for what it holds took a good half second to find out). They are `take`n like any
  * other kind, and snapshot() leaves them out: a member is told of what they have left of the first three.
  *
- * createLimits({ now = Date.now }) → { check, take, snapshot, size, hold }. `now` is the clock, in milliseconds.
+ * createLimits({ now = Date.now }) → { check, take, snapshot, size, holding, working, hold }. `now` is the clock, in milliseconds.
  *   check(kind, key) → { ok: true } | { ok: false, retryAfter, error }: whether a try of that kind by that member (`key`, the
  *     member's id) would be let through now. It takes nothing.
- *   take(kind, key): the same, and a try that is let through is counted. A refused try is not counted, so asking again and
- *     again does not push the wait out. `retryAfter` is the whole seconds to wait, at least 1, until the oldest try inside
- *     the window leaves it; `error` is the copy for the member (tooFast).
+ *   take(kind, key) → { ok: true, refund } | the same refusal: as check, and a try that is let through is counted. A refused try
+ *     is not counted, so asking again and again does not push the wait out. `retryAfter` is the whole seconds to wait, at least
+ *     1, until the oldest try inside the window leaves it; `error` is the copy for the member (tooFast). `refund()` gives that
+ *     try back, as if it had never been taken, for a try that turned out to cost nothing: once, however often it is called. A
+ *     try that has left its window already is gone, and giving it back changes nothing.
  *   snapshot(key) → { reply, edit, upload }, each { limit, windowSeconds, remaining }: what a member has left, for /librarius/me.
  *   size() → how many (kind, member) pairs it holds a try for. A pair is dropped as soon as it is looked at with every one of
  *     its tries a window old, so it holds at most what the members who are writing now have done.
  *   holding() → how many members hold a place in flight now, which is none once every place is released: a member is forgotten with their last.
- *   hold(key) → { ok: true, release } | { ok: false, status, error }: a place for a picture being received, which is held in
- *     memory several times over while it is read, judged and stripped. At most IN_FLIGHT.perMember at a time for a member (429,
- *     BUSY.member) and IN_FLIGHT.total for all (503, BUSY.site); a member who is at their own cap is told so first. `release`
- *     frees the place, once, however often it is called. A refused hold takes nothing.
+ *   working() → how many places for all are taken now (see work()), which is none once every place is released.
+ *   hold(key) → { ok: true, work, release } | { ok: false, status: 429, error: BUSY.member }: a member's place for a picture, from
+ *     the moment it starts to arrive to its end, at most IN_FLIGHT.perMember at a time. A refused hold takes nothing. A picture on
+ *     its way holds no more than its own bytes, so a hold takes none of the places for all: a slow arrival keeps nobody else waiting.
+ *   work() → { ok: true } | { ok: false, status: 503, error: BUSY.site }: one of the IN_FLIGHT.total places for all, taken once
+ *     the picture has arrived, for the work that holds it in memory several times over (it is read as a form, judged and
+ *     stripped). Asked again by a hold that has one, it takes no other. A refused work() takes nothing and leaves the member's
+ *     place as it was; a hold that has been released cannot work (an Error), since nothing would free that place.
+ *   release() frees the member's place, and the place for all if it took one: once, however often it is called.
  * A try counts for `windowMs` exactly: at the very millisecond it is a window old it no longer does.
  *
  * `kind` is one of LIMITS' names, else a RangeError; `key` is a non-empty string, else a TypeError, and so is a clock that gives
@@ -40,7 +47,7 @@ export const LIMITS = Object.freeze({
   search: Object.freeze({ limit: 30, windowMs: 60_000 }),
 })
 
-/** How many pictures may be in flight (being read, judged and stripped) at once: for one member, and for everyone. */
+/** How many pictures may be in flight at once: a member's, from the moment one starts to arrive; and everyone's being worked (read as a form, judged and stripped). */
 export const IN_FLIGHT = Object.freeze({ perMember: 2, total: 4 })
 
 /** What a member is told when a picture is turned away for want of a place in flight. */
@@ -60,9 +67,9 @@ export function createLimits({ now = Date.now } = {}) {
   if (typeof now !== 'function') throw new TypeError('now must be a function.')
   // 'kind key' → the times of the tries counted, oldest first. Only a pair with a try inside its window is held.
   const held = new Map()
-  // The pictures in flight: how many each member has, and how many there are in all.
+  // The pictures in flight: how many each member has, and how many are being worked in all.
   const flying = new Map()
-  let inFlight = 0
+  let inWork = 0
 
   const slot = (kind, key) => `${kind} ${key}`
 
@@ -100,8 +107,23 @@ export function createLimits({ now = Date.now } = {}) {
       const retryAfter = Math.ceil((live[0] + LIMITS[kind].windowMs - t) / 1000)
       return { ok: false, retryAfter, error: tooFast(retryAfter) }
     }
-    if (record) held.set(slot(kind, key), [...live, t])
-    return { ok: true }
+    if (!record) return { ok: true }
+    const id = slot(kind, key)
+    held.set(id, [...live, t])
+    let given = false
+    return {
+      ok: true,
+      refund() {
+        if (given) return
+        given = true
+        // The pair may have been dropped, or its tries filtered into a new list, since: the one counted now is what is changed.
+        const times = held.get(id) ?? []
+        const at = times.lastIndexOf(t)
+        if (at === -1) return
+        times.splice(at, 1)
+        if (times.length === 0) held.delete(id)
+      },
+    }
   }
 
   return {
@@ -123,20 +145,29 @@ export function createLimits({ now = Date.now } = {}) {
 
     holding: () => flying.size,
 
+    working: () => inWork,
+
     hold(key) {
       needKey(key)
       const mine = flying.get(key) ?? 0
       if (mine >= IN_FLIGHT.perMember) return { ok: false, status: 429, error: BUSY.member }
-      if (inFlight >= IN_FLIGHT.total) return { ok: false, status: 503, error: BUSY.site }
       flying.set(key, mine + 1)
-      inFlight += 1
       let freed = false
+      let worked = false
       return {
         ok: true,
+        work() {
+          if (freed) throw new Error('A place that was released cannot be worked.')
+          if (worked) return { ok: true }
+          if (inWork >= IN_FLIGHT.total) return { ok: false, status: 503, error: BUSY.site }
+          worked = true
+          inWork += 1
+          return { ok: true }
+        },
         release() {
           if (freed) return
           freed = true
-          inFlight -= 1
+          if (worked) inWork -= 1
           const left = flying.get(key) - 1
           if (left === 0) flying.delete(key)
           else flying.set(key, left)

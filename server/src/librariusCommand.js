@@ -4,33 +4,39 @@
  * gateway connection the API already holds (the application must have no Interactions Endpoint URL set), so this module only reads what
  * the gateway dispatches and makes two kinds of call: it makes the command, and answers an interaction.
  *
- * createCommand({ discord, store, guildId, siteUrl = 'https://sm2salamanders.site', timers = { setTimeout, clearTimeout },
- *   deadlineMs = 1500, log = console.error }) → { dispatch(type, data) → Promise<void> }
+ * createCommand({ discord, store, guildId, repliesOn, siteUrl = 'https://sm2salamanders.site', timers = { setTimeout, clearTimeout },
+ *   now = Date.now, deadlineMs = 1500, log = console.error }) → { dispatch(type, data) → Promise<void> }
  *   `discord` is the Librarius's client (librariusDiscord.js: applicationCommands, createMessageCommand and interactionCallback, which goes
- *   around the client's limits and has a timeout of its own); `store` has outboxMessage (librariusOutboxStore.js). dispatch never rejects:
+ *   around the client's limits and has a timeout of its own); `store` has outboxMessage (librariusOutboxStore.js). `repliesOn` is whether
+ *   replying from the site is on (true or false, nothing else): the command is made whenever the Librarius is, and it is only with the
+ *   replies on that it is made in the guild (Ruling B12). `now` is the clock, in milliseconds. dispatch never rejects:
  *   what goes wrong is logged (without a token or a link) and the event is over. Nothing in it can throw: every call to Discord and to the store
  *   is caught. It is for the gateway's onDispatch; it waits for the answer to an interaction (up to `deadlineMs` and the call that sends it),
  *   so a caller that has other work should not hold it up behind this. The gateway hands INTERACTION_CREATE over at once, outside the queue
  *   of its other events (librariusGateway.js), so this is begun when the event comes, and the time it has is counted from then.
  *
- * READY: makes sure the guild has the command. It lists the application's commands in the guild (the application's id is in READY)
- * and, only if none is a message command (type 3) named "Delete on site", makes it. It never overwrites the list, since other
- * commands may be there. If Discord refuses the bot the right (403), that is said once and the API goes on without the command; any
- * other failure is said each time and is tried again at the next READY.
+ * READY, with the replies on: makes sure the guild has the command. It lists the application's commands in the guild (the application's
+ * id is in READY) and, only if none is a message command (type 3) named "Delete on site", makes it. It never overwrites the list, since
+ * other commands may be there. If Discord refuses the bot the right (403), that is said once and the API goes on without the command; any
+ * other failure is said each time and is tried again at the next READY. With the replies off, READY asks Discord nothing: the command is
+ * neither made nor taken away, so one made while they were on is still in the Apps menu, and is still answered.
  *
  * INTERACTION_CREATE of that command in this guild: answers with `POST /interactions/<id>/<token>/callback`, type 4, `flags: 64`
- * (only they see it) and `allowed_mentions: { parse: [] }`, in one of these (the copy is the spec's):
- *   - the message is one this member wrote on the site: "This was written on the site. Delete it there:" and the link
- *     `<site>/reliquarium/librarius/<post>#m-<message>`, the post being the one the store has the message in;
+ * (only they see it) and `allowed_mentions: { parse: [] }`, in one of these (the copy is the spec's and Ruling B12's):
+ *   - the message is one this member wrote on the site, with the replies on: "This was written on the site. Delete it there:" and the
+ *     link `<site>/reliquarium/librarius/<post>#m-<message>`, the post being the one the store has the message in;
+ *   - the message was written on the site, with the replies off, whoever wrote it: "Deleting from the site is switched off right now. A
+ *     moderator can delete this in Discord.";
  *   - the message was written in Discord (by anyone): "Written in Discord: use Discord's own Delete.";
- *   - anything else, someone else's message of the site, one the Librarius does not hold, or a target that is no message id (nothing
- *     is asked of the store for that one): "Only the author can delete this, on the site."
+ *   - anything else, someone else's message of the site with the replies on, one the Librarius does not hold, or a target that is no
+ *     message id (nothing is asked of the store for that one): "Only the author can delete this, on the site."
  * Discord wants the first answer within 3 seconds of the interaction, and the time is spent this way: the store is asked within `deadlineMs`
- * (1500; at most 1900), counted from the moment the event came, and the answer is then sent with a timeout of its own of a second
- * (CALLBACK_MS), so that the whole is at most 2.5 seconds, with the rest for the network. If the store has not answered by the deadline,
- * or fails, the answer is "Couldn't check right now; open it on the site:" and a link to the message, from what the interaction says of
- * where it is. The first of the two is the answer, and it is the only one. Anything that is not this command (another type of
- * interaction, another command, another guild) is none of this module's, and is not answered.
+ * (1500; at most 1900), counted from the moment the event came, and the answer is then sent with a timeout of what is left of 2.8 seconds
+ * since then, but never less than a second (CALLBACK_MS): 2,795 ms for an answer sent 5 ms in, 1,100 ms for one sent 1,700 ms in (rB4
+ * N3). So the whole is at most 2.8 seconds, or the deadline and a second when the store took most of it, with the rest for the network.
+ * If the store has not answered by the deadline, or fails, the answer is "Couldn't check right now; open it on the site:" and a link to
+ * the message, from what the interaction says of where it is. The first of the two is the answer, and it is the only one. Anything that
+ * is not this command (another type of interaction, another command, another guild) is none of this module's, and is not answered.
  */
 import { siteBase } from './librariusWrites.js'
 import { describe, isId, isStoreId } from './librariusText.js'
@@ -41,26 +47,31 @@ const APPLICATION_COMMAND = 2
 const CHANNEL_MESSAGE = 4
 const EPHEMERAL = 64
 // The three seconds Discord gives are spent as the store's deadline and then the callback's timeout, and what is left over is the
-// network's: the deadline cannot be asked past what leaves the callback its second and 100 ms to spare.
+// network's: the callback has what is left of ANSWER_BY_MS once it is sent, and never less than CALLBACK_MS, and the deadline cannot be
+// asked past what leaves the callback its second and 100 ms to spare.
 const CALLBACK_MS = 1000
+const ANSWER_BY_MS = 2800
 const MAX_DEADLINE_MS = 1900
 const SITE_URL = 'https://sm2salamanders.site'
 
 const COPY = {
   site: (link) => `This was written on the site. Delete it there: ${link}`,
   discord: "Written in Discord: use Discord's own Delete.",
+  off: 'Deleting from the site is switched off right now. A moderator can delete this in Discord.',
   other: 'Only the author can delete this, on the site.',
   fallback: (link) => `Couldn't check right now; open it on the site: ${link}`,
 }
 
 const isObject = (v) => typeof v === 'object' && v !== null && !Array.isArray(v)
 
-export function createCommand({ discord, store, guildId, siteUrl = SITE_URL, timers = { setTimeout, clearTimeout }, deadlineMs = 1500, log = console.error }) {
+export function createCommand({ discord, store, guildId, repliesOn, siteUrl = SITE_URL, timers = { setTimeout, clearTimeout }, now = Date.now, deadlineMs = 1500, log = console.error }) {
   for (const name of ['applicationCommands', 'createMessageCommand', 'interactionCallback']) {
     if (typeof discord?.[name] !== 'function') throw new TypeError(`discord.${name} must be a function.`)
   }
   if (typeof store?.outboxMessage !== 'function') throw new TypeError('store.outboxMessage must be a function.')
   if (!isId(guildId)) throw new TypeError('guildId must be a Discord id.')
+  if (typeof repliesOn !== 'boolean') throw new TypeError('repliesOn must be true or false.')
+  if (typeof now !== 'function') throw new TypeError('now must be a function.')
   if (!Number.isSafeInteger(deadlineMs) || deadlineMs < 1 || deadlineMs > MAX_DEADLINE_MS) throw new RangeError(`deadlineMs must be a whole number of milliseconds from 1 to ${MAX_DEADLINE_MS}.`)
   if (typeof log !== 'function') throw new TypeError('log must be a function.')
   const site = siteBase(siteUrl)
@@ -101,6 +112,8 @@ export function createCommand({ discord, store, guildId, siteUrl = SITE_URL, tim
     const found = await store.outboxMessage(messageId)
     if (found === null) return COPY.other
     if (found.origin === 'discord') return COPY.discord
+    // With the replies off nobody can delete it from the site: it is the same answer for its author and for anyone else.
+    if (found.origin === 'site' && !repliesOn) return COPY.off
     if (found.origin === 'site' && found.authorId === memberId) return COPY.site(linkTo(found.postId, messageId))
     return COPY.other
   }
@@ -129,7 +142,11 @@ export function createCommand({ discord, store, guildId, siteUrl = SITE_URL, tim
     return COPY.fallback(linkTo(isId(place) ? place : null, messageId))
   }
 
-  async function answer(d) {
+  /** → the callback's timeout: what is left of ANSWER_BY_MS since the event came at `cameAt`, and never less than a second. A clock
+   * that has gone back counts as no time spent. */
+  const callbackTimeout = (cameAt) => Math.max(CALLBACK_MS, ANSWER_BY_MS - Math.max(0, now() - cameAt))
+
+  async function answer(d, cameAt) {
     // A target that is no message id is none the store holds, and no link is made for it: what goes into a link is checked first.
     const messageId = isStoreId(d.data.target_id) ? d.data.target_id : null
     // Whoever asked, if the interaction says: a missing member is no one, and so no one's message is theirs.
@@ -141,7 +158,7 @@ export function createCommand({ discord, store, guildId, siteUrl = SITE_URL, tim
       content = (await within(lookup)) ?? fallbackFor(d, messageId)
     }
     try {
-      await discord.interactionCallback(d.id, d.token, { type: CHANNEL_MESSAGE, data: { content, flags: EPHEMERAL, allowed_mentions: { parse: [] } } }, { timeoutMs: CALLBACK_MS })
+      await discord.interactionCallback(d.id, d.token, { type: CHANNEL_MESSAGE, data: { content, flags: EPHEMERAL, allowed_mentions: { parse: [] } } }, { timeoutMs: callbackTimeout(cameAt) })
     } catch (err) {
       // Stryker disable next-line StringLiteral: as above
       say(`the answer could not be sent: ${describe(err, { secret: d.token })}`)
@@ -152,12 +169,14 @@ export function createCommand({ discord, store, guildId, siteUrl = SITE_URL, tim
     async dispatch(type, d) {
       if (type === 'READY') {
         const applicationId = d?.application?.id
-        if (isId(applicationId)) await ensure(applicationId)
+        if (repliesOn && isId(applicationId)) await ensure(applicationId)
       } else if (type === 'INTERACTION_CREATE') {
+        // The three seconds are counted from here: the gateway hands the event over the moment it comes.
+        const cameAt = now()
         const data = d?.data
         // Only this command, in this guild, and only one that can be answered: it has an id and a token to answer by.
         const ours = d?.type === APPLICATION_COMMAND && d.guild_id === guildId && isObject(data) && data.type === MESSAGE_COMMAND && data.name === NAME
-        if (ours && isId(d.id) && typeof d.token === 'string' && d.token !== '') await answer(d)
+        if (ours && isId(d.id) && typeof d.token === 'string' && d.token !== '') await answer(d, cameAt)
       }
     },
   }
