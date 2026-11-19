@@ -284,6 +284,14 @@ describe.skipIf(!runnable)('the outbox store on a real Postgres 16, as the data-
       expect((await rows("select 1 from librarius_events where action = 'send'")).length).toBe(1)
     })
 
+    it('writes the author of the entry into the layout of the reply it stores', async () => {
+      await sentReply([A, B])
+      await sentReply([C], { author: OTHER })
+      expect((await message(A)).layout.authorId).toBe(MEMBER)
+      expect((await message(C)).layout.authorId).toBe(OTHER)
+      expect((await message(C)).layout.username).toBe('Invented Name')
+    })
+
     it('replaces the phantom messages an import stored for later parts, with tombstones', async () => {
       await importAs(B)
       await sentReply([A, B])
@@ -334,6 +342,40 @@ describe.skipIf(!runnable)('the outbox store on a real Postgres 16, as the data-
       expect(queued).toHaveLength(1)
       expect(queued[0]).toMatchObject({ message_key: A, payload: { postId: POST, partIds: [A, C], webhookId: OLD_HOOK } })
       expect((await rows("select 1 from librarius_events where action = 'deleted-in-discord'")).length).toBe(1)
+    })
+
+    it('lets a delete of the reply finish while a deletion in Discord of one of its parts waits for it: an entry is locked before its message, so neither waits on the other in a ring', async () => {
+      await sentReply([A, B])
+      const del = await store.enqueueOutbox({ kind: 'delete', messageKey: A, authorId: MEMBER, payload: { postId: POST } })
+      expect((await store.claimOutbox(Date.now())).id).toBe(del.id)
+      // finishDelete's own statements, one at a time on a connection of their own, so that the echo can come in between: the entry first...
+      const worker = await pool.connect()
+      try {
+        await worker.query('begin')
+        await worker.query("update librarius_outbox set state = 'sent', last_error = null where id = $1 and state = 'sending' returning author_id", [del.id])
+        // ...then the gateway's echo of the removal of part 2 comes in, and waits for the entry...
+        const echo = store.siteDeleted([B], POST).then(
+          (out) => ({ out }),
+          (err) => ({ err }),
+        )
+        for (let tries = 0; (await rows("select count(*)::int as n from pg_stat_activity where wait_event_type = 'Lock' and datname = current_database()"))[0].n === 0; tries++) {
+          if (tries > 100) throw new Error('the echo never waited for a lock')
+          await new Promise((resolve) => setTimeout(resolve, 50))
+        }
+        // ...and then the message, which the echo has not locked: with the other order this waits on the echo, the echo on this, and Postgres ends one of them.
+        await worker.query('insert into librarius_tombstones (message_id, post_id, rev) select id, post_id, 1 from librarius_messages where id = $1', [A])
+        await worker.query('delete from librarius_messages where id = $1', [A])
+        await worker.query('commit')
+        expect(await echo).toEqual({ out: { plain: [] } })
+      } finally {
+        await worker.query('rollback').catch(() => {})
+        worker.release()
+      }
+      expect(await message(A)).toBeUndefined()
+      expect(await partsOf(A)).toEqual([])
+      // The delete took the reply: the echo found nothing of it left, so it queued no second delete and noted nothing.
+      expect(await rows("select id from librarius_outbox where kind = 'delete' and state <> 'sent'")).toEqual([])
+      expect(await rows("select 1 from librarius_events where action = 'deleted-in-discord'")).toEqual([])
     })
 
     it('notes a part lost while its reply is on its way in that entry, and finishSend then stores nothing', async () => {
@@ -440,7 +482,43 @@ describe.skipIf(!runnable)('the outbox store on a real Postgres 16, as the data-
       expect(await store.ownWebhookIds()).toEqual(new Set([OLD_HOOK, HOOK]))
     })
 
-    it('lets one connection hold the worker lock, and another take it when it is let go or lost', async () => {
+    it('notices when the server ends the connection that holds the lock: it holds no lock then, the dead connection leaves the pool, and a new take gets the lock', async () => {
+      const options = { host: '127.0.0.1', port, user: 'salamanders_app', password, database: 'salamanders_builds', max: 1, connectionTimeoutMillis: 5_000 }
+      // A pool of one: a dead connection that was never given back would leave no room for the new take.
+      const lonePool = new pg.Pool(options)
+      const otherPool = new pg.Pool(options)
+      lonePool.on('error', () => {})
+      otherPool.on('error', () => {})
+      const lone = createLibrariusStore(lonePool)
+      const other = createLibrariusStore(otherPool)
+      try {
+        expect(lone.holdsWorkerLock()).toBe(false)
+        expect(await lone.takeWorkerLock()).toBe(true)
+        expect(lone.holdsWorkerLock()).toBe(true)
+        expect(await other.takeWorkerLock()).toBe(false)
+        const held = await rows("select pid from pg_locks where locktype = 'advisory' and classid = 0 and objid = 19000001 and objsubid = 1 and granted")
+        expect(held).toHaveLength(1)
+        expect((await rows('select pg_terminate_backend($1) as done', [held[0].pid]))[0].done).toBe(true)
+        // The connection hears it from the server: a few milliseconds, a few seconds at most.
+        for (let tries = 0; lone.holdsWorkerLock() && tries < 100; tries++) await new Promise((resolve) => setTimeout(resolve, 50))
+        expect(lone.holdsWorkerLock()).toBe(false)
+        expect(lonePool.totalCount).toBe(0)
+        // The server let the lock go with the session, and the slot of the pool is free.
+        expect(await lone.takeWorkerLock()).toBe(true)
+        expect(lone.holdsWorkerLock()).toBe(true)
+        expect(await other.takeWorkerLock()).toBe(false)
+        await lone.releaseWorkerLock()
+        expect(lone.holdsWorkerLock()).toBe(false)
+        expect(await other.takeWorkerLock()).toBe(true)
+      } finally {
+        await lone.releaseWorkerLock().catch(() => {})
+        await other.releaseWorkerLock().catch(() => {})
+        await lonePool.end()
+        await otherPool.end()
+      }
+    })
+
+    it('lets one connection hold the worker lock, and another take it when it is let go', async () => {
       const otherPool = new pg.Pool({ host: '127.0.0.1', port, user: 'salamanders_app', password, database: 'salamanders_builds', max: 2 })
       const other = createLibrariusStore(otherPool)
       try {
@@ -472,7 +550,7 @@ describe.skipIf(!runnable)('the outbox store on a real Postgres 16, as the data-
       await store.releaseWorkerLock()
     })
 
-    it('prunes the entries that are done and old, and the events that are old, and nothing else', async () => {
+    it('prunes the entries that are done and old, and nothing else: an event stays, however old', async () => {
       const old = "now() - interval '3 days'"
       const mk = async (state) => {
         const { id } = await store.enqueueOutbox({ kind: 'send', messageKey: keyOf(), authorId: MEMBER, payload: { postId: POST, source: state } })
@@ -482,12 +560,12 @@ describe.skipIf(!runnable)('the outbox store on a real Postgres 16, as the data-
       const [sent, failed, blocked, sending, pending] = [await mk('sent'), await mk('failed'), await mk('blocked'), await mk('sending'), await mk('pending')]
       const fresh = await store.enqueueOutbox({ kind: 'send', messageKey: keyOf(), authorId: MEMBER, payload: { postId: POST, source: 'fresh' } })
       await sql("update librarius_outbox set state = 'sent' where id = $1", [fresh.id])
-      await sql("insert into librarius_events (actor_id, action, at) values ($1, 'old', now() - interval '100 days'), ($1, 'new', now() - interval '10 days')", [MEMBER])
-      const out = await store.pruneOutbox({ sentBefore: new Date(Date.now() - 86_400_000), eventsBefore: new Date(Date.now() - 90 * 86_400_000) })
-      expect(out).toEqual({ entries: 1, events: 1 })
+      await sql("insert into librarius_events (actor_id, action, at) values ($1, 'ancient', now() - interval '4000 days'), ($1, 'old', now() - interval '100 days'), ($1, 'new', now() - interval '10 days')", [MEMBER])
+      const out = await store.pruneOutbox({ sentBefore: new Date(Date.now() - 86_400_000) })
+      expect(out).toEqual({ entries: 1 })
       expect((await rows('select id from librarius_outbox order by id')).map((r) => r.id).sort()).toEqual([failed, blocked, sending, pending, fresh.id].sort())
       expect(sent).toBeDefined()
-      expect((await rows('select action from librarius_events')).map((r) => r.action)).toEqual(['new'])
+      expect((await rows('select action from librarius_events order by id')).map((r) => r.action)).toEqual(['ancient', 'old', 'new'])
     })
 
     it('has an index for the entries it left sending', async () => {
@@ -536,8 +614,28 @@ describe.skipIf(!runnable)('the outbox store on a real Postgres 16, as the data-
       expect((await message(A)).rev).toBe(healed.rev)
     })
 
-    it('finds the author in the event when the entry is pruned, and leaves the author alone when both are gone', async () => {
+    it('takes the author the layout names, with the entry and the event both gone', async () => {
       await damage()
+      await sql('delete from librarius_outbox')
+      await sql('delete from librarius_events')
+      expect(await store.repairSiteMessages()).toEqual({ removed: 2, restored: 1 })
+      expect(await message(A)).toMatchObject({ author_id: MEMBER, content: SOURCE, author_name: 'Invented Name', author_avatar: AVATAR, reply_to: REPLIED })
+    })
+
+    it('takes the author the layout names over the entry\'s and the event\'s', async () => {
+      await damage()
+      await sql('update librarius_outbox set author_id = $1', [OTHER])
+      await sql("update librarius_events set actor_id = $1 where action = 'send'", [OTHER])
+      await store.repairSiteMessages()
+      expect((await message(A)).author_id).toBe(MEMBER)
+    })
+
+    /** A reply stored before its layout named its author. */
+    const unnamed = () => sql("update librarius_messages set layout = layout - 'authorId' where origin = 'site'")
+
+    it('for a reply whose layout names no author: finds the author in the event when the entry is pruned, and leaves the author alone when both are gone', async () => {
+      await damage()
+      await unnamed()
       await sql('delete from librarius_outbox')
       expect(await store.repairSiteMessages()).toEqual({ removed: 2, restored: 1 })
       expect((await message(A)).author_id).toBe(MEMBER)
@@ -549,11 +647,20 @@ describe.skipIf(!runnable)('the outbox store on a real Postgres 16, as the data-
       expect(kept.content).toBe(SOURCE)
     })
 
-    it('takes the author of the newest entry that sent the message, over an event', async () => {
+    it('for a reply whose layout names no author: takes the author of the newest entry that sent the message, over an event', async () => {
       await damage()
+      await unnamed()
       await sql("insert into librarius_events (actor_id, action, post_id, message_id) values ($1, 'send', $2, $3)", [OTHER, POST, A])
       await store.repairSiteMessages()
       expect((await message(A)).author_id).toBe(MEMBER)
+    })
+
+    it('leaves alone an author in the layout that is not an id, and takes the next source', async () => {
+      await damage()
+      await sql(`update librarius_messages set layout = jsonb_set(layout, '{authorId}', '"not an id"') where id = $1`, [A])
+      await sql('update librarius_outbox set author_id = $1', [OTHER])
+      expect(await store.repairSiteMessages()).toEqual({ removed: 2, restored: 1 })
+      expect((await message(A)).author_id).toBe(OTHER)
     })
 
     it('cuts the text to 4000 characters as the worker does, by characters and not by bytes', async () => {

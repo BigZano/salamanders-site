@@ -41,12 +41,18 @@
  *   sent (their progress): the snowflake of a part holds its time. It is what the 20 sends a minute are counted from again after
  *   a restart.
  * takeWorkerLock() → true when this process now holds the outbox's lock (a Postgres advisory lock, held by one connection until
- *   releaseWorkerLock() or the end of the process), false when another worker holds it: only that one sends. releaseWorkerLock() lets it go.
- * pruneOutbox({ sentBefore, eventsBefore }) → { entries, events }: how many 'sent' entries created before `sentBefore`, and how many
- *   events noted before `eventsBefore`, it deleted. Nothing else is deleted: an entry that is not done, or ended for good, stays.
+ *   releaseWorkerLock() or the end of that connection), false when another worker holds it: only that one sends. releaseWorkerLock() lets it go.
+ * holdsWorkerLock() → true while the connection that took the lock is alive and has not let it go, at once and without a question to
+ *   the database: a connection that fails or ends has lost the lock (the server lets a session's locks go with it), and is dropped
+ *   from the pool. The worker asks before it sends, and takes the lock again when it is lost.
+ * pruneOutbox({ sentBefore }) → { entries }: how many 'sent' entries created before `sentBefore` it deleted. Nothing else is deleted:
+ *   an entry that is not done, or ended for good, stays, and so does every event (librarius_events is the Librarians' record of what
+ *   was done from the site and by whom, kept with no end).
  * finishSend(id, { message, partIds, uploadIds, event }) → { stored, gone }. The reply is done, in one transaction: the other
  *   parts of it that an import stored as messages of their own are deleted, the message is stored (origin 'site', with its
- *   attachments), its parts are written, its uploads (the author's) are deleted, the event is noted and the entry is 'sent';
+ *   attachments, and with the author of the entry, read from the entry's own row, in its layout as `authorId`, so that the repair
+ *   knows the author when the entry and the event are gone), its parts are written, its uploads (the author's) are deleted, the
+ *   event is noted and the entry is 'sent';
  *   `stored` is true, and an entry that was not 'sending' any more (it was done by a write that committed, whose answer was
  *   lost) is left alone, and answers true too. Nothing is written, and `stored` is false, when `gone` lists parts that Discord
  *   was told of as deleted while the reply was on its way (siteDeleted noted them in the entry), or, with `gone` null, when the
@@ -88,6 +94,8 @@
  *   queued beside it: removing a part twice is harmless.) `plain` is the ids that are no part of one, which the caller deletes
  *   as messages of Discord. Of those, the ones that are parts of a reply or an edit still on its way (named in its progress,
  *   not stored yet) are noted in that entry (payload.gone), so that finishSend or finishEdit does not store what Discord lost.
+ *   A reply that a delete of its own took while this waited for that delete's entry (see "The order of locks") is left as it is:
+ *   nothing of it is left to delete, queue or note.
  * blockedSince(since) → the times (ISO) of the blocks noted since `since`, oldest first: what the breaker is built from again
  *   after a restart.
  * ownWebhookIds() → the Set of the ids of the webhooks that ever sent a stored part (librarius_parts.webhook_id), or are sending a
@@ -97,8 +105,14 @@
  *   the replies, or a webhook that was replaced, let the import write over the replies of the site. In one transaction: a part
  *   with no webhook gets its message's; the message rows whose id is a part after the first (the import stored them as messages of
  *   their own) are deleted, with their tombstones; the author, the name and picture, the text and the reply link of a site message
- *   are written again from what the site knew when it made the message (the outbox entry that sent it, or else the event it noted;
- *   the layout; the source), wherever the row differs, with one new rev. A second run writes nothing, and takes no rev.
+ *   are written again from what the site knew when it made the message (the author its layout names, or else the outbox entry that
+ *   sent it, or else the event it noted; the layout; the source), wherever the row differs, with one new rev. A second run writes
+ *   nothing, and takes no rev.
+ *
+ * The order of locks. A transaction here that locks an entry of the outbox and the message it names takes the entry first, and the
+ * message after: outboxSet, finishSend, finishEdit, finishDelete and siteDeleted all do, and siteDeleted takes the replies it deletes
+ * in the order of their ids. Two transactions that took them the other way round could each wait for the other, and Postgres would
+ * end one of them.
  */
 import { createInTx } from './inTx.js'
 import { BIGINT_MAX, isStoreId } from './librariusText.js'
@@ -125,6 +139,11 @@ const PICTURE_TYPES = ['image/png', 'image/jpeg', 'image/webp', 'image/gif']
 // advisory lock of this server uses it (the Deathwatch's access lock is 18000002), and a session lock and a transaction lock of one
 // key are the same lock to Postgres, so the keys must differ.
 const WORKER_LOCK = 19_000_001
+// The first of the two numbers of the lock addUpload takes for one author's pictures (the second is the author). A lock of two numbers
+// never meets a lock of one, so it cannot be the worker's or the Deathwatch's, but its first number is still one no other lock uses.
+const UPLOAD_LOCK = 19_000_003
+// What a connection that held the worker's lock and ended with no error is dropped from the pool with.
+const LOCK_ENDED = 'the connection that held the outbox lock ended'
 
 const isObject = (v) => typeof v === 'object' && v !== null && !Array.isArray(v)
 
@@ -286,16 +305,20 @@ async function noteGone(q, ids) {
   }
 }
 
-/** → the entry's note of parts that Discord lost, those of `partIds` only, or null when the entry is not 'sending' (it is done already). Locks the entry. */
+/**
+ * → { gone, authorId }: the entry's note of parts that Discord lost, those of `partIds` only, and the member who queued it; or null when
+ * the entry is not 'sending' (it is done already). Locks the entry.
+ */
 async function goneOf(q, id, partIds) {
-  const { rows } = await q.query("select coalesce(payload->'gone', '[]'::jsonb) as gone from librarius_outbox where id = $1 and state = 'sending' for update", [id])
-  return rows.length === 0 ? null : rows[0].gone.filter((part) => partIds.includes(part))
+  const { rows } = await q.query("select coalesce(payload->'gone', '[]'::jsonb) as gone, author_id from librarius_outbox where id = $1 and state = 'sending' for update", [id])
+  return rows.length === 0 ? null : { gone: rows[0].gone.filter((part) => partIds.includes(part)), authorId: rows[0].author_id }
 }
 
 // What a message of the site should say, from what the site knew when it made it, for the repair (repairSiteMessages). The author is the
-// member of the outbox entry that sent the message (its first part is the message), or else of the event the site noted when it did
-// (the entries are pruned after a day, the events after ninety); the rest is in the message's own source and layout. The text is cut as the
-// outbox cuts it, to 4000 characters.
+// one its layout names (finishSend writes it there), so that no history is needed; for a reply stored before the layout named it, the
+// member of the outbox entry that sent the message (its first part is the message), or else of the event the site noted when it did (the
+// entries are pruned after a day; the events are kept). The rest is in the message's own source and layout. The text is cut as the outbox
+// cuts it, to 4000 characters.
 const INTENDED = `with sent as (
     select distinct on (mid) mid, author_id
       from (
@@ -309,7 +332,7 @@ const INTENDED = `with sent as (
      order by mid, rank, at desc
   ), intended as (
     select m.id,
-           coalesce(s.author_id, m.author_id) as author_id,
+           coalesce(case when m.layout->>'authorId' ~ '^[0-9]{17,19}$' then (m.layout->>'authorId')::bigint end, s.author_id, m.author_id) as author_id,
            coalesce(m.layout->>'username', m.author_name) as author_name,
            case when m.layout->'avatarUrl' is not null then m.layout->>'avatarUrl' else m.author_avatar end as author_avatar,
            left(m.source, ${CONTENT_MAX}) as content,
@@ -431,34 +454,47 @@ export function createOutboxStore(pool) {
       }
       if (got) {
         lock = client
-        // A connection that drops takes the lock with it; an error on a connection nobody listens to would take the server down.
-        client.on?.('error', () => {
-          if (lock === client) lock = null
-        })
+        // A connection that fails or ends takes the lock with it: the flag goes at once, and the connection is dropped from the pool (a
+        // release with an error does that), so that it holds no place there. An error on a connection nobody listens to would take the
+        // server down. A lost connection can fail more than once and then end: the first of those does it, and the rest find it done, as
+        // does any event of a connection that was let go before.
+        const lost = (err = new Error(LOCK_ENDED)) => {
+          if (lock !== client) return
+          lock = null
+          client.release(err)
+        }
+        client.on?.('error', lost)
+        client.on?.('end', () => lost())
       }
       return got
+    },
+
+    holdsWorkerLock() {
+      return lock !== null
     },
 
     async releaseWorkerLock() {
       if (lock === null) return
       const client = lock
       lock = null
+      let failed
       try {
         await client.query('select pg_advisory_unlock($1::bigint)', [WORKER_LOCK])
+      } catch (err) {
+        // A connection whose unlock failed may hold the lock still: it is dropped, not given back, and the lock goes with it.
+        failed = err
+        throw err
       } finally {
-        client.release()
+        client.release(failed)
       }
     },
 
     async pruneOutbox(options) {
       needObject(options, 'options')
+      for (const key of Object.keys(options)) if (key !== 'sentBefore') throw new TypeError(`options takes sentBefore only (the events are never pruned), not ${key}`)
       const sentBefore = needTime(options.sentBefore, 'sentBefore')
-      const eventsBefore = needTime(options.eventsBefore, 'eventsBefore')
-      const count = async (sql, before) => (await pool.query(sql, [before])).rows[0].n
-      return {
-        entries: await count("with gone as (delete from librarius_outbox where state = 'sent' and created_at < $1::timestamptz returning 1) select count(*)::int as n from gone", sentBefore),
-        events: await count('with gone as (delete from librarius_events where at < $1::timestamptz returning 1) select count(*)::int as n from gone', eventsBefore),
-      }
+      const { rows } = await pool.query("with gone as (delete from librarius_outbox where state = 'sent' and created_at < $1::timestamptz returning 1) select count(*)::int as n from gone", [sentBefore])
+      return { entries: rows[0].n }
     },
 
     async finishSend(id, { message, partIds, uploadIds, event }) {
@@ -472,10 +508,10 @@ export function createOutboxStore(pool) {
       const created = needTime(message.createdAt, 'createdAt')
       const noted = needEvent(event)
       return inTx(async (q) => {
-        const gone = await goneOf(q, id, partIds)
+        const entry = await goneOf(q, id, partIds)
         // Done already, by a write that committed.
-        if (gone === null) return { stored: true, gone: [] }
-        if (gone.length > 0) return { stored: false, gone }
+        if (entry === null) return { stored: true, gone: [] }
+        if (entry.gone.length > 0) return { stored: false, gone: entry.gone }
         const { rows: posts } = await q.query('select 1 from librarius_posts where id = $1', [message.postId])
         if (posts.length === 0) return { stored: false, gone: null }
         const rev = await nextRev(q)
@@ -502,7 +538,8 @@ export function createOutboxStore(pool) {
             created,
             rev,
             message.source,
-            JSON.stringify(message.layout),
+            // The member who queued the reply, from the entry's own row: what the repair takes the author from, with no history.
+            JSON.stringify({ ...message.layout, authorId: entry.authorId }),
           ],
         )
         await q.query('delete from librarius_attachments where message_id = $1', [message.id])
@@ -530,9 +567,9 @@ export function createOutboxStore(pool) {
       if (partIds[0] !== messageId) throw new TypeError('the first part is the message')
       const noted = needEvent(event)
       return inTx(async (q) => {
-        const gone = await goneOf(q, id, partIds)
-        if (gone === null) return { stored: true, gone: [] }
-        if (gone.length > 0) return { stored: false, gone }
+        const held = await goneOf(q, id, partIds)
+        if (held === null) return { stored: true, gone: [] }
+        if (held.gone.length > 0) return { stored: false, gone: held.gone }
         const { rows: edited } = await q.query(
           "update librarius_messages set source = $2, content = $3, edited_at = now(), state = null, rev = nextval('librarius_rev') where id = $1 and origin = 'site' returning author_id",
           [messageId, source, content],
@@ -609,7 +646,7 @@ export function createOutboxStore(pool) {
       // One author's pictures at a time: a statement sees the rows committed when it began, so without the lock pictures sent together
       // would each find the room that another is taking. The first number names this family of locks (the worker's is another), the second is the author.
       return inTx(async (q) => {
-        await q.query('select pg_advisory_xact_lock(19000003, hashtext($1::text))', [authorId])
+        await q.query(`select pg_advisory_xact_lock(${UPLOAD_LOCK}, hashtext($1::text))`, [authorId])
         const { rows } = await q.query(
           'insert into librarius_uploads (author_id, name, content_type, bytes) ' +
             'select $1::bigint, $2::text, $3::text, $4::bytea ' +
@@ -688,31 +725,32 @@ export function createOutboxStore(pool) {
       needId(postId, 'postId')
       if (ids.length === 0) return { plain: [] }
       return inTx(async (q) => {
-        const { rows: hit } = await q.query('select discord_id, message_id from librarius_parts where discord_id = any($1::bigint[])', [ids])
+        const { rows: hit } = await q.query('select discord_id, message_id from librarius_parts where discord_id = any($1::bigint[]) order by message_id', [ids])
         const parts = new Set(hit.map((r) => r.discord_id))
         const plain = ids.filter((id) => !parts.has(id))
         if (plain.length > 0) await noteGone(q, plain)
         if (hit.length === 0) return { plain }
         const rev = await nextRev(q)
         for (const messageId of new Set(hit.map((r) => r.message_id))) {
+          // The order of locks (see the top of the file): the deletes of the reply that are on their way first, and its message after.
+          const { rows: queued } = await q.query("select payload from librarius_outbox where kind = 'delete' and message_key = $1 and state in ('pending', 'sending') for update", [messageId])
           const { rows: all } = await q.query('select discord_id, webhook_id from librarius_parts where message_id = $1 order by part_index', [messageId])
+          // A delete that finished while this waited for its entry took the whole reply already.
+          if (all.length === 0) continue
           const left = all.map((r) => r.discord_id).filter((part) => !parts.has(part))
           const sentBy = all.find((r) => r.webhook_id !== null)?.webhook_id ?? null
           const { rows: stored } = await q.query('select post_id, author_id from librarius_messages where id = $1', [messageId])
           await deleteRows(q, [messageId], rev)
           await q.query('delete from librarius_parts where message_id = $1', [messageId])
           const author = stored.length === 0 ? '0' : stored[0].author_id
-          if (left.length > 0) {
-            // A delete that knows its parts (the one an earlier call queued, or one at work) takes these; one that has yet to read them from the message, which is gone, does not.
-            const { rows: queued } = await q.query("select payload from librarius_outbox where kind = 'delete' and message_key = $1 and state in ('pending', 'sending') for update", [messageId])
-            const covered = queued.some(({ payload }) => payload.partIds !== undefined || payload.progress?.partIds !== undefined)
-            if (!covered) {
-              await q.query("insert into librarius_outbox (kind, message_key, author_id, payload) values ('delete', $1, $2, $3::jsonb)", [
-                messageId,
-                author,
-                JSON.stringify({ postId, partIds: left, webhookId: sentBy }),
-              ])
-            }
+          // A delete that knows its parts (the one an earlier call queued, or one at work) takes these; one that has yet to read them from the message, which is gone, does not.
+          const covered = queued.some(({ payload }) => payload.partIds !== undefined || payload.progress?.partIds !== undefined)
+          if (left.length > 0 && !covered) {
+            await q.query("insert into librarius_outbox (kind, message_key, author_id, payload) values ('delete', $1, $2, $3::jsonb)", [
+              messageId,
+              author,
+              JSON.stringify({ postId, partIds: left, webhookId: sentBy }),
+            ])
           }
           await logEvent(q, author, { action: 'deleted-in-discord', postId, messageId, note: null })
         }

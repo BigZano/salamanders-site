@@ -19,7 +19,7 @@ function rig(options = {}) {
       timers.waiting = timers.waiting.filter((h) => h !== handle)
     },
   }
-  const store = { sweepUploads: vi.fn(async () => 0), pruneOutbox: vi.fn(async () => ({ entries: 0, events: 0 })) }
+  const store = { sweepUploads: vi.fn(async () => 0), pruneOutbox: vi.fn(async () => ({ entries: 0 })) }
   const calls = { get all() { return store.sweepUploads.mock.calls.map(([arg]) => arg) } }
   const logged = []
   const sweeper = createUploadSweeper({ store, now: () => clock.t, timers: fakeTimers, log: (line) => logged.push(line), ...options })
@@ -88,10 +88,20 @@ describe('sweep', () => {
 describe('the prune of the outbox, on the same timer', () => {
   const DAY = 86_400_000
 
-  it('prunes the entries done more than a day ago and the events more than 90 days old, at the first sweep', async () => {
+  it('prunes the entries done more than a day ago, at the first sweep', async () => {
     const { sweeper, store, clock } = rig()
     await sweeper.sweep()
-    expect(store.pruneOutbox.mock.calls).toStrictEqual([[{ sentBefore: clock.t - DAY, eventsBefore: clock.t - 90 * DAY }]])
+    expect(store.pruneOutbox.mock.calls).toStrictEqual([[{ sentBefore: clock.t - DAY }]])
+  })
+
+  it('never asks for the events to be pruned, however old they are: they are the Librarians\' record', async () => {
+    const { sweeper, store, clock } = rig()
+    for (let i = 0; i < 3; i++) {
+      await sweeper.sweep()
+      clock.t += 400 * DAY
+    }
+    expect(store.pruneOutbox).toHaveBeenCalledTimes(3)
+    for (const [options] of store.pruneOutbox.mock.calls) expect(Object.keys(options)).toEqual(['sentBefore'])
   })
 
   it('prunes once an hour, not at every sweep, reading the clock when it does', async () => {
@@ -103,7 +113,7 @@ describe('the prune of the outbox, on the same timer', () => {
     expect(store.pruneOutbox).toHaveBeenCalledTimes(1)
     clock.t += 1
     await sweeper.sweep()
-    expect(store.pruneOutbox.mock.calls).toStrictEqual([[{ sentBefore: first - DAY, eventsBefore: first - 90 * DAY }], [{ sentBefore: first + HOUR - DAY, eventsBefore: first + HOUR - 90 * DAY }]])
+    expect(store.pruneOutbox.mock.calls).toStrictEqual([[{ sentBefore: first - DAY }], [{ sentBefore: first + HOUR - DAY }]])
   })
 
   it('prunes on every sweep that the timer makes, an hour apart', async () => {
@@ -147,7 +157,7 @@ describe('the prune of the outbox, on the same timer', () => {
   it('does not hold the next sweep up for ever when the prune never answers: the sweep waits for it, as it does for its own work', async () => {
     const { sweeper, store } = rig()
     let release
-    store.pruneOutbox.mockImplementationOnce(() => new Promise((resolve) => (release = () => resolve({ entries: 0, events: 0 }))))
+    store.pruneOutbox.mockImplementationOnce(() => new Promise((resolve) => (release = () => resolve({ entries: 0 }))))
     let done = false
     const sweeping = sweeper.sweep().then(() => (done = true))
     await flush()
@@ -278,7 +288,7 @@ describe('start and stop', () => {
     vi.useFakeTimers()
     try {
       const asked = []
-      const store = { sweepUploads: async (arg) => asked.push(arg) && 0, pruneOutbox: async () => ({ entries: 0, events: 0 }) }
+      const store = { sweepUploads: async (arg) => asked.push(arg) && 0, pruneOutbox: async () => ({ entries: 0 }) }
       const sweeper = createUploadSweeper({ store, log: () => {} })
       await sweeper.sweep()
       expect(asked[0].olderThan).toBe(Date.now() - HOUR)
@@ -314,7 +324,7 @@ describe('start and stop', () => {
 })
 
 describe('what it refuses', () => {
-  const store = { sweepUploads: async () => 0, pruneOutbox: async () => ({ entries: 0, events: 0 }) }
+  const store = { sweepUploads: async () => 0, pruneOutbox: async () => ({ entries: 0 }) }
 
   it('needs a store with sweepUploads', () => {
     for (const bad of [undefined, null, {}, { sweepUploads: 1 }, 'store']) {
