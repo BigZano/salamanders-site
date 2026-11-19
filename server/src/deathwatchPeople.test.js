@@ -123,21 +123,20 @@ describe('searchMembers', () => {
 
 describe('departed', () => {
   const row = (n, grantedAt = new Date(LATE)) => ({ discordId: id(n), grantedAt })
-  const byId = (...people) => new Map(people.map((p) => [p.id, p]))
 
-  it('someone the roster no longer has has left', () => {
-    expect(departed(row(1), byId(person(2, 'Other')))).toBe(true)
+  it('someone proved not in the guild has left', () => {
+    expect(departed(row(1), null)).toBe(true)
   })
 
   it('someone still there since before the access was given has not', () => {
-    expect(departed(row(1), byId(person(1, 'Kael', { joinedAt: EARLY })))).toBe(false)
+    expect(departed(row(1), person(1, 'Kael', { joinedAt: EARLY }))).toBe(false)
   })
 
   it('someone who joined again since has left, for this access', () => {
-    expect(departed(row(1, new Date(EARLY)), byId(person(1, 'Kael', { joinedAt: LATE })))).toBe(true)
+    expect(departed(row(1, new Date(EARLY)), person(1, 'Kael', { joinedAt: LATE }))).toBe(true)
   })
 
   it('an unknown join date proves nothing either way', () => {
-    expect(departed(row(1), byId(person(1, 'Kael', { joinedAt: null })))).toBe(false)
+    expect(departed(row(1), person(1, 'Kael', { joinedAt: null }))).toBe(false)
   })
 })

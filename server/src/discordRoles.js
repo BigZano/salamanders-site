@@ -31,6 +31,7 @@ export function createDiscordRoles({ fetchImpl = fetch, apiBase, guildId, botTok
         headers: { Authorization: authorization },
         signal: AbortSignal.timeout(timeoutMs),
       })
+      // Stryker disable next-line ArrowFunction: an undefined body reads as a null one, every reader goes through ?.
       return { status: res.status, body: await res.json().catch(() => null) }
     } catch {
       // Network error, abort or timeout. Drop the original: its message can carry the request url, and with it a user id.
@@ -61,7 +62,8 @@ export function createDiscordRoles({ fetchImpl = fetch, apiBase, guildId, botTok
     if (guild.status !== 200 || !Array.isArray(guild.body?.roles)) throw new Upstream()
     if (guild.body.owner_id === userId) return true
     // @everyone's role id is the guild id; its permissions apply to everyone.
-    const held = new Set([...(roles || []), guildId])
+    const held = new Set(roles) // null or undefined (no roles) gives an empty set
+    held.add(guildId)
     return guild.body.roles.some((r) => held.has(r.id) && carriesAdmin(r))
   }
 

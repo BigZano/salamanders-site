@@ -22,11 +22,11 @@ export const joinedBefore = (joinedAt, grantedAt) => timeOf(joinedAt) < timeOf(g
 export const rejoinedSince = (joinedAt, grantedAt) => timeOf(joinedAt) >= timeOf(grantedAt)
 
 /**
- * Whether the person of an access row (`{ discordId, grantedAt }`) has left since it was given, by the roster's
- * members (`byId`, id → { joinedAt }): absent from it, or there again only since.
+ * Whether the person of an access row (`{ discordId, grantedAt }`) has left since it was given, by what is known of
+ * them (`person`, { joinedAt }): null when Discord says they are not in the guild, or there again only since.
+ * The caller must pass null only on proof; an unknown join date proves nothing.
  */
-export function departed(row, byId) {
-  const person = byId.get(row.discordId)
+export function departed(row, person) {
   return !person || rejoinedSince(person.joinedAt, row.grantedAt)
 }
 

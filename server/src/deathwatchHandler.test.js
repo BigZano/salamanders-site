@@ -408,10 +408,11 @@ describe('GET /deathwatch/data', () => {
   })
 
   it('uses the cached verdict for repeated reads', async () => {
-    const { call, roles } = setup()
-    await call('watcher', 'GET', '/deathwatch/data')
-    await call('watcher', 'GET', '/deathwatch/data')
-    expect(roles.memberOf).toHaveBeenCalledTimes(1)
+    const { call, store, users } = setup()
+    store.docs.teams.set('alpha', { n: 1 })
+    expect((await call('watcher', 'GET', '/deathwatch/data')).body.teams).toEqual({ alpha: { n: 1 } })
+    users.watcher.roles = [] // lost the role in Discord a moment ago: the cached verdict still reads
+    expect((await call('watcher', 'GET', '/deathwatch/data')).body.teams).toEqual({ alpha: { n: 1 } })
   })
 })
 
@@ -645,8 +646,9 @@ describe('the access list', () => {
     const people = everyone()
       .filter((p) => p.id !== USERS.granted.id)
       .map((p) => (p.id === USERS.watcher.id ? { ...p, joinedAt: '2026-07-01T00:00:00.000Z' } : p))
-    const { call, store } = setup({ roster: rosterOf(people) })
+    const { call, store, users } = setup({ roster: rosterOf(people) })
     store.give(USERS.granted.id, 'deathwatch') // gone from the roster
+    users.granted.roles = null // and Discord says so too
     store.give(USERS.watcher.id, 'watchcommand') // the roster says he joined again after it was given
     expect((await list(call)).map((r) => r.id)).toEqual([USERS.desk.id])
     expect(store.events).toEqual([
@@ -654,6 +656,44 @@ describe('the access list', () => {
       { id: USERS.watcher.id, kind: 'watchcommand', actor: 'left-guild', action: 'removed' },
     ])
     expect([...store.access.keys()]).toEqual([`${USERS.desk.id}:desk`])
+  })
+
+  it('keeps someone added since the roster last loaded: the list right after the add does not drop them', async () => {
+    const { call, store } = setup({ roster: rosterOf(everyone().filter((p) => p.id !== USERS.plain.id)) })
+    expect((await call('commander', 'POST', '/deathwatch/access', { discordId: USERS.plain.id, kind: 'desk' })).status).toBe(201)
+    expect((await list(call)).map((r) => [r.id, r.kind, r.name])).toEqual([
+      [USERS.desk.id, 'desk', 'Brother Valen'],
+      [USERS.plain.id, 'desk', null],
+    ])
+    expect(store.events).toEqual([{ id: USERS.plain.id, kind: 'desk', actor: USERS.commander.id, action: 'added' }])
+  })
+
+  it('asks Discord about anyone missing from the roster: gone, or back only since, goes; still there stays', async () => {
+    const roster = rosterOf(everyone().filter((p) => ![USERS.granted.id, USERS.plain.id, USERS.watcher.id].includes(p.id)))
+    const { call, store, users } = setup({ roster })
+    store.give(USERS.granted.id, 'deathwatch')
+    store.give(USERS.plain.id, 'desk')
+    store.give(USERS.watcher.id, 'watchcommand')
+    users.granted.roles = null // left the guild
+    users.plain.joinedAt = '2026-07-01T00:00:00.000Z' // left and came back after it was given
+    expect((await list(call)).map((r) => r.id)).toEqual([USERS.desk.id, USERS.watcher.id])
+    expect(store.events).toEqual([
+      { id: USERS.granted.id, kind: 'deathwatch', actor: 'left-guild', action: 'removed' },
+      { id: USERS.plain.id, kind: 'desk', actor: 'left-guild', action: 'removed' },
+    ])
+  })
+
+  it('keeps everyone missing from the roster while Discord cannot be asked', async () => {
+    const { call, store, roles } = setup({ roster: rosterOf(everyone().filter((p) => p.id !== USERS.granted.id)) })
+    store.give(USERS.granted.id, 'deathwatch')
+    store.give(USERS.granted.id, 'desk')
+    const live = roles.memberOf.getMockImplementation()
+    roles.memberOf.mockImplementation(async (id) => {
+      if (id === USERS.granted.id) throw new Upstream()
+      return live(id)
+    })
+    expect((await list(call)).map((r) => r.id)).toEqual([USERS.desk.id, USERS.granted.id, USERS.granted.id])
+    expect(store.events).toEqual([])
   })
 
   it('forgets cached verdicts when it removes someone, so their access ends at once', async () => {
@@ -673,8 +713,9 @@ describe('the access list', () => {
   })
 
   it('removes nobody while the roster has not loaded, and names nobody, the giver shown by id', async () => {
-    const { call, store } = setup({ roster: rosterOf(null) })
+    const { call, store, users } = setup({ roster: rosterOf(null) })
     store.give(USERS.granted.id, 'deathwatch')
+    users.granted.roles = null // gone, as Discord would say: still not asked until the roster is there
     expect(await list(call)).toEqual([
       { id: USERS.desk.id, kind: 'desk', name: null, avatar: null, grantedBy: USERS.commander.id, grantedAt: GIVEN.toISOString() },
       { id: USERS.granted.id, kind: 'deathwatch', name: null, avatar: null, grantedBy: USERS.commander.id, grantedAt: GIVEN.toISOString() },

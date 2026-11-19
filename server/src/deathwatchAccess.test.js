@@ -34,16 +34,18 @@ function setup({ granted = [], delegated = {}, joinedAt = EARLY, ...opts } = {})
   // When every member's present membership began; a test may move it, as a leave and a rejoin would.
   const member = { joinedAt }
   const fail = { identify: false, roles: false }
+  // What Discord says now, which a test may change: the tokens it knows, and each user's roles (null: not in the guild).
+  const tokens = { ...TOKENS }
+  const held = new Map(Object.values(USERS).map((u) => [u.id, u.roles]))
   const roles = {
     identify: vi.fn(async (request) => {
       if (fail.identify) throw new Upstream()
-      const u = TOKENS[(request.headers.get('Authorization') || '').slice(7)]
+      const u = tokens[(request.headers.get('Authorization') || '').slice(7)]
       return u ? { id: u.id, username: u.username } : null
     }),
     memberOf: vi.fn(async (id) => {
       if (fail.roles) throw new Upstream()
-      const held = Object.values(USERS).find((u) => u.id === id).roles
-      return held === null ? null : { roles: held, joinedAt: member.joinedAt }
+      return held.get(id) === null ? null : { roles: held.get(id), joinedAt: member.joinedAt }
     }),
   }
   // What the Watch Commander has given whom (deathwatch_access): a "grant" is the general level, given after joining.
@@ -68,7 +70,7 @@ function setup({ granted = [], delegated = {}, joinedAt = EARLY, ...opts } = {})
     now: () => clock.t,
     ...opts,
   })
-  return { access, roles, store, clock, fail, delegations, removed, member }
+  return { access, roles, store, clock, fail, delegations, removed, member, tokens, held }
 }
 
 describe('configured', () => {
@@ -243,12 +245,13 @@ describe('the Deathwatch Command role', () => {
 
 describe('no identity, no cache', () => {
   it('returns null for no Authorization header and for an unknown token, and caches neither', async () => {
-    const { access, roles } = setup()
+    const { access, fail, tokens } = setup()
+    fail.roles = true // no member lookup without an identity: this failure never shows
     expect(await access.resolve(req(null))).toBeNull()
-    expect(await access.resolve(req('nobody'))).toBeNull()
-    expect(await access.resolve(req('nobody'))).toBeNull()
-    expect(roles.identify).toHaveBeenCalledTimes(3)
-    expect(roles.memberOf).not.toHaveBeenCalled()
+    expect(await access.resolve(req('late'))).toBeNull()
+    fail.roles = false
+    tokens.late = USERS.watcher // Discord knows the token now: the null was not kept
+    expect((await access.resolve(req('late'))).access).toBe(true)
   })
 })
 
@@ -270,64 +273,60 @@ describe('Discord failures fail closed', () => {
   })
 })
 
+// Each test changes what Discord says after a first answer, then reads whether the cached or the fresh one returns.
 describe('the verdict cache', () => {
   it('serves a verdict for ttlMs and looks again one millisecond later', async () => {
-    const { access, roles, clock } = setup()
-    await access.resolve(req('watcher'))
+    const { access, clock, held } = setup()
+    expect((await access.resolve(req('watcher'))).access).toBe(true)
+    held.set(USERS.watcher.id, [])
     clock.t = 1_000 + 29_999
-    await access.resolve(req('watcher'))
-    expect(roles.identify).toHaveBeenCalledTimes(1)
-    expect(roles.memberOf).toHaveBeenCalledTimes(1)
+    expect((await access.resolve(req('watcher'))).access).toBe(true)
     clock.t = 1_000 + 30_000
-    await access.resolve(req('watcher'))
-    expect(roles.identify).toHaveBeenCalledTimes(2)
+    expect((await access.resolve(req('watcher'))).access).toBe(false)
   })
 
   it('honours a different ttlMs', async () => {
-    const { access, roles, clock } = setup({ ttlMs: 5 })
+    const { access, clock, held } = setup({ ttlMs: 5 })
     await access.resolve(req('watcher'))
+    held.set(USERS.watcher.id, [])
     clock.t = 1_004
-    await access.resolve(req('watcher'))
-    expect(roles.identify).toHaveBeenCalledTimes(1)
+    expect((await access.resolve(req('watcher'))).access).toBe(true)
     clock.t = 1_005
-    await access.resolve(req('watcher'))
-    expect(roles.identify).toHaveBeenCalledTimes(2)
+    expect((await access.resolve(req('watcher'))).access).toBe(false)
   })
 
   it('keeps a separate entry per token, even for tokens that differ in one character', async () => {
-    const { access, roles } = setup()
-    await access.resolve(req('tok-a'))
-    await access.resolve(req('tok-b'))
-    expect(roles.identify).toHaveBeenCalledTimes(2)
-    await access.resolve(req('tok-a'))
-    await access.resolve(req('tok-b'))
-    expect(roles.identify).toHaveBeenCalledTimes(2)
+    const { access, held } = setup()
+    expect((await access.resolve(req('tok-a'))).access).toBe(true)
+    held.set(USERS.watcher.id, [])
+    expect((await access.resolve(req('tok-b'))).access).toBe(false) // its own lookup, not tok-a's answer
+    held.set(USERS.watcher.id, [DW])
+    expect((await access.resolve(req('tok-a'))).access).toBe(true)
+    expect((await access.resolve(req('tok-b'))).access).toBe(false) // both kept
   })
 
   it('lets fresh bypass the cache and leaves the cache as it was', async () => {
-    const { access, roles } = setup()
+    const { access, held } = setup()
     await access.resolve(req('watcher'))
-    await access.resolve(req('watcher'), { fresh: true })
-    expect(roles.identify).toHaveBeenCalledTimes(2)
-    await access.resolve(req('watcher'))
-    expect(roles.identify).toHaveBeenCalledTimes(2)
+    held.set(USERS.watcher.id, [])
+    expect((await access.resolve(req('watcher'), { fresh: true })).access).toBe(false)
+    expect((await access.resolve(req('watcher'))).access).toBe(true)
   })
 
   it('does not cache what a fresh call learned', async () => {
-    const { access, roles } = setup()
-    await access.resolve(req('watcher'), { fresh: true })
-    await access.resolve(req('watcher'))
-    expect(roles.identify).toHaveBeenCalledTimes(2)
+    const { access, held } = setup()
+    expect((await access.resolve(req('watcher'), { fresh: true })).access).toBe(true)
+    held.set(USERS.watcher.id, [])
+    expect((await access.resolve(req('watcher'))).access).toBe(false)
   })
 
   it('drops every cached verdict on forget', async () => {
-    const { access, roles, delegations } = setup()
+    const { access, delegations } = setup()
     expect((await access.resolve(req('plain'))).access).toBe(false)
     delegations.set(USERS.plain.id, given('deathwatch'))
     expect((await access.resolve(req('plain'))).access).toBe(false) // still the cached answer
     access.forget()
     expect((await access.resolve(req('plain'))).access).toBe(true)
-    expect(roles.identify).toHaveBeenCalledTimes(2)
   })
 
   it('does not remember a verdict that a forget() overtook while it was being looked up', async () => {
@@ -335,7 +334,7 @@ describe('the verdict cache', () => {
     let answer
     store.delegationsOf.mockImplementationOnce(() => new Promise((resolve) => (answer = resolve)))
     const inFlight = access.resolve(req('plain')) // a read that is about to be told "granted"
-    await vi.waitFor(() => expect(store.delegationsOf).toHaveBeenCalled())
+    await vi.waitFor(() => expect(answer).toBeTypeOf('function'))
     delegations.delete(USERS.plain.id) // the grant is revoked, and every cached verdict dropped,
     access.forget() // while that lookup is still running
     answer(given('deathwatch'))
@@ -344,16 +343,13 @@ describe('the verdict cache', () => {
   })
 
   it('is bounded: a full cache evicts its oldest entry', async () => {
-    const { access, roles } = setup({ maxEntries: 2 })
-    await access.resolve(req('watcher'))
-    await access.resolve(req('commander'))
-    await access.resolve(req('plain')) // evicts watcher
-    expect(roles.identify).toHaveBeenCalledTimes(3)
-    await access.resolve(req('commander'))
-    await access.resolve(req('plain'))
-    expect(roles.identify).toHaveBeenCalledTimes(3)
-    await access.resolve(req('watcher')) // gone, looked up again
-    expect(roles.identify).toHaveBeenCalledTimes(4)
+    const { access, held } = setup({ maxEntries: 2 })
+    for (const who of ['watcher', 'both', 'tok-a']) expect((await access.resolve(req(who))).access).toBe(true) // evicts watcher
+    held.set(USERS.watcher.id, [])
+    held.set(USERS.both.id, [])
+    expect((await access.resolve(req('both'))).access).toBe(true) // still cached
+    expect((await access.resolve(req('tok-a'))).access).toBe(true) // still cached, though the same user as watcher
+    expect((await access.resolve(req('watcher'))).access).toBe(false) // gone, looked up again
   })
 })
 
