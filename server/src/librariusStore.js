@@ -40,9 +40,18 @@ const POST_MESSAGES = `select ${MESSAGE_COLUMNS} from librarius_messages where p
 
 const REPLIES = '(select count(*)::int from librarius_messages m where m.post_id = p.id and m.id <> p.id)'
 
+// A post's newest messages (see windowIds), each with the parts after the first of a reply of the site, unless it is 'sending'.
+const WINDOW = `select m.id, m.edited_at,
+    case when m.state = 'sending' then '{}'::text[]
+         else array(select p.discord_id::text from librarius_parts p where p.message_id = m.id and p.part_index > 0 order by p.part_index) end as parts
+  from librarius_messages m where m.post_id = $1 order by m.id desc limit $2`
+
 /**
  * Insert a message, or update what Discord can change on it, stamping the rev it is given ($15) either way. → { id } when
  * written. `reactions` is the one column a caller may ask to leave alone on an update: see UPSERT_KEEPING_REACTIONS.
+ * A conflict updates only a message of Discord (origin 'discord'): a reply of the site is the outbox's, and it stores it
+ * as one message, under the member who wrote it, so a row of the site answers nothing, as a message whose post is not
+ * stored does, and is left as it is.
  */
 const upsertMessageSql = (updatesReactions) => `insert into librarius_messages
     (id, post_id, author_id, author_name, author_avatar, webhook_id, kind, content, embeds, stickers, reactions, reply_to, created_at, edited_at, rev)
@@ -53,6 +62,7 @@ const upsertMessageSql = (updatesReactions) => `insert into librarius_messages
     webhook_id = excluded.webhook_id, kind = excluded.kind, content = excluded.content, embeds = excluded.embeds,
     stickers = excluded.stickers, ${updatesReactions ? 'reactions = excluded.reactions, ' : ''}reply_to = excluded.reply_to,
     edited_at = excluded.edited_at, rev = excluded.rev
+    where librarius_messages.origin = 'discord'
   returning id`
 
 const UPSERT_MESSAGE = upsertMessageSql(true)
@@ -262,7 +272,8 @@ export function createLibrariusStore(pool) {
 
     /**
      * Write parseMessage rows, all with one new rev (taken once, as the transaction begins), and replace each one's attachments, all in one transaction. A message
-     * whose post is not stored is skipped. Every row is checked before the first is written.
+     * whose post is not stored is skipped, and so is one that is stored as a reply of the site (origin 'site'): neither it nor its attachments
+     * are written over, whatever the row says. Every row is checked before the first is written.
      *
      * With `keepReactions: true` a message that is already stored keeps the reactions it has, whatever the row says,
      * and a new one is stored with the row's: for a live update of a message, which can leave its reactions out. It is
@@ -566,15 +577,17 @@ export function createLibrariusStore(pool) {
       await pool.query('update librarius_posts set import_cursor = $2 where id = $1', [postId, messageId])
     },
 
-    /** → [{ id, editedAt }] for a post's newest `limit` messages, newest first: what the catch-up compares with Discord's. */
+    /**
+     * → [{ id, editedAt, parts }] for a post's newest `limit` messages, newest first: what the catch-up compares with Discord's. `parts`
+     * is the Discord ids of a reply of the site after its first part (which is the message), in order: empty for a message of Discord,
+     * and for a reply that an edit or a delete is at work on ('sending'), since an edit removes the parts it no longer needs before it
+     * stores the change.
+     */
     async windowIds(postId, limit) {
       needId(postId, 'postId')
       needCount(limit, 'limit')
-      const { rows } = await pool.query('select id, edited_at from librarius_messages where post_id = $1 order by id desc limit $2', [
-        postId,
-        limit,
-      ])
-      return rows.map((r) => ({ id: r.id, editedAt: iso(r.edited_at) }))
+      const { rows } = await pool.query(WINDOW, [postId, limit])
+      return rows.map((r) => ({ id: r.id, editedAt: iso(r.edited_at), parts: r.parts }))
     },
 
     /** → { importDone, lastRunAt, lastOkAt, lastError } from the single sync row; the empty state before it is written. */

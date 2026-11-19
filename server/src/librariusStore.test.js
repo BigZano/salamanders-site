@@ -408,7 +408,8 @@ describe('upsertMessages', () => {
     `where exists (select 1 from librarius_posts where id = $2) ` +
     `on conflict (id) do update set author_id = excluded.author_id, author_name = excluded.author_name, author_avatar = excluded.author_avatar, ` +
     `webhook_id = excluded.webhook_id, kind = excluded.kind, content = excluded.content, embeds = excluded.embeds, stickers = excluded.stickers, ` +
-    `reactions = excluded.reactions, reply_to = excluded.reply_to, edited_at = excluded.edited_at, rev = excluded.rev returning id`
+    `reactions = excluded.reactions, reply_to = excluded.reply_to, edited_at = excluded.edited_at, rev = excluded.rev ` +
+    `where librarius_messages.origin = 'discord' returning id`
   const DELETE_ATTACHMENTS = 'delete from librarius_attachments where message_id = $1'
   const INSERT_ATTACHMENT =
     'insert into librarius_attachments (id, message_id, position, filename, content_type, size, width, height, url, proxy_url, expires_at) ' +
@@ -461,7 +462,7 @@ describe('upsertMessages', () => {
     expect(log[2].params[14]).toBe('900')
     // The insert carries the number, and so does what a conflict updates; the statement asks the sequence for nothing.
     expect(log[2].sql).toContain('edited_at, rev) select')
-    expect(log[2].sql).toContain('rev = excluded.rev returning id')
+    expect(log[2].sql).toContain("rev = excluded.rev where librarius_messages.origin = 'discord' returning id")
     expect(log[2].sql).not.toContain('nextval')
   })
 
@@ -525,6 +526,23 @@ describe('upsertMessages', () => {
     const { pool, sqls } = revPool([['insert into librarius_messages', []]])
     await store(pool).upsertMessages([message()])
     expect(sqls()).toEqual(['begin', REV, INSERT, 'commit'])
+  })
+
+  it('never writes over a message of the site, nor its attachments: a conflict updates only a row of origin discord', async () => {
+    // A row of the site is the outbox's (origin 'site'): the update of a conflict is limited to rows of Discord, so for one of the site
+    // the statement answers nothing, as for a message whose post is not stored, and its attachments are left as they are.
+    const { pool, log, sqls } = revPool([['insert into librarius_messages', []]])
+    await store(pool).upsertMessages([message({ attachments: [attachment(), attachment({ id: ATT_2, position: 1 })] })])
+    expect(sqls()).toEqual(['begin', REV, INSERT, 'commit'])
+    const update = log[2].sql.slice(log[2].sql.indexOf('do update set'))
+    expect(update.endsWith("rev = excluded.rev where librarius_messages.origin = 'discord' returning id")).toBe(true)
+  })
+
+  it('limits the update of a conflict to rows of Discord with keepReactions too', async () => {
+    const { pool, log, sqls } = revPool([['insert into librarius_messages', []]])
+    await store(pool).upsertMessages([message()], { keepReactions: true })
+    expect(sqls()).toEqual(['begin', REV, INSERT.replace('reactions = excluded.reactions, ', ''), 'commit'])
+    expect(log[2].sql).toContain("where librarius_messages.origin = 'discord' returning id")
   })
 
   it('goes on with the next message after a skipped one, in the order given', async () => {
@@ -1736,15 +1754,28 @@ describe('importCursor and setImportCursor', () => {
 })
 
 describe('windowIds', () => {
-  it('answers the newest ids with their edit times, newest first', async () => {
+  const WINDOW =
+    "select m.id, m.edited_at, case when m.state = 'sending' then '{}'::text[] " +
+    'else array(select p.discord_id::text from librarius_parts p where p.message_id = m.id and p.part_index > 0 order by p.part_index) end as parts ' +
+    'from librarius_messages m where m.post_id = $1 order by m.id desc limit $2'
+
+  it('answers the newest ids with their edit times and their later parts, newest first', async () => {
     const { pool, log } = fakePool([
-      ['from librarius_messages', [{ id: MSG_2, edited_at: new Date('2026-11-02T19:00:00.000Z') }, { id: MSG, edited_at: null }]],
+      [
+        'from librarius_messages',
+        [
+          { id: MSG_3, edited_at: null, parts: [ATT, ATT_2] },
+          { id: MSG_2, edited_at: new Date('2026-11-02T19:00:00.000Z'), parts: [] },
+          { id: MSG, edited_at: null, parts: [ATT] },
+        ],
+      ],
     ])
     expect(await store(pool).windowIds(POST, 100)).toEqual([
-      { id: MSG_2, editedAt: '2026-11-02T19:00:00.000Z' },
-      { id: MSG, editedAt: null },
+      { id: MSG_3, editedAt: null, parts: [ATT, ATT_2] },
+      { id: MSG_2, editedAt: '2026-11-02T19:00:00.000Z', parts: [] },
+      { id: MSG, editedAt: null, parts: [ATT] },
     ])
-    expect(log).toEqual([{ sql: 'select id, edited_at from librarius_messages where post_id = $1 order by id desc limit $2', params: [POST, 100] }])
+    expect(log).toEqual([{ sql: WINDOW, params: [POST, 100] }])
   })
 
   it('is empty for a post with no messages', async () => {

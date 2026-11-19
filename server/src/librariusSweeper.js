@@ -9,8 +9,9 @@
  * them after sending. All of that is one statement of the store (sweepUploads), which this module only times.
  *
  * The same timer prunes the outbox (store.pruneOutbox), once an hour (and at the first sweep): the entries that are done ('sent') and
- * more than a day old, which hold the full text of replies that may have been deleted since, and the events more than 90 days old.
- * A prune that fails is logged and tried again at the next sweep; it never fails the sweep.
+ * more than a day old, which hold the full text of replies that may have been deleted since. The events (librarius_events) are never
+ * pruned: they are the Librarians' record of what was done from the site and by whom, for which the spec sets no end. A prune that
+ * fails is logged and tried again at the next sweep; it never fails the sweep.
  *
  * createUploadSweeper({ store, now = Date.now, timers = { setTimeout, clearTimeout }, intervalMs = 60000, maxAgeMs = 3600000,
  *   log = console.error }) → { start(), stop() → Promise, sweep() → Promise<number> }
@@ -25,9 +26,8 @@ import { describe } from './librariusText.js'
 
 const MAX_TIMER_MS = 2 ** 31 - 1
 const DAY_MS = 86_400_000
-// What the prune keeps: a done entry for a day, an event for 90 days; and how often it looks.
+// What the prune keeps: a done entry for a day (an event for ever); and how often it looks.
 const SENT_KEEP_MS = DAY_MS
-const EVENTS_KEEP_MS = 90 * DAY_MS
 const PRUNE_EVERY_MS = 3_600_000
 
 export function createUploadSweeper({ store, now = Date.now, timers = { setTimeout, clearTimeout }, intervalMs = 60_000, maxAgeMs = 3_600_000, log = console.error }) {
@@ -47,7 +47,7 @@ export function createUploadSweeper({ store, now = Date.now, timers = { setTimeo
     const t = now()
     if (t - prunedAt < PRUNE_EVERY_MS) return
     try {
-      await store.pruneOutbox({ sentBefore: t - SENT_KEEP_MS, eventsBefore: t - EVENTS_KEEP_MS })
+      await store.pruneOutbox({ sentBefore: t - SENT_KEEP_MS })
       prunedAt = t
     } catch (err) {
       // Stryker disable next-line StringLiteral: what is logged is for the owner to read, and no test asserts it
