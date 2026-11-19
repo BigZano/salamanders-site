@@ -1,27 +1,32 @@
 /**
  * The owner's one-time setup of the Librarius's webhook (batch 2): it makes a webhook called "Librarius" on the Librarius
- * forum with the bot's token, and prints its address, the one value the site's replies need, once. Run it from the host,
- * with the working directory the `server/` folder of the checkout that holds `.env` (Bun reads `.env` from there; a
- * worktree has none), and this file's path after it:
+ * forum with the bot's token, and prints its address, the one value the site's replies need. Run it from the host, by
+ * hand and not through an assistant or a script that keeps what it prints, with the working directory the `server/`
+ * folder of the checkout that holds `.env` (Bun reads `.env` from there; a worktree has none), and this file's path after
+ * it:
  *
- *   ../node_modules/.bin/bun src/librariusWebhookSetupRun.js              makes the webhook
- *   ../node_modules/.bin/bun src/librariusWebhookSetupRun.js --dry-run    prints what it would call; calls nothing
+ *   ../node_modules/.bin/bun src/librariusWebhookSetupRun.js                     makes the webhook
+ *   ../node_modules/.bin/bun src/librariusWebhookSetupRun.js --print-existing    also prints the address of one that is there
+ *   ../node_modules/.bin/bun src/librariusWebhookSetupRun.js --dry-run           says what it would call; calls nothing
  *
  * Settings: DISCORD_BOT_TOKEN, DISCORD_GUILD_ID and LIBRARIUS_CHANNEL_ID (the Librarius forum); DISCORD_API_BASE as
  * everywhere else. It exits 2, before it calls anything, when one of them is missing or is not what it should be or when an
  * argument is not one it knows, and again when the channel is not a forum or is not in DISCORD_GUILD_ID. It exits 1 when
- * Discord refused or did not answer, and when a webhook named "Librarius" that this bot made is already on the forum but
- * Discord gave no usable address for it. A webhook that is already there is not made again: Discord lists the address of a
- * webhook of this kind to the bot that may manage webhooks, so the run prints that address, the same one as ever, and
- * makes nothing. A second webhook would be another sender: a webhook can edit and delete only its own messages, so once the
- * site has sent replies through the first, this one must never be deleted (nor a new one put in its place) to get its
- * address back.
+ * Discord refused or did not answer, when two or more webhooks named "Librarius" that this bot made are on the forum (it
+ * lists their ids, and cannot tell which one the site uses), and when one is there, its address was asked for, and Discord
+ * gave no usable address for it. A webhook that is already there is not made again. Its address is printed only with
+ * --print-existing: Discord lists the address of a webhook of this kind to the bot that may manage webhooks, so that run
+ * prints it, the same one as ever, and makes nothing; without the flag the run gives its id, says how to print the
+ * address, and exits 0. A second webhook would be another sender: a webhook can edit and delete only its own messages, so
+ * once the site has sent replies through the first, this one must never be deleted (nor a new one put in its place) to
+ * get its address back.
  *
- * On success it prints one line to standard output, `LIBRARIUS_WEBHOOK_URL=` and the address, and says on standard error to
- * paste that line into `server/.env` and to rebuild the API. The address is a secret (whoever has it can post as the
- * Librarius), so it is printed nowhere else, and neither is the bot's token. What Discord says in a failure is cut of every
- * link and of the tokens before it is printed, and a failure to reach Discord names the kind of error and nothing it
- * carried. A webhook that may have been made though no answer came is found by running this again.
+ * Standard output carries one line at most, `LIBRARIUS_WEBHOOK_URL=` and the address, and only when the run exits 0, so
+ * it can go straight into a file. Everything else goes to standard error: what to do with the line (paste it into
+ * `server/.env` and rebuild the API), the dry run, every refusal. The address is a secret (whoever has it can post as the
+ * Librarius), so it is printed nowhere else, and neither is the bot's token. What Discord says in a failure is cut of
+ * every link and of the tokens before it is printed, and a failure to reach Discord names the kind of error and nothing it
+ * carried. A webhook that may have been made though no answer came is found by running this again with --print-existing.
  *
  * Exports are for the test: setupConfig and runSetup do the work. The file runs only when it is the program Bun was
  * started with.
@@ -33,7 +38,9 @@ const DEFAULT_API = 'https://discord.com/api'
 const NAME = 'Librarius'
 const FORUM = 15
 const TIMEOUT_MS = 15_000
-const USAGE = 'Unknown argument. usage: bun src/librariusWebhookSetupRun.js [--dry-run]'
+const DRY_RUN = '--dry-run'
+const PRINT_EXISTING = '--print-existing'
+const USAGE = `Unknown argument. usage: bun src/librariusWebhookSetupRun.js [${DRY_RUN}] [${PRINT_EXISTING}]`
 const WEBHOOKS_PAGE = `Edit Channel → Integrations → Webhooks → ${NAME}`
 const KEEP_IT = 'Do not delete the webhook once the site has sent replies: a new webhook cannot edit or delete what this one sent.'
 
@@ -78,7 +85,7 @@ function unreached(err) {
 export async function runSetup({ argv = [], env = process.env, fetchImpl = fetch, log = console.log, warn = console.error } = {}) {
   let config
   try {
-    if (!argv.every((arg) => arg === '--dry-run')) throw new SetupRefused(USAGE)
+    if (!argv.every((arg) => arg === DRY_RUN || arg === PRINT_EXISTING)) throw new SetupRefused(USAGE)
     config = setupConfig(env)
   } catch (err) {
     if (!(err instanceof SetupRefused)) throw err
@@ -87,14 +94,20 @@ export async function runSetup({ argv = [], env = process.env, fetchImpl = fetch
   }
   const { apiBase, botToken, guildId, channelId } = config
   const channelPath = `/v10/channels/${channelId}`
+  const printExisting = argv.includes(PRINT_EXISTING)
 
-  if (argv.includes('--dry-run')) {
-    log('Dry run: nothing is called. These are the calls the setup would make, in order, all as the bot.')
-    log('GET /v10/users/@me')
-    log(`GET ${channelPath}`)
-    log(`GET ${channelPath}/webhooks`)
-    log(`POST ${channelPath}/webhooks  body: ${JSON.stringify({ name: NAME })}`)
-    log(`Then it prints LIBRARIUS_WEBHOOK_URL= and the webhook's address, once (a webhook named "${NAME}" that this bot made is used when it is there, and none is made beside it). Dry run: nothing was called.`)
+  if (argv.includes(DRY_RUN)) {
+    warn('Dry run: nothing is called. These are the calls the setup would make, in order, all as the bot.')
+    warn('GET /v10/users/@me')
+    warn(`GET ${channelPath}`)
+    warn(`GET ${channelPath}/webhooks`)
+    warn(`POST ${channelPath}/webhooks  body: ${JSON.stringify({ name: NAME })}  (only when no webhook named "${NAME}" that this bot made is there)`)
+    warn(
+      printExisting
+        ? 'Then it prints LIBRARIUS_WEBHOOK_URL= and the address of the webhook it made, or of the one that is there already, on standard output.'
+        : `Then it prints LIBRARIUS_WEBHOOK_URL= and the address of the webhook it made, on standard output. Of a webhook that is there already it prints the id, and the address only with ${PRINT_EXISTING}.`,
+    )
+    warn('Dry run: nothing was called.')
     return 0
   }
 
@@ -153,9 +166,24 @@ export async function runSetup({ argv = [], env = process.env, fetchImpl = fetch
     typeof hook.name === 'string' &&
     hook.name.trim().toLowerCase() === NAME.toLowerCase() &&
     ((isObject(hook.user) && hook.user.id === me.body.id) || hook.application_id === me.body.id)
-  const existing = listed.body.find(mine)
+  const idOf = (hook) => (isId(hook.id) ? hook.id : 'unknown')
+  const ours = listed.body.filter(mine)
+  if (ours.length > 1) {
+    warn(
+      `Setup not run: ${ours.length} webhooks named "${NAME}" that this bot made are on the Librarius forum (ids ${ours.map(idOf).join(', ')}), so it cannot tell which one the site uses. ` +
+        'Nothing was made and no address was printed. The site uses the one whose id is in LIBRARIUS_WEBHOOK_URL in server/.env (…/webhooks/<id>/…). ' +
+        'Do not delete one that the site has sent replies through: a new webhook cannot edit or delete what it sent.',
+    )
+    return 1
+  }
+  const existing = ours[0]
   if (existing !== undefined) {
-    const id = isId(existing.id) ? existing.id : 'unknown'
+    const id = idOf(existing)
+    if (!printExisting) {
+      warn(`A ${NAME} webhook is there (id ${id}). Run again with ${PRINT_EXISTING} to print its address.`)
+      warn(`Nothing was made. ${KEEP_IT}`)
+      return 0
+    }
     let found = null
     if (typeof existing.token === 'string') {
       hidden.push(existing.token)
@@ -174,7 +202,7 @@ export async function runSetup({ argv = [], env = process.env, fetchImpl = fetch
     }
     log(`LIBRARIUS_WEBHOOK_URL=${found}`)
     warn(
-      `A webhook named "${NAME}" that this bot made is already on the Librarius forum (id ${id}), so none was made: the line above is its address, the one the site uses. ` +
+      `A webhook named "${NAME}" that this bot made is already on the Librarius forum (id ${id}), so none was made: the line above is its address, the address of the webhook this command made on an earlier run. ` +
         `Paste it into server/.env if it is not there. It is a secret: whoever has it can post as the Librarius, so do not paste it anywhere else. ${KEEP_IT}`,
     )
     return 0
@@ -185,7 +213,7 @@ export async function runSetup({ argv = [], env = process.env, fetchImpl = fetch
   if (made.status !== 200 || !isObject(made.body)) {
     warn(`Setup stopped: the webhook could not be made (${said(made)}).`)
     // It may be there all the same: an answer that never came says nothing about what Discord did.
-    if (made.status === null) warn(`If a webhook named "${NAME}" is on the Librarius forum now, run this again: it finds that webhook and prints its address, and makes no second one.`)
+    if (made.status === null) warn(`If a webhook named "${NAME}" is on the Librarius forum now, run this again with ${PRINT_EXISTING}: it finds that webhook and prints its address, and makes no second one.`)
     return 1
   }
   let address
@@ -201,7 +229,7 @@ export async function runSetup({ argv = [], env = process.env, fetchImpl = fetch
   warn(
     'The webhook is made. Paste the line above into server/.env on the host that runs the API, then rebuild the API. ' +
       'It is a secret: whoever has it can post as the Librarius, so do not paste it anywhere else. ' +
-      `If it is lost, run this again (it prints the address of the webhook that is there) or copy it from ${WEBHOOKS_PAGE} → Copy Webhook URL. ${KEEP_IT}`,
+      `If it is lost, run this again with ${PRINT_EXISTING} (it prints the address of the webhook that is there) or copy it from ${WEBHOOKS_PAGE} → Copy Webhook URL. ${KEEP_IT}`,
   )
   return 0
 }

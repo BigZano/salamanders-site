@@ -17,9 +17,12 @@
  * file has never heard of (a C2PA manifest, an editor's private chunk, a block that a newer version of the format adds)
  * is dropped with the rest, and only what a picture needs to be seen stays, in each format:
  *   - JPEG: the segments that are not APPn or COM (the tables, the frame, the scans) stay, and of the APPn three: APP0
- *     (JFIF), APP2 when its payload starts with "ICC_PROFILE\0" (the colour profile) and APP14 (Adobe, which says how the
- *     colour channels are to be read). Every other APPn goes: APP1 with its EXIF and XMP, APP2 of FlashPix (FPXR) and of
- *     the Multi-Picture Format (MPF), APP11 (the JUMBF of C2PA), APP13 and the rest. So does the comment (COM);
+ *     when it is a JFIF header with no thumbnail (its payload starts with "JFIF\0" and its length is 16, which leaves no
+ *     room for one), APP2 when its payload starts with "ICC_PROFILE\0" (the colour profile) and APP14 (Adobe, which says
+ *     how the colour channels are to be read). Every other APPn goes: APP0 of a JFXX extension or of a JFIF that carries a
+ *     thumbnail (a small copy of the picture, perhaps from before it was cropped, and in a JFXX a whole JPEG with an EXIF
+ *     of its own), APP1 with its EXIF and XMP, APP2 of FlashPix (FPXR) and of the Multi-Picture Format (MPF), APP11 (the
+ *     JUMBF of C2PA), APP13 and the rest. So does the comment (COM). No decoder needs an APP0;
  *   - PNG: IHDR, PLTE, IDAT and IEND (the picture), tRNS, cHRM, gAMA, iCCP, sBIT, sRGB, cICP, mDCv, cLLi and bKGD (how it is
  *     coloured), pHYs (its size), acTL, fcTL and fdAT (its movement) and tIME stay. Every other chunk goes: the text chunks,
  *     eXIf, zxIf, caBX (C2PA), and every one that no one has heard of. A chunk that is not on the list and is critical (its
@@ -60,12 +63,17 @@ const GIF89A_SIGNATURE = bytesOf('GIF89a')
 const RIFF_SIGNATURE = bytesOf('RIFF')
 const WEBP_SIGNATURE = bytesOf('WEBP')
 
+const APP0 = 0xe0
 const APP1 = 0xe1
 const APP2 = 0xe2
 const APP14 = 0xee
 const APP15 = 0xef
 const COM = 0xfe
 const ICC_ID = bytesOf('ICC_PROFILE\0') // what the payload of an APP2 starts with when it holds a colour profile
+const JFIF_ID = bytesOf('JFIF\0') // what the payload of an APP0 starts with when it is a JFIF header
+// The length of a JFIF APP0 with no thumbnail: the length's own 2 bytes, the identifier (5), the version (2), the units
+// (1), the two densities (4) and the thumbnail's width and height (2). A thumbnail's pixels would come after them.
+const JFIF_LENGTH = 16
 const EXIF_ID = bytesOf('Exif\0\0')
 const ORIENTATION_TAG = 0x0112
 const TIFF_SHORT = 3
@@ -218,12 +226,13 @@ function endOfScan(b, from) {
 }
 
 /**
- * Whether the segment at b[pos] with the marker `code` goes: the comment, and every APPn but APP14 (Adobe) and the APP2 that
- * holds an ICC profile. APP0 (JFIF) is not in that range. An identifier that is cut short by the end of its segment does not
- * match: the byte that follows a segment is 0xFF, which no identifier holds.
+ * Whether the segment at b[pos] of `length` with the marker `code` goes: the comment, and every APPn but APP14 (Adobe), the
+ * APP0 that is a JFIF header with no thumbnail and the APP2 that holds an ICC profile. An identifier that is cut short by
+ * the end of its segment does not match: the byte that follows a segment is 0xFF, which no identifier holds.
  */
-function dropsJpeg(b, pos, code) {
+function dropsJpeg(b, pos, code, length) {
   if (code === COM) return true
+  if (code === APP0) return length !== JFIF_LENGTH || !hasAt(b, JFIF_ID, pos + 4)
   if (code < APP1 || code > APP15 || code === APP14) return false
   return code !== APP2 || !hasAt(b, ICC_ID, pos + 4)
 }
@@ -251,7 +260,7 @@ function stripJpeg(b) {
     if (length < 2) return null
     // A segment that claims more than the file holds leaves `pos` at or past the end, and the walk ends in null.
     const next = pos + 2 + length
-    if (dropsJpeg(b, pos, code)) {
+    if (dropsJpeg(b, pos, code, length)) {
       drops.push(pos, next)
       // The first EXIF with an orientation to keep is the one that does. It must lie inside the file, with an EOI after it.
       if (code === APP1 && patch === NO_PATCH && next + 2 <= n) patch = jpegPatch(b, pos, next)
