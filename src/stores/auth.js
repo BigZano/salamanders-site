@@ -47,6 +47,19 @@ export const useAuth = defineStore('auth', {
       // And where they were in each post, which is the last reader's own reading and is kept per tab.
       forgetPlaces()
     },
+    // The server no longer takes the sign-in: a read of the Librarius was answered 401 (the token has run out, or was revoked). The
+    // reader is signed out as signOut() does it, so that the pages ask them to sign in again instead of losing what they showed
+    // without a word, and what they had under way in this browser is kept for when they are back: their drafts and their place in
+    // each post. It was the server that let them go, not someone else who took their seat.
+    expire() {
+      discordAuth.signOut()
+      this.member = null
+      useArchive().reset()
+      useRoster().reset()
+      useDeathwatch().reset()
+      useDeathwatchData().reset()
+      useLibrarius().reset()
+    },
     // Keeps the server's latest answer about whether this person may read the Librarius (see discordAuth.rememberLibrarius),
     // so that the nav links show the Reliquarium to someone who signed in before they were let in, and stop showing it when
     // they no longer are. The member is replaced only when the answer is news: the page that asks does so on every visit,
