@@ -52,11 +52,14 @@
  *      link `[text](address)` put by its text (unmasked()), when that is not the same text: `[zo](https://e.com)rp` shows "zorp", and
  *      Discord's own reading of it, with the brackets, would not call it one. Those hits have `match: null` too. Then the regular
  *      expressions, over the texts that are sent only (they are at most 4,000 characters each, where the source is up to 16,000, and
- *      the time of a pattern with several `.*` grows with the 4th power of its text), in the one budget of REGEX_BUDGET_MS. A pattern
- *      that matches is the same refusal, with `match: null`. A reply that could not be checked is 422 with the error "This reply
- *      couldn't be checked against the server's rules. Try a shorter one." and no `rule`: a pattern was not done in the budget (or
- *      the child it runs in did not answer, or was too busy to be asked), or a text folds to more than it may, which is to more than 4
- *      times its length (1,000 at least), or to more than 64,000 characters more than its text, in all the texts of the reply: folding
+ *      the time of a pattern with several `.*` grows with the 4th power of its text), each as it is sent and, when that is not the same
+ *      text, with its links let out of the angle brackets that the form writes them in (unwrapped(): `](<url>)` is `](url)` and `<url>`
+ *      is `url`), as the member spelled them, for a rule against the shape of a link was written for that; in the one budget of
+ *      REGEX_BUDGET_MS. A pattern that matches is the same refusal, with `match: null`. A reply that could not be checked is 422 with
+ *      the error "This reply couldn't be checked against the server's rules. Try a shorter one." and no `rule`: a pattern was not done
+ *      in the budget (or the child it runs in did not answer, or was too busy to be asked), or a text folds to more than it may, which is
+ *      to more than 4 times its length (1,000 at least), or the source and the parts of the reply together add more than 64,000
+ *      characters by being folded (the other readings, which go over the same characters again, are held to the 4 times only): folding
  *      a text of characters that decompose to 18 each (U+FDFA) would hold up the server for most of a second.
  *   `clean` is { source, replyTo, mentions, uploads }, all copies: the source with every NUL and every lone half of a pair
  *   replaced by U+FFFD (Postgres cannot store them), one for one; `replyTo` as { authorId, url } or null; `mentions` the ids
@@ -71,7 +74,8 @@
  *   blocks it, as its name and where in `text` (the text is a string and `start` < `end` ≤ its length). It throws Unfoldable for a text
  *   that folds to more than 4 times its length (1,000 at least) or to more than `spend.left` characters more than it is, where `spend`
  *   is { left } shared by the texts of one reply (64,000 for a call that is not given one), which it takes from; a rule with no keyword
- *   to look for does not fold the text. Its `regex(texts)` answers
+ *   to look for does not fold the text. The keywords of a rule are looked for in one pass over the text, by an index of how each starts
+ *   (earliestIn), where each keyword of a rule of 1,000 was one pass of its own. Its `regex(texts)` answers
  *   for the regular expressions, async: for a list of texts, null when no pattern matches one, { rule, text,
  *   start, end } for the first that does (`text` the place of the text in the list, the first text that any pattern matches, and
  *   in it the first rule), or { unchecked: true } when it could not be told: a text is over 10,000 characters, or the patterns were
@@ -114,15 +118,18 @@
  *     An empty match is no match. The allow list does not let a match of a pattern go. When the budget is over the child is KILLED
  *     (SIGKILL, which stops a regular expression that is running, on Node and on Bun, where a worker thread that is terminated runs it
  *     to its end) and the next reply gets a new one; the reply that ran over is refused, as is one with a text over the cap: failing
- *     open would let through what a rule may have blocked.
+ *     open would let through what a rule may have blocked. The child is killed when the server exits too, but a server that is itself
+ *     killed with SIGKILL cannot do that: in the container the child ends with it, and outside one (a server run by hand) a child that
+ *     is in the middle of a job runs it to its end, which for a pattern with several `.*` can be minutes of a core.
  *
  * automodUnchecked(rules) → the names of the rules that are on, each once and in the order of the rules, with a regular expression that
  *   translatePattern() gives up on, which the site cannot check (for the people who manage the server to be told of).
  * translatePattern(source) → the JavaScript source for a pattern of Rust's, or null; scanPatterns(job) is the job of the child
  *   process, run by answerJob(job) (for the worker file) and handed to it by scanInWorker(job), which createRegexRunner(spawnChild)
  *   makes for the child that spawnRegexWorker() starts. shownBy(parts, { reply, footer }) → the texts that the messages of a reply
- *   show of the reply itself (see validateReply); unmasked(text) → the text with its masked links put by their texts; Unfoldable is
- *   what the matcher throws for a text that folds to more than it may. All of them are exported for the worker file and for the tests.
+ *   show of the reply itself (see validateReply); unmasked(text) → the text with its masked links put by their texts; unwrapped(text) →
+ *   the text with its links let out of their angle brackets; Unfoldable is what the matcher throws for a text that folds to more than it
+ *   may. All of them are exported for the worker file and for the tests.
  *
  * cleanName(name) → the name a reply is sent under: at most 80 characters, at least 1. Only the first 400 UTF-16 units of the
  *   name are read (the names of Discord have at most 32). Controls, format characters (zero-width ones, direction marks, the joiner
@@ -132,6 +139,7 @@
  *   in the middle of a pair. What is left of nothing is "Member", and so is what is no text.
  */
 import { spawn } from 'node:child_process'
+import { dirname } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { parse, walk } from './librariusMarkdown.js'
 import { DEFAULT_FORM, limitFor, toDiscord } from './librariusForm.js'
@@ -219,10 +227,12 @@ function fold(text, mode) {
   let start = 0
   for (const ch of text) {
     const end = start + ch.length
-    // Stryker disable next-line ConditionalExpression,EqualityOperator: a character of ASCII is its own decomposition and has one lower case, so this is only how soon the folding is done
+    // Stryker disable next-line ConditionalExpression,EqualityOperator: two of the four variants answer the same, only later: `false` (always the long way) and `<=` (U+0080 is its own decomposition and its own lower case). The other two, `true` and `>=`, skip the decomposition of what is not ASCII and are NOT the same: with this disable lifted, six tests fail for each (a CAFÉ for cafe, a full-width zorp, STRAẞE), checked by hand. A disable cannot name one variant, so it holds all four
     const read = ch.charCodeAt(0) < 0x80 ? ch.toLowerCase() : decomposed(ch)
     for (const c of read) {
-      if (SPACE.test(c) || (mode === SPACED && IGNORABLE.test(c))) {
+      // What shows nothing is a space in the SPACED reading, but a mark that shows nothing (a joiner of graphemes, a variation selector) is
+      // left out in both, as every combining mark is: it is part of the character before it, and not a place between two words.
+      if (SPACE.test(c) || (mode === SPACED && IGNORABLE.test(c) && !MARK.test(c))) {
         if (!spaced) put(' ', start, end)
       } else if (!IGNORABLE.test(c) && !MARK.test(c)) put(c, start, end)
     }
@@ -273,13 +283,15 @@ export class Unfoldable extends RangeError {
  */
 function foldBoth(text, spend) {
   const size = decomposed(text).length
-  const added = size - text.length
+  // What it adds, and not less than nothing: a character that decomposes to fewer units than it is (a mathematical letter is two units) takes nothing from the allowance, and gives nothing back.
+  const added = Math.max(0, size - text.length)
   if (size > Math.max(FOLD_RATIO * text.length, FOLD_FLOOR) || added > spend.left) throw new Unfoldable()
   spend.left -= added
   return { [DROPPED]: fold(text, DROPPED), [SPACED]: fold(text, SPACED) }
 }
 /**
- * → { segments, startFree, endFree } for a keyword as Discord's filter is written, read in `mode`; null when it holds nothing.
+ * → { head, rest, startFree, endFree, wide } for a keyword as Discord's filter is written, read in `mode`: `head` its first segment (what
+ * is between two `*`), `rest` the others, and `wide` whether there are none; null when it holds nothing.
  * Space round the keyword is not part of it: ` *cat` is the suffix `*cat` (Discord's documentation does not say whether a keyword
  * is trimmed, and a suffix finds every place the whole word does, and more).
  */
@@ -293,7 +305,11 @@ function keywordOf(rawKeyword, mode) {
   parts[0] = parts[0].trimStart()
   parts[parts.length - 1] = parts[parts.length - 1].trimEnd()
   const segments = parts.filter((part) => part !== '')
-  return segments.length === 0 ? null : { segments, startFree: raw.startsWith('*'), endFree: raw.endsWith('*') }
+  if (segments.length === 0) return null
+  const [head, ...rest] = segments
+  // A keyword of one piece: the skipping that eachSpan() and earliestIn() do after a match is safe for it, and for no other (see nextPlace).
+  const wide = rest.length === 0
+  return { head, rest, startFree: raw.startsWith('*'), endFree: raw.endsWith('*'), wide }
 }
 
 /**
@@ -316,33 +332,47 @@ function reach(s, start, pos, segments, k, needEdge) {
 }
 
 /**
- * Gives `visit(start, end)` each place the keyword matches in the folded text, one at a time and in order, with the whole word that a `*`
- * reaches into, until it answers true. A place costs what its edges cost, which is a look at the text beside it, never the length of the
- * word, and nothing is made for it: a keyword that matches at every place of a long word is a lot of places.
+ * → [start, end] of the match of the keyword that starts at place `i` of the folded text (the keyword's first piece is there), or null:
+ * with the whole word that a `*` reaches into. A place costs what its edges cost, which is a look at the text beside it, never the length
+ * of the word.
  */
-function eachSpan(folded, keyword, visit) {
+function spanAt(folded, keyword, i) {
   const { s } = folded
   const { start, end } = wordsIn(folded)
-  const { segments, startFree, endFree } = keyword
-  const [head, ...rest] = segments
+  const inside = inWord(start, i - 1)
+  if (!keyword.startFree && inside) return null
+  const stop = reach(s, start, i + keyword.head.length, keyword.rest, 0, !keyword.endFree)
+  if (stop === -1) return null
+  // The word the keyword is in or at, where a * lets it reach: with no * at that end the edge held, and nothing is added.
+  return [inside ? start[i - 1] : i, inWord(start, stop) ? end[stop] : stop]
+}
+
+/**
+ * → the first place after `i` that a keyword whose match at `i` is `span` is looked for at again. A keyword of one piece ends where its
+ * match does, or inside the word that the match reaches the end of; a match that starts at a later place and ends by the end of that
+ * word ends there, and starts at or after where this one does, so it lies inside this one and adds nothing to an allow list nor to what
+ * a rule finds. That is every place up to `span[1] - head.length`, which are not looked at: a word of a single letter that `*a*` is found
+ * in at every place is one match, where looking at each place would compare the keyword with the text there again, which for 100 keywords
+ * or allow entries of up to 100 letters over a word of 11,000 is 55 million comparisons. It holds for a keyword of one piece whatever its
+ * ends (with no `*` at the end the match ends at the word's end and there is nothing to skip), and for no keyword of several pieces: the
+ * later start of one of those can end further on than the first (`*a*b*c` in `abac-bc`: the first `a` ends at 4, the second at 7).
+ */
+function nextPlace(keyword, i, span) {
+  // The last place that a match of the keyword could start at and end where this one does, or before.
+  const latest = span[1] - keyword.head.length
+  return keyword.wide ? latest + 1 : i + 1
+}
+
+/** Gives `visit(start, end)` each place the keyword matches in the folded text, one at a time and in order (see nextPlace). */
+function eachSpan(folded, keyword, visit) {
+  const { s } = folded
   let next = 0
-  for (let i = s.indexOf(head); i !== -1; i = s.indexOf(head, next)) {
+  for (let i = s.indexOf(keyword.head); i !== -1; i = s.indexOf(keyword.head, next)) {
     next = i + 1
-    const inside = inWord(start, i - 1)
-    if (!startFree && inside) continue
-    const stop = reach(s, start, i + head.length, rest, 0, !endFree)
-    // Stryker disable next-line ConditionalExpression: a place with no match that is given on, as ending at -1, is covered by anything (the reach is at least 0), adds nothing to an allow list and takes the loop on no further, so this only saves the work
-    if (stop === -1) continue
-    // The word the keyword is in or at, where a * lets it reach: with no * at that end the edge held, and nothing is added.
-    const last = inWord(start, stop) ? end[stop] : stop
-    // A keyword of one piece that a `*` frees at both ends takes in the whole word that it is in. A match in it that ends where that
-    // word does, or before, takes in no more than the one before, so the places up to the last that could end there are not looked at: a
-    // word of a single letter that the keyword `*a*` is found in at every place is one match, which is all that the allow list or the rule
-    // has to know. `latest` is that last place.
-    const latest = last - head.length
-    // Stryker disable next-line ConditionalExpression,LogicalOperator,ArithmeticOperator: the condition is what makes the skipping provably safe. Applied to the other keywords it passes over places inside the word that the first match took in, which are refused as the start of a match (a keyword that is not free at its start) or add no more, and no text of the model that the tests compare with tells that from one place at a time; the walk that does not skip at all is what the test of the 100 allow entries measures. One place more or fewer that is looked at holds no more than the span
-    if (rest.length === 0 && startFree && endFree) next = Math.max(next, latest + 1)
-    if (visit(inside ? start[i - 1] : i, last)) return
+    const span = spanAt(folded, keyword, i)
+    if (span === null) continue
+    next = nextPlace(keyword, i, span)
+    visit(span[0], span[1])
   }
 }
 
@@ -356,7 +386,6 @@ function allowedIn(norm, allow) {
   for (const keyword of allow) {
     eachSpan(norm, keyword, (start, end) => {
       reach[start] = Math.max(reach[start], end)
-      return false
     })
   }
   // Stryker disable next-line EqualityOperator: a place past the end of the typed array is never written
@@ -367,15 +396,61 @@ function allowedIn(norm, allow) {
 /** → whether [a, b) lies inside one span: of those that start at or before `a`, the furthest that any reaches (nothing is at least `b` when none starts so early). */
 const covers = (reach, a, b) => reach[a] >= b
 
-/** → [a, b] of the first match of the keyword that the allow list does not cover, or null. `allowOf()` is the allow list, read when the first match is found and not before, and a match found is not looked past. */
-function firstUncovered(folded, keyword, allowOf) {
-  let found = null
-  eachSpan(folded, keyword, (a, b) => {
-    if (covers(allowOf(), a, b)) return false
-    found = [a, b]
-    return true
+/**
+ * → the keywords and an index of how their first pieces start, which earliestIn() looks each place of a text up in, so that the text is
+ * read once for all the keywords of a rule, and not once for each: a map from the first unit of a first piece to { one, two }, `one` the
+ * places (in the order of the keywords) of those whose first piece is that one unit, and `two` a map from the second unit to the places of
+ * the others. Two units and not one, because the keywords of a script whose letters are taken apart start with few of them: the first
+ * letter of a syllable of Hangul is one of 19.
+ */
+function indexed(keywords) {
+  const index = new Map()
+  keywords.forEach((keyword, j) => {
+    const first = keyword.head.charCodeAt(0)
+    if (!index.has(first)) index.set(first, { one: [], two: new Map() })
+    const { one, two } = index.get(first)
+    if (keyword.head.length === 1) one.push(j)
+    else {
+      const second = keyword.head.charCodeAt(1)
+      if (!two.has(second)) two.set(second, [])
+      two.get(second).push(j)
+    }
   })
-  return found
+  return { keywords, index }
+}
+
+/**
+ * → { j, a, b } for the keyword (its place `j`) and its span that start earliest in the folded text, among the spans of the keywords that
+ * the allow list does not hold, or null: the first of the keywords when two start together, and of the spans of one keyword, the one found
+ * first. That is the first span of each keyword that the allow list does not hold, compared by where they start, as the keywords were one by
+ * one: a span starts at its place or at the start of the word that its place is in, which is no earlier at a later place. It is one pass over
+ * the text for all the keywords, and each place is looked up in the index: only the keywords that start as the text does there are tried, and
+ * of those whose first piece is more than one unit, only the ones whose whole first piece is there, at a place that their last match does not
+ * skip (see nextPlace). `allowOf()` is the allow list, made when the first match is found and not before. Every place of the text is looked
+ * at, a text with a match as much as one without: the work is that of a text the length of the reply, whatever is found.
+ */
+function earliestIn(folded, { keywords, index }, allowOf) {
+  const { s, from } = folded
+  // For each keyword, the first place that it is compared with the text at again (see nextPlace).
+  const skip = new Int32Array(keywords.length)
+  let best = null
+  const consider = (j, i) => {
+    const span = spanAt(folded, keywords[j], i)
+    if (span === null) return
+    skip[j] = nextPlace(keywords[j], i, span)
+    if (covers(allowOf(), span[0], span[1])) return
+    // The places are looked at in order, and no span found later starts earlier: it is only taken for one that starts at the same place, of a
+    // keyword written before. (Where they start is compared in the text that was given: two places of the folded text can be one character there.)
+    if (best === null || (from[span[0]] === from[best.a] && j < best.j)) best = { j, a: span[0], b: span[1] }
+  }
+  for (let i = 0; i !== s.length; i++) {
+    const node = index.get(s.charCodeAt(i))
+    if (node === undefined) continue
+    // A keyword whose first piece is one unit is there whole; one of more is compared with the text. Either only where it is not skipped.
+    for (const j of node.one) if (i >= skip[j]) consider(j, i)
+    for (const j of node.two.get(s.charCodeAt(i + 1)) ?? []) if (i >= skip[j] && s.startsWith(keywords[j].head, i)) consider(j, i)
+  }
+  return best
 }
 
 // The regular expressions of the rules are Rust's, and run as JavaScript's, in Unicode mode and in any case (`giu`). What cannot be
@@ -513,13 +588,25 @@ export function answerJob(job) {
 // process and never the server, and so that it can be KILLED when it is not done in time. (A thread cannot be: on Bun a worker that is
 // terminated runs the regular expression it is in to its end, which for a pattern with several `.*` can take minutes of a core.)
 // It is started when it is first wanted, and a job that is not answered in its budget, or that ends it, kills it and the next job
-// starts another. The jobs run one at a time, so that each is given the answer of its own.
+// starts another. The jobs run one at a time, so that each is given the answer of its own. When this process exits (a crash that is caught,
+// a signal that is handled, a normal end) the child it has is killed too. A process that is killed with SIGKILL cannot do that: outside a
+// container, where the end of the first process ends all that it started, a child that is in the middle of a job runs it to its end (for
+// a pattern with several `.*`, minutes of a core), and one that is idle ends by itself when the channel closes.
 const WORKER_FILE = fileURLToPath(new URL('./librariusRegexWorker.js', import.meta.url))
 
 // Told once for the whole process, for a child that cannot run is made again by every job, and would be told again each time. What it says
 // is left out: a trace of it may hold a path, and a failure of the child must never carry a pattern or a text into a log. A reply that a
 // pattern applies to is refused (fail closed) while it fails, so the owner is told why, once.
 let workerTold = false
+
+// What kills the child that each runner has, run when this process exits: one listener for all the runners (a test makes many), and not
+// one for each child that is spawned.
+const killers = new Set()
+/** Kills the child that each runner has now (exported for the tests; it is what runs when this process exits). */
+export function killRunners() {
+  for (const kill of killers) kill()
+}
+process.once('exit', killRunners)
 
 // Stryker disable BlockStatement,ConditionalExpression,BooleanLiteral,StringLiteral: the log, which no test asserts
 function workerFailed() {
@@ -532,10 +619,12 @@ function workerFailed() {
 /**
  * → a new child process that runs librariusRegexWorker.js with the runtime of the server (`node` for the tests, `bun` in the container),
  * with a channel of its own for messages that are plain JSON, and nothing else: no standard input or output, and none of the environment of
- * the server, which holds its secrets. It never keeps the server alive by itself.
+ * the server, which holds its secrets. It runs in the folder of its own file: Bun reads a `.env` of its working folder into the environment
+ * of whatever it runs, so a child that started where the server was started (`server/`, on a machine that is not the container) would have
+ * the secrets back. It never keeps the server alive by itself.
  */
 export function spawnRegexWorker() {
-  const child = spawn(process.execPath, [WORKER_FILE], { stdio: ['ignore', 'ignore', 'inherit', 'ipc'], serialization: 'json', env: {} })
+  const child = spawn(process.execPath, [WORKER_FILE], { stdio: ['ignore', 'ignore', 'inherit', 'ipc'], serialization: 'json', env: {}, cwd: dirname(WORKER_FILE) })
   child.unref()
   // Stryker disable next-line OptionalChaining: Node's channel can be let go of and Bun's has no such call (its child does not hold the server alive); the suite runs on Node
   child.channel?.unref?.()
@@ -582,6 +671,7 @@ const isAnswer = (message) => isObject(message) && message.found !== undefined
 export function createRegexRunner(spawnChild) {
   // The child that the next job uses, or null; { child, ready } with `ready` the promise of true when it said so, and null when it did not.
   let current = null
+  killers.add(() => current?.child.kill('SIGKILL'))
   const queue = []
   let busy = false
 
@@ -742,7 +832,7 @@ export function automodMatcher(rules, options = {}) {
       mentionCap = Math.min(mentionCap, Number.isInteger(meta.mention_total_limit) ? Math.max(0, meta.mention_total_limit - 1) : 0)
     } else if (rule.trigger_type === KEYWORD) {
       const read = (mode) => ({
-        keywords: listOf(meta.keyword_filter).map((k) => keywordOf(k, mode)).filter((k) => k !== null),
+        ...indexed(listOf(meta.keyword_filter).map((k) => keywordOf(k, mode)).filter((k) => k !== null)),
         allow: listOf(meta.allow_list).map((k) => keywordOf(k, mode)).filter((k) => k !== null),
       })
       const patterns = listOf(meta.regex_patterns).map(translatePattern)
@@ -770,10 +860,8 @@ export function automodMatcher(rules, options = {}) {
       for (const mode of MODES) {
         const folded = norm(mode)
         let allow = null
-        for (const keyword of rule[mode].keywords) {
-          const span = firstUncovered(folded, keyword, () => (allow ??= allowedIn(folded, rule[mode].allow)))
-          if (span !== null) take(folded.from[span[0]], folded.to[span[1] - 1])
-        }
+        const found = earliestIn(folded, rule[mode], () => (allow ??= allowedIn(folded, rule[mode].allow)))
+        if (found !== null) take(folded.from[found.a], folded.to[found.b - 1])
       }
     }
     for (const re of rule.literals) {
@@ -824,6 +912,9 @@ const LINK_SHAPED = /\]\( ?<?((?:[^\s()<>[\]]|\([^\s()<>[\]]*\))*)>? ?\)/g
 // most one level of parentheses in it (a title, a space and angle brackets are all characters of it). No part of it can start before another
 // ends, so that finding the links of any text is a single pass.
 const MASKED_LINK = /\[([^\][\n]*)\]\((?:[^()\][\n]|\([^()\][\n]*\))*\)/g
+// A link as the form sends it: the address of a masked link and a bare address are written in angle brackets (`[text](<address>)`,
+// `<address>`), and only an address that starts with http:// or https:// is a link at all (see hasBadLink).
+const WRAPPED_LINK = /<(https?:\/\/[^\s<>]*)>/g
 const ANGLE_LINK = /<([a-z][a-z0-9+.-]*):[^\s<>]*>/gi
 const HTTP_ADDRESS = /^https?:\/\//
 // What Discord writes in angle brackets with a colon in it, and is no link: a timestamp, a slash command, an emoji, and the
@@ -872,6 +963,16 @@ const refused = (status, error, more = {}) => ({ ok: false, status, error, ...mo
  */
 export const unmasked = (text) => text.replace(MASKED_LINK, '$1')
 
+/**
+ * → the text with each link let out of the angle brackets that the form wrote it in: `[text](<address>)` is `[text](address)` and
+ * `<address>` is `address`, for the addresses of http and https. The form writes every link so, whatever the member typed, and a rule of
+ * the server against the shape of a link (`\]\(https?://`, a URL after a space) was written for the spelling of a member, so the patterns
+ * read this copy as well as the text that is sent. It cannot tell a link that the form wrapped from one that the member did: an address
+ * that the member wrote in angle brackets is let out too, which is what Discord would have shown the rule had it been typed there. The
+ * copy is never longer than the text.
+ */
+export const unwrapped = (text) => text.replace(WRAPPED_LINK, '$1')
+
 // The kind of a component that is a Text Display, in the messages of the form.
 const TEXT_DISPLAY = 10
 
@@ -897,7 +998,13 @@ const withoutMark = (text, mark) => (text.startsWith(mark) && (text.length === m
  * messages. A picture written inside a line is not in these texts, nor is the text of one that has nothing to show, so what stood on
  * its two sides is next to each other here.
  */
-export function shownBy(parts, fixed) {
+export const shownBy = (parts, fixed) => shownEach(parts, fixed).map((shown) => shown.text)
+
+/**
+ * → what shownBy() is made of: { text, joined } for each of the texts, `joined` being true for a text that is the displays of a V2 part put
+ * together, which holds the characters of the displays that came before it in the list.
+ */
+function shownEach(parts, fixed) {
   const texts = []
   parts.forEach((part, k) => {
     const shown = part.components === null ? [part.text] : displaysOf(part.components)
@@ -905,10 +1012,10 @@ export function shownBy(parts, fixed) {
     if (parts.length > 1) shown[0] = withoutMark(shown[0], `**${k + 1}/${parts.length}**`)
     if (k === parts.length - 1) shown[shown.length - 1] = withoutLastLine(shown[shown.length - 1], fixed.footer)
     const kept = shown.filter((text) => text !== '')
-    texts.push(...kept)
+    texts.push(...kept.map((text) => ({ text, joined: false })))
     // A V2 message is read as what the fallback shows of the same part too, its displays joined by a line end: the same reply is
     // refused in both forms. A picture on a line of its own sets two displays apart there and is only blank lines in the fallback.
-    if (kept.length > 1) texts.push(kept.join('\n'))
+    if (kept.length > 1) texts.push({ text: kept.join('\n'), joined: true })
   })
   return texts
 }
@@ -960,18 +1067,26 @@ export async function validateReply(input, options) {
   // Stryker disable next-line ObjectLiteral,StringLiteral: a stand-in reply of one letter, of which only the lines the site adds are taken
   const stand = toDiscord('x', { ...common, images: [] }).parts[0].text.split('\n')
   const fixed = { reply: replyTo === null ? null : stand[0], footer: stand[stand.length - 1] }
-  const shown = shownBy(sent.parts, fixed)
+  const each = shownEach(sent.parts, fixed)
+  const shown = each.map((one) => one.text)
 
   // The keywords read the source, and then each text that is sent, and each of them again with the masked links read as their text, when
   // that is not the same text. A text that folds to more than it may (Unfoldable) was not checked: the reply is refused, not let through.
+  // What the folding of the texts adds is taken from one allowance for the whole reply (FOLD_TOTAL) for the source and each part. The
+  // other readings go over the characters of those again (the displays put together, the links read as their text), and are held to the
+  // size of the text that each is, as any text is: they would use the allowance up for a long reply that is no more than ordinary.
   const spend = { left: FOLD_TOTAL }
+  const again = () => ({ left: Number.POSITIVE_INFINITY })
   try {
     const hit = automod(text, spend)
     if (hit !== null) return blocked(hit, { start: hit.start, end: hit.end })
     const bare = unmasked(text)
-    const reads = [...(bare === text ? [] : [bare]), ...shown.flatMap((part) => (unmasked(part) === part ? [part] : [part, unmasked(part)]))]
-    for (const read of reads) {
-      const found = automod(read, spend)
+    const reads = [
+      ...(bare === text ? [] : [[bare, again()]]),
+      ...each.flatMap(({ text: part, joined }) => (unmasked(part) === part ? [[part, joined ? again() : spend]] : [[part, joined ? again() : spend], [unmasked(part), again()]])),
+    ]
+    for (const [read, allowance] of reads) {
+      const found = automod(read, allowance)
       if (found !== null) return blocked(found, null)
     }
   } catch (error) {
@@ -980,9 +1095,11 @@ export async function validateReply(input, options) {
   }
 
   // The patterns read what is sent only (see scanInWorker): the source holds what is not sent, and is up to 16,000 characters, where
-  // the time of a pattern with several `.*` grows with the 4th power of the text.
+  // the time of a pattern with several `.*` grows with the 4th power of the text. Each text is read as it is sent and, when that is not the
+  // same text, with its links let out of the angle brackets that the form wrote them in, as the member spelled them: a rule against the
+  // shape of a link would see none otherwise.
   if (typeof automod.regex === 'function') {
-    const found = await automod.regex(shown)
+    const found = await automod.regex(shown.flatMap((part) => (unwrapped(part) === part ? [part] : [part, unwrapped(part)])))
     if (found !== null && found.unchecked === true) return refused(422, COPY.unchecked)
     if (found !== null) return blocked(found, null)
   }

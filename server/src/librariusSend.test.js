@@ -1,10 +1,12 @@
 import { spawn, execFile } from 'node:child_process'
 import { EventEmitter } from 'node:events'
-import { readFileSync } from 'node:fs'
+import { readFileSync, readlinkSync, realpathSync } from 'node:fs'
+import { dirname } from 'node:path'
+import { fileURLToPath } from 'node:url'
 import { describe, it, expect, vi, beforeAll, afterEach } from 'vitest'
 import * as fc from 'fast-check'
 import { toDiscord } from './librariusForm.js'
-import { MAX_SOURCE, MENTION_CAP, Unfoldable, answerJob, automodMatcher, automodUnchecked, cleanName, createRegexRunner, scanInWorker, scanPatterns, shownBy, spawnRegexWorker, translatePattern, unmasked, validateReply } from './librariusSend.js'
+import { MAX_SOURCE, MENTION_CAP, Unfoldable, answerJob, automodMatcher, automodUnchecked, cleanName, createRegexRunner, killRunners, scanInWorker, scanPatterns, shownBy, spawnRegexWorker, translatePattern, unmasked, unwrapped, validateReply } from './librariusSend.js'
 
 // Every id, name, keyword, rule and link here is invented.
 const U1 = '200000000000000421'
@@ -507,8 +509,9 @@ describe('automodMatcher: the cap on mentions', () => {
 
 // What the checks of the time that a text takes are made of. A check at four times the length takes about four times as long when the walk
 // is linear and about sixteen times as long when it is quadratic, whatever the speed of the host or of Stryker's instrumented copy of the
-// module, so the ratio is what is measured. It is the ratio of the medians of 5 runs of each, so that one slow run (the collector, a
-// busy host) does not decide it. A loose ceiling on the time of the longer one is kept besides, for a walk that is slow and not quadratic.
+// module, so the ratio is what is measured. The two sizes are run in turn, 5 times each, and the least time of each is taken: load on the
+// host (the collector, other test files that run at the same time) only ever adds time, and in turn it falls on both. A loose ceiling on
+// the time of the longer one is kept besides, for a walk that is slow and not quadratic.
 const RATIO = 8
 const BOUND_MS = 4_000
 const median = (list) => [...list].sort((a, b) => a - b)[Math.floor(list.length / 2)]
@@ -523,11 +526,23 @@ function timeOf(thunk) {
     }),
   )
 }
-// → what a check takes at 4n against what it takes at n, as `make(n)` gives the thunk for a text of about n characters.
-function scaling(make, n = 4_000) {
-  const small = timeOf(make(n))
-  const large = timeOf(make(4 * n))
-  return { ratio: large / Math.max(small, 0.05), ms: large }
+// → what a check takes at 4n against what it takes at n, as `make(n)` gives the thunk for a text of about n characters: 8,000 and 32,000 by
+// default, which is long enough for a walk that flattens a string for each space, or one that looks over a word for each place of it, to show.
+function scaling(make, n = 8_000) {
+  const small = make(n)
+  const large = make(4 * n)
+  // One run of each is not counted (it pays for the compiling of the code it runs).
+  small()
+  large()
+  let least = [Number.POSITIVE_INFINITY, Number.POSITIVE_INFINITY]
+  for (let round = 0; round < 5; round++) {
+    least = [small, large].map((thunk, k) => {
+      const started = performance.now()
+      thunk()
+      return Math.min(least[k], performance.now() - started)
+    })
+  }
+  return { ratio: least[1] / Math.max(least[0], 0.05), ms: least[1] }
 }
 function expectLinear(label, make, n) {
   const { ratio, ms } = scaling(make, n)
@@ -1502,10 +1517,16 @@ describe('scanInWorker: the one child process, the real one', () => {
 
   it('answers null for a job in whose middle the child ends, long before the budget, and the next job is answered', async () => {
     let made = 0
-    const { children, scan } = recording(() => (made++ === 0 ? standIn("process.on('message', () => process.exit(1)); process.send({ ready: true })")() : spawnRegexWorker()))
-    const started = performance.now()
+    let readyAt = null
+    const { children, scan } = recording(() => {
+      if (made++ > 0) return spawnRegexWorker()
+      const child = standIn("process.on('message', () => process.exit(1)); process.send({ ready: true })")()
+      // The first thing it says is that it is ready: what is timed is the job, and not how long a process takes to start.
+      child.once('message', () => (readyAt = performance.now()))
+      return child
+    })
     expect(await scan(FAST)).toBeNull()
-    expect(performance.now() - started).toBeLessThan(240)
+    expect(performance.now() - readyAt).toBeLessThan(240)
     expect((await children[0].ended).code).toBe(1)
     expect(await scan(FAST)).toEqual(FAST_FOUND)
     expect(children).toHaveLength(2)
@@ -1567,6 +1588,74 @@ describe('scanInWorker: the one child process, the real one', () => {
     } finally {
       delete process.env.LIBRARIUS_TEST_SECRET
     }
+  })
+
+  it('starts the child in the folder of its own file, where Bun finds no `.env` of the server to read into its environment', async () => {
+    if (process.platform !== 'linux') return
+    const { children, scan } = recording()
+    expect(await scan(FAST)).toEqual(FAST_FOUND)
+    const folder = dirname(fileURLToPath(new URL('./librariusRegexWorker.js', import.meta.url)))
+    expect(realpathSync(readlinkSync(`/proc/${children[0].pid}/cwd`))).toBe(realpathSync(folder))
+    process.kill(children[0].pid, 'SIGKILL')
+  })
+
+  // A process that runs a script of the test, with what it prints and how it ended.
+  const runScript = (script) =>
+    new Promise((resolve) => {
+      execFile(process.execPath, ['--input-type=module', '-e', script], { timeout: 10_000, env: {} }, (error, stdout, stderr) => resolve({ code: error === null ? 0 : error.code, stdout, stderr }))
+    })
+  const SEND = JSON.stringify(new URL('./librariusSend.js', import.meta.url).href)
+
+  it('kills the child it has when its own process exits, even one that is in the middle of a job', async () => {
+    const run = await runScript(`
+      import { createRegexRunner, spawnRegexWorker } from ${SEND}
+      const scan = createRegexRunner(() => { const c = spawnRegexWorker(); console.log(c.pid); return c })
+      scan({ rules: [['(a+)+$']], texts: ['a'.repeat(60) + '!'] })
+      setTimeout(() => process.exit(0), 200)
+    `)
+    expect(run.code).toBe(0)
+    const pid = Number(run.stdout)
+    expect(pid).toBeGreaterThan(0)
+    await new Promise((resolve) => setTimeout(resolve, 300))
+    expect(alive(pid)).toBe(false)
+  })
+
+  it('kills what each runner has now, the ones that have a child and the ones that have none', async () => {
+    // What runs when the process exits, run by hand: it kills the child of every runner of this file, the one of the module too, which the
+    // next job of that one finds gone and starts another for.
+    // A runner that has been given no job, and so has no child.
+    createRegexRunner(() => new FakeChild())
+    const children = []
+    const busy = createRegexRunner(() => {
+      const child = new FakeChild()
+      children.push(child)
+      return child
+    })
+    const job = busy(JOB)
+    children[0].emit('message', { ready: true })
+    await flush()
+    expect(children[0].signals).toEqual([])
+    killRunners()
+    expect(children[0].signals).toEqual(['SIGKILL'])
+    children[0].emit('exit', null, 'SIGKILL')
+    expect(await job).toBeNull()
+    await new Promise((resolve) => setTimeout(resolve, 200))
+    expect(await scanInWorker(FAST)).toEqual(FAST_FOUND)
+  })
+
+  it('has one thing to do when its process exits, whatever the number of runners, and nothing to say when there is no child', async () => {
+    const run = await runScript(`
+      import { createRegexRunner, spawnRegexWorker } from ${SEND}
+      const before = process.listenerCount('exit')
+      const runners = Array.from({ length: 30 }, () => createRegexRunner(spawnRegexWorker))
+      console.log(process.listenerCount('exit') - before)
+      // One that had a child that was killed, and so has none now.
+      const answer = await runners[0]({ rules: [['(a+)+$']], texts: ['a'.repeat(60) + '!'] })
+      console.log(answer)
+    `)
+    expect(run.stdout.trim().split('\n')).toEqual(['0', 'null'])
+    expect(run.stderr).toBe('')
+    expect(run.code).toBe(0)
   })
 
   it('does not keep a process alive that has nothing else to do, and the child goes with it', async () => {
@@ -1659,7 +1748,8 @@ describe('automodMatcher: it stays linear in the length of the text', TIMED, () 
   })
 
   it('takes four times as long for four times the word, whatever the word is made of, when every place the keyword meets it is a match', () => {
-    for (const unit of ['𐐨', 'a\u200b', 'a*']) {
+    for (const unit of ['𐐨', 'a\u200b', 'a*', 'a ']) {
+      // `a ` is the one that tells a string that is flattened for each space: a ratio of 9.4 for that, and 4 for the walk that is not.
       expectLinear(JSON.stringify(unit), (n) => {
         const text = word(unit, n)
         const m = matcher([keywordRule(['*a*', '*𐐨*', '*é*'])])
@@ -1687,7 +1777,7 @@ describe('automodMatcher: it stays linear in the length of the text', TIMED, () 
   })
 
   it('takes four times as long for four times the word, with an allow list that covers every match, and with several rules', () => {
-    for (const [keywords, allow] of [[['*a*'], ['*a*']], [['a*', '*a', '*a*'], ['*aa*', 'a*', '*a']]]) {
+    for (const [keywords, allow] of [[['*a*'], ['*a*']], [['*a*a*'], ['*a*']], [['a*', '*a', '*a*'], ['*aa*', 'a*', '*a']]]) {
       expectLinear(`${keywords} / ${allow}`, (n) => {
         const text = word('a', n)
         const m = matcher([keywordRule(keywords, { allow_list: allow })])
@@ -1706,6 +1796,21 @@ describe('automodMatcher: it stays linear in the length of the text', TIMED, () 
     expect(timeOf(() => m(text))).toBeLessThan(150)
   })
 
+  it('takes about as long for 200 copies of a keyword of one piece as for one, over one word of 11,000 characters that the allow list covers', () => {
+    // A keyword of one piece is skipped to the end of the word after its first match, whatever the length of its first piece (one unit, which
+    // the index looks up whole, or more, which is compared with the text): about 2.5 to 4 times as long for 200 copies (a look at where each
+    // is skipped to, at every place). A match at every place for each, and a comparison of a first piece of 60 letters at every place, are
+    // 27 and 52 times as long. A ratio, and not a time, so that Stryker's slower copy of the module is held to the same.
+    const text = word('a', 11_000)
+    for (const keyword of ['*a*', '*aa*', `*${'a'.repeat(60)}*`]) {
+      const one = matcher([keywordRule([keyword], { allow_list: ['*a*'] })])
+      const copies = matcher([keywordRule(Array(200).fill(keyword), { allow_list: ['*a*'] })])
+      expect(copies(text), keyword).toBeNull()
+      expect(matcher([keywordRule(Array(200).fill(keyword))])(text), keyword).toEqual(hit(0, 11_000))
+      expect(timeOf(() => copies(text)) / Math.max(timeOf(() => one(text)), 0.05), keyword).toBeLessThan(10)
+    }
+  })
+
   it('answers a text of many short words, and a keyword in all of them', () => {
     const text = 'ass '.repeat(4_000)
     for (const keywords of [['*ass*'], ['ass'], ['ass*'], ['*ass']]) expect(find(keywords, text), keywords.join()).toEqual(hit(0, 3))
@@ -1720,6 +1825,170 @@ describe('automodMatcher: it stays linear in the length of the text', TIMED, () 
         return () => m(text)
       })
     }
+  })
+})
+
+describe('automodMatcher: keywords of several pieces and joiners that are no letters, against a plain list of every span', () => {
+  // The spans of a keyword as it is written for Discord's filter, worked out the plain way: every place of the first piece is looked at,
+  // none is skipped, and the allow list is every one of its spans (a span lies inside the allow list when any one of them holds it).
+  // The text is made of the letters a to c, `-` and `1` (which end a word and are no space), and single spaces.
+  const letter = (c) => c !== undefined && c >= 'a' && c <= 'c'
+  const MAX_GAP = 60
+  const reachOf = (t, pos, pieces, k, needEdge) => {
+    if (k === pieces.length) return needEdge && letter(t[pos]) ? -1 : pos
+    const last = k === pieces.length - 1
+    for (let p = pos; p <= pos + MAX_GAP; p++) {
+      if (t.startsWith(pieces[k], p)) {
+        const end = reachOf(t, p + pieces[k].length, pieces, k + 1, needEdge)
+        if (end !== -1 || !last) return end
+      }
+      if (t[p] === ' ') break
+    }
+    return -1
+  }
+  const spansOf = (t, k) => {
+    const out = []
+    for (let i = t.indexOf(k.pieces[0]); i !== -1; i = t.indexOf(k.pieces[0], i + 1)) {
+      const inside = letter(t[i - 1])
+      if (!k.lead && inside) continue
+      const stop = reachOf(t, i + k.pieces[0].length, k.pieces.slice(1), 0, !k.trail)
+      if (stop === -1) continue
+      let a = i
+      if (inside) while (letter(t[a - 1])) a--
+      let b = stop
+      while (letter(t[b])) b++
+      out.push([a, b])
+    }
+    return out
+  }
+  const modelOf = (t, keywords, allow) => {
+    const held = allow.flatMap((k) => spansOf(t, k))
+    let best = null
+    for (const k of keywords) {
+      const found = spansOf(t, k).find(([a, b]) => !held.some(([c, d]) => c <= a && b <= d))
+      if (found !== undefined && (best === null || found[0] < best.start)) best = { start: found[0], end: found[1] }
+    }
+    return best === null ? null : { rule: 'Test Rule', ...best }
+  }
+  const written = (k) => `${k.lead ? '*' : ''}${k.pieces.join('*')}${k.trail ? '*' : ''}`
+
+  it('does not let a skip over the places that a free-ended keyword of one piece has taken in lose the match that a keyword of several pieces has further on', () => {
+    // `*a*b*c` matches at the first `a` (as `abac`, which the allow list holds) and at the second (as `abac-bc`, which it does not): the
+    // second starts inside the span of the first, and reaches past it.
+    for (const keyword of ['*a*b*c', '*a*b*c*']) {
+      expect(find([keyword], 'abac-bc', { allow_list: ['abac'] }), keyword).toEqual(hit(0, 7))
+      expect(find([keyword], 'abac-bc'), keyword).toEqual(hit(0, 4))
+    }
+    expect(find(['*a*b*c'], 'abac-bc', { allow_list: ['abac', '*abac-bc*'] })).toBeNull()
+  })
+
+  it('finds the first match that the allow list does not hold, as the list of every span says, for keywords of up to 3 pieces and allow entries made of the text', () => {
+    const piece = fc.constantFrom('a', 'b', 'c', 'ab', 'bc', 'a-', '-b', '1', 'a b', '-')
+    const keyword = fc.record({ pieces: fc.array(piece, { minLength: 1, maxLength: 3 }), lead: fc.boolean(), trail: fc.boolean() })
+    const token = fc.constantFrom('a', 'b', 'c', 'ab', 'bc', 'ba', 'aba', '-', '1', '-1', ' ')
+    const text = fc
+      .array(token, { minLength: 1, maxLength: 10 })
+      .map((list) => list.join('').replace(/ {2,}/g, ' ').trim())
+      .filter((t) => t !== '')
+    // An entry of the allow list is a piece or two of the text itself, with or without a `*` at its ends.
+    const entryOf = (t) =>
+      fc.record({
+        pieces: fc.array(fc.tuple(fc.nat(t.length), fc.nat(t.length)).map(([i, j]) => t.slice(Math.min(i, j), Math.max(i, j) + 1).trim()).filter((p) => p !== ''), { minLength: 1, maxLength: 2 }),
+        lead: fc.boolean(),
+        trail: fc.boolean(),
+      })
+    // And texts of words that are cut by `-` and `1` where the pieces are letters only and free at the start, with allow entries that are the
+    // words of the text or a piece of its start: where a later start inside a word can reach past the first, and the allow list holds the first.
+    const letters = fc.constantFrom('a', 'b', 'c', 'ab', 'ba')
+    const joined = fc
+      .array(fc.constantFrom('a', 'b', 'c', 'ab', 'bc', 'ba', 'aba', 'abc', '-', '1'), { minLength: 3, maxLength: 12 })
+      .map((list) => list.join(''))
+      .chain((t) => {
+        const words = t.split(/[-1 ]+/).filter((w) => w !== '')
+        const entry = fc.record({ pieces: fc.constantFrom(...words, t.slice(0, 4), t.slice(0, 5)).map((w) => [w]), lead: fc.boolean(), trail: fc.boolean() })
+        return fc.tuple(fc.constant(t), fc.array(fc.record({ pieces: fc.array(letters, { minLength: 1, maxLength: 3 }), lead: fc.boolean(), trail: fc.boolean() }), { minLength: 1, maxLength: 2 }), fc.array(entry, { minLength: 1, maxLength: 2 }))
+      })
+    fc.assert(
+      fc.property(
+        fc.oneof(text.chain((t) => fc.tuple(fc.constant(t), fc.array(keyword, { minLength: 1, maxLength: 3 }), fc.array(entryOf(t), { maxLength: 3 }))), joined),
+        ([t, keywords, allow]) => {
+          const m = matcher([keywordRule(keywords.map(written), { allow_list: allow.map(written) })])
+          expect(m(t), JSON.stringify({ t, keywords: keywords.map(written), allow: allow.map(written) })).toEqual(modelOf(t, keywords, allow))
+        },
+      ),
+      { numRuns: 4_000 },
+    )
+  })
+})
+
+describe('automodMatcher: the keywords of a rule are looked for in one pass over the text', TIMED, () => {
+  it('answers the keyword that starts earliest, and the first of those that start together, whatever the order they are written in', () => {
+    // `a b` ends at 3 and `a*` at 1, and both start at 0.
+    expect(find(['a b', 'a*'], 'a b')).toEqual(hit(0, 3))
+    expect(find(['a*', 'a b'], 'a b')).toEqual(hit(0, 1))
+    expect(find(['zz', 'a b', 'a*'], 'a b')).toEqual(hit(0, 3))
+    expect(find(['zz', 'a*', 'a b'], 'a b')).toEqual(hit(0, 1))
+    // One written with a head of one unit and one with two, which are looked up apart.
+    expect(find(['ab*', 'a*'], 'abc')).toEqual(hit(0, 3))
+    expect(find(['a*', 'ab*'], 'abc')).toEqual(hit(0, 3))
+    expect(find(['*bc', 'ab'], 'x abc bc')).toEqual(hit(2, 5))
+    // The earliest start wins over the order.
+    expect(find(['gronk', 'zorp'], 'zorp gronk')).toEqual(hit(0, 4))
+    expect(find(['zorp', 'gronk'], 'zorp gronk')).toEqual(hit(0, 4))
+    expect(find(['zorp', 'gronk'], 'gronk zorp')).toEqual(hit(0, 5))
+    // A keyword that starts later inside the same word, and so ends it earlier, has no more to say than the one that starts the word.
+    expect(find(['*orp', '*zor*'], 'a zorp')).toEqual(hit(2, 6))
+    // Of the spans of one keyword that start together, the first: `*a*b*c` in `abac-bc` is `abac` from its first `a` and the whole from its second.
+    expect(find(['*a*b*c'], 'abac-bc')).toEqual(hit(0, 4))
+    // Of the two readings that start together, the one without the characters that show nothing: `ba` and `d` are one word there.
+    expect(find(['ba*'], 'ba\u200bd')).toEqual(hit(0, 4))
+    expect(find(['ba*'], 'ba\u200bd x')).toEqual(hit(0, 4))
+  })
+
+  it('looks a keyword up by its first unit or its first two, a pair of units as one character, and a keyword at the very end of the text', () => {
+    expect(find(['a'], 'a b')).toEqual(hit(0, 1))
+    expect(find(['a'], 'b a')).toEqual(hit(2, 3))
+    expect(find(['a'], 'a')).toEqual(hit(0, 1))
+    expect(find(['ab'], 'ab')).toEqual(hit(0, 2))
+    expect(find(['ba'], 'a ba')).toEqual(hit(2, 4))
+    expect(find(['ba'], 'a b')).toBeNull()
+    expect(find(['*b'], 'ab')).toEqual(hit(0, 2))
+    expect(find(['\u{10428}'], 'a \u{10428}')).toEqual(hit(2, 4))
+    expect(find(['\u{10428}\u{10428}'], 'a \u{10428}\u{10428}')).toEqual(hit(2, 6))
+    expect(find(['\u{10428}'], '\u{10428}')).toEqual(hit(0, 2))
+    expect(find(['\u{10428}x'], '\u{10428}')).toBeNull()
+    // The same first unit and a different second one.
+    expect(find(['abc', 'abd', 'ab', 'ax'], 'ax')).toEqual(hit(0, 2))
+    expect(find(['abc', 'abd', 'ab'], 'abd')).toEqual(hit(0, 3))
+    expect(find(['abc', 'abd', 'ab'], 'ab')).toEqual(hit(0, 2))
+  })
+
+  it('does not take a keyword for found at a place where it only starts as one that was found before', () => {
+    expect(find(['abc', 'abd'], 'abx abd')).toEqual(hit(4, 7))
+    expect(find(['abc'], 'ab abc')).toEqual(hit(3, 6))
+  })
+
+  it('answers 6 rules of 1,000 keywords over 11,000 characters of Hangul in about as long as 6 rules of one, and says where', () => {
+    // Pseudo-random Hangul, the same for every run: 11,000 syllables, which are 29,000 letters when they are taken apart.
+    let seed = 20_261_118
+    const next = () => (seed = (Math.imul(seed, 1_103_515_245) + 12_345) >>> 0)
+    const syllable = () => String.fromCodePoint(0xac00 + (next() % 11_172))
+    const hangul = (n) => Array.from({ length: n }, syllable).join('')
+    const text = hangul(11_000)
+    const rulesOf = (per) =>
+      Array.from({ length: 6 }, (_, r) => keywordRule(Array.from({ length: per }, () => hangul(2 + (next() % 3))), {}, { name: `Rule ${r}` }))
+    const few = matcher(rulesOf(1))
+    const many = matcher(rulesOf(1_000))
+    expect(many(text)).toBeNull()
+    // The same text with one keyword of the last rule put into it: found, in that rule, at the place it was put.
+    const last = Array.from({ length: 1_000 }, () => hangul(3))
+    const wanted = matcher([...rulesOf(1_000).slice(0, 5), keywordRule([...last, '비밀단어'], {}, { name: 'Last' })])
+    expect(wanted(`${text.slice(0, 5_000)} 비밀단어 ${text.slice(5_000)}`)).toEqual({ rule: 'Last', start: 5_001, end: 5_005 })
+    const small = timeOf(() => few(text))
+    const large = timeOf(() => many(text))
+    // About 1 to 3 times as long, where one pass for each keyword is a thousand times as long; and under a second in any case.
+    expect(large / Math.max(small, 0.05)).toBeLessThan(10)
+    expect(large).toBeLessThan(1_000)
   })
 })
 
@@ -1766,6 +2035,16 @@ describe('automodMatcher: a text that folds to far more than it is', () => {
     throwsAs(() => guard('ß'.repeat(100), { left: 99 }), Unfoldable, 'the text folds to more than it may')
   })
 
+  it('takes nothing from the allowance for a text that folds to fewer units than it is, and gives nothing back', () => {
+    // A mathematical letter is two units and folds to one.
+    const spend = { left: 100 }
+    expect(guard('\u{1d41a}'.repeat(50), spend)).toBeNull()
+    expect(spend.left).toBe(100)
+    // What is added is of the whole text: another that adds 50 (60 ß add 60, and 10 of them add nothing more than they take away).
+    expect(guard(`${'ß'.repeat(60)}${'\u{1d41a}'.repeat(10)}`, spend)).toBeNull()
+    expect(spend.left).toBe(50)
+  })
+
   it('lets one reply grow its texts to 64,000 characters in all, which a call that is not given a total has to itself', () => {
     expect(guard('ß'.repeat(64_000))).toBeNull()
     throwsAs(() => guard('ß'.repeat(64_001)), Unfoldable, 'the text folds to more than it may')
@@ -1800,7 +2079,7 @@ describe('automodMatcher: a text that folds to far more than it is', () => {
 describe('automodMatcher: what shows as blank', () => {
   // Characters that show nothing and are no space, no control and no format character: the fillers of Hangul, the blank of Braille, and
   // the ones that Unicode keeps for what is not yet written (the default ignorables, assigned or not).
-  const BLANKS = ['\u115f', '\u1160', '\u3164', '\uffa0', '\u2800', '\u2065', '\ufff0', '\u{e0000}', '\u17b5', '\u034f']
+  const BLANKS = ['\u115f', '\u1160', '\u3164', '\uffa0', '\u2800', '\u2065', '\ufff0', '\u{e0000}']
 
   it('reads each of them as nothing and as a space, so that a word they split is found, and so is a phrase they stand in for the space of', () => {
     for (const blank of BLANKS) {
@@ -1810,6 +2089,21 @@ describe('automodMatcher: what shows as blank', () => {
       expect(find(['*zorp'], `a ${blank}zorp`), name).toEqual(hit(2 + blank.length, 6 + blank.length))
       expect(find(['zorp'], `zo${blank}${blank}rp`), name).toEqual(hit(0, 4 + 2 * blank.length))
       expect(find(['zorp'], `zo${blank}x${blank}rp`), name).toBeNull()
+    }
+  })
+
+  it('reads a mark that shows nothing (a joiner of graphemes, a variation selector) as nothing in both readings, as any mark: it is no place between words', () => {
+    const CGJ = String.fromCodePoint(0x34f)
+    const VS16 = String.fromCodePoint(0xfe0f)
+    const MONGOLIAN = String.fromCodePoint(0x180b)
+    const ZWSP = String.fromCodePoint(0x200b)
+    for (const mark of [CGJ, VS16, MONGOLIAN, String.fromCodePoint(0x17b5)]) {
+      const name = `U+${mark.codePointAt(0).toString(16)}`
+      expect(find(['bad'], `ba${mark}d`), name).toEqual(hit(0, 4))
+      // The zero-width space is a place between words in one reading, so `bad` is a word of its own there and the mark does not split it.
+      expect(find(['bad'], `x${ZWSP}ba${mark}d`), name).toEqual(hit(2, 6))
+      expect(find(['bad'], `x${ZWSP}b${mark}ad`), name).toEqual(hit(2, 6))
+      expect(find(['the mat'], `the${mark}mat`), name).toBeNull()
     }
   })
 
@@ -1827,6 +2121,32 @@ describe('automodMatcher: what shows as blank', () => {
   it('strips them from a name, where they could hide a word that Discord refuses', () => {
     expect(cleanName('disc\u3164ord')).toBe('Member')
     expect(cleanName('cly\u2800de')).toBe('Member')
+  })
+})
+
+describe('unwrapped: the links of a text out of the angle brackets that the form puts them in', TIMED, () => {
+  it('writes `[text](<address>)` as `[text](address)` and `<address>` as `address`, for http and https', () => {
+    expect(unwrapped('[a](<https://e.com>)')).toBe('[a](https://e.com)')
+    expect(unwrapped('see <https://e.com> now')).toBe('see https://e.com now')
+    expect(unwrapped('<http://e.com/x?y=1&z=2#f>')).toBe('http://e.com/x?y=1&z=2#f')
+    expect(unwrapped('<https://e.com/a%3Eb>')).toBe('https://e.com/a%3Eb')
+    expect(unwrapped('<https://a.com> <http://b.com>\n[c](<https://d.com>)')).toBe('https://a.com http://b.com\n[c](https://d.com)')
+    expect(unwrapped('<<https://e.com>>')).toBe('<https://e.com>')
+  })
+
+  it('leaves what the form does not put there as it is: mentions, timestamps, emoji, channels, and what is no whole address', () => {
+    for (const text of ['<@200000000000000421>', '<@!200000000000000421>', '<t:1700000000:R>', '<:name:200000000000000421>', '<a:name:200000000000000421>', '<#200000000000000421>', '<id:customize>', '<https://e.com', 'https://e.com>', '<https://e.com >', '<https://e .com>', '<HTTPS://e.com>', '<ftp://e.com>', '<https:/e.com>', '< https://e.com>', '<>', '', 'zorp']) {
+      expect(unwrapped(text), text).toBe(text)
+    }
+  })
+
+  it('takes four times as long for four times the text, whatever the shape of the text that is no link, or half of one', () => {
+    for (const unit of ['<https://', '<h', '<', '<https://a', '<https://a>', '<https://a <', '[a](<https://a>) ']) {
+      expectLinear(JSON.stringify(unit), (n) => {
+        const text = unit.repeat(Math.ceil(n / unit.length))
+        return () => unwrapped(text)
+      })
+    }
   })
 })
 
@@ -2866,10 +3186,16 @@ describe('validateReply: the text that is sent, not only the text that was writt
   describe('for any source made around the keyword (the property)', () => {
     const m = automodMatcher([keywordRule(['*zorp*'], {}, { name: 'No Zorp' })], quiet)
     const squash = (t) => t.replace(/[*_~|`\\\u200b]/g, '').toLowerCase()
-    const shownOf = (source, form) =>
+    const sentOf = (source, form) =>
       toDiscord(source, { form, authorId: U1, siteUrl: 'https://example.test/x', replyTo: null, images: [{ ref: 1, name: 'image-1.png' }] })
-        .parts.map((part) => squash(part.text))
+        .parts.map((part) => part.text)
         .join('\n')
+    const shownOf = (source, form) => squash(sentOf(source, form))
+    // The text of a link beside the text round it, without the brackets and the address: `[zo](https://x)rp` shows "zorp", which the
+    // matcher reads as well (the oracle is its own: one pass of its own pattern, over the source and over what is sent).
+    const unlink = (text) => text.replace(/\[([^\][\n]*)\]\([^)\n]*\)/g, '$1')
+    // Where the keyword may be found for a refusal to be right: in the source or in what is sent, as written and with the links read as their text.
+    const holdsZorp = (source, form) => [source, unlink(source), sentOf(source, form), unlink(sentOf(source, form))].some((text) => squash(text).includes('zorp'))
 
     it('refuses the reply when what is sent holds the keyword, and only then, where the keyword is cut by what is left out of the line', async () => {
       const gap = fc.array(fc.constantFrom('![x](upload:1)', '![](upload:1)', '**', '*', '_', '||', '~~', '`', ' ', '\n', '\u200b', '[^1]', '\\'), { maxLength: 3 }).map((a) => a.join(''))
@@ -2883,7 +3209,7 @@ describe('validateReply: the text that is sent, not only the text that was writt
           const inSent = shownOf(source, form).includes('zorp')
           if (inSent) expect(r.ok, source).toBe(false)
           if (inSent && m(source) === null && r.status === 422) onlyInSent++
-          if (!r.ok && r.status === 422) expect(squash(source).includes('zorp') || inSent, source).toBe(true)
+          if (!r.ok && r.status === 422) expect(holdsZorp(source, form), source).toBe(true)
         }),
         { numRuns: 1_500 },
       )
@@ -2932,10 +3258,38 @@ describe('validateReply: the text that is sent, not only the text that was writt
           const r = await via(source, m, { authorId: U1, siteUrl: 'https://example.test/x', form })
           const inSent = shownOf(source, form).includes('zorp')
           if (inSent) expect(r.ok, source).toBe(false)
-          if (!r.ok && r.status === 422) expect(squash(source).includes('zorp') || inSent, source).toBe(true)
+          if (!r.ok && r.status === 422) expect(holdsZorp(source, form), source).toBe(true)
         }),
         { numRuns: 1_000 },
       )
+    })
+
+    it('is right to refuse what the oracle once called a reply with no keyword in it: the label of a link and the text beside it read "zorp"', async () => {
+      // Found by a run of the property above that went wrong about one time in eight: the matcher was right and the oracle did not read the
+      // label of a link without its brackets.
+      for (const form of ['v2', 'plain']) {
+        for (const source of ['[zo](https://example.test/a)rp', 'zor[p](https://example.test/a)', 'zo[rp](https://example.test/a)zo']) {
+          const r = await via(source, m, { authorId: U1, siteUrl: 'https://example.test/x', form })
+          expect(r, `${form} ${source}`).toMatchObject({ ok: false, status: 422, rule: 'No Zorp', match: null })
+          expect(squash(source).includes('zorp'), source).toBe(false)
+          expect(holdsZorp(source, form), source).toBe(true)
+        }
+      }
+    })
+
+    it('holds for the runs that found it: the same seeds and the same paths as the ones that failed', async () => {
+      const pieces = fc.constantFrom('zo', 'rp', 'z', 'o', 'r', 'p', 'zorp', 'zor', '![x](upload:1)', '![](upload:1)', ' ', '\n', '\n\n', '**', '*', '_', '||', '~~', '`', '> ', '- ', '# ', '-# ', '| a | b |\n|---|---|\n| ', ' |', '[^1]', '\n\n[^1]: ', '[', '](https://example.test/a)', '\\')
+      // The second was found by another run of the whole suite: `zo[rp](https://example.test/a)zo`, the text before the link and its label.
+      for (const [seed, path] of [[-178024739, '544:2:0:0:1:4:1:4:8'], [-646092332, '317:2:2:10:10:10']]) {
+        await fc.assert(
+          fc.asyncProperty(fc.array(pieces, { minLength: 1, maxLength: 14 }), fc.constantFrom('v2', 'plain'), async (list, form) => {
+            const source = list.join('')
+            const r = await via(source, m, { authorId: U1, siteUrl: 'https://example.test/x', form })
+            if (!r.ok && r.status === 422) expect(holdsZorp(source, form), source).toBe(true)
+          }),
+          { numRuns: 1_000, seed, path },
+        )
+      }
     })
   })
 })
@@ -3005,6 +3359,45 @@ describe('validateReply: the regular expressions of the server\'s rules', () => 
     expect((await send(reply('zorp'), { automod: () => null })).ok).toBe(true)
   })
 
+  it('reads the links as the member wrote them as well as as they are sent: a rule against the shape of a link still refuses it, in both forms', async () => {
+    // The form sends every link in angle brackets (`[t](<url>)`, `<url>`), so a pattern for `](http` or for a URL after a space would see
+    // none of them in what is sent, where it saw them in the source before the patterns were kept from the source.
+    const masked = 'see [here](https://evil.example/x) now'
+    const bare = 'see https://evil.example/x now'
+    const cases = [['\\]\\(https?://', masked], ['\\[[^\\]]*\\]\\(\\s*https?://', masked], ['(?:^|\\s)https?://evil', bare], ['\\(https?://[^)]*\\)', masked]]
+    for (const form of ['v2', 'plain']) {
+      for (const [pattern, source] of cases) {
+        expect(await by([withRegex([pattern], { name: 'No Links' })], source, { options: { form } }), `${form} ${pattern}`).toEqual({
+          ok: false,
+          status: 422,
+          error: 'Blocked by the server\'s AutoMod rule "No Links".',
+          rule: 'No Links',
+          match: null,
+        })
+      }
+    }
+    // What is not a link is not touched, nor what a pattern for the sent spelling looks for.
+    expect((await by([withRegex(['\\]\\(https?://'])], 'see [here](ftp://x)', { options: { form: 'v2' } })).status).toBe(400)
+    expect((await by([withRegex(['\\]\\(https?://'])], 'no link at all')).ok).toBe(true)
+    expect((await by([withRegex(['\\]\\(<https'], { name: 'Sent' })], masked)).rule).toBe('Sent')
+  })
+
+  it('reads a link twice only when the member\'s spelling is not the sent one, and always within the size of a message', async () => {
+    const asked = []
+    const automod = Object.assign(() => null, { regex: async (texts) => (asked.push(texts), null) })
+    await send(reply('Say hi'), { automod, form: 'plain' })
+    await send(reply('[a](https://e.com) b'), { automod, form: 'plain' })
+    await send(reply('see https://e.com'), { automod, form: 'plain' })
+    await send(reply(`hi <@${U1}>`, { mentions: [U1] }), { automod, form: 'plain' })
+    expect(asked).toEqual([['Say hi'], ['[a](<https://e.com>) b', '[a](https://e.com) b'], ['see <https://e.com>', 'see https://e.com'], [`hi <@${U1}>`]])
+    // Each copy is shorter than its text: the links are only let out of their angle brackets.
+    asked.length = 0
+    await send(reply(`${'[a](https://e.com/x) '.repeat(450)}`), { automod, form: 'v2' })
+    expect(asked[0].length).toBeGreaterThan(1)
+    for (const [text, copy] of [asked[0].slice(0, 2)]) expect(copy.length).toBeLessThan(text.length)
+    expect(Math.max(...asked[0].map((t) => t.length))).toBeLessThan(4_100)
+  })
+
   it('asks for the texts that are sent, in one go, and never for the source', async () => {
     const asked = []
     const automod = Object.assign(() => null, { regex: async (texts) => (asked.push(texts), null) })
@@ -3070,13 +3463,50 @@ describe('validateReply: a reply whose texts fold to far more than they are', ()
     expect((await send(reply(all3), { automod: zorp() })).ok).toBe(true)
   })
 
-  it('counts what every text of the reply adds, the source, the messages and the texts that are read without the brackets of a link, together', async () => {
-    // 17 plain characters and 3 that fold to 18: each text of it is 3.55 times as long folded, and adds 2.55 characters for each it has.
-    const dense = fit(`${'a'.repeat(17)}${FDFA.repeat(3)}`, 10_900)
-    // The source and the messages: about 2 * 28,000 added, which is under 64,000.
-    expect((await send(reply(dense), { automod: zorp() })).ok).toBe(true)
-    // The same with a masked link as well: the texts without its brackets are read too, which is more than the total.
-    expect(await send(reply(`[x](https://e.com) ${dense}`), { automod: zorp() })).toEqual(UNCHECKED)
+  it('counts what the source and the messages add, together, against the allowance of the reply', async () => {
+    // 4 characters that fold to 18 and 19 that fold to one: each text of it is 3.957 times as long folded (a cut in the middle of the 23
+    // moves that by less than 0.02), and adds 2.957 characters for each it has.
+    const dense = (n) => fit(`${'a'.repeat(19)}${FDFA.repeat(4)}`, n)
+    // The source and the messages: for 10,000 characters 2 * 29,570 added, which is under 64,000, and for 11,000 2 * 32,530, which is over.
+    expect((await send(reply(dense(10_000)), { automod: zorp() })).ok).toBe(true)
+    expect(await send(reply(dense(11_000)), { automod: zorp() })).toEqual(UNCHECKED)
+  })
+
+  it('does not refuse an ordinary reply of 10,000 characters of Korean with pictures on lines of their own and masked links', async () => {
+    // Korean grows by a little over one character for each when it is taken apart, and a reply with pictures and links is read in many ways: the
+    // source, each part, the displays of a part put together, and each of those again with the links read as their text. Only the source and the
+    // parts are charged to the allowance.
+    const korean = '안녕하세요 여러분 오늘은 날씨가 정말 좋네요 같이 게임해요 한글은 음절마다 두세 개의 자모로 풀립니다 '
+    const block = fit(korean, 1_700)
+    const source = Array.from({ length: 6 }, (_, k) => `${block} [링크 ${k}](https://example.test/a${k})\n\n![](upload:${k + 1})`).join('\n\n')
+    expect(source.length).toBeGreaterThan(10_000)
+    const uploads = ['u1', 'u2', 'u3', 'u4', 'u5', 'u6']
+    const r = await send(reply(source, { uploads }), { automod: zorp(), ownUploadIds: uploads })
+    expect(r.ok).toBe(true)
+  })
+
+  it('charges the source and each part to the allowance, and the displays put together and the links read as their text to none', async () => {
+    const calls = []
+    const automod = (text, spend) => (calls.push({ text, spend }), null)
+    await send(reply('a [x](https://e.com)\n\n![](upload:1)\n\nb', { uploads: ['u1'] }), { automod, ownUploadIds: ['u1'] })
+    const shared = calls[0].spend
+    expect(shared).toEqual({ left: 64_000 })
+    expect(calls.map(({ text, spend }) => `${spend === shared ? 'charged' : 'free'} ${text.replaceAll('\n', '/')}`)).toEqual([
+      'charged a [x](https://e.com)//![](upload:1)//b',
+      'free a x//!//b',
+      'charged a [x](<https://e.com>)',
+      'free a x',
+      'charged b',
+      'free a [x](<https://e.com>)/b',
+      'free a x/b',
+    ])
+    for (const { spend } of calls) if (spend !== shared) expect(spend.left).toBe(Number.POSITIVE_INFINITY)
+    // They are not charged, and they are not free of the size of the text that each is: the label of a link with a long address folds to little
+    // against the whole, and to far more than itself once it is read without the address.
+    const label = FDFA.repeat(300)
+    const address = `https://example.test/${'a'.repeat(1_900)}`
+    expect(await send(reply(`[${label}](${address})`), { automod: matcher([keywordRule(['zorp'])]) })).toEqual(UNCHECKED)
+    expect((await send(reply(`[${label.slice(0, 40)}](${address})`), { automod: matcher([keywordRule(['zorp'])]) })).ok).toBe(true)
   })
 
   it('gives the matcher one allowance for the whole reply, and a new one for the next', async () => {
