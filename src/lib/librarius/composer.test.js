@@ -1,7 +1,7 @@
-import { describe, it, expect } from 'vitest'
+import { describe, it, expect, afterEach } from 'vitest'
 import fc from 'fast-check'
 import { parse, plainText, walk } from '../archive/markdown'
-import { ACTIONS, apply, draftKey, saveDraft, loadDraft, clearDraft, clearAllDrafts } from './composer'
+import { ACTIONS, apply, draftKey, draftStorage, saveDraft, loadDraft, clearDraft, clearAllDrafts } from './composer'
 
 // Every id here is invented.
 const POST = '200000000000000410'
@@ -666,7 +666,10 @@ describe('apply: properties', () => {
         const outLines = out.text.split('\n')
         expect(outLines).toHaveLength(ls.length)
 
-        const touched = ls.map((_, i) => i).filter((i) => i >= first && i <= last)
+        // A selection that ends at the very start of a line does not touch it, and one that ends on an empty line after the first
+        // ends at its start.
+        const reached = last > first && texts[last] === '' ? last - 1 : last
+        const touched = ls.map((_, i) => i).filter((i) => i >= first && i <= reached)
         const blank = (i) => (ls[i].indent + ls[i].list + ls[i].head + ls[i].words).trim() === ''
         const written = touched.filter((i) => !blank(i))
         const acted = action === 'quote' || written.length === 0 ? touched : written
@@ -680,6 +683,14 @@ describe('apply: properties', () => {
       }),
       { numRuns: 1500 },
     )
+  })
+
+  it('leaves alone an empty last line that a selection ends at the start of (a seed of the property above)', () => {
+    const text = '  -   one\n> -# two\n\n> three'
+    const end = '  -   one\n> -# two\n'.length
+    expect(apply(text, { start: 0, end }, 'quote').text).toBe('>   -   one\n> -# two\n\n> three')
+    expect(apply(text, { start: 0, end: end - 1 }, 'quote').text).toBe('>   -   one\n> -# two\n\n> three')
+    expect(apply('one\n\ntwo', { start: 0, end: 5 }, 'quote').text).toBe('> one\n> \ntwo')
   })
 
   it('gives back the text a line action was pressed on when it is pressed again, on lines with no marks', () => {
@@ -943,5 +954,44 @@ describe('clearAllDrafts', () => {
     storage.key = (i) => (i === 1 ? null : key(i))
     clearAllDrafts(storage)
     expect([...storage.map.keys()]).toEqual(['kept'])
+  })
+})
+
+describe('draftStorage', () => {
+  // The browser's own localStorage is put back after each test; each test puts its own in its place.
+  const own = Object.getOwnPropertyDescriptor(globalThis, 'localStorage')
+  afterEach(() => {
+    if (own) Object.defineProperty(globalThis, 'localStorage', own)
+    else delete globalThis.localStorage
+  })
+  const stand = (get) => Object.defineProperty(globalThis, 'localStorage', { get, configurable: true })
+
+  it('is the browser\'s localStorage, the very one', () => {
+    const storage = memoryStorage([['kept', 'k']])
+    stand(() => storage)
+    expect(draftStorage()).toBe(storage)
+  })
+
+  it('is null where reading localStorage throws, as it does when a browser blocks storage', () => {
+    stand(() => {
+      throw new DOMException('The operation is insecure.', 'SecurityError')
+    })
+    expect(draftStorage()).toBeNull()
+  })
+
+  it('is null where there is no localStorage at all', () => {
+    stand(() => undefined)
+    expect(draftStorage()).toBeNull()
+    stand(() => null)
+    expect(draftStorage()).toBeNull()
+  })
+
+  it('gives the drafts somewhere that never makes them throw, whatever the browser does', () => {
+    stand(() => {
+      throw new DOMException('The operation is insecure.', 'SecurityError')
+    })
+    expect(saveDraft(draftStorage(), POST, null, 'kept?')).toBe(false)
+    expect(loadDraft(draftStorage(), POST, null)).toBeNull()
+    expect(() => clearAllDrafts(draftStorage())).not.toThrow()
   })
 })

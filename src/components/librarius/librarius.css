@@ -119,47 +119,58 @@
   margin-top: 0;
 }
 
-/* Discord's text, in the Librarius's own words for it. */
+/* Discord's text, in the Librarius's own words for it: in a message, and in the composer's preview and Discord view
+ * (.lb-rendered), which show a reply as the page will. */
+.lb-rendered .md-h,
 .lb-msg .md-h {
   font-family: var(--font-display);
   font-weight: 700;
   line-height: 1.15;
   margin: 1.2rem 0 0.5rem;
 }
+.lb-rendered .md-h1,
 .lb-msg .md-h1 {
   font-size: var(--text-xl);
   text-transform: uppercase;
   letter-spacing: 0.05em;
 }
+.lb-rendered .md-h2,
 .lb-msg .md-h2 {
   font-size: var(--text-lg);
   text-transform: uppercase;
   letter-spacing: 0.04em;
 }
+.lb-rendered .md-h3,
 .lb-msg .md-h3 {
   font-size: var(--text-base);
   letter-spacing: 0.02em;
 }
+.lb-rendered .md-h4,
 .lb-msg .md-h4 {
   font-size: var(--text-base);
   letter-spacing: 0.02em;
 }
+.lb-rendered .md-h5,
 .lb-msg .md-h5 {
   font-size: var(--text-md);
   letter-spacing: 0.02em;
 }
+.lb-rendered .md-h6,
 .lb-msg .md-h6 {
   font-size: var(--text-sm);
   text-transform: uppercase;
   letter-spacing: 0.08em;
   color: var(--color-pewter);
 }
+.lb-rendered .md-line,
 .lb-msg .md-line {
   margin: 0.15rem 0;
 }
+.lb-rendered .md-blank,
 .lb-msg .md-blank {
   height: 0.8rem;
 }
+.lb-rendered .md-sub,
 .lb-msg .md-sub {
   margin: 0.2rem 0;
   font-family: var(--font-mono);
@@ -169,6 +180,7 @@
 .lb-msg strong {
   color: var(--color-whitehot);
 }
+.lb-rendered .md-quote,
 .lb-msg .md-quote {
   margin: 0.5rem 0;
   padding: 0.5rem 0.9rem;
@@ -181,6 +193,7 @@
   margin: 0.3rem 0;
   padding-left: 1.5rem;
 }
+.lb-rendered .md-link,
 .lb-msg .md-link {
   color: var(--color-bone);
   text-decoration: underline;
@@ -188,15 +201,18 @@
   text-decoration-thickness: 1px;
   text-underline-offset: 3px;
 }
+.lb-rendered .md-ext::after,
 .lb-msg .md-ext::after {
   content: '\2197';
   margin-left: 0.15em;
   font-size: 0.75em;
   color: var(--color-smoke);
 }
+.lb-rendered .md-unlinked,
 .lb-msg .md-unlinked {
   overflow-wrap: anywhere;
 }
+.lb-rendered .md-code,
 .lb-msg .md-code {
   padding: 0 0.3em;
   font-family: var(--font-mono);
@@ -206,36 +222,44 @@
   border-radius: var(--radius-sm);
 }
 /* What only a reply written on the site has: a rule, a table inside a region that scrolls on its own, footnotes, a picture's stand-in. */
+.lb-rendered .md-hr,
 .lb-msg .md-hr {
   margin: 0.9rem 0;
   border: 0;
   border-top: 1px solid var(--color-ash);
 }
+.lb-rendered .md-table-wrap,
 .lb-msg .md-table-wrap {
   max-width: 100%;
   margin: 0.5rem 0;
   overflow-x: auto;
 }
+.lb-rendered .md-table,
 .lb-msg .md-table {
   border-collapse: collapse;
   font-size: var(--text-sm);
 }
+.lb-rendered .md-table th,
 .lb-msg .md-table th,
+.lb-rendered .md-table td,
 .lb-msg .md-table td {
   padding: 0.35rem 0.7rem;
   text-align: left;
   vertical-align: top;
   border: 1px solid var(--color-ash);
 }
+.lb-rendered .md-table th,
 .lb-msg .md-table th {
   font-family: var(--font-display);
   color: var(--color-bone);
   background: rgba(0, 0, 0, 0.35);
 }
+.lb-rendered .md-fnref,
 .lb-msg .md-fnref {
   font-size: 0.75em;
   color: var(--color-bone);
 }
+.lb-rendered .md-footnotes,
 .lb-msg .md-footnotes {
   margin-top: 0.9rem;
   padding-top: 0.5rem;
@@ -243,18 +267,22 @@
   color: var(--color-pewter);
   border-top: 1px solid var(--color-ash);
 }
+.lb-rendered .md-footnote,
 .lb-msg .md-footnote {
   display: flex;
   gap: 0.4rem;
   align-items: baseline;
 }
+.lb-rendered .md-footnote > div,
 .lb-msg .md-footnote > div {
   min-width: 0;
 }
+.lb-rendered .md-image-missing,
 .lb-msg .md-image-missing {
   font-style: italic;
   color: var(--color-smoke);
 }
+.lb-rendered .md-pre,
 .lb-msg .md-pre {
   margin: 0.5rem 0;
   padding: 0.8rem 1rem;
@@ -265,6 +293,7 @@
   border: 1px solid var(--color-ash);
   border-radius: var(--radius-sm);
 }
+.lb-rendered .md-mention,
 .lb-msg .md-mention {
   padding: 0 0.25em;
   font-weight: 600;
@@ -273,6 +302,7 @@
   border-radius: var(--radius-md);
 }
 /* A spoiler is hatched over until it is tapped; its words are hidden from the eye, not from a screen reader. */
+.lb-rendered .md-spoiler,
 .lb-msg .md-spoiler {
   color: transparent;
   cursor: pointer;
@@ -280,15 +310,18 @@
   border-radius: var(--radius-sm);
   box-shadow: inset 0 0 0 1px rgba(253, 184, 37, 0.22);
 }
+.lb-rendered .md-spoiler *,
 .lb-msg .md-spoiler * {
   visibility: hidden;
 }
+.lb-rendered .md-spoiler.is-shown,
 .lb-msg .md-spoiler.is-shown {
   color: inherit;
   cursor: auto;
   background: rgba(255, 255, 255, 0.06);
   box-shadow: none;
 }
+.lb-rendered .md-spoiler.is-shown *,
 .lb-msg .md-spoiler.is-shown * {
   visibility: visible;
 }
@@ -647,10 +680,12 @@ a.lb-file {
     color: var(--color-bone);
     border-left-color: var(--color-drake);
   }
+  .lb-rendered .md-link:hover,
   .lb-msg .md-link:hover {
     color: var(--color-whitehot);
     text-decoration-color: var(--color-drake);
   }
+  .lb-rendered .md-spoiler:hover,
   .lb-msg .md-spoiler:hover {
     box-shadow: inset 0 0 0 1px rgba(253, 184, 37, 0.5);
   }
@@ -828,6 +863,219 @@ a.lb-file {
     color: var(--color-bone);
   }
   .lb-month:hover:not(:disabled) {
+    color: var(--color-bone);
+    border-color: var(--color-ash-2);
+  }
+}
+
+/* The composer (Composer.vue): where a reply is written. The source and, beside it on a wide screen (below it on a phone),
+ * the preview and the Discord view in tabs; the toolbar above, the meter and Reply below. Full screen fills the window. */
+.lb-composer {
+  display: grid;
+  gap: 0.6rem;
+  padding: 0.8rem;
+  color: var(--color-bone);
+  background: var(--color-basalt-2);
+  border: 1px solid var(--color-ash);
+  border-radius: var(--radius-md);
+}
+.lb-composer-full {
+  position: fixed;
+  inset: 0;
+  z-index: 60;
+  overflow-y: auto;
+  border-radius: 0;
+  align-content: start;
+}
+.lb-composer-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.4rem 0.8rem;
+}
+.lb-composer-where,
+.lb-replying-text,
+.lb-posting-as,
+.lb-draft-saved,
+.lb-budget,
+.lb-sending,
+.lb-pane-note,
+.lb-dv-head,
+.lb-dv-files {
+  margin: 0;
+  font-size: var(--text-sm);
+  color: var(--color-smoke);
+}
+.lb-composer-where b,
+.lb-replying-text b {
+  color: var(--color-bone);
+  overflow-wrap: anywhere;
+  unicode-bidi: isolate;
+}
+.lb-replying-to {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+}
+.lb-full {
+  margin-left: auto;
+}
+.lb-ping,
+.lb-unreply,
+.lb-tool,
+.lb-tab {
+  min-height: var(--tap);
+  min-width: var(--tap);
+  padding: 0.2rem 0.5rem;
+  font: inherit;
+  font-size: var(--text-sm);
+  color: var(--color-pewter);
+  background: transparent;
+  border: 1px solid var(--color-ash);
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+}
+.lb-ping[aria-pressed='true'],
+.lb-full[aria-pressed='true'] {
+  color: var(--color-drake);
+  border-color: var(--color-drake-deep);
+}
+.lb-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.3rem 0.6rem;
+}
+.lb-tools {
+  display: flex;
+  gap: 0.2rem;
+}
+.lb-tools + .lb-tools {
+  padding-left: 0.6rem;
+  border-left: 1px solid var(--color-ash);
+}
+.lb-tool:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+.lb-compose-body {
+  display: grid;
+  gap: 0.6rem;
+}
+.lb-source {
+  width: 100%;
+  min-height: 10rem;
+  padding: 0.6rem;
+  font-family: var(--font-mono);
+  font-size: var(--text-md);
+  line-height: 1.5;
+  color: var(--color-bone);
+  background: var(--color-pitch);
+  border: 1px solid var(--color-ash);
+  border-radius: var(--radius-sm);
+  resize: vertical;
+}
+.lb-source[readonly] {
+  color: var(--color-smoke);
+}
+.lb-composer-full .lb-source {
+  min-height: 60vh;
+}
+.lb-pane {
+  min-width: 0;
+}
+.lb-tabs {
+  display: flex;
+  gap: 0.2rem;
+}
+.lb-tab[aria-selected='true'] {
+  color: var(--color-bone);
+  border-color: var(--color-ash-2);
+  border-bottom-color: var(--color-drake);
+}
+.lb-tabpanel {
+  max-height: 24rem;
+  overflow-y: auto;
+  padding: 0.6rem;
+  border: 1px solid var(--color-ash);
+  border-radius: var(--radius-sm);
+}
+.lb-composer-full .lb-tabpanel {
+  max-height: none;
+}
+.lb-dv-parts {
+  display: grid;
+  gap: 0.6rem;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.lb-dv-part {
+  padding: 0.5rem 0.6rem;
+  border-left: 3px solid var(--color-ash-2);
+  background: rgba(7, 17, 13, 0.6);
+}
+.lb-dv-picture,
+.lb-dv-button {
+  margin: 0.4rem 0;
+  font-size: var(--text-sm);
+  color: var(--color-smoke);
+}
+.lb-dv-picture {
+  padding: 0.6rem;
+  border: 1px dashed var(--color-ash-2);
+}
+.lb-dv-button-face {
+  display: inline-block;
+  padding: 0.2rem 0.6rem;
+  border: 1px solid var(--color-ash-2);
+  border-radius: var(--radius-sm);
+}
+.lb-dv-separator {
+  border: 0;
+  border-top: 1px solid var(--color-ash-2);
+}
+.lb-dv-over,
+.lb-budget-over,
+.lb-composer-error {
+  margin: 0;
+  font-size: var(--text-md);
+  color: var(--color-ember);
+}
+.lb-composer-foot {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.4rem 0.8rem;
+}
+.lb-budget {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.2rem 0.6rem;
+}
+.lb-meter {
+  width: 8rem;
+}
+.lb-over .lb-budget-text {
+  color: var(--color-ember);
+}
+.lb-send {
+  margin-left: auto;
+}
+@media (min-width: 900px) {
+  .lb-compose-body {
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  }
+  .lb-composer-full .lb-tabpanel,
+  .lb-composer-full .lb-source {
+    min-height: calc(100vh - 14rem);
+  }
+}
+@media (hover: hover) and (pointer: fine) {
+  .lb-tool:hover:not(:disabled),
+  .lb-tab:hover,
+  .lb-ping:hover,
+  .lb-unreply:hover {
     color: var(--color-bone);
     border-color: var(--color-ash-2);
   }

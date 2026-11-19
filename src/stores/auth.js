@@ -7,6 +7,7 @@ import { useDeathwatchData } from './deathwatchData'
 import { useLibrarius } from './librarius'
 import { stashAnchor } from '../lib/archive/anchor'
 import { forgetPlaces } from '../lib/librarius/places'
+import { clearAllDrafts, draftStorage } from '../lib/librarius/composer'
 
 // Thin reactive wrapper around discordAuth.js. Sign-in itself is a full-page
 // redirect (implicit grant), so state is correct at mount time by construction
@@ -46,6 +47,8 @@ export const useAuth = defineStore('auth', {
       useLibrarius().reset()
       // And where they were in each post, which is the last reader's own reading and is kept per tab.
       forgetPlaces()
+      // And the replies they had begun, kept as drafts in this browser: the next person to sign in here is not them.
+      clearAllDrafts(draftStorage())
     },
     // Keeps the server's latest answer about whether this person may read the Librarius (see discordAuth.rememberLibrarius),
     // so that the nav links show the Reliquarium to someone who signed in before they were let in, and stop showing it when

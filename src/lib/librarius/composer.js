@@ -42,6 +42,8 @@
  *   loadDraft(storage, postId, replyTo) → the draft's text, or null.
  *   clearDraft(storage, postId, replyTo) removes the one draft (after a reply is sent).
  *   clearAllDrafts(storage) removes every draft and nothing else (at sign-out).
+ *   draftStorage() → the browser's localStorage, to give these, or null where there is none or reading it throws (a
+ *     browser that blocks storage): the helpers take null as a storage that keeps nothing.
  */
 
 const ID = /^\d{17,20}$/
@@ -419,5 +421,13 @@ export function clearAllDrafts(storage) {
     } catch {
       // The next one may still go.
     }
+  }
+}
+
+export function draftStorage() {
+  try {
+    return globalThis.localStorage ?? null
+  } catch {
+    return null
   }
 }

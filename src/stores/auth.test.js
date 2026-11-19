@@ -241,3 +241,40 @@ describe('auth.signOut forgets the places kept in the Librarius posts', () => {
     expect(lib).toMatchObject({ status: 'idle', posts: [] })
   })
 })
+
+// A Librarius reply that is being written is kept in this browser as a draft (see lib/librarius/composer.js). It is the last
+// person's writing, so it goes with them, from every post.
+describe('auth.signOut removes the drafts of Librarius replies', () => {
+  const POST = '200000000000000402'
+  const OTHER = '200000000000000403'
+  const MESSAGE = '200000000000000450'
+  beforeEach(() => localStorage.clear())
+
+  it('removes every draft, and nothing else that is kept', () => {
+    localStorage.setItem(`lb-draft:${POST}:new`, 'A reply half written')
+    localStorage.setItem(`lb-draft:${POST}:${MESSAGE}`, 'An answer to one message')
+    localStorage.setItem(`lb-draft:${OTHER}:new`, 'Another post')
+    localStorage.setItem('lb-draft', 'not a draft')
+    localStorage.setItem('salamanders-planner', 'kept')
+    useAuth().signOut()
+    expect(localStorage.getItem(`lb-draft:${POST}:new`)).toBeNull()
+    expect(localStorage.getItem(`lb-draft:${POST}:${MESSAGE}`)).toBeNull()
+    expect(localStorage.getItem(`lb-draft:${OTHER}:new`)).toBeNull()
+    expect(localStorage.getItem('lb-draft')).toBe('not a draft')
+    expect(localStorage.getItem('salamanders-planner')).toBe('kept')
+  })
+
+  it('still signs out when the browser will not let it read what is kept', () => {
+    localStorage.setItem('salamanders-discord-member', JSON.stringify({ id: '200000000000000001', accessToken: 'tok' }))
+    const auth = useAuth()
+    vi.spyOn(Storage.prototype, 'key').mockImplementation(() => {
+      throw new DOMException('denied', 'SecurityError')
+    })
+    try {
+      expect(() => auth.signOut()).not.toThrow()
+    } finally {
+      vi.restoreAllMocks()
+    }
+    expect(auth.signedIn).toBe(false)
+  })
+})
