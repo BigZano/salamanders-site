@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest'
 import * as fc from 'fast-check'
-import { FORM_SLACK, MAX_PICTURE_BYTES, readBounded, readJsonWithin, readPicture } from './librariusBody.js'
+import { FORM_SLACK, MAX_PICTURE_BYTES, pictureOf, readBounded, readJsonWithin, receivePicture } from './librariusBody.js'
 
 const URL_ = 'https://api.test/librarius/x'
 
@@ -35,6 +35,36 @@ function multipart(parts) {
 }
 
 const PNG = new Uint8Array([137, 80, 78, 71, 13, 10, 26, 10, 1, 2, 3])
+
+/** A picture as the write route reads one: what arrived, then the one file of that form. */
+async function readPicture(request) {
+  const came = await receivePicture(request)
+  return came.error === undefined ? pictureOf(came.form) : came
+}
+
+/**
+ * A request whose body sends `chunks` and then neither ends nor sends more: a picture still on its way. `seen` says how many were
+ * pulled, and whether the stream was cancelled.
+ */
+function stalled(chunks, headers = {}) {
+  const seen = { pulled: 0, cancelled: false }
+  let i = 0
+  const body = new ReadableStream({
+    pull(controller) {
+      if (i >= chunks.length) return new Promise(() => {})
+      seen.pulled++
+      controller.enqueue(chunks[i++])
+    },
+    cancel() {
+      seen.cancelled = true
+    },
+  }, { highWaterMark: 0 })
+  return { request: new Request(URL_, { method: 'POST', body, headers, duplex: 'half' }), seen }
+}
+
+const turns = async () => {
+  for (let i = 0; i < 5; i++) await new Promise((resolve) => setImmediate(resolve))
+}
 
 describe('the numbers', () => {
   it('are 10 MiB for a picture, with 64 KB over it for the form around it', () => {
@@ -123,6 +153,97 @@ describe('readBounded', () => {
   })
 })
 
+describe('readBounded: a deadline', () => {
+  it('ends a read that is still waiting when its signal is aborted: the stream is cancelled, and what came of it is dropped', async () => {
+    const { request, seen } = stalled([new Uint8Array([1, 2, 3])])
+    const control = new AbortController()
+    const reading = readBounded(request, 100, { signal: control.signal })
+    await turns()
+    expect(seen.pulled).toBe(1)
+    control.abort()
+    expect(await reading).toStrictEqual({ late: true })
+    expect(seen.cancelled).toBe(true)
+  })
+
+  it('ends a read whose signal is aborted already, before anything is pulled', async () => {
+    const { request, seen } = stalled([new Uint8Array([1, 2, 3])])
+    expect(await readBounded(request, 100, { signal: AbortSignal.abort() })).toStrictEqual({ late: true })
+    expect(seen.pulled).toBe(0)
+    expect(seen.cancelled).toBe(true)
+  })
+
+  it('answers the bytes of a body that ends before its signal is aborted, and an abort after that changes nothing', async () => {
+    const { request } = streamed([new Uint8Array([1, 2]), new Uint8Array([3])])
+    const control = new AbortController()
+    const got = await readBounded(request, 100, { signal: control.signal })
+    control.abort()
+    await turns()
+    expect(got).toStrictEqual({ bytes: new Uint8Array([1, 2, 3]) })
+  })
+
+  it('refuses a Content-Length over the limit as too large, aborted or not, without reading', async () => {
+    const { request, seen } = stalled([new Uint8Array(5)], { 'Content-Length': '101' })
+    expect(await readBounded(request, 100, { signal: AbortSignal.abort() })).toStrictEqual({ tooLarge: true })
+    expect(seen.pulled).toBe(0)
+  })
+
+  it('answers no bytes for a request with no body, whatever its signal', async () => {
+    expect(await readBounded(new Request(URL_), 100, { signal: AbortSignal.abort() })).toStrictEqual({ bytes: new Uint8Array(0) })
+  })
+
+  // A cancel that fails and is left unhandled is an error of the whole run (Vitest fails it), as it would be the end of the server.
+  it('answers late when the stream fails to cancel, and leaves that failure handled', async () => {
+    const body = new ReadableStream({ pull: () => new Promise(() => {}), cancel() { throw new Error('the socket is gone') } }, { highWaterMark: 0 })
+    const control = new AbortController()
+    const reading = readBounded(new Request(URL_, { method: 'POST', body, duplex: 'half' }), 100, { signal: control.signal })
+    await turns()
+    control.abort()
+    expect(await reading).toStrictEqual({ late: true })
+    await turns()
+  })
+
+  it('lets a stream that breaks throw as it did, signal or not', async () => {
+    const broken = new Request(URL_, { method: 'POST', body: new ReadableStream({ start: (c) => c.error(new Error('the connection dropped')) }), duplex: 'half' })
+    await expect(readBounded(broken, 100, { signal: new AbortController().signal })).rejects.toThrow('the connection dropped')
+  })
+})
+
+describe('receivePicture', () => {
+  const TYPE = 'multipart/form-data; boundary=xyz'
+
+  it('answers the bytes that came and the type they came as, not read as a form yet', async () => {
+    const { request } = streamed([new TextEncoder().encode('not a form, '), new TextEncoder().encode('yet')], { 'Content-Type': TYPE })
+    expect(await receivePicture(request)).toStrictEqual({ form: { bytes: new TextEncoder().encode('not a form, yet'), type: TYPE } })
+  })
+
+  it('refuses a type that is not multipart with 415, and leaves the body unread', async () => {
+    const { request, seen } = streamed([PNG], { 'Content-Type': 'image/png' })
+    expect(await receivePicture(request, { signal: new AbortController().signal })).toStrictEqual({ status: 415, error: 'Send the picture as multipart/form-data.' })
+    expect(seen.pulled).toBe(0)
+  })
+
+  it('is 408 "That picture took too long to arrive." when its signal is aborted before all of it has come, and cancels the stream', async () => {
+    const { request, seen } = stalled([new Uint8Array(1000)], { 'Content-Type': TYPE })
+    const control = new AbortController()
+    const receiving = receivePicture(request, { signal: control.signal })
+    await turns()
+    control.abort()
+    expect(await receiving).toStrictEqual({ status: 408, error: 'That picture took too long to arrive.' })
+    expect(seen.cancelled).toBe(true)
+  })
+
+  it('is 413 for a body past the limit and the form around it, before it is late', async () => {
+    const { request, seen } = stalled([new Uint8Array(MAX_PICTURE_BYTES), new Uint8Array(FORM_SLACK + 1)], { 'Content-Type': TYPE })
+    expect(await receivePicture(request, { signal: new AbortController().signal })).toStrictEqual({ status: 413, error: 'That picture is over 10 MB.' })
+    expect(seen.cancelled).toBe(true)
+  })
+
+  it('takes a body of exactly the limit and the form around it', async () => {
+    const { request } = streamed([new Uint8Array(MAX_PICTURE_BYTES), new Uint8Array(FORM_SLACK)], { 'Content-Type': TYPE })
+    expect((await receivePicture(request)).form.bytes).toHaveLength(MAX_PICTURE_BYTES + FORM_SLACK)
+  })
+})
+
 describe('readJsonWithin', () => {
   const LIMITS = { maxBytes: 64, tooLarge: 'Too big.' }
 
@@ -190,7 +311,7 @@ describe('readJsonWithin', () => {
   })
 })
 
-describe('readPicture', () => {
+describe('receivePicture, then pictureOf: the one file of the form', () => {
   it('answers the bytes of the one file of a multipart form', async () => {
     expect(await readPicture(multipart([{ name: 'file', bytes: PNG }]))).toStrictEqual({ bytes: PNG })
   })

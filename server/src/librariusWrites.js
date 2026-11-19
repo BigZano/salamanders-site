@@ -15,10 +15,13 @@
  *
  * Refused work is not free. The first thing a reply, an edit, a delete or an upload does is take a place in a window of TRIES of its member
  * (librariusLimits.js): 20 writes a minute (all three JSON writes share it) and 10 upload tries a minute, 429 over them, whatever the try
- * comes to (a 403, a 404 or a body that is refused all count). That is before any lookup and before the body is read, and it is on top of
+ * comes to (a 403, a 404 or a body that is refused all count; an upload first makes sure its member has a place in flight, below, and is
+ * given its try back when the site is too busy to work it). That is before any lookup and before the body is read, and it is on top of
  * the windows that count what is let through (3 replies and 20 edits a minute, 30 uploads an hour), which a refused try does not use. A
- * picture is held in memory several times over while it is read, so no more than 2 are in flight for a member (429) and 4 in all (503),
- * and what a member holds of pictures that are not sent yet is capped at 100 MiB (413).
+ * member has no more than 2 pictures in flight, from the moment one starts to arrive (429, before the try is taken, so it costs none).
+ * A picture on its way holds no more than its own bytes, and it has 30 seconds from the request's start to come (408). Once it has
+ * come it is held in memory several times over while it is read as a form, judged and stripped, so only 4 are worked at a time in
+ * all (503, and the try is given back). What a member holds of pictures that are not sent yet is capped at 100 MiB (413).
  *
  * reply(postId, request, verdict): POST /librarius/posts/:id/messages with { source, replyTo?, pingReply?, mentions[], uploads[] }
  *   → 202 { pending: { key, state: 'sending' } }. In this order: 404 for a post the store does not hold; 403 for a member who is
@@ -48,12 +51,15 @@
  *   or the site's alike (the outbox deletes it from Discord by the webhook or the bot). A whole post is never deleted here (the
  *   message that opens it is 403), and nothing in a locked post but by a member who manages threads (403 "This post is locked.",
  *   as in Discord, the author included). 404, 403, 409 while it is being changed, 429 as for an edit. → 202.
- * upload(request, verdict): POST /librarius/uploads, multipart, one picture of 10 MB at most → 201 { id }. 403 without the right to
- *   attach, 429 over 30 an hour (checked before the body is read, counted when the picture is held) and over 10 tries a minute, 429
- *   "One picture at a time, please." for a third in flight and 503 for a fifth in all, 413, 415, 400 for a form that is not one
- *   picture or a file that is no PNG, JPEG, WebP or GIF by its bytes (librariusUploads.js sniff, then strip: a file strip refuses is
- *   never held), and 413 "You're holding too many pictures; send or remove some first." when the member would hold more than 100 MiB
- *   of pictures that are not sent. What is held is the stripped bytes, under a name of our own, never the file's.
+ * upload(request, verdict): POST /librarius/uploads, multipart, one picture of 10 MB at most → 201 { id }. In this order: 429 "One
+ *   picture at a time, please." for a member's third in flight (no try is taken); 429 over 10 tries a minute; 403 without the right
+ *   to attach; 429 over 30 an hour (checked before the body is read, counted when the picture is held); 415, 413, and 408 "That
+ *   picture took too long to arrive." for one that has not all come 30 s after the request's start (librariusBody.js receivePicture);
+ *   503 "The site is busy with pictures; try again in a moment." when 4 are being worked already (the try is given back); 413, 400
+ *   for a form that is not one picture or a file that is no PNG, JPEG, WebP or GIF by its bytes (librariusUploads.js sniff, then
+ *   strip: a file strip refuses is never held), and 413 "You're holding too many pictures; send or remove some first." when the
+ *   member would hold more than 100 MiB of pictures that are not sent. What is held is the stripped bytes, under a name of our own,
+ *   never the file's. Every place is given up on every way out, a body that breaks and a store that fails included.
  * search(url, verdict): GET /librarius/members?q= → { members: [{ id, name, avatar }] }, at most 10 of the roster whose name has `q`
  *   or whose id is `q` (searchMembers of deathwatchPeople.js), who may read the forum by Discord's rules (permissionsIn). `q` is 1 to
  *   32 characters, else 400. It takes a place of a window of its own (30 a minute), once the query is known to be one and the roster is
@@ -62,7 +68,7 @@
 import { randomUUID } from 'node:crypto'
 import { searchMembers } from './deathwatchPeople.js'
 import { reply } from './httpReply.js'
-import { readJsonWithin, readPicture } from './librariusBody.js'
+import { pictureOf, readJsonWithin, receivePicture } from './librariusBody.js'
 import { DEFAULT_FORM, FORMS, placement } from './librariusForm.js'
 import { COPY as OUTBOX_COPY } from './librariusOutbox.js'
 import { canRead, permissionsIn } from './librariusPerms.js'
@@ -71,6 +77,9 @@ import { isStoreId } from './librariusText.js'
 import { sniff, strip } from './librariusUploads.js'
 
 const JSON_MAX_BYTES = 65_536
+// How long a picture has to arrive, from the request's start. Bun ends a body that stalls (its idleTimeout of 10 s, which index.js
+// leaves as it is), but not one that keeps coming slowly: this is what bounds how long a picture on its way keeps its member's place.
+const ARRIVAL_MS = 30_000
 // What a member may hold of pictures that are not sent yet, in all: 100 MiB, ten of the biggest there can be.
 const MAX_HELD_BYTES = 100 * 1024 * 1024
 const PENDING_WINDOW_MS = 86_400_000
@@ -177,7 +186,7 @@ export function createLibrariusWrites({ store, guild, roster, outbox, limits, gu
     return { clean: result.clean, matcher }
   }
 
-  /** → the 429 for a member who has used their tries of a kind (`writeTry` or `uploadTry`), or null: taken before anything else is done, refused or not. */
+  /** → the 429 for a member who has used their tries of a kind (`writeTry`), or null: taken before anything else is done, refused or not. */
   function triedTooOften(kind, verdict) {
     const tried = limits.take(kind, verdict.user.id)
     return tried.ok ? null : slowDown(tried)
@@ -338,19 +347,30 @@ export function createLibrariusWrites({ store, guild, roster, outbox, limits, gu
   }
 
   async function upload(request, verdict) {
-    const tooOften = triedTooOften('uploadTry', verdict)
-    if (tooOften !== null) return tooOften
-    const may = mayNotWrite(verdict, COPY.cantReply)
-    if (may !== null) return may
-    if (!verdict.attach) return reply(403, { error: COPY.cantAttach })
-    const early = limits.check('upload', verdict.user.id)
-    if (!early.ok) return slowDown(early)
-
-    // A picture is held in memory several times over while it is read, judged and stripped: only a few at a time (a member's two, four in all).
+    // A member's place covers a picture from the moment it starts to arrive: one turned away for want of it has cost nothing, not even a try.
     const place = limits.hold(verdict.user.id)
     if (!place.ok) return reply(place.status, { error: place.error })
+    const deadline = new AbortController()
+    const timer = setTimeout(() => deadline.abort(), ARRIVAL_MS)
     try {
-      const read = await readPicture(request)
+      const tried = limits.take('uploadTry', verdict.user.id)
+      if (!tried.ok) return slowDown(tried)
+      const may = mayNotWrite(verdict, COPY.cantReply)
+      if (may !== null) return may
+      if (!verdict.attach) return reply(403, { error: COPY.cantAttach })
+      const early = limits.check('upload', verdict.user.id)
+      if (!early.ok) return slowDown(early)
+
+      const came = await receivePicture(request, { signal: deadline.signal })
+      if (came.error) return reply(came.status, { error: came.error })
+      // Only now is the picture held several times over, as it is read as a form, judged and stripped: four at a time in all. One
+      // turned away for that is given its try back: it was the site that was busy, not the member who tried too often.
+      const work = place.work()
+      if (!work.ok) {
+        tried.refund()
+        return reply(work.status, { error: work.error })
+      }
+      const read = await pictureOf(came.form)
       if (read.error) return reply(read.status, { error: read.error })
       const type = sniff(read.bytes)
       const bytes = type === null ? null : strip(read.bytes, type)
@@ -363,6 +383,7 @@ export function createLibrariusWrites({ store, guild, roster, outbox, limits, gu
       if (added === null) return reply(413, { error: COPY.tooManyHeld })
       return reply(201, { id: added.id })
     } finally {
+      clearTimeout(timer)
       place.release()
     }
   }
