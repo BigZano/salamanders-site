@@ -260,6 +260,7 @@ describe('reply: a reply is queued for Discord', () => {
           username: 'Mira Invented',
           avatarUrl: AVATAR,
           siteUrl: POST_URL,
+          form: 'v2',
         },
       },
     ])
@@ -296,6 +297,25 @@ describe('reply: a reply is queued for Discord', () => {
     const plain = world({ options: { form: 'plain' } })
     expect(await out(await plain.writes.reply(POST, json({ source: seven }), verdictOf()))).toMatchObject({ status: 413, body: { error: "That's longer than Discord can carry in 3 messages." } })
     expect(plain.queue).toStrictEqual([])
+  })
+
+  it('writes into the reply the form it was checked in, so the outbox sends it in that form whatever the form is by then (contract 1)', async () => {
+    const three = 'y'.repeat(3000) // one part of the primary form, two of the plain one: both forms take it
+    for (const [options, form] of [[{}, 'v2'], [{ form: 'v2' }, 'v2'], [{ form: 'plain' }, 'plain']]) {
+      const t = world({ options })
+      expect((await t.writes.reply(POST, json({ source: three }), verdictOf())).status, form).toBe(202)
+      expect(t.queue, form).toHaveLength(1)
+      expect(t.queue[0].kind, form).toBe('send')
+      expect(t.queue[0].payload.form, form).toBe(form)
+    }
+  })
+
+  it('writes the form the reply was checked in whatever the member sends, a form of their own included', async () => {
+    for (const form of ['v2', 'plain']) {
+      const t = world({ options: { form } })
+      await t.writes.reply(POST, json({ source: 'hello', form: form === 'v2' ? 'plain' : 'v2', payload: { form: 'v3' } }), verdictOf())
+      expect(t.queue[0].payload.form, form).toBe(form)
+    }
   })
 
   it('does not tell the outbox of a reply that was refused, nor queue it', async () => {

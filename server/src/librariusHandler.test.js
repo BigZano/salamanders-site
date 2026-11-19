@@ -1921,7 +1921,7 @@ describe('the write routes: what they reach', () => {
     expect(out.pending.state).toBe('sending')
     const [entry] = t.calls('enqueueOutbox')[0]
     expect(entry).toMatchObject({ kind: 'send', messageKey: out.pending.key, authorId: READER.id })
-    expect(entry.payload).toMatchObject({ postId: POST, source: 'hello there', username: 'Test Reader', siteUrl: `https://sm2salamanders.site/reliquarium/librarius/${POST}` })
+    expect(entry.payload).toMatchObject({ postId: POST, source: 'hello there', username: 'Test Reader', siteUrl: `https://sm2salamanders.site/reliquarium/librarius/${POST}`, form: 'v2' })
     expect(t.kicks.count).toBe(1)
     expect(t.asked).toEqual([{ fresh: true }])
   })
@@ -1936,6 +1936,8 @@ describe('the write routes: what they reach', () => {
     const out = await body(await t.send('POST', `/librarius/posts/${POST}/messages`, { source: 'hello' }))
     expect(out.pending.key).toBe('key-1')
     expect(t.calls('enqueueOutbox')[0][0].payload.siteUrl).toBe(`https://other.example/reliquarium/librarius/${POST}`)
+    // The queued reply says the form it was checked in, for the outbox to send it in (contract 1).
+    expect(t.calls('enqueueOutbox')[0][0].payload.form).toBe('plain')
     const long = await t.send('POST', `/librarius/posts/${POST}/messages`, { source: 'x'.repeat(7000) })
     expect(long.status).toBe(413)
   })

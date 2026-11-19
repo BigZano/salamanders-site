@@ -36,7 +36,8 @@
  *   `rule` and `match` for AutoMod); and the pictures, which must be the member's own, held and not sent. `pingReply: true` also
  *   pings the author of the message replied to, when that stays within the mention cap and the author is a member of the roster who may
  *   read the forum, as every mention must be (else the ping is dropped, and the reply still goes). The name and picture it goes under are the
- *   roster's (cleanName), else the member's Discord name. The 3-a-minute slot is taken only for a reply that is queued.
+ *   roster's (cleanName), else the member's Discord name. The 3-a-minute slot is taken only for a reply that is queued. The queued
+ *   reply's payload carries `form` ('v2' or 'plain'), the form it was checked in, which the outbox sends it in (contract 1, rB2 m1).
  * pending(postId, verdict): GET /librarius/posts/:id/pending → { pending: [{ key, kind, state, error, source, createdAt }] }: the
  *   member's own outbox entries for the post of the last day that are not done, oldest first. `state` is 'sending' (waiting or
  *   being sent), 'blocked' or 'failed'; `error` is what the member is told, only once the entry has ended, else null; `source` is
@@ -255,6 +256,8 @@ export function createLibrariusWrites({ store, guild, roster, outbox, limits, gu
         username: cleanName(me?.name ?? verdict.user.username),
         avatarUrl: me?.avatar ?? null,
         siteUrl: postUrl(postId),
+        // The form validateReply checked it in: the outbox sends it in that one, whatever the form is by the time it is sent.
+        form,
       },
     })
     outbox?.kick()

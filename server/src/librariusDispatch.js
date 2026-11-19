@@ -1,7 +1,7 @@
 /**
  * Hands each event of the gateway to two handlers that have nothing to do with each other: the live feed (librariusIngest.js) and the
  * "Delete on site" command (librariusCommand.js). The gateway gives events to onDispatch one at a time and waits for each, and the
- * command can take about two seconds to answer an interaction, so the command must not stand in front of the feed: the feed's answer
+ * command can take nearly three seconds to answer an interaction, so the command must not stand in front of the feed: the feed's answer
  * is the answer, and the command goes on by itself.
  *
  * alongside(main, aside, onError = console.error) → dispatch(type, data)

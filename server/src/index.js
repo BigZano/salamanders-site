@@ -225,8 +225,9 @@ else if (librarius.configured && !librariusConfigured) {
   )
 }
 // Replying from the site, on top of that (librariusOutbox.js): on only when LIBRARIUS_WEBHOOK_URL is a webhook address. Off, the
-// read side is whole, every write route answers 503, /librarius/me says it cannot reply, and the outbox, the upload sweeper and the
-// "Delete on site" command do not start. The warnings say which setting, never its value (the address is a secret).
+// read side is whole, every write route answers 503, /librarius/me says it cannot reply, and the outbox and the upload sweeper do not
+// start; the "Delete on site" command is not made in the guild, and one that is there still answers, that deleting from the site is
+// off (Ruling B12). The warnings say which setting, never its value (the address is a secret).
 const replies = repliesConfig(process.env, DISCORD_API_BASE)
 if (librariusConfigured) for (const line of replies.reports) console.warn(line)
 
@@ -248,23 +249,30 @@ if (librariusConfigured) {
     const guild = createLibrariusGuild({ discord, forumId: librarius.forumId })
     const access = createLibrariusAccess({ roles, guild, guildId: GUILD_ID })
     const store = createLibrariusStore(pool)
-    // The replies' parts, made only when there is an address for the webhook: the outbox is the one writer to the forum, the
-    // sweeper clears the pictures held for replies that were never sent, and the command is "Delete on site" in the Apps menu.
-    // A failure to make them leaves the replies off and the read side on: no outbox is no webhook, to the handler.
+    // The replies' parts, made only when there is an address for the webhook: the outbox is the one writer to the forum, and the
+    // sweeper clears the pictures held for replies that were never sent. A failure to make them leaves the replies off and the read
+    // side on: no outbox is no webhook, to the handler.
     let webhook = null
     let outbox = null
     let sweeper = null
-    let command = null
     if (replies.webhookUrl !== null) {
       try {
         webhook = createWebhookClient({ url: replies.webhookUrl, apiBase: DISCORD_API_BASE })
         outbox = createOutbox({ store, webhook, discord, form: replies.form, guildId: GUILD_ID })
         sweeper = createUploadSweeper({ store })
-        command = createCommand({ discord, store, guildId: GUILD_ID })
       } catch (err) {
-        outbox = sweeper = command = null
+        outbox = sweeper = null
         console.error(`Librarius: replying from the site could not be set up, so it stays off: ${describeForLog(err)}`)
       }
+    }
+    // "Delete on site" in the Apps menu is made whenever the Librarius is, with the replies on or off (Ruling B12): on, it is made in
+    // the guild at READY and sends a member to the site; off, it is not made, and one made while they were on still answers within
+    // the three seconds, that deleting from the site is off. A failure to make it leaves the command off and the rest as it is.
+    let command = null
+    try {
+      command = createCommand({ discord, store, guildId: GUILD_ID, repliesOn: outbox !== null })
+    } catch (err) {
+      console.error(`Librarius: the "Delete on site" command could not be set up, so it stays off: ${describeForLog(err)}`)
     }
     // What the webhook posts is the outbox's to store, whole: the import and the live feed must know it by its id, or a catch-up
     // would store parts 2 and 3 of a reply as messages of their own, and the first part over the reply.
@@ -292,7 +300,7 @@ if (librariusConfigured) {
       onReady: () => importer.run(),
       webhookId,
     })
-    // The command answers an interaction within about two seconds, so it runs beside the live feed and never in front of it
+    // The command answers an interaction within the three seconds Discord gives, so it runs beside the live feed and never in front of it
     // (librariusDispatch.js).
     const onDispatch =
       command === null
