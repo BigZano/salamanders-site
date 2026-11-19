@@ -1,7 +1,10 @@
-# Legion Archive merge gate: the build and its Content-Security-Policy first (they are quick, and the one dist they make is
-# what the archive scan reads below), then the whole suite, then 100% coverage + mutation on the gated units, then (locally,
-# where the plaintext exists) a build scan against real-content sentinels.
+# Legion Archive merge gate: first the Librarius's AutoMod smoke check on Bun (about 2 seconds: a regular expression over its
+# time budget must leave no child process running, which only Bun can show, so the suite cannot), then the build and its
+# Content-Security-Policy (they are quick, and the one dist they make is what the archive scan reads below), then the whole
+# suite, then 100% coverage + mutation on the gated units, then (locally, where the plaintext exists) a build scan against
+# real-content sentinels.
 export PATH="$PWD/node_modules/.bin:$PATH"
+node_modules/.bin/bun server/src/librariusRegexSmoke.js || exit 1
 bun run build >/dev/null && node scripts/check-csp.mjs dist || exit 1
 bun run test || exit 1
 bun run test:coverage || exit 1
