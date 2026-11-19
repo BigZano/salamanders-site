@@ -408,6 +408,154 @@ describe.skipIf(!runnable)('the outbox store on a real Postgres 16, as the data-
       expect(await message(A)).toBeUndefined()
     })
 
+    // The worker removes the parts an edit no longer needs before finishEdit writes the new list (librariusOutbox.js runEdit), and Discord's
+    // gateway tells of each removal with a MESSAGE_DELETE, which the live feed hands to siteDeleted.
+    describe('a deletion in Discord while an edit of the reply is on its way', () => {
+      /** Queues an edit of the reply A, and takes it as the worker does unless it is to stay pending. → the entry's id */
+      async function editOfA({ take = true } = {}) {
+        const { id } = await store.enqueueOutbox({ kind: 'edit', messageKey: A, authorId: MEMBER, payload: { postId: POST, source: 'Shorter.', mentions: [] } })
+        if (take) expect((await store.claimOutbox(Date.now())).id).toBe(id)
+        return id
+      }
+      const entryRow = async (id) => (await rows('select state, payload from librarius_outbox where id = $1', [id]))[0]
+      const shorter = (id, partIds) => store.finishEdit(id, { messageId: A, source: 'Shorter.', content: 'Shorter.', partIds, event: { action: 'edit', postId: POST, messageId: A, note: `${partIds.length} parts` } })
+      const nothingTaken = async () => {
+        expect(await rows("select id from librarius_outbox where kind = 'delete'")).toEqual([])
+        expect(await rows("select 1 from librarius_events where action = 'deleted-in-discord'")).toEqual([])
+        expect(await rows('select message_id from librarius_tombstones')).toEqual([])
+      }
+      async function waitsForLock() {
+        for (let tries = 0; (await rows("select count(*)::int as n from pg_stat_activity where wait_event_type = 'Lock' and datname = current_database()"))[0].n === 0; tries++) {
+          if (tries > 100) throw new Error('the echo never waited for a lock')
+          await new Promise((resolve) => setTimeout(resolve, 50))
+        }
+      }
+
+      it.each([
+        ['one at a time, each after its removal', [[B], [C]]],
+        ['together', [[B, C]]],
+      ])('keeps a reply of three parts edited down to one, when Discord tells of the removals of parts 2 and 3 %s before the edit is done', async (_, echoes) => {
+        await sentReply([A, B, C])
+        const edit = await editOfA()
+        const done = [`edit:${A}`]
+        for (const echo of echoes) {
+          for (const id of echo) {
+            done.push(`remove:${id}`)
+            await store.outboxProgress(edit, { form: 'v2', parts: [], inflight: null, done: [...done] })
+          }
+          expect(await store.siteDeleted(echo, POST)).toEqual({ plain: [] })
+        }
+        // The reply is left to the edit, which is told: nothing of the reply is deleted, queued or noted, and the worker's progress is kept.
+        expect((await message(A)).state).toBe('sending')
+        expect(await partsOf(A)).toEqual([
+          [A, 0, HOOK],
+          [B, 1, HOOK],
+          [C, 2, HOOK],
+        ])
+        expect(await entryRow(edit)).toMatchObject({ state: 'sending', payload: { gone: [B, C], progress: { done } } })
+        await nothingTaken()
+        // The edit is done: the parts it removed itself do not count.
+        expect(await shorter(edit, [A])).toEqual({ stored: true, gone: [] })
+        expect(await partsOf(A)).toEqual([[A, 0, HOOK]])
+        expect(await message(A)).toMatchObject({ source: 'Shorter.', content: 'Shorter.', state: null, origin: 'site', author_id: MEMBER })
+        expect((await entryRow(edit)).state).toBe('sent')
+        await nothingTaken()
+        // An echo that comes in after the edit is done finds no part of a reply: it is a message the store does not have.
+        expect(await store.siteDeleted([C], POST)).toEqual({ plain: [C] })
+        expect(await partsOf(A)).toEqual([[A, 0, HOOK]])
+      })
+
+      it.each([
+        ['its second part', B],
+        ['its first part, the message', A],
+      ])('still takes the reply when a moderator deletes %s, which the edit keeps, while the edit is on its way', async (_, kept) => {
+        await sentReply([A, B, C])
+        const edit = await editOfA()
+        await store.outboxProgress(edit, { form: 'v2', parts: [], inflight: null, done: [`edit:${A}`, `edit:${B}`, `remove:${C}`] })
+        expect(await store.siteDeleted([C], POST)).toEqual({ plain: [] })
+        expect(await store.siteDeleted([kept], POST)).toEqual({ plain: [] })
+        expect(await shorter(edit, [A, B])).toEqual({ stored: false, gone: [kept] })
+        // Nothing was written: the reply is as it was, and the entry is still the worker's.
+        expect(await partsOf(A)).toHaveLength(3)
+        expect((await message(A)).source).toBe(SOURCE)
+        expect((await entryRow(edit)).state).toBe('sending')
+        // The worker then purges the rest (runEdit): it removes the parts but the one that is gone, and finishes the entry as a delete.
+        await store.finishDelete(edit, { messageId: A, partIds: [A, B, C].filter((id) => id !== kept), event: { action: 'delete', postId: POST, messageId: A, note: 'A part was deleted in Discord.' } })
+        expect(await message(A)).toBeUndefined()
+        expect(await partsOf(A)).toEqual([])
+        expect((await rows('select message_id from librarius_tombstones')).map((r) => r.message_id)).toEqual([A])
+        expect((await entryRow(edit)).state).toBe('sent')
+        expect(await rows("select id from librarius_outbox where kind = 'delete'")).toEqual([])
+      })
+
+      it('leaves the reply to an edit that is queued and not begun, as to one at work', async () => {
+        await sentReply([A, B, C])
+        const edit = await editOfA({ take: false })
+        expect(await store.siteDeleted([B], POST)).toEqual({ plain: [] })
+        expect(await entryRow(edit)).toMatchObject({ state: 'pending', payload: { gone: [B] } })
+        expect(await partsOf(A)).toHaveLength(3)
+        await nothingTaken()
+        // When it runs and keeps part 2, it is told, and the worker purges the reply.
+        await store.claimOutbox(Date.now())
+        expect(await shorter(edit, [A, B, C])).toEqual({ stored: false, gone: [B] })
+      })
+
+      it.each(['sent', 'failed', 'blocked'])('takes the whole reply as before when the edit of it is %s', async (state) => {
+        await sentReply([A, B, C])
+        const edit = await editOfA()
+        if (state === 'sent') expect(await shorter(edit, [A, B, C])).toEqual({ stored: true, gone: [] })
+        else await store.outboxSet(edit, { state, messageState: state === 'blocked' ? 'blocked' : null })
+        expect(await store.siteDeleted([B], POST)).toEqual({ plain: [] })
+        expect(await message(A)).toBeUndefined()
+        expect(await rows("select message_key, payload from librarius_outbox where kind = 'delete'")).toEqual([{ message_key: A, payload: { postId: POST, partIds: [A, C], webhookId: HOOK } }])
+        expect((await rows("select 1 from librarius_events where action = 'deleted-in-discord'")).length).toBe(1)
+        expect((await entryRow(edit)).payload.gone).toBeUndefined()
+      })
+
+      it.each([
+        ['a delete from the route, which reads its parts when it runs: one of its own is queued beside it', { postId: POST }, 2],
+        ['a delete that knows its parts: nothing more is queued', { postId: POST, partIds: [A, B, C] }, 1],
+      ])('takes the whole reply as before with %s', async (_, payload, deletes) => {
+        await sentReply([A, B, C])
+        await store.enqueueOutbox({ kind: 'delete', messageKey: A, authorId: MEMBER, payload })
+        expect(await store.siteDeleted([B], POST)).toEqual({ plain: [] })
+        expect(await message(A)).toBeUndefined()
+        expect(await partsOf(A)).toEqual([])
+        expect(await rows("select 1 from librarius_outbox where kind = 'delete' and state = 'pending'")).toHaveLength(deletes)
+        expect((await rows("select 1 from librarius_events where action = 'deleted-in-discord'")).length).toBe(1)
+      })
+
+      it('keeps the reply when the edit is done while the echo of its removals waits for the entry: by then they are no parts of it', async () => {
+        await sentReply([A, B, C])
+        const edit = await editOfA()
+        const worker = await pool.connect()
+        try {
+          // finishEdit's own statements, one at a time on a connection of their own: the entry is locked first, and the reply made one part...
+          await worker.query('begin')
+          await worker.query("select coalesce(payload->'gone', '[]'::jsonb) as gone, author_id from librarius_outbox where id = $1 and state = 'sending' for update", [edit])
+          await worker.query("update librarius_messages set source = 'Shorter.', content = 'Shorter.', edited_at = now(), state = null, rev = nextval('librarius_rev') where id = $1 and origin = 'site'", [A])
+          await worker.query('delete from librarius_parts where message_id = $1', [A])
+          await worker.query('insert into librarius_parts (message_id, part_index, discord_id, webhook_id) values ($1, 0, $1, $2)', [A, HOOK])
+          await worker.query("update librarius_outbox set state = 'sent', last_error = null where id = $1", [edit])
+          // ...then the echo of the removals of parts 2 and 3 comes in: it still reads them as parts of the reply, and waits for the entry...
+          const echo = store.siteDeleted([B, C], POST).then(
+            (out) => ({ out }),
+            (err) => ({ err }),
+          )
+          await waitsForLock()
+          // ...and the edit is done.
+          await worker.query('commit')
+          expect(await echo).toEqual({ out: { plain: [] } })
+        } finally {
+          await worker.query('rollback').catch(() => {})
+          worker.release()
+        }
+        expect(await partsOf(A)).toEqual([[A, 0, HOOK]])
+        expect(await message(A)).toMatchObject({ source: 'Shorter.', state: null })
+        await nothingTaken()
+      })
+    })
+
     it('lists the author’s entries that are not done, sweeps old uploads and spares those a live reply names', async () => {
       const held = await store.addUpload({ authorId: MEMBER, name: 'picture.png', contentType: 'image/png', bytes: new Uint8Array([137, 80, 78, 71]), maxHeldBytes: 1_000_000 })
       const used = await store.addUpload({ authorId: MEMBER, name: 'picture.png', contentType: 'image/png', bytes: new Uint8Array([137, 80, 78, 71]), maxHeldBytes: 1_000_000 })

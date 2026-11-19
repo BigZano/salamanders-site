@@ -657,6 +657,20 @@ describe('finishEdit', () => {
     expect(await r.done).toEqual({ stored: true, gone: [] })
   })
 
+  // The parts an edit no longer needs are removed before it is done, and Discord tells of each removal: siteDeleted notes those in the entry.
+  it('does not count the parts the edit removed itself: a reply of three parts made one is stored, with its one part', async () => {
+    const r = run([["payload->'gone'", [{ gone: [MSG_2, MSG_3], author_id: AUTHOR }]]], { partIds: [MSG] })
+    expect(await r.done).toEqual({ stored: true, gone: [] })
+    expect(r.log.find((l) => l.sql.startsWith('insert into librarius_parts')).params).toEqual([MSG, [MSG]])
+    expect(r.sqls().slice(-3)).toEqual(["update librarius_outbox set state = 'sent', last_error = null where id = $1 returning author_id", has('insert into librarius_events'), 'commit'])
+  })
+
+  it('still counts a part it keeps that was deleted in Discord, beside the ones it removed: nothing is written, and the caller purges the reply', async () => {
+    const r = run([["payload->'gone'", [{ gone: [MSG_3, MSG] }]]], { partIds: [MSG, MSG_2] })
+    expect(await r.done).toEqual({ stored: false, gone: [MSG] })
+    expect(r.sqls()).toEqual(['begin', GONE_SQL, 'commit'])
+  })
+
   it('rolls back and throws what failed', async () => {
     const err = boom()
     const r = run([['insert into librarius_parts', err]])
@@ -868,9 +882,13 @@ describe('messageOfPart', () => {
   })
 })
 
-const NOTE_SQL = "select id, payload from librarius_outbox where kind in ('send', 'edit') and state in ('pending', 'sending') and exists (select 1 from jsonb_array_elements(coalesce(payload->'progress'->'parts', '[]'::jsonb)) as part where part->>'id' = any($1::text[])) order by id for update"
+// The one statement in which siteDeleted locks every entry it reads or writes, in the order of their ids, before any message: the replies and
+// edits on their way that sent one of the ids no stored reply owns ($1), and the edits and deletes on their way of the replies it hits ($2).
+const ENTRIES_SQL =
+  "select id, kind, message_key, payload from librarius_outbox where state in ('pending', 'sending') and ((kind in ('send', 'edit') and exists (select 1 from jsonb_array_elements(coalesce(payload->'progress'->'parts', '[]'::jsonb)) as part where part->>'id' = any($1::text[]))) or (kind in ('edit', 'delete') and message_key = any($2::text[]))) order by id for update"
 const NOTE_UPDATE = "update librarius_outbox set payload = jsonb_set(payload, '{gone}', $2::jsonb, true) where id = $1"
-const QUEUED_SQL = "select payload from librarius_outbox where kind = 'delete' and message_key = $1 and state in ('pending', 'sending') for update"
+const PARTS_SQL = 'select discord_id, message_id from librarius_parts where discord_id = any($1::bigint[]) order by message_id'
+const REPLY_PARTS_SQL = 'select discord_id, webhook_id from librarius_parts where message_id = $1 order by part_index'
 
 describe('siteDeleted', () => {
   // A reply of three parts MSG, MSG_2, MSG_3; MSG's message is stored.
@@ -880,13 +898,15 @@ describe('siteDeleted', () => {
     ['select discord_id, webhook_id from librarius_parts where message_id', [{ discord_id: MSG, webhook_id: HOOK }, { discord_id: MSG_2, webhook_id: HOOK }, { discord_id: MSG_3, webhook_id: HOOK }]],
     ['select post_id, author_id from librarius_messages', [{ post_id: POST, author_id: AUTHOR }]],
   ]
+  const deleteOf = (id, payload, messageKey = MSG) => ({ id, kind: 'delete', message_key: messageKey, payload })
+  const editOf = (id, payload, messageKey = MSG) => ({ id, kind: 'edit', message_key: messageKey, payload: { postId: POST, source: 'shorter', mentions: [], ...payload } })
 
-  it('answers every id as plain when none is a part, after one question', async () => {
+  it('answers every id as plain when none is a part, after one question of the parts and one of the entries', async () => {
     const { pool, log } = fakePool()
     expect(await store(pool).siteDeleted([MSG, MSG_2], POST)).toEqual({ plain: [MSG, MSG_2] })
-    expect(log.map((l) => l.sql)).toEqual(['begin', 'select discord_id, message_id from librarius_parts where discord_id = any($1::bigint[]) order by message_id', NOTE_SQL, 'commit'])
+    expect(log.map((l) => l.sql)).toEqual(['begin', PARTS_SQL, ENTRIES_SQL, 'commit'])
     expect(log[1].params).toEqual([[MSG, MSG_2]])
-    expect(log[2].params).toEqual([[MSG, MSG_2]])
+    expect(log[2].params).toEqual([[MSG, MSG_2], []])
   })
 
   it('asks nothing for no ids', async () => {
@@ -896,15 +916,14 @@ describe('siteDeleted', () => {
   })
 
   it('takes the whole reply when one of its parts is deleted: the message goes, noted for the readers, and the parts left are queued for deletion', async () => {
-    const r = revPool([...three, [QUEUED_SQL, []]])
+    const r = revPool([...three, [ENTRIES_SQL, []]])
     expect(await store(r.pool).siteDeleted([MSG_2, MSG_4], POST)).toEqual({ plain: [MSG_4] })
     expect(r.sqls()).toEqual([
       'begin',
-      'select discord_id, message_id from librarius_parts where discord_id = any($1::bigint[]) order by message_id',
-      NOTE_SQL,
+      PARTS_SQL,
+      ENTRIES_SQL,
       "select nextval('librarius_rev') as rev",
-      QUEUED_SQL,
-      'select discord_id, webhook_id from librarius_parts where message_id = $1 order by part_index',
+      REPLY_PARTS_SQL,
       'select post_id, author_id from librarius_messages where id = $1',
       'insert into librarius_tombstones (message_id, post_id, rev) select id, post_id, $2::bigint from librarius_messages where id = any($1::bigint[])',
       'delete from librarius_messages where id = any($1::bigint[])',
@@ -914,24 +933,23 @@ describe('siteDeleted', () => {
       'commit',
     ])
     const at = (sql) => r.log.find((l) => l.sql === sql).params
-    expect(at('select discord_id, webhook_id from librarius_parts where message_id = $1 order by part_index')).toEqual([MSG])
+    expect(at(REPLY_PARTS_SQL)).toEqual([MSG])
     expect(at('select post_id, author_id from librarius_messages where id = $1')).toEqual([MSG])
     expect(at('delete from librarius_parts where message_id = $1')).toEqual([MSG])
-    expect(at(QUEUED_SQL)).toEqual([MSG])
-    expect(at(NOTE_SQL)).toEqual([[MSG_4]])
+    expect(at(ENTRIES_SQL)).toEqual([[MSG_4], [MSG]])
     expect(at('delete from librarius_messages where id = any($1::bigint[])')).toEqual([[MSG]])
-    expect(r.log[7].params).toEqual([[MSG], '900'])
+    expect(r.log[6].params).toEqual([[MSG], '900'])
     expect(at("insert into librarius_outbox (kind, message_key, author_id, payload) values ('delete', $1, $2, $3::jsonb)")).toEqual([MSG, AUTHOR, JSON.stringify({ postId: POST, partIds: [MSG, MSG_3], webhookId: HOOK })])
     expect(at('insert into librarius_events (actor_id, action, post_id, message_id, note) values ($1, $2, $3, $4, $5)')).toEqual([AUTHOR, 'deleted-in-discord', POST, MSG, null])
   })
 
-  it('locks the deletes of the reply that are on their way before it deletes the message: an entry before its message, the order finishDelete and outboxSet lock in', async () => {
-    const r = revPool([...three, [QUEUED_SQL, []]])
+  it('locks the entries of the reply that are on their way before it reads or deletes its message: an entry before its message, the order finishDelete, finishEdit and outboxSet lock in', async () => {
+    const r = revPool([...three, [ENTRIES_SQL, []]])
     await store(r.pool).siteDeleted([MSG_2], POST)
     const order = r.sqls()
-    const locked = order.indexOf(QUEUED_SQL)
+    const locked = order.indexOf(ENTRIES_SQL)
     expect(locked).toBeGreaterThan(0)
-    for (const later of ['select discord_id, webhook_id from librarius_parts where message_id = $1 order by part_index', 'select post_id, author_id from librarius_messages where id = $1', 'delete from librarius_messages where id = any($1::bigint[])', 'delete from librarius_parts where message_id = $1']) {
+    for (const later of [REPLY_PARTS_SQL, 'select post_id, author_id from librarius_messages where id = $1', 'delete from librarius_messages where id = any($1::bigint[])', 'delete from librarius_parts where message_id = $1']) {
       expect(order.indexOf(later), later).toBeGreaterThan(locked)
     }
   })
@@ -943,11 +961,11 @@ describe('siteDeleted', () => {
       ['select post_id, author_id from librarius_messages', [{ post_id: POST, author_id: AUTHOR }]],
     ])
     await store(r.pool).siteDeleted([MSG], POST)
-    expect(r.sqls().indexOf(QUEUED_SQL)).toBeLessThan(r.sqls().indexOf('delete from librarius_messages where id = any($1::bigint[])'))
-    expect(r.log.find((l) => l.sql === QUEUED_SQL).params).toEqual([MSG])
+    expect(r.sqls().indexOf(ENTRIES_SQL)).toBeLessThan(r.sqls().indexOf('delete from librarius_messages where id = any($1::bigint[])'))
+    expect(r.log.find((l) => l.sql === ENTRIES_SQL).params).toEqual([[], [MSG]])
   })
 
-  it('takes the replies one at a time, in the order the parts were read in (by the id of the reply), each with its own deletes locked first', async () => {
+  it('locks the entries of every reply it hits in one statement, before any message, and then takes the replies in the order of their ids', async () => {
     const r = revPool([
       partsOf([
         { discord_id: MSG_2, message_id: MSG },
@@ -955,14 +973,13 @@ describe('siteDeleted', () => {
       ]),
       ['select discord_id, webhook_id from librarius_parts where message_id', (p) => (p[0] === MSG ? [{ discord_id: MSG, webhook_id: HOOK }, { discord_id: MSG_2, webhook_id: HOOK }] : [{ discord_id: MSG_3, webhook_id: HOOK }, { discord_id: MSG_4, webhook_id: HOOK }])],
       ['select post_id, author_id from librarius_messages', [{ post_id: POST, author_id: AUTHOR }]],
-      [QUEUED_SQL, []],
+      [ENTRIES_SQL, []],
     ])
     await store(r.pool).siteDeleted([MSG_4, MSG_2], POST)
-    const steps = r.log.filter((l) => l.sql === QUEUED_SQL || l.sql.startsWith('delete from librarius_messages')).map((l) => [l.sql === QUEUED_SQL ? 'lock' : 'delete', l.params[0]])
+    const steps = r.log.filter((l) => l.sql === ENTRIES_SQL || l.sql.startsWith('delete from librarius_messages')).map((l) => (l.sql === ENTRIES_SQL ? ['lock', l.params[1]] : ['delete', l.params[0]]))
     expect(steps).toEqual([
-      ['lock', MSG],
+      ['lock', [MSG, MSG_3]],
       ['delete', [MSG]],
-      ['lock', MSG_3],
       ['delete', [MSG_3]],
     ])
   })
@@ -976,7 +993,7 @@ describe('siteDeleted', () => {
       // The delete of MSG's reply committed while this waited: its parts went with its message.
       ['select discord_id, webhook_id from librarius_parts where message_id', (p) => (p[0] === MSG ? [] : [{ discord_id: MSG_3, webhook_id: HOOK }, { discord_id: MSG_4, webhook_id: HOOK }])],
       ['select post_id, author_id from librarius_messages', [{ post_id: POST, author_id: AUTHOR }]],
-      [QUEUED_SQL, []],
+      [ENTRIES_SQL, []],
     ])
     expect(await store(r.pool).siteDeleted([MSG_2, MSG_4], POST)).toEqual({ plain: [] })
     const touched = (sql) => r.log.filter((l) => l.sql === sql).map((l) => l.params[0])
@@ -987,23 +1004,38 @@ describe('siteDeleted', () => {
     expect(r.log.filter((l) => l.sql.startsWith('insert into librarius_events')).map((l) => l.params[3])).toEqual([MSG_3])
   })
 
+  it('leaves a reply alone whose deleted parts an edit removed and was done with while this waited for its entry: the reply keeps the parts it has now', async () => {
+    const r = revPool([
+      partsOf([
+        { discord_id: MSG_2, message_id: MSG },
+        { discord_id: MSG_3, message_id: MSG },
+      ]),
+      // The edit made the reply one part, and committed: its entry is 'sent' now, so the lock found none of it.
+      ['select discord_id, webhook_id from librarius_parts where message_id', [{ discord_id: MSG, webhook_id: HOOK }]],
+      ['select post_id, author_id from librarius_messages', [{ post_id: POST, author_id: AUTHOR }]],
+      [ENTRIES_SQL, []],
+    ])
+    expect(await store(r.pool).siteDeleted([MSG_2, MSG_3], POST)).toEqual({ plain: [] })
+    expect(r.sqls()).toEqual(['begin', PARTS_SQL, ENTRIES_SQL, "select nextval('librarius_rev') as rev", REPLY_PARTS_SQL, 'commit'])
+  })
+
   // A delete of the reply that is on its way, as the row of the outbox says.
   it.each([
     ['one that was queued with the parts to remove', { postId: POST, partIds: [MSG, MSG_3] }],
     ['one at work, that has written down the parts it removes', { postId: POST, progress: { form: null, parts: [], inflight: null, partIds: [MSG, MSG_2, MSG_3] } }],
   ])('queues nothing when %s is on its way already', async (_, payload) => {
-    const r = revPool([...three, [QUEUED_SQL, [{ payload }]]])
+    const r = revPool([...three, [ENTRIES_SQL, [deleteOf('9', payload)]]])
     await store(r.pool).siteDeleted([MSG_2], POST)
     expect(r.sqls().some((s) => s.startsWith('insert into librarius_outbox'))).toBe(false)
     expect(r.sqls()).toContain('delete from librarius_messages where id = any($1::bigint[])')
   })
 
   it.each([
-    ['a delete from the route, which will read its parts from the message, that is gone', [{ payload: { postId: POST } }]],
-    ['a delete that has begun but not written its parts down', [{ payload: { postId: POST, progress: { form: null, parts: [], inflight: null } } }]],
-    ['two that do not know them', [{ payload: { postId: POST } }, { payload: { postId: POST, progress: {} } }]],
+    ['a delete from the route, which will read its parts from the message, that is gone', [deleteOf('9', { postId: POST })]],
+    ['a delete that has begun but not written its parts down', [deleteOf('9', { postId: POST, progress: { form: null, parts: [], inflight: null } })]],
+    ['two that do not know them', [deleteOf('9', { postId: POST }), deleteOf('10', { postId: POST, progress: {} })]],
   ])('queues a delete of its own beside %s, since removing a part twice is harmless', async (_, rows) => {
-    const r = revPool([...three, [QUEUED_SQL, rows]])
+    const r = revPool([...three, [ENTRIES_SQL, rows]])
     await store(r.pool).siteDeleted([MSG_2], POST)
     const queued = r.log.filter((l) => l.sql.startsWith('insert into librarius_outbox'))
     expect(queued).toHaveLength(1)
@@ -1011,22 +1043,130 @@ describe('siteDeleted', () => {
   })
 
   it('queues nothing when any one of the deletes on its way knows its parts, though the others do not', async () => {
-    const r = revPool([...three, [QUEUED_SQL, [{ payload: { postId: POST } }, { payload: { postId: POST, partIds: [MSG_3] } }]]])
+    const r = revPool([...three, [ENTRIES_SQL, [deleteOf('9', { postId: POST }), deleteOf('10', { postId: POST, partIds: [MSG_3] })]]])
     await store(r.pool).siteDeleted([MSG_2], POST)
     expect(r.sqls().some((s) => s.startsWith('insert into librarius_outbox'))).toBe(false)
   })
 
+  it('counts only the deletes of that reply: a delete of another reply that knows its parts does not stand in for this one', async () => {
+    const r = revPool([...three, [ENTRIES_SQL, [deleteOf('9', { postId: POST, partIds: [MSG_4] }, MSG_4)]]])
+    await store(r.pool).siteDeleted([MSG_2], POST)
+    expect(r.log.filter((l) => l.sql.startsWith('insert into librarius_outbox')).map((l) => l.params[0])).toEqual([MSG])
+  })
+
+  describe('a reply that an edit is on its way for', () => {
+    // The edit may be removing these parts itself (the parts it no longer needs go before finishEdit writes the new list), so it decides.
+    it('leaves the reply to the edit: notes the parts deleted in the edit, and deletes, queues and notes nothing of the reply', async () => {
+      const r = revPool([
+        partsOf([
+          { discord_id: MSG_2, message_id: MSG },
+          { discord_id: MSG_3, message_id: MSG },
+        ]),
+        ...three.slice(1),
+        [ENTRIES_SQL, [editOf('8', { progress: { form: 'v2', parts: [], inflight: null, done: [`edit:${MSG}`, `remove:${MSG_2}`, `remove:${MSG_3}`] } })]],
+      ])
+      expect(await store(r.pool).siteDeleted([MSG_3, MSG_2], POST)).toEqual({ plain: [] })
+      expect(r.sqls()).toEqual(['begin', PARTS_SQL, ENTRIES_SQL, "select nextval('librarius_rev') as rev", REPLY_PARTS_SQL, NOTE_UPDATE, 'commit'])
+      expect(r.log[2].params).toEqual([[], [MSG]])
+      expect(r.log[4].params).toEqual([MSG])
+      // In the order of the reply's parts.
+      expect(r.log[5].params).toEqual(['8', JSON.stringify([MSG_2, MSG_3])])
+    })
+
+    it.each([
+      ['one that has not begun (pending, no progress)', editOf('8', {})],
+      ['one at work (sending)', editOf('8', { progress: { form: 'v2', parts: [], inflight: null } })],
+      ['a restore, which the worker queued', editOf('8', { mentions: [], restore: true })],
+    ])('leaves it to %s', async (_, edit) => {
+      const r = revPool([...three, [ENTRIES_SQL, [edit]]])
+      expect(await store(r.pool).siteDeleted([MSG_2], POST)).toEqual({ plain: [] })
+      expect(r.log.filter((l) => l.sql === NOTE_UPDATE).map((l) => l.params)).toEqual([['8', JSON.stringify([MSG_2])]])
+      expect(r.sqls().filter((s) => s.startsWith('delete') || s.startsWith('insert'))).toEqual([])
+    })
+
+    it('adds the parts to what the edit had been told, once each', async () => {
+      const r = revPool([...three, [ENTRIES_SQL, [editOf('8', { gone: [MSG_4, MSG_2] })]]])
+      await store(r.pool).siteDeleted([MSG_2], POST)
+      expect(r.log.find((l) => l.sql === NOTE_UPDATE).params).toEqual(['8', JSON.stringify([MSG_4, MSG_2])])
+    })
+
+    it('notes only the deleted parts that are still parts of the reply', async () => {
+      const r = revPool([
+        partsOf([
+          { discord_id: MSG_2, message_id: MSG },
+          { discord_id: MSG_3, message_id: MSG },
+        ]),
+        // MSG_3 stopped being a part while this waited (an earlier edit made the reply two parts).
+        ['select discord_id, webhook_id from librarius_parts where message_id', [{ discord_id: MSG, webhook_id: HOOK }, { discord_id: MSG_2, webhook_id: HOOK }]],
+        [ENTRIES_SQL, [editOf('8', {})]],
+      ])
+      await store(r.pool).siteDeleted([MSG_2, MSG_3], POST)
+      expect(r.log.find((l) => l.sql === NOTE_UPDATE).params).toEqual(['8', JSON.stringify([MSG_2])])
+    })
+
+    it('leaves the reply to the edit though a delete is on its way too: the delete removes what is left, and the edit does what it does', async () => {
+      const r = revPool([...three, [ENTRIES_SQL, [deleteOf('7', { postId: POST }), editOf('8', {})]]])
+      expect(await store(r.pool).siteDeleted([MSG_2], POST)).toEqual({ plain: [] })
+      expect(r.log.filter((l) => l.sql === NOTE_UPDATE).map((l) => l.params[0])).toEqual(['8'])
+      expect(r.sqls().filter((s) => s.startsWith('delete') || s.startsWith('insert'))).toEqual([])
+    })
+
+    it('tells every edit on its way for the reply, and no delete', async () => {
+      const r = revPool([...three, [ENTRIES_SQL, [editOf('6', {}), deleteOf('7', { postId: POST }), editOf('8', { gone: [MSG_3] })]]])
+      await store(r.pool).siteDeleted([MSG_2], POST)
+      expect(r.log.filter((l) => l.sql === NOTE_UPDATE).map((l) => l.params)).toEqual([
+        ['6', JSON.stringify([MSG_2])],
+        ['8', JSON.stringify([MSG_3, MSG_2])],
+      ])
+    })
+
+    it('still takes another reply in the same call, which no edit is on its way for', async () => {
+      const r = revPool([
+        partsOf([
+          { discord_id: MSG_2, message_id: MSG },
+          { discord_id: MSG_4, message_id: MSG_3 },
+        ]),
+        ['select discord_id, webhook_id from librarius_parts where message_id', (p) => (p[0] === MSG ? [{ discord_id: MSG, webhook_id: HOOK }, { discord_id: MSG_2, webhook_id: HOOK }] : [{ discord_id: MSG_3, webhook_id: HOOK }, { discord_id: MSG_4, webhook_id: HOOK }])],
+        ['select post_id, author_id from librarius_messages', [{ post_id: POST, author_id: AUTHOR }]],
+        [ENTRIES_SQL, [editOf('8', {})]],
+      ])
+      expect(await store(r.pool).siteDeleted([MSG_2, MSG_4], POST)).toEqual({ plain: [] })
+      expect(r.log.filter((l) => l.sql === NOTE_UPDATE).map((l) => l.params)).toEqual([['8', JSON.stringify([MSG_2])]])
+      expect(r.log.filter((l) => l.sql.startsWith('delete from librarius_messages')).map((l) => l.params[0])).toEqual([[MSG_3]])
+      expect(r.log.filter((l) => l.sql.startsWith('insert into librarius_outbox')).map((l) => l.params[0])).toEqual([MSG_3])
+      expect(r.log.filter((l) => l.sql.startsWith('insert into librarius_events')).map((l) => l.params[3])).toEqual([MSG_3])
+    })
+
+    it('does not leave a reply to an edit of another reply', async () => {
+      const r = revPool([...three, [ENTRIES_SQL, [editOf('8', { progress: { parts: [{ id: MSG_4 }] } }, MSG_3)]]])
+      expect(await store(r.pool).siteDeleted([MSG_2, MSG_4], POST)).toEqual({ plain: [MSG_4] })
+      expect(r.log.filter((l) => l.sql === NOTE_UPDATE).map((l) => l.params)).toEqual([['8', JSON.stringify([MSG_4])]])
+      expect(r.log.filter((l) => l.sql.startsWith('delete from librarius_messages')).map((l) => l.params[0])).toEqual([[MSG]])
+    })
+
+    it('tells an edit both what it sent that is gone and what of its reply is gone, the second note holding the first', async () => {
+      const r = revPool([...three, [ENTRIES_SQL, [editOf('8', { progress: { parts: [{ id: MSG_4 }] } })]]])
+      expect(await store(r.pool).siteDeleted([MSG_4, MSG_2], POST)).toEqual({ plain: [MSG_4] })
+      expect(r.log.filter((l) => l.sql === NOTE_UPDATE).map((l) => l.params)).toEqual([
+        ['8', JSON.stringify([MSG_4])],
+        ['8', JSON.stringify([MSG_4, MSG_2])],
+      ])
+      expect(r.sqls().filter((s) => s.startsWith('delete') || s.startsWith('insert'))).toEqual([])
+    })
+  })
+
   describe('a part that no stored reply owns, which a reply or an edit on its way has sent', () => {
-    const rows = (...list) => revPool([[NOTE_SQL, list]])
+    const rows = (...list) => revPool([[ENTRIES_SQL, list]])
 
     it('notes it in that entry, beside what the entry had been told, once', async () => {
       const r = rows(
-        { id: '5', payload: { postId: POST, progress: { parts: [{ id: MSG }, { id: MSG_2 }] }, gone: [MSG_4] } },
-        { id: '6', payload: { postId: POST, progress: { parts: [{ id: MSG_2 }, { id: MSG_3 }] } } },
-        { id: '7', payload: { postId: POST, progress: { parts: [{ id: MSG_2 }] }, gone: [MSG_2] } },
+        { id: '5', kind: 'send', message_key: 'k5', payload: { postId: POST, progress: { parts: [{ id: MSG }, { id: MSG_2 }] }, gone: [MSG_4] } },
+        { id: '6', kind: 'edit', message_key: MSG_3, payload: { postId: POST, progress: { parts: [{ id: MSG_2 }, { id: MSG_3 }] } } },
+        { id: '7', kind: 'send', message_key: 'k7', payload: { postId: POST, progress: { parts: [{ id: MSG_2 }] }, gone: [MSG_2] } },
       )
       expect(await store(r.pool).siteDeleted([MSG_2, MSG_4], POST)).toEqual({ plain: [MSG_2, MSG_4] })
-      expect(r.sqls()).toEqual(['begin', 'select discord_id, message_id from librarius_parts where discord_id = any($1::bigint[]) order by message_id', NOTE_SQL, NOTE_UPDATE, NOTE_UPDATE, NOTE_UPDATE, 'commit'])
+      expect(r.sqls()).toEqual(['begin', PARTS_SQL, ENTRIES_SQL, NOTE_UPDATE, NOTE_UPDATE, NOTE_UPDATE, 'commit'])
+      expect(r.log[2].params).toEqual([[MSG_2, MSG_4], []])
       const writes = r.log.filter((l) => l.sql === NOTE_UPDATE).map((l) => l.params)
       expect(writes).toEqual([
         ['5', JSON.stringify([MSG_4, MSG_2])],
@@ -1035,16 +1175,23 @@ describe('siteDeleted', () => {
       ])
     })
 
-    it('notes it before it takes a reply of the site, for the parts of that reply and of another', async () => {
-      const r = revPool([...three, [NOTE_SQL, [{ id: '5', payload: { postId: POST, progress: { parts: [{ id: MSG_4 }] } } }]], [QUEUED_SQL, []]])
-      await store(r.pool).siteDeleted([MSG_2, MSG_4], POST)
-      expect(r.sqls().slice(0, 5)).toEqual(['begin', has('select discord_id, message_id'), NOTE_SQL, NOTE_UPDATE, "select nextval('librarius_rev') as rev"])
+    it('writes nothing for an entry the lock found that sent none of them', async () => {
+      const r = rows({ id: '5', kind: 'send', message_key: 'k5', payload: { postId: POST, progress: { parts: [{ id: MSG_3 }] } } }, { id: '6', kind: 'delete', message_key: MSG_3, payload: { postId: POST } })
+      expect(await store(r.pool).siteDeleted([MSG_2], POST)).toEqual({ plain: [MSG_2] })
+      expect(r.sqls()).not.toContain(NOTE_UPDATE)
     })
 
-    it('asks nothing of the entries when every id is a part of a stored reply', async () => {
-      const r = revPool([...three, [QUEUED_SQL, []]])
+    it('notes it before it takes a reply of the site, for the parts of that reply and of another', async () => {
+      const r = revPool([...three, [ENTRIES_SQL, [{ id: '5', kind: 'send', message_key: 'k5', payload: { postId: POST, progress: { parts: [{ id: MSG_4 }] } } }]]])
+      await store(r.pool).siteDeleted([MSG_2, MSG_4], POST)
+      expect(r.sqls().slice(0, 5)).toEqual(['begin', PARTS_SQL, ENTRIES_SQL, NOTE_UPDATE, "select nextval('librarius_rev') as rev"])
+    })
+
+    it('writes no note when every id is a part of a stored reply that no edit is on its way for', async () => {
+      const r = revPool([...three, [ENTRIES_SQL, []]])
       await store(r.pool).siteDeleted([MSG_2], POST)
-      expect(r.sqls()).not.toContain(NOTE_SQL)
+      expect(r.log.find((l) => l.sql === ENTRIES_SQL).params[0]).toEqual([])
+      expect(r.sqls()).not.toContain(NOTE_UPDATE)
     })
   })
 
@@ -1064,7 +1211,7 @@ describe('siteDeleted', () => {
       partsOf([{ discord_id: MSG_2, message_id: MSG }]),
       ['select discord_id, webhook_id from librarius_parts where message_id', [{ discord_id: MSG, webhook_id: null }, { discord_id: MSG_2, webhook_id: HOOK }, { discord_id: MSG_3, webhook_id: '200000000000000416' }]],
       ['select post_id, author_id from librarius_messages', [{ post_id: POST, author_id: AUTHOR }]],
-      [QUEUED_SQL, []],
+      [ENTRIES_SQL, []],
     ])
     await store(r.pool).siteDeleted([MSG_2], POST)
     expect(r.log.find((l) => l.sql.startsWith('insert into librarius_outbox')).params[2]).toBe(JSON.stringify({ postId: POST, partIds: [MSG, MSG_3], webhookId: HOOK }))
@@ -1075,7 +1222,7 @@ describe('siteDeleted', () => {
       partsOf([{ discord_id: MSG_2, message_id: MSG }]),
       ['select discord_id, webhook_id from librarius_parts where message_id', [{ discord_id: MSG, webhook_id: null }, { discord_id: MSG_2, webhook_id: null }]],
       ['select post_id, author_id from librarius_messages', [{ post_id: POST, author_id: AUTHOR }]],
-      [QUEUED_SQL, []],
+      [ENTRIES_SQL, []],
     ])
     await store(r.pool).siteDeleted([MSG_2], POST)
     expect(r.log.find((l) => l.sql.startsWith('insert into librarius_outbox')).params[2]).toBe(JSON.stringify({ postId: POST, partIds: [MSG], webhookId: null }))
@@ -1090,9 +1237,10 @@ describe('siteDeleted', () => {
       ]),
       ['select discord_id, webhook_id from librarius_parts where message_id', (p) => (p[0] === MSG ? [{ discord_id: MSG, webhook_id: null }, { discord_id: MSG_2, webhook_id: null }] : [{ discord_id: MSG_3, webhook_id: HOOK }, { discord_id: MSG_4, webhook_id: HOOK }])],
       ['select post_id, author_id from librarius_messages', [{ post_id: POST, author_id: AUTHOR }]],
-      [QUEUED_SQL, []],
+      [ENTRIES_SQL, []],
     ])
     expect(await store(r.pool).siteDeleted([MSG, MSG_2, MSG_4], POST)).toEqual({ plain: [] })
+    expect(r.log.find((l) => l.sql === ENTRIES_SQL).params).toEqual([[], [MSG, MSG_3]])
     expect(r.sqls().filter((s) => s.startsWith("select nextval"))).toHaveLength(1)
     expect(r.sqls().filter((s) => s.startsWith('delete from librarius_messages'))).toHaveLength(2)
     const queued = r.log.filter((l) => l.sql.startsWith('insert into librarius_outbox'))
@@ -1106,7 +1254,7 @@ describe('siteDeleted', () => {
       partsOf([{ discord_id: MSG_2, message_id: MSG }]),
       ['select discord_id, webhook_id from librarius_parts where message_id', [{ discord_id: MSG, webhook_id: HOOK }, { discord_id: MSG_2, webhook_id: HOOK }]],
       ['select post_id, author_id from librarius_messages', []],
-      [QUEUED_SQL, []],
+      [ENTRIES_SQL, []],
     ])
     await store(r.pool).siteDeleted([MSG_2], POST)
     expect(r.log.find((l) => l.sql.startsWith('insert into librarius_outbox')).params).toEqual([MSG, '0', JSON.stringify({ postId: POST, partIds: [MSG], webhookId: HOOK })])
@@ -1115,7 +1263,7 @@ describe('siteDeleted', () => {
 
   it('rolls back and throws what failed', async () => {
     const err = boom()
-    const r = revPool([...three, ['insert into librarius_outbox', err], [QUEUED_SQL, []]])
+    const r = revPool([...three, ['insert into librarius_outbox', err], [ENTRIES_SQL, []]])
     await expect(store(r.pool).siteDeleted([MSG_2], POST)).rejects.toBe(err)
     expect(r.sqls().at(-1)).toBe('rollback')
   })
@@ -1127,6 +1275,84 @@ describe('siteDeleted', () => {
   ])('refuses %s before any query', async (_, ids, postId, message) => {
     const rig = fakePool()
     await refused(rig, () => store(rig.pool).siteDeleted(ids, postId), message)
+  })
+
+  // A world of up to three replies of the site, each of one to three parts, two ids no reply owns, and the entries on their way: for each reply
+  // maybe an edit and maybe deletes, and maybe a reply being sent. The pool answers each statement as Postgres would from that world, and the
+  // property checks what siteDeleted did against the rules: a reply an edit is on its way for is left to it, with the parts noted; any other
+  // reply that was hit goes, with a delete of what is left queued unless a delete on its way knows its parts; and an entry that sent an id no
+  // reply owns is told of it.
+  it('does what the rules say for any world and any deletion (property)', async () => {
+    const idOf = (reply, part) => `2000000000000004${5 + reply}${part}`
+    const LOOSE = ['200000000000000480', '200000000000000481']
+    const world = fc.record({
+      sizes: fc.array(fc.integer({ min: 1, max: 3 }), { minLength: 1, maxLength: 3 }),
+      edits: fc.array(fc.option(fc.record({ sent: fc.subarray(LOOSE), gone: fc.subarray([...LOOSE, idOf(0, 1)]) }), { nil: null }), { minLength: 3, maxLength: 3 }),
+      deletes: fc.array(fc.array(fc.boolean(), { maxLength: 2 }), { minLength: 3, maxLength: 3 }),
+      send: fc.subarray(LOOSE),
+      pick: fc.array(fc.boolean(), { minLength: 11, maxLength: 11 }),
+    })
+    await fc.assert(
+      fc.asyncProperty(world, async ({ sizes, edits, deletes, send, pick }) => {
+        const replies = sizes.map((size, r) => Array.from({ length: size }, (_, k) => idOf(r, k)))
+        const owner = new Map(replies.flatMap((parts) => parts.map((part) => [part, parts[0]])))
+        const every = [...replies.flat(), ...LOOSE]
+        const ids = every.filter((_, i) => pick[i])
+        if (ids.length === 0) ids.push(every[0])
+        let serial = 0
+        const entries = []
+        if (send.length > 0) entries.push({ id: String(++serial), kind: 'send', message_key: 'k', payload: { postId: POST, progress: { parts: send.map((id) => ({ id })) } } })
+        replies.forEach((parts, r) => {
+          for (const knows of deletes[r]) entries.push({ id: String(++serial), kind: 'delete', message_key: parts[0], payload: knows ? { postId: POST, partIds: parts } : { postId: POST } })
+          const edit = edits[r]
+          if (edit !== null) entries.push({ id: String(++serial), kind: 'edit', message_key: parts[0], payload: { postId: POST, gone: edit.gone, progress: { parts: edit.sent.map((id) => ({ id })) } } })
+        })
+        const sentOne = (e, plain) => (e.payload.progress?.parts ?? []).some((part) => plain.includes(part.id))
+        const r = revPool([
+          ['select discord_id, message_id', (p) => p[0].filter((id) => owner.has(id)).map((id) => ({ discord_id: id, message_id: owner.get(id) })).sort((a, b) => a.message_id.localeCompare(b.message_id))],
+          [ENTRIES_SQL, (p) => entries.filter((e) => (e.kind !== 'delete' && sentOne(e, p[0])) || (e.kind !== 'send' && p[1].includes(e.message_key)))],
+          ['select discord_id, webhook_id from librarius_parts where message_id', (p) => replies.find((parts) => parts[0] === p[0]).map((id) => ({ discord_id: id, webhook_id: HOOK }))],
+          ['select post_id, author_id from librarius_messages', [{ post_id: POST, author_id: AUTHOR }]],
+        ])
+
+        const out = await store(r.pool).siteDeleted(ids, POST)
+
+        // The model.
+        const plain = ids.filter((id) => !owner.has(id))
+        const gone = new Map(entries.map((e) => [e.id, [...e.payload.gone ?? []]]))
+        const tell = (e, list) => gone.set(e.id, [...new Set([...gone.get(e.id), ...list])])
+        for (const e of entries) if (e.kind !== 'delete') tell(e, (e.payload.progress?.parts ?? []).map((part) => part.id).filter((id) => plain.includes(id)))
+        const taken = []
+        const queued = []
+        for (const parts of replies) {
+          const hit = parts.filter((id) => ids.includes(id))
+          if (hit.length === 0) continue
+          const mine = entries.filter((e) => e.message_key === parts[0])
+          const editing = mine.filter((e) => e.kind === 'edit')
+          if (editing.length > 0) {
+            for (const e of editing) tell(e, hit)
+            continue
+          }
+          taken.push(parts[0])
+          const left = parts.filter((id) => !ids.includes(id))
+          if (left.length > 0 && !mine.some((e) => e.payload.partIds !== undefined)) queued.push([parts[0], left])
+        }
+
+        expect(out).toEqual({ plain })
+        const written = new Map(entries.map((e) => [e.id, [...e.payload.gone ?? []]]))
+        for (const { params } of r.log.filter((l) => l.sql === NOTE_UPDATE)) written.set(params[0], JSON.parse(params[1]))
+        expect(written).toEqual(gone)
+        expect(r.log.filter((l) => l.sql.startsWith('delete from librarius_messages')).map((l) => l.params[0][0])).toEqual(taken)
+        expect(r.log.filter((l) => l.sql.startsWith('insert into librarius_outbox')).map((l) => [l.params[0], JSON.parse(l.params[2]).partIds])).toEqual(queued)
+        expect(r.log.filter((l) => l.sql.startsWith('insert into librarius_events')).map((l) => l.params[3])).toEqual(taken)
+        // Every entry is locked in the one statement, before any message is read or written.
+        const sqls = r.sqls()
+        expect(sqls.filter((s) => s === ENTRIES_SQL)).toHaveLength(1)
+        const firstMessage = sqls.findIndex((s) => s.includes('librarius_messages'))
+        if (firstMessage !== -1) expect(sqls.indexOf(ENTRIES_SQL)).toBeLessThan(firstMessage)
+      }),
+      { numRuns: 300 },
+    )
   })
 })
 
