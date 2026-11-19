@@ -45,6 +45,16 @@
  *    question: only a newer one may have come in after the page was read). That is the limit of the catch-up for a post
  *    of more than `windowSize` messages: one deleted while the gateway was down and older than the window stays until the
  *    post is reimported.
+ *    A reply of the site is one stored message but up to three in Discord, and a moderator may delete its part 2 or 3 while
+ *    the gateway is down. So each later part of each stored reply of the window that is not gone already (store.windowIds
+ *    names them) is judged in the same way, by its own id: on the page it is there; inside the page's range, or older than a
+ *    page that is the whole post, it is gone; older than a full page it is out of view, and left alone; newer than the whole
+ *    page, Discord is asked for it. Those questions are capped, at 10 for a post's page and 50 for a run (a part is newer than
+ *    the page only when its reply was stored after the page was read, or when it was the newest message of the post and was
+ *    deleted): a part past the caps is kept, and a later run judges it. A part that is gone takes the whole reply with it, as
+ *    a first part does (store.siteDeleted). The parts of a reply that an edit or a delete is at work on are not judged at all
+ *    (windowIds names none): an edit removes the parts it no longer needs before it stores the change. A question Discord
+ *    cannot answer, about a message or a part, ends the run with nothing of that post deleted.
  * 4. sets import_done, last_ok_at and a clear last_error.
  *
  * Any failure ends the run where it stands, with the cursors it has already set: last_error says why, and the next run
@@ -76,6 +86,9 @@ import { attempt as attemptWrite, describe, isId, isStoreId } from './librariusT
 
 // Discord's most for a page of messages, and so for a window.
 const PAGE = 100
+// The most questions the catch-up asks Discord about the later parts of the site's replies (see step 3): for one post's page, and for a run.
+const PART_LOOKS_PER_PAGE = 10
+const PART_LOOKS_PER_RUN = 50
 // The longest a timer can hold: a longer delay makes it fire at once.
 const MAX_TIMER_MS = 2_147_483_647
 const DISCORD_METHODS = ['activeThreads', 'archivedThreads', 'messagesAfter', 'newest', 'message', 'thread']
@@ -246,7 +259,8 @@ export function createImport({
     }
   }
 
-  async function catchUp(postId) {
+  /** `run` is { left }: how many questions about later parts the run may still ask, all posts together. */
+  async function catchUp(postId, run) {
     const fetched = new Map()
     const page = await discord.newest(postId, windowSize)
     for (const message of page) {
@@ -257,31 +271,50 @@ export function createImport({
     const onPage = [...fetched.keys()].map(BigInt)
     // A page of fewer messages than were asked for is the whole post: Discord has nothing beyond it.
     const whole = page.length < windowSize
+    // How many questions about later parts this page may still ask.
+    let left = PART_LOOKS_PER_PAGE
+    const always = () => true
+    /** Whether a question about a later part is left, for the page and for the run; one that is, is taken. */
+    const spare = () => {
+      if (left === 0 || run.left === 0) return false
+      left -= 1
+      run.left -= 1
+      return true
+    }
+    /**
+     * → what Discord holds of a stored id that is not on the page: the message, null when it is gone, or undefined when the page cannot
+     * say and Discord is not asked. Newer than the whole page, or the page is empty (which every id is newer than): the page cannot say
+     * what became of it, since it may have been deleted while the gateway was down, or come in after the page was read, so Discord is
+     * asked for it, when `ask()` lets it. Older than the whole page: out of view, not gone, unless the page is the whole post, which has
+     * nothing older. Inside the range of the page, or older than a page that is the whole post, and not on it: gone.
+     */
+    const lookUp = async (id, ask) => {
+      const at = BigInt(id)
+      // Stryker disable next-line EqualityOperator: this id is not on the page, so no id of the page equals it
+      if (onPage.every((p) => p < at)) return ask() ? discord.message(postId, id) : undefined
+      // Stryker disable next-line EqualityOperator: as above
+      return !whole && onPage.every((p) => p > at) ? undefined : null
+    }
     const gone = []
     const edited = []
-    for (const { id, editedAt } of await store.windowIds(postId, windowSize)) {
-      let message = fetched.get(id)
-      if (message === undefined) {
-        const at = BigInt(id)
-        // Newer than the whole page, or the page is empty (which every message is newer than). The page cannot say what
-        // became of it: it may have been deleted while the gateway was down, or come in after the page was read. So Discord
-        // is asked for that message itself, which is at most one question for each message of the window.
-        // Stryker disable next-line EqualityOperator: this message is not on the page, so no id of the page equals it
-        const newer = onPage.every((p) => p < at)
-        // Older than the whole page: out of view, not gone, unless the page is the whole post, which has nothing older.
-        // Stryker disable next-line EqualityOperator: as above
-        if (!whole && !newer && onPage.every((p) => p > at)) continue
-        // Inside the range of the page, or older than a page that is the whole post, and not on it: deleted.
-        message = newer ? await discord.message(postId, id) : null
-        if (message === null) {
-          gone.push(id)
-          continue
-        }
+    // The parts after the first of the replies of the site that are not gone, judged once every message is.
+    const later = []
+    for (const { id, editedAt, parts } of await store.windowIds(postId, windowSize)) {
+      // A message is asked about whenever the page cannot say: at most one question for each message of the window.
+      const message = fetched.get(id) ?? (await lookUp(id, always))
+      if (message === null) {
+        gone.push(id)
+        continue
       }
+      later.push(...parts)
+      // A message out of view (undefined) makes no row, and is left as it is.
       const row = parseMessage(message)
       if (row !== null && instant(row.editedAt) !== instant(editedAt)) edited.push(row)
     }
-    // A reply of the site whose first part is gone from Discord goes with all its parts: the others are queued for deletion.
+    // A later part is judged as a message is, but a question about one is asked only within the caps: one past them is kept, for a
+    // later run to judge, and only an answer of null (Discord no longer has it) is gone.
+    for (const part of later) if (!fetched.has(part) && (await lookUp(part, spare)) === null) gone.push(part)
+    // A reply of the site whose part, any of them, is gone from Discord goes with all its parts: the others are queued for deletion.
     const { plain } = await store.siteDeleted(gone, postId)
     await store.deleteMessages(plain)
     await write(edited)
@@ -293,7 +326,8 @@ export function createImport({
     const posts = await importPosts()
     await onPostsListed()
     for (const id of posts) await importMessages(id)
-    for (const id of posts) await catchUp(id)
+    const run = { left: PART_LOOKS_PER_RUN }
+    for (const id of posts) await catchUp(id, run)
     await store.setSync({ import_done: true, last_ok_at: stamp(), last_error: null })
   }
 

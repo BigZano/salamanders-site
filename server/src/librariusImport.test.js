@@ -247,7 +247,12 @@ function fakeStore({ posts = [], messages = [], cursors = {}, sync, parts = [], 
         .filter((m) => m.postId === id)
         .sort((a, b) => (BigInt(a.id) < BigInt(b.id) ? 1 : -1))
         .slice(0, limit)
-        .map((m) => ({ id: m.id, editedAt: m.editedAt === null ? null : new Date(m.editedAt).toISOString() }))
+        .map((m) => ({
+          id: m.id,
+          editedAt: m.editedAt === null ? null : new Date(m.editedAt).toISOString(),
+          // The parts after the first of a reply of the site, in order (the first is the message itself), as the real store reads them.
+          parts: [...s.parts].filter(([part, reply]) => reply === m.id && part !== m.id).map(([part]) => part),
+        }))
     },
     async syncStatus() {
       enter('syncStatus')
@@ -912,6 +917,8 @@ describe('the catch-up and a reply of the site whose first part is gone from Dis
     expect(idsOf(w, 1)).toEqual([1, 4].map((n) => mid(1, n)))
     expect(w.store.queued).toEqual([{ messageKey: mid(1, 2), postId: postId(1), partIds: [mid(1, 20), mid(1, 21)] }])
     expect([...w.store.parts.keys()]).toEqual([])
+    // The reply goes whatever became of its other parts, so Discord is asked about none of them.
+    expect(w.discord.calls.filter((c) => c[0] === 'message')).toEqual([])
   })
 
   it('deletes a stored message that is no part as before, and queues nothing for a reply of one part', async () => {
@@ -924,7 +931,7 @@ describe('the catch-up and a reply of the site whose first part is gone from Dis
   it('queues nothing, and asks siteDeleted for nothing it can know, when nothing is gone', async () => {
     const w = setup({
       active: [thread(1)],
-      channels: { [postId(1)]: [raw(1, 1), raw(1, 2)] },
+      channels: { [postId(1)]: [raw(1, 1), raw(1, 2), raw(1, 20), raw(1, 21)] },
       store: { posts: [known(1)], messages: [1, 2].map((n) => parseMessage(raw(1, n))), cursors: { [postId(1)]: mid(1, 100) }, parts: THREE },
       windowSize: 5,
     })
@@ -940,6 +947,280 @@ describe('the catch-up and a reply of the site whose first part is gone from Dis
     await w.imp.run()
     expect(idsOf(w, 1)).toEqual([1, 2, 3, 4].map((n) => mid(1, n)))
     expect(await w.imp.status()).toMatchObject({ importDone: false, lastError: 'Error: connection lost' })
+  })
+})
+
+// A moderator may delete part 2 or 3 of a reply of the site while the gateway is down. The catch-up then judges each later part of each
+// stored reply of the window as it judges a message: on the page it is there; inside the page's range and not on it, it is gone; newer than
+// the whole page, Discord is asked (within a cap for a page and one for a run); older than a full page, it is out of view. A part that is
+// gone takes the whole reply, through siteDeleted, as a first part does.
+describe('the catch-up and the later parts of a reply of the site', () => {
+  const HOOK = '200000000000000450'
+  const PAGE_CAP = 10
+  const RUN_CAP = 50
+  const ofHook = (p, n) => raw(p, n, { webhook_id: HOOK, author: { id: HOOK, username: 'Invented Name', bot: true } })
+  const rereads = (w) => w.discord.calls.filter((c) => c[0] === 'message').map((c) => c[2])
+
+  /**
+   * One post as Discord and the store hold it: Discord has messages 1 to `top` but the `missing` ones; `replies` are the replies of the
+   * site, each the numbers of its parts in order. The store holds the messages of `stored` (all of them by default), a reply once, as its
+   * first part, with its parts.
+   */
+  function post(p, { top, missing = [], replies = [], stored }) {
+    const firstOf = new Map(replies.flatMap((parts) => parts.map((n) => [n, parts[0]])))
+    const numbers = Array.from({ length: top }, (_, i) => i + 1)
+    const chan = numbers.filter((n) => !missing.includes(n)).map((n) => (firstOf.has(n) ? ofHook(p, n) : raw(p, n)))
+    const keep = (stored ?? numbers).filter((n) => !firstOf.has(n) || firstOf.get(n) === n)
+    return {
+      chan,
+      rows: keep.map((n) => parseMessage(raw(p, n))),
+      parts: replies.flatMap((parts) => parts.map((n) => [mid(p, n), mid(p, parts[0])])),
+    }
+  }
+
+  /** A world of posts 1, 2, … (one for each of `posts`), with a page read before `readBefore` came in, when it is given. */
+  function world(posts, { windowSize = 5, readBefore } = {}) {
+    const built = posts.map((options, i) => post(i + 1, options))
+    const w = setup({
+      active: built.map((_, i) => thread(i + 1)),
+      channels: Object.fromEntries(built.map((b, i) => [postId(i + 1), b.chan])),
+      store: {
+        posts: built.map((_, i) => known(i + 1)),
+        messages: built.flatMap((b) => b.rows),
+        cursors: Object.fromEntries(built.map((_, i) => [postId(i + 1), mid(i + 1, 999)])),
+        parts: built.flatMap((b) => b.parts),
+        hooks: [HOOK],
+      },
+      webhookId: HOOK,
+      windowSize,
+    })
+    if (readBefore !== undefined) {
+      const newest = w.discord.newest
+      w.discord.newest = async (ch, limit) => (await newest(ch, 100)).filter((m) => BigInt(m.id) % 1000000n < BigInt(readBefore)).slice(0, limit)
+    }
+    return w
+  }
+
+  it('takes the reply, and queues the deletion of the parts that are left, when its part 3 is missing inside the page: with no question', async () => {
+    // The page is [8, 6, 5, 4, 3]: part 3 (message 7) lies inside it and is not on it. Message 2 is older than the full page, out of view.
+    const w = world([{ top: 8, missing: [7], replies: [[3, 5, 7]] }])
+    await w.imp.run()
+    expect(idsOf(w, 1)).toEqual([1, 2, 4, 6, 8].map((n) => mid(1, n)))
+    expect(w.store.queued).toEqual([{ messageKey: mid(1, 3), postId: postId(1), partIds: [mid(1, 3), mid(1, 5)] }])
+    expect([...w.store.parts.keys()]).toEqual([])
+    expect(rereads(w)).toEqual([])
+    expect(await w.imp.status()).toMatchObject({ importDone: true, lastError: null })
+  })
+
+  it('takes the reply when its part 2 is missing inside the page, and leaves the part that is there to the queued deletion', async () => {
+    const w = world([{ top: 8, missing: [5], replies: [[3, 5, 7]] }])
+    await w.imp.run()
+    expect(idsOf(w, 1)).toEqual([1, 2, 4, 6, 8].map((n) => mid(1, n)))
+    expect(w.store.queued).toEqual([{ messageKey: mid(1, 3), postId: postId(1), partIds: [mid(1, 3), mid(1, 7)] }])
+  })
+
+  it('asks Discord about a part 3 newer than the whole page, and takes the reply when Discord no longer has it', async () => {
+    // The last message of the post was the reply's part 3, deleted while the gateway was down: the page [6, 5, 4, 3, 2] cannot show it.
+    const w = world([{ top: 7, missing: [7], replies: [[3, 5, 7]] }])
+    await w.imp.run()
+    expect(rereads(w)).toEqual([mid(1, 7)])
+    expect(idsOf(w, 1)).toEqual([1, 2, 4, 6].map((n) => mid(1, n)))
+    expect(w.store.queued).toEqual([{ messageKey: mid(1, 3), postId: postId(1), partIds: [mid(1, 3), mid(1, 5)] }])
+  })
+
+  it('keeps a reply whose part is there but on another page: one newer than the page, which came in after it was read', async () => {
+    const w = world([{ top: 7, replies: [[3, 5, 7]] }], { readBefore: 7 })
+    await w.imp.run()
+    expect(rereads(w)).toEqual([mid(1, 7)])
+    expect(idsOf(w, 1)).toEqual([1, 2, 3, 4, 6].map((n) => mid(1, n)))
+    expect(w.store.queued).toEqual([])
+    expect([...w.store.parts.keys()]).toHaveLength(3)
+  })
+
+  it('leaves alone, with no question, a reply out of view: older than a full page, its parts too, though one of them is gone', async () => {
+    // The page is [12, 11, 10, 9, 8]; the store's window is [12, 11, 10, 2, 1], and the reply (2, 3, 4) lies below the page.
+    const w = world([{ top: 12, missing: [3], replies: [[2, 3, 4]], stored: [1, 2, 10, 11, 12] }])
+    await w.imp.run()
+    expect(idsOf(w, 1)).toEqual([1, 2, 10, 11, 12].map((n) => mid(1, n)))
+    expect(rereads(w)).toEqual([])
+    expect(w.store.queued).toEqual([])
+  })
+
+  it('judges the later parts of a reply whose first part is out of view: one on the page is there, and one inside it that is missing is gone', async () => {
+    // The page is [12, 10, 9, 8, 7] (11 is gone); the reply (2, 9, 11) begins below it, and its parts 9 and 11 lie inside it.
+    const gone = world([{ top: 12, missing: [11], replies: [[2, 9, 11]], stored: [1, 2, 12] }])
+    await gone.imp.run()
+    expect(idsOf(gone, 1)).toEqual([1, 12].map((n) => mid(1, n)))
+    expect(gone.store.queued).toEqual([{ messageKey: mid(1, 2), postId: postId(1), partIds: [mid(1, 2), mid(1, 9)] }])
+    expect(rereads(gone)).toEqual([])
+
+    const whole = world([{ top: 12, missing: [10], replies: [[2, 9, 11]], stored: [1, 2, 12] }])
+    await whole.imp.run()
+    expect(idsOf(whole, 1)).toEqual([1, 2, 12].map((n) => mid(1, n)))
+    expect(whole.store.queued).toEqual([])
+  })
+
+  it('takes a reply whose later part is older than a short page, which is the whole post', async () => {
+    // The page [6, 5, 4] is short of the window, so the post has nothing older: the reply's part 2 (message 3) is gone.
+    const w = world([{ top: 6, missing: [1, 3], replies: [[2, 3]] }])
+    // Message 2 is the reply's first part, and the page shows it, so only its part 2 is judged; it is older than the page.
+    w.discord.channels[postId(1)] = w.discord.channels[postId(1)].filter((m) => m.id !== mid(1, 2)).concat([ofHook(1, 2)])
+    w.discord.newest = async () => [6, 5, 4, 2].map((n) => w.discord.channels[postId(1)].find((m) => m.id === mid(1, n)))
+    await w.imp.run()
+    expect(idsOf(w, 1)).toEqual([4, 5, 6].map((n) => mid(1, n)))
+    expect(w.store.queued).toEqual([{ messageKey: mid(1, 2), postId: postId(1), partIds: [mid(1, 2)] }])
+    expect(rereads(w)).toEqual([])
+  })
+
+  it.each([
+    ['undefined', undefined],
+    ['an empty object', {}],
+    ['empty text', ''],
+    ['zero', 0],
+    ['false', false],
+    ['a list', []],
+  ])('keeps a part when Discord answers %s for it: only null says it is gone', async (_, answer) => {
+    const w = world([{ top: 7, missing: [7], replies: [[3, 5, 7]] }])
+    const message = w.discord.message
+    w.discord.message = async (ch, id) => (id === mid(1, 7) ? (w.discord.calls.push(['message', ch, id]), answer) : message(ch, id))
+    await w.imp.run()
+    expect(rereads(w)).toEqual([mid(1, 7)])
+    expect(idsOf(w, 1)).toContain(mid(1, 3))
+    expect(w.store.queued).toEqual([])
+  })
+
+  /** Replies of three parts, all of them newer than a page read before message 100 came in: `count` replies from message 100 on. */
+  const late = (count) => Array.from({ length: count }, (_, i) => [100 + 3 * i, 101 + 3 * i, 102 + 3 * i])
+
+  it(`asks about ${PAGE_CAP} later parts of a page at most, newest reply first, and keeps the replies past that for a later run`, async () => {
+    // Six replies whose parts 2 and 3 are all gone: twelve questions, and ten are asked, for the five newest replies.
+    const replies = late(6)
+    const w = world([{ top: 117, missing: replies.flatMap((r) => r.slice(1)), replies }], { windowSize: 10, readBefore: 100 })
+    await w.imp.run()
+    const asked = replies
+      .slice(1)
+      .reverse()
+      .flatMap((r) => r.slice(1).map((n) => mid(1, n)))
+    expect(rereads(w).filter((id) => !replies.some((r) => mid(1, r[0]) === id))).toEqual(asked)
+    expect(idsOf(w, 1)).toContain(mid(1, 100))
+    for (const r of replies.slice(1)) expect(idsOf(w, 1)).not.toContain(mid(1, r[0]))
+    expect(w.store.queued.map((q) => q.messageKey)).toEqual(replies.slice(1).reverse().map((r) => mid(1, r[0])))
+    expect(await w.imp.status()).toMatchObject({ importDone: true, lastError: null })
+  })
+
+  it('asks all the questions of a page that needs exactly the cap', async () => {
+    const replies = late(5)
+    const w = world([{ top: 114, missing: replies.flatMap((r) => r.slice(1)), replies }], { windowSize: 10, readBefore: 100 })
+    await w.imp.run()
+    expect(rereads(w).filter((id) => !replies.some((r) => mid(1, r[0]) === id))).toHaveLength(PAGE_CAP)
+    for (const r of replies) expect(idsOf(w, 1)).not.toContain(mid(1, r[0]))
+  })
+
+  it('still judges a part inside the page past the cap: only the questions are capped', async () => {
+    // Six replies newer than the page cost every question of the page; a seventh, older, has its part 3 missing inside the page.
+    const replies = [[90, 92, 94], ...late(6)]
+    const missing = [94, ...late(6).flatMap((r) => r.slice(1))]
+    const w = world([{ top: 117, missing, replies }], { windowSize: 30, readBefore: 100 })
+    await w.imp.run()
+    expect(rereads(w).filter((id) => BigInt(id) % 1000000n > 100n && (BigInt(id) % 1000000n - 100n) % 3n !== 0n)).toHaveLength(PAGE_CAP)
+    expect(idsOf(w, 1)).not.toContain(mid(1, 90))
+    expect(w.store.queued.map((q) => q.messageKey)).toContain(mid(1, 90))
+    expect(rereads(w)).not.toContain(mid(1, 94))
+  })
+
+  it(`asks about ${RUN_CAP} later parts in a run at most, all posts together, and a new run has its own`, async () => {
+    // Five posts that each need the page's ten questions spend the run's fifty; the sixth needs only two, and is not asked them.
+    const busy = () => {
+      const replies = late(5)
+      return { top: 114, missing: replies.flatMap((r) => r.slice(1)), replies }
+    }
+    const last = { top: 102, missing: [101, 102], replies: late(1) }
+    const w = world([busy(), busy(), busy(), busy(), busy(), last], { windowSize: 10, readBefore: 100 })
+    const partLooks = () => rereads(w).filter((id) => BigInt(id) % 1000000n !== 100n && (BigInt(id) % 1000000n - 100n) % 3n !== 0n)
+    await w.imp.run()
+    expect(partLooks()).toHaveLength(RUN_CAP)
+    for (const p of [1, 2, 3, 4, 5]) expect(idsOf(w, p).some((id) => BigInt(id) % 1000000n >= 100n)).toBe(false)
+    expect(idsOf(w, 6)).toContain(mid(6, 100))
+    expect(w.store.queued.map((q) => q.messageKey)).not.toContain(mid(6, 100))
+    // The next run asks again, from a run's whole allowance.
+    w.discord.calls.length = 0
+    await w.imp.run()
+    expect(partLooks()).toEqual([mid(6, 101), mid(6, 102)])
+    expect(idsOf(w, 6)).not.toContain(mid(6, 100))
+  })
+
+  it('matches a model of Discord: a reply goes when any of its parts is judged gone, and only then, and Discord is asked only what the page cannot say', async () => {
+    const seen = { kept: 0, byFirst: 0, byLater: 0 }
+    await fc.assert(
+      fc.asyncProperty(
+        fc.uniqueArray(fc.integer({ min: 1, max: 20 }), { maxLength: 9 }),
+        fc.uniqueArray(fc.integer({ min: 1, max: 20 }), { maxLength: 8 }),
+        fc.integer({ min: 1, max: 21 }),
+        fc.integer({ min: 1, max: 8 }),
+        async (inReplies, missing, readBefore, windowSize) => {
+          // The parts of the replies are taken three at a time, in order, from the numbers drawn: a reply's parts come one after another.
+          const sorted = [...inReplies].sort((a, b) => a - b)
+          const replies = Array.from({ length: Math.ceil(sorted.length / 3) }, (_, i) => sorted.slice(3 * i, 3 * i + 3))
+          const w = world([{ top: 20, missing, replies }], { windowSize, readBefore })
+          await w.imp.run()
+
+          const truth = (n) => !missing.includes(n)
+          const page = Array.from({ length: 20 }, (_, i) => 20 - i).filter((n) => truth(n) && n < readBefore).slice(0, windowSize)
+          const whole = page.length < windowSize
+          const replyOf = new Map(replies.flatMap((parts) => parts.map((n) => [n, parts])))
+          const rows = Array.from({ length: 20 }, (_, i) => 20 - i).filter((n) => !replyOf.has(n) || replyOf.get(n)[0] === n)
+          const asked = []
+          const judge = (n) => {
+            if (page.includes(n)) return 'there'
+            if (page.every((p) => p < n)) {
+              asked.push(n)
+              return truth(n) ? 'there' : 'gone'
+            }
+            return !whole && page.every((p) => p > n) ? 'out' : 'gone'
+          }
+          const removed = new Set()
+          const queued = []
+          const later = []
+          for (const n of rows.slice(0, windowSize)) {
+            if (judge(n) === 'gone') {
+              removed.add(n)
+              const parts = replyOf.get(n)
+              if (parts !== undefined && parts.length > 1) queued.push({ first: n, gone: [n] })
+            } else if (replyOf.has(n)) later.push(...replyOf.get(n).slice(1).map((part) => [n, part]))
+          }
+          const byLater = new Map()
+          for (const [first, part] of later) if (judge(part) === 'gone') byLater.set(first, [...(byLater.get(first) ?? []), part])
+          for (const first of byLater.keys()) removed.add(first)
+          seen[removed.size === 0 ? 'kept' : byLater.size > 0 ? 'byLater' : 'byFirst']++
+
+          expect(idsOf(w, 1)).toEqual(rows.filter((n) => !removed.has(n)).reverse().map((n) => mid(1, n)))
+          expect(rereads(w)).toEqual(asked.map((n) => mid(1, n)))
+          // Each reply that went has the deletion of the parts that are left queued: all of them but those judged gone.
+          const expectQueued = [...queued.map(({ first, gone }) => [first, gone]), ...byLater.entries()]
+            .map(([first, gone]) => ({ messageKey: mid(1, first), partIds: replyOf.get(first).filter((n) => !gone.includes(n)).map((n) => mid(1, n)) }))
+            .filter((q) => q.partIds.length > 0)
+          const sortQ = (list) => [...list].sort((a, b) => (a.messageKey < b.messageKey ? -1 : 1))
+          expect(sortQ(w.store.queued.map(({ messageKey, partIds }) => ({ messageKey, partIds })))).toEqual(sortQ(expectQueued))
+        },
+      ),
+      { numRuns: 400 },
+    )
+    // The property is only worth anything if it saw replies kept, and taken by a first part and by a later one.
+    expect(seen.kept).toBeGreaterThan(20)
+    expect(seen.byFirst).toBeGreaterThan(10)
+    expect(seen.byLater).toBeGreaterThan(10)
+  })
+
+  it('ends the run, deleting nothing of the post, when Discord cannot answer about a part, and moves on to no other post', async () => {
+    // Message 4 of a person is missing inside the page too: it waits with the rest until Discord answers again.
+    const w = world([{ top: 7, missing: [4, 7], replies: [[3, 5, 7]] }, { top: 3, missing: [2] }])
+    w.discord.failWhen('message', (ch, id) => id === mid(1, 7), new Upstream('Discord answered 500 for a message.'))
+    await w.imp.run()
+    expect(idsOf(w, 1)).toEqual([1, 2, 3, 4, 6].map((n) => mid(1, n)))
+    expect(w.store.queued).toEqual([])
+    expect(w.discord.calls.filter((c) => c[0] === 'newest').map((c) => c[1])).toEqual([postId(1)])
+    expect(idsOf(w, 2)).toHaveLength(3)
+    expect(await w.imp.status()).toMatchObject({ importDone: false, lastOkAt: null, lastError: 'Error: Discord answered 500 for a message.' })
   })
 })
 
@@ -1334,7 +1615,7 @@ describe('the catch-up window', () => {
   it('survives an old list of the window that holds a message the live feed has already deleted', async () => {
     const w = world({ discordIds: [6, 8, 9, 10], storedIds: [6, 8, 9, 10] })
     const windowIds = w.store.windowIds
-    w.store.windowIds = async (...args) => [...(await windowIds(...args)), { id: mid(1, 7), editedAt: null }]
+    w.store.windowIds = async (...args) => [...(await windowIds(...args)), { id: mid(1, 7), editedAt: null, parts: [] }]
     await w.imp.run()
     expect(idsOf(w, 1)).toEqual([6, 8, 9, 10].map((n) => mid(1, n)))
     expect((await w.imp.status()).importDone).toBe(true)

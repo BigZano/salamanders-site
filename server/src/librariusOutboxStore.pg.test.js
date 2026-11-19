@@ -3,6 +3,7 @@ import { spawnSync } from 'node:child_process'
 import { randomBytes } from 'node:crypto'
 import { readFileSync } from 'node:fs'
 import { createLibrariusStore } from './librariusStore.js'
+import { createImport } from './librariusImport.js'
 import { parseMessage } from './librariusParse.js'
 
 // The SQL of the outbox store (librariusOutboxStore.js), run for real: a throwaway Postgres 16 in a container of its own (a unique name,
@@ -30,6 +31,7 @@ const OTHER = '200000000000000417'
 const HOOK = '200000000000000415'
 const OLD_HOOK = '200000000000000416'
 const REPLIED = '200000000000000418'
+const FORUM = '200000000000000419'
 const EPOCH = 1420070400000n
 /** → a Discord snowflake made at `ms`, as text. */
 const snow = (ms, n = 0) => String(((BigInt(ms) - EPOCH) << 22n) | BigInt(n))
@@ -151,6 +153,21 @@ describe.skipIf(!runnable)('the outbox store on a real Postgres 16, as the data-
       attachments: [],
     })
     await store.upsertMessages([row])
+  }
+
+  /**
+   * What the rollback image (batch 1, which knows no reply of the site) does to a message of the webhook: its upsert, which writes over
+   * any row. The upsert of this code leaves a row of the site alone, so the damage the repair puts right is made with batch 1's statement.
+   */
+  async function oldImageAs(id, { webhook = HOOK, content = '' } = {}) {
+    await sql(
+      `insert into librarius_messages (id, post_id, author_id, author_name, author_avatar, webhook_id, kind, content, embeds, stickers, reactions, reply_to, created_at, edited_at, rev)
+       values ($1, $2, $3, 'The Webhook', null, $3, 0, $4, '[]', '[]', '[]', null, $5, null, nextval('librarius_rev'))
+       on conflict (id) do update set author_id = excluded.author_id, author_name = excluded.author_name, author_avatar = excluded.author_avatar,
+         webhook_id = excluded.webhook_id, kind = excluded.kind, content = excluded.content, embeds = excluded.embeds, stickers = excluded.stickers,
+         reactions = excluded.reactions, reply_to = excluded.reply_to, edited_at = excluded.edited_at, rev = excluded.rev`,
+      [id, POST, webhook, content, new Date(T0).toISOString()],
+    )
   }
 
   const message = async (id) => (await rows('select * from librarius_messages where id = $1', [id]))[0]
@@ -581,9 +598,9 @@ describe.skipIf(!runnable)('the outbox store on a real Postgres 16, as the data-
     /** The damage the reviewer described: parts 2 and 3 stored as messages of their own, and part 1's author rewritten to the webhook with no text. */
     async function damage(ids = [A, B, C], hook = HOOK) {
       await sentReply(ids, { hook })
-      await importAs(ids[1], { webhook: hook, content: '' })
-      if (ids[2] !== undefined) await importAs(ids[2], { webhook: hook, content: 'part three' })
-      await importAs(ids[0], { webhook: hook, content: '' })
+      await oldImageAs(ids[1], { webhook: hook, content: '' })
+      if (ids[2] !== undefined) await oldImageAs(ids[2], { webhook: hook, content: 'part three' })
+      await oldImageAs(ids[0], { webhook: hook, content: '' })
     }
 
     it('writes the site’s own author, text, name, picture and reply link back over part 1, and deletes the phantom parts', async () => {
@@ -639,7 +656,7 @@ describe.skipIf(!runnable)('the outbox store on a real Postgres 16, as the data-
       await sql('delete from librarius_outbox')
       expect(await store.repairSiteMessages()).toEqual({ removed: 2, restored: 1 })
       expect((await message(A)).author_id).toBe(MEMBER)
-      await importAs(A, { content: '' })
+      await oldImageAs(A, { content: '' })
       await sql('delete from librarius_events')
       await store.repairSiteMessages()
       const kept = await message(A)
@@ -666,7 +683,7 @@ describe.skipIf(!runnable)('the outbox store on a real Postgres 16, as the data-
     it('cuts the text to 4000 characters as the worker does, by characters and not by bytes', async () => {
       const long = `${'é'.repeat(3999)}😀tail`
       await sentReply([A], { source: long, over: { content: Array.from(long).slice(0, 4000).join('') } })
-      await importAs(A, { content: '' })
+      await oldImageAs(A, { content: '' })
       await store.repairSiteMessages()
       expect((await message(A)).content).toBe(Array.from(long).slice(0, 4000).join(''))
     })
@@ -699,11 +716,123 @@ describe.skipIf(!runnable)('the outbox store on a real Postgres 16, as the data-
 
     it('works for a reply of a webhook that was replaced, and for a reply with no reply link', async () => {
       await sentReply([A, B], { hook: OLD_HOOK, over: { replyTo: null, layout: { form: 'v2', replyTo: null, siteUrl: 'https://site.example/p', username: 'Name', avatarUrl: null, images: [] } } })
-      await importAs(B, { webhook: OLD_HOOK })
-      await importAs(A, { webhook: OLD_HOOK })
+      await oldImageAs(B, { webhook: OLD_HOOK })
+      await oldImageAs(A, { webhook: OLD_HOOK })
       await store.repairSiteMessages()
       expect(await message(B)).toBeUndefined()
       expect(await message(A)).toMatchObject({ author_id: MEMBER, reply_to: null, author_avatar: null, author_name: 'Name', webhook_id: OLD_HOOK })
+    })
+  })
+
+  // ---- a reply of the site against what Discord says of it (rB3 M7, M9)
+
+  describe('a reply of the site and the import', () => {
+    const PICTURE = { id: snow(T0 + 1000, 30), position: 0, filename: 'map.png', contentType: 'image/png', size: 2048, width: 640, height: 480, url: 'https://cdn.example/invented/map.png', proxyUrl: null, expiresAt: null }
+    const attachmentsOf = async (id) => (await rows('select id, position, filename from librarius_attachments where message_id = $1 order by position', [id])).map((r) => [r.id, r.position, r.filename])
+
+    /** The row the import makes of a message of the webhook with this id, with a picture of its own: what would write over a reply. */
+    const webhookRow = (id, over = {}) => ({
+      ...parseMessage({
+        id,
+        channel_id: POST,
+        type: 0,
+        content: 'what Discord shows',
+        edited_timestamp: new Date(T0 + 60_000).toISOString(),
+        embeds: [{ type: 'link', url: 'https://site.example/x', title: 'A preview' }],
+        webhook_id: HOOK,
+        author: { id: HOOK, username: 'The Webhook', avatar: null },
+        timestamp: new Date(T0).toISOString(),
+        attachments: [{ id: snow(T0 + 1000, 31), filename: 'other.png', size: 10, url: `https://cdn.discordapp.com/attachments/${POST}/${snow(T0 + 1000, 31)}/other.png`, content_type: 'image/png' }],
+      }),
+      ...over,
+    })
+
+    it('never writes over a reply of the site: an upsert of its first part leaves the row and its attachments as they are, with keepReactions or not', async () => {
+      await sentReply([A, B], { over: { attachments: [PICTURE] } })
+      const before = await message(A)
+      expect(await attachmentsOf(A)).toEqual([[PICTURE.id, 0, 'map.png']])
+      for (const options of [undefined, { keepReactions: true }]) {
+        await store.upsertMessages([webhookRow(A)], options)
+        const after = await message(A)
+        expect(after).toEqual(before)
+        expect(await attachmentsOf(A)).toEqual([[PICTURE.id, 0, 'map.png']])
+      }
+    })
+
+    it('still writes a message of Discord in the same batch, and inserts a new one', async () => {
+      const person = snow(T0 + 500, 9)
+      await importAs(person, { webhook: OTHER, content: 'first' })
+      await sentReply([A])
+      const fresh = snow(T0 + 9000, 9)
+      await store.upsertMessages([webhookRow(A), webhookRow(person, { webhookId: OTHER, content: 'second' }), webhookRow(fresh)])
+      expect(await message(A)).toMatchObject({ origin: 'site', author_id: MEMBER, content: SOURCE })
+      expect(await message(person)).toMatchObject({ origin: 'discord', content: 'second' })
+      expect(await attachmentsOf(person)).toEqual([[snow(T0 + 1000, 31), 0, 'other.png']])
+      expect(await message(fresh)).toMatchObject({ origin: 'discord', content: 'what Discord shows', author_id: HOOK })
+    })
+
+    it('reads the window with the later parts of each reply in order, none of a message of Discord, and none while an edit is at work', async () => {
+      const person = snow(T0 + 7000, 9)
+      await sentReply([A, B, C])
+      await importAs(person, { webhook: OTHER })
+      expect(await store.windowIds(POST, 10)).toEqual([
+        { id: person, editedAt: null, parts: [] },
+        { id: A, editedAt: null, parts: [B, C] },
+      ])
+      await store.enqueueOutbox({ kind: 'edit', messageKey: A, authorId: MEMBER, payload: { postId: POST, source: 'new', mentions: [] } })
+      expect((await store.windowIds(POST, 10))[1]).toEqual({ id: A, editedAt: null, parts: [] })
+      // The places of the parts, not their ids, give the order.
+      await sql('delete from librarius_parts where message_id = $1 and part_index > 0', [A])
+      await sql('insert into librarius_parts (message_id, part_index, discord_id, webhook_id) values ($1, 1, $2, $4), ($1, 2, $3, $4)', [A, C, B, HOOK])
+      await sql("update librarius_messages set state = 'blocked' where id = $1", [A])
+      expect((await store.windowIds(POST, 10))[1].parts).toEqual([C, B])
+    })
+
+    /** Discord as the catch-up reads it: the post, and the messages it holds now, all of them on the page. */
+    function discordOf(messages) {
+      const raw = (id) => ({ id, channel_id: POST, type: 0, content: '', webhook_id: HOOK, author: { id: HOOK, username: 'The Webhook' }, timestamp: new Date(T0).toISOString(), attachments: [] })
+      const post = { id: POST, parent_id: FORUM, owner_id: MEMBER, name: 'An invented post', applied_tags: [], thread_metadata: { archived: false, locked: false, create_timestamp: new Date(T0).toISOString() } }
+      const held = messages.map(raw)
+      return {
+        asked: [],
+        activeThreads: async () => [post],
+        archivedThreads: async () => ({ threads: [], hasMore: false }),
+        messagesAfter: async (ch, after) => held.filter((m) => BigInt(m.id) > BigInt(after)),
+        newest: async (ch, limit) => [...held].reverse().slice(0, limit),
+        async message(ch, id) {
+          this.asked.push(id)
+          return held.find((m) => m.id === id) ?? null
+        },
+        thread: async () => null,
+      }
+    }
+
+    it('takes a reply whose part 3 is gone from Discord in a catch-up, and queues the deletion of the parts that are left', async () => {
+      await sentReply([A, B, C])
+      const discord = discordOf([A, B])
+      const imp = createImport({ discord, store, forumId: FORUM, webhookId: HOOK, log: () => {} })
+      await imp.run()
+      expect(await imp.status()).toMatchObject({ importDone: true, lastError: null })
+      // Part 3 was the newest message of the post, so the page could not show what became of it: Discord was asked.
+      expect(discord.asked).toEqual([C])
+      expect(await message(A)).toBeUndefined()
+      expect(await partsOf(A)).toEqual([])
+      expect((await rows('select message_id from librarius_tombstones')).map((r) => r.message_id)).toEqual([A])
+      const queued = await rows("select message_key, author_id, payload from librarius_outbox where kind = 'delete'")
+      expect(queued).toEqual([{ message_key: A, author_id: MEMBER, payload: { postId: POST, partIds: [A, B], webhookId: HOOK } }])
+      expect((await rows("select actor_id from librarius_events where action = 'deleted-in-discord'")).map((r) => r.actor_id)).toEqual([MEMBER])
+    })
+
+    it('keeps a reply that Discord holds whole, and stores none of its parts as messages of their own', async () => {
+      await sentReply([A, B, C])
+      const discord = discordOf([A, B, C])
+      const imp = createImport({ discord, store, forumId: FORUM, webhookId: null, log: () => {} })
+      await imp.run()
+      expect(await imp.status()).toMatchObject({ importDone: true, lastError: null })
+      expect(await message(A)).toMatchObject({ origin: 'site', author_id: MEMBER, content: SOURCE })
+      expect(await message(B)).toBeUndefined()
+      expect(await partsOf(A)).toHaveLength(3)
+      expect(await rows("select 1 from librarius_outbox where kind = 'delete'")).toEqual([])
     })
   })
 })
