@@ -7,38 +7,49 @@
  */
 import { request } from '../buildsApi'
 
-const local = () => import.meta.env.DEV && !!import.meta.env.VITE_DEATHWATCH_FIXTURE
+// The fixture is built on first use, never at import: Stryker switches its mutants on per test, which code run at
+// import never sees, so every mutant there would survive.
+function local() {
+  return import.meta.env.DEV && !!import.meta.env.VITE_DEATHWATCH_FIXTURE
+}
 
 // Invented, two of them of one name, as a guild has.
-const MEMBERS = [
-  ['300000000000000201', 'Brother Valen'],
-  ['300000000000000202', 'Brother Varro'],
-  ['300000000000000203', 'Brother Kael'],
-  ['300000000000000204', 'Brother Ostar'],
-  ['300000000000000205', 'Brother Ostar'],
-  ['300000000000000206', 'Brother Avar'],
-].map(([id, name]) => ({ id, name, avatar: null }))
-const given = [{ id: '300000000000000201', kind: 'desk', grantedBy: 'Watch Commander', grantedAt: '2026-10-02T18:00:00Z' }]
-const named = (r) => ({ ...r, name: MEMBERS.find((m) => m.id === r.id)?.name ?? null, avatar: null })
+function members() {
+  return [
+    ['300000000000000201', 'Brother Valen'],
+    ['300000000000000202', 'Brother Varro'],
+    ['300000000000000203', 'Brother Kael'],
+    ['300000000000000204', 'Brother Ostar'],
+    ['300000000000000205', 'Brother Ostar'],
+    ['300000000000000206', 'Brother Avar'],
+  ].map(([id, name]) => ({ id, name, avatar: null }))
+}
+let held
+function given() {
+  return (held ??= [{ id: '300000000000000201', kind: 'desk', grantedBy: 'Watch Commander', grantedAt: '2026-10-02T18:00:00Z' }])
+}
+function named(r) {
+  return { ...r, name: members().find((m) => m.id === r.id)?.name ?? null, avatar: null }
+}
 
 /** → [{ id, name, avatar }]: members whose display name holds `q`, or the one whose id it is. */
 export async function searchMembers(token, q) {
   if (local()) {
     const t = q.trim().toLowerCase()
-    return t.length < 2 ? [] : MEMBERS.filter((m) => m.id === t || m.name.toLowerCase().includes(t))
+    return t.length < 2 ? [] : members().filter((m) => m.id === t || m.name.toLowerCase().includes(t))
   }
   return (await request(`/deathwatch/members?q=${encodeURIComponent(q)}`, { token, cache: 'no-store' })).members
 }
 
 /** → [{ id, kind, name, avatar, grantedBy, grantedAt }], everyone given access by hand. */
 export async function listAccess(token) {
-  if (local()) return given.map(named)
+  if (local()) return given().map(named)
   return (await request('/deathwatch/access', { token, cache: 'no-store' })).people
 }
 
 export async function addAccess(token, discordId, kind) {
   if (local()) {
-    if (!given.some((r) => r.id === discordId && r.kind === kind)) given.push({ id: discordId, kind, grantedBy: 'Watch Commander', grantedAt: new Date().toISOString() })
+    if (!given().some((r) => r.id === discordId && r.kind === kind)) given().push({ id: discordId, kind, grantedBy: 'Watch Commander', grantedAt: new Date().toISOString() })
     return
   }
   await request('/deathwatch/access', { method: 'POST', token, body: { discordId, kind } })
@@ -46,8 +57,8 @@ export async function addAccess(token, discordId, kind) {
 
 export async function removeAccess(token, discordId, kind) {
   if (local()) {
-    const i = given.findIndex((r) => r.id === discordId && r.kind === kind)
-    if (i >= 0) given.splice(i, 1)
+    const i = given().findIndex((r) => r.id === discordId && r.kind === kind)
+    if (i >= 0) given().splice(i, 1)
     return
   }
   await request(`/deathwatch/access/${encodeURIComponent(discordId)}/${encodeURIComponent(kind)}`, { method: 'DELETE', token })

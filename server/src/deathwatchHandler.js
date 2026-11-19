@@ -109,15 +109,19 @@ export function createDeathwatchHandler({ access, store, roster = null, memberOf
 
   // Everyone given access by hand, named from the roster. Anyone who has left the guild since, or come back only
   // since, loses it here for good (removed as 'left-guild'); with no roster loaded nothing is proved, so nothing goes.
+  // The roster lags Discord by minutes, so someone missing from it is asked of Discord live (as addAccess does):
+  // only Discord's "not in the server" or a join date after the grant removes them; a failed lookup proves nothing.
   async function listAccess() {
     const rows = await store.listAccess()
     const people = await membersNow()
     const byId = new Map(people?.map((p) => [p.id, p]))
+    // A failed lookup is a member with no known join date ({}), which departed() never counts as proof.
+    const known = async (id) => byId.get(id) ?? memberOf(id).catch(() => ({}))
     let kept = rows
     if (people) {
       kept = []
       for (const row of rows) {
-        if (departed(row, byId)) await store.removeAccess(row.discordId, row.kind, 'left-guild')
+        if (departed(row, await known(row.discordId))) await store.removeAccess(row.discordId, row.kind, 'left-guild')
         else kept.push(row)
       }
       if (kept.length < rows.length) access.forget()

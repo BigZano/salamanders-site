@@ -6,15 +6,15 @@ const USER = '300000000000000001'
 const ADMIN_ROLE = '111111111111111111'
 const PLAIN_ROLE = '222222222222222222'
 
+// A route with `auth` answers only that Authorization header, as Discord does: any other gets a 401.
 function discord(routes) {
-  const seen = []
   const fetchImpl = async (url, init) => {
-    seen.push([url, init.headers.Authorization])
     const r = routes[url.replace('https://d.test/api', '')] || { status: 404, body: {} }
+    if (r.auth !== undefined && init.headers.Authorization !== r.auth) return new Response('{}', { status: 401 })
     // `raw` hands back a body as given (to model a reply that is not JSON); otherwise `body` is serialised.
     return new Response(r.raw ?? JSON.stringify(r.body), { status: r.status })
   }
-  return { fetchImpl, seen }
+  return { fetchImpl }
 }
 const make = (routes, over = {}) => {
   const d = discord(routes)
@@ -28,9 +28,9 @@ const guild = (over = {}) => ({
 
 describe('identify', () => {
   it('returns the Discord user for a good token', async () => {
-    const { roles, d } = make({ '/users/@me': { status: 200, body: { id: USER, username: 'u' } } })
+    const { roles } = make({ '/users/@me': { status: 200, body: { id: USER, username: 'u' }, auth: 'Bearer tok' } })
     expect(await roles.identify(req('Bearer tok'))).toEqual({ id: USER, username: 'u' })
-    expect(d.seen[0][1]).toBe('Bearer tok')
+    expect(await roles.identify(req('Bearer other'))).toBeNull() // the user's own token, passed on as it came
   })
 
   it('is null without a token or when Discord rejects it', async () => {
@@ -77,10 +77,20 @@ describe('identify', () => {
   })
 
   it('does ask Discord at the longest token the check allows (512 characters)', async () => {
-    const { roles, d } = make({ '/users/@me': { status: 200, body: { id: USER, username: 'u' } } })
     const token = 'a'.repeat(512)
+    const { roles } = make({ '/users/@me': { status: 200, body: { id: USER, username: 'u' }, auth: `Bearer ${token}` } })
     expect(await roles.identify(rawAuth(`Bearer ${token}`))).toEqual({ id: USER, username: 'u' })
-    expect(d.seen[0][1]).toBe(`Bearer ${token}`)
+  })
+
+  // Each with a route that would answer well: only the missing setting may stop it.
+  it.each([
+    ['no bot token', { botToken: '' }],
+    ['a bot token that is not text', { botToken: 42 }],
+    ['no guild id', { guildId: undefined }],
+    ['no API base', { apiBase: '' }],
+  ])('asks nothing with %s', async (_, over) => {
+    const { roles } = make({ '/users/@me': { status: 200, body: { id: USER, username: 'u' } } }, over)
+    await expect(roles.identify(req('Bearer t'))).rejects.toThrow(new Upstream('Discord lookups are not configured.'))
   })
 
   it('throws Upstream on odd answers and when unconfigured', async () => {
@@ -138,9 +148,10 @@ describe('identify', () => {
 
 describe('rolesOf', () => {
   it('returns roles with the bot token, null when not in the guild', async () => {
-    const { roles, d } = make({ [`/v10/guilds/${GUILD}/members/${USER}`]: { status: 200, body: { roles: [PLAIN_ROLE] } } })
+    const route = { [`/v10/guilds/${GUILD}/members/${USER}`]: { status: 200, body: { roles: [PLAIN_ROLE] }, auth: 'Bot bot' } }
+    const { roles } = make(route)
     expect(await roles.rolesOf(USER)).toEqual([PLAIN_ROLE])
-    expect(d.seen[0][1]).toBe('Bot bot')
+    await expect(make(route, { botToken: 'other' }).roles.rolesOf(USER)).rejects.toBeInstanceOf(Upstream)
     expect(await roles.rolesOf('1')).toBeNull()
   })
 
@@ -184,6 +195,15 @@ describe('isAdmin', () => {
     expect(await make(route(everyoneAdmin)).roles.isAdmin(USER, [])).toBe(true)
   })
 
+  it('reads no roles at all (someone not in the guild) as only @everyone', async () => {
+    expect(await make(route(guild())).roles.isAdmin(USER, null)).toBe(false)
+    expect(await make(route(guild({ roles: [{ id: GUILD, permissions: '8' }] }))).roles.isAdmin(USER, null)).toBe(true)
+  })
+
+  it('throws Upstream, not a TypeError, on a 200 whose body is not JSON', async () => {
+    await expect(make(route({ status: 200, raw: 'not json' })).roles.isAdmin(USER, [])).rejects.toBeInstanceOf(Upstream)
+  })
+
   it('treats malformed permissions as none and a failed guild fetch as Upstream', async () => {
     expect(await make(route(guild({ roles: [{ id: ADMIN_ROLE, permissions: '8x' }] }))).roles.isAdmin(USER, [ADMIN_ROLE])).toBe(false)
     await expect(make({}).roles.isAdmin(USER, [])).rejects.toBeInstanceOf(Upstream)
@@ -205,6 +225,7 @@ describe('Discord unreachable', () => {
     await expect(roles.identify(req('Bearer tok'))).rejects.toBeInstanceOf(Upstream)
     await expect(roles.rolesOf(USER)).rejects.toBeInstanceOf(Upstream)
     await expect(roles.isAdmin(USER, [])).rejects.toBeInstanceOf(Upstream)
+    await expect(roles.rolesOf(USER)).rejects.toThrow('Discord is unreachable.')
   })
 
   it('throws Upstream when Discord never answers within the timeout', async () => {
@@ -229,9 +250,10 @@ describe('memberOf', () => {
   const at = (route) => make({ [`/v10/guilds/${GUILD}/members/${USER}`]: route }).roles.memberOf(USER)
 
   it('returns the roles and when they joined, with the bot token', async () => {
-    const { roles, d } = make({ [`/v10/guilds/${GUILD}/members/${USER}`]: { status: 200, body: { roles: [PLAIN_ROLE], joined_at: '2025-01-01T00:00:00.000000+00:00' } } })
+    const route = { [`/v10/guilds/${GUILD}/members/${USER}`]: { status: 200, body: { roles: [PLAIN_ROLE], joined_at: '2025-01-01T00:00:00.000000+00:00' }, auth: 'Bot bot' } }
+    const { roles } = make(route)
     expect(await roles.memberOf(USER)).toEqual({ roles: [PLAIN_ROLE], joinedAt: '2025-01-01T00:00:00.000000+00:00' })
-    expect(d.seen[0][1]).toBe('Bot bot')
+    await expect(make(route, { botToken: 'other' }).roles.memberOf(USER)).rejects.toBeInstanceOf(Upstream)
   })
 
   it('is null for someone not in the guild', async () => {
