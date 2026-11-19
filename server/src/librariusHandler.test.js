@@ -414,6 +414,7 @@ describe('GET /librarius/me', () => {
       ],
       guildId: GUILD,
       forumId: FORUM,
+      form: 'v2',
       can: { reply: false, attach: false, manageMessages: false, manageThreads: false },
       limits: FRESH_LIMITS,
     })
@@ -2123,6 +2124,42 @@ describe('GET /librarius/me: what the member may do, and what they have left', (
   it('says nothing of any of it to someone who cannot read the forum', async () => {
     const out = await body(await setup({ verdict: VERDICTS.outsider, outbox: LIVE }).get('/librarius/me'))
     expect(out).toEqual({ access: false })
+  })
+
+  it('tells every reader the form replies are checked in, v2 unless it was made with plain, whatever they may do', async () => {
+    const forms = [
+      [{}, 'v2'],
+      [{ form: 'v2' }, 'v2'],
+      [{ form: 'plain' }, 'plain'],
+    ]
+    const verdicts = [VERDICTS.reader, VERDICTS.librarian, { ...VERDICTS.reader, reply: false }]
+    for (const [options, form] of forms) {
+      for (const [v, verdict] of verdicts.entries()) {
+        for (const [o, outbox] of [LIVE, undefined, { ...LIVE, refused: { status: 404, text: 'gone' } }].entries()) {
+          const res = await setup({ verdict, outbox, options }).get('/librarius/me')
+          expect(res.status).toBe(200)
+          expect((await body(res)).form, `${form}, verdict ${v}, outbox ${o}`).toBe(form)
+        }
+      }
+    }
+  })
+
+  it('says the very form the reply route checks with: a reply too long for plain is taken in v2 and refused in plain', async () => {
+    const long = { source: 'x'.repeat(7000) }
+    for (const [options, status] of [[{}, 202], [{ form: 'plain' }, 413]]) {
+      const t = setup({ verdict: VERDICTS.reader, outbox: LIVE, options })
+      const said = (await body(await t.get('/librarius/me'))).form
+      expect(said).toBe(options.form ?? 'v2')
+      expect((await t.send('POST', `/librarius/posts/${POST}/messages`, long)).status, said).toBe(status)
+    }
+  })
+
+  it('says no form when the Librarius is not configured, nor to someone who cannot read the forum', async () => {
+    const off = await setup({ configured: false, options: { form: 'plain' } }).get('/librarius/me')
+    expect(off.status).toBe(503)
+    expect(await body(off)).not.toHaveProperty('form')
+    const outsider = await body(await setup({ verdict: VERDICTS.outsider, outbox: LIVE, options: { form: 'plain' } }).get('/librarius/me'))
+    expect(outsider).not.toHaveProperty('form')
   })
 
   describe('the AutoMod rules the site cannot check', () => {

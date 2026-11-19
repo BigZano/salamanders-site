@@ -6,7 +6,8 @@
  * one is waiting. A refused request writes nothing.
  *
  * createLibrariusWrites({ store, guild, roster, outbox, limits, guildId, forumId, form = 'v2', siteUrl, now = Date.now,
- *   newKey = crypto.randomUUID }) → { reply, pending, edit, remove, upload, search }, each → a Response.
+ *   newKey = crypto.randomUUID }) → { reply, pending, edit, remove, upload, search }, each → a Response, and `form`, the form
+ *   ('v2' or 'plain') that a reply is checked and queued in, for /librarius/me to tell the site.
  *   `siteUrl` is the site's address (https, no path): the button of a reply and "Delete on site" link to it. `outbox` may be null: the
  *   routes queue all the same and tell no one (the handler never runs a write route without one).
  *
@@ -410,5 +411,5 @@ export function createLibrariusWrites({ store, guild, roster, outbox, limits, gu
     return reply(200, { members: found })
   }
 
-  return { reply: replyTo, pending, edit, remove, upload, search }
+  return { reply: replyTo, pending, edit, remove, upload, search, form }
 }

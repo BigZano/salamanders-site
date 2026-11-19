@@ -20,7 +20,8 @@
  * unset), `limits` (a createLimits() by default), `form` ('v2' or 'plain'), `siteUrl` (https://sm2salamanders.site) and `newKey`.
  *
  * /librarius/me adds, for a reader, `can: { reply, attach, manageMessages, manageThreads }`, which are what the verdict says and
- * false for all of them while no write is possible, and `limits` (librariusLimits.js snapshot: what the member has left of each).
+ * false for all of them while no write is possible, `limits` (librariusLimits.js snapshot: what the member has left of each)
+ * and `form`, 'v2' or 'plain': the form the reply route checks a reply in, so that the composer measures it by the same caps.
  * For a member who may manage messages it also says `sendingPausedUntil` (ISO time while the outbox's breaker holds all sending,
  * else null), `sendingFatal` (Discord has refused the webhook) and `automodUnchecked` (the names of the server's AutoMod rules with a
  * regular expression the site cannot run, so that it cannot check a reply against them; [] for none, null when the rules cannot be read
@@ -243,6 +244,7 @@ export function createLibrariusHandler({
       roles: facts.roles.map(({ id, name, color }) => ({ id, name, color })),
       guildId,
       forumId,
+      form: writes.form,
       can: {
         reply: writable && verdict.reply,
         attach: writable && verdict.attach,
