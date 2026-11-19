@@ -2335,7 +2335,7 @@ describe('"Delete on site" is answered within its budget however busy the gatewa
       return new Response(callback ? null : '{}', { status: callback ? 204 : 200 })
     }
     const discord = createLibrariusDiscord({ fetchImpl, apiBase: 'https://d.test/api', botToken: 'secret-bot-token', guildId: APP_GUILD, perSecond: 1 })
-    const command = createCommand({ discord, store: store ?? { outboxMessage: () => new Promise(() => {}) }, guildId: APP_GUILD, repliesOn: true })
+    const command = createCommand({ discord, store: store ?? { outboxMessage: () => new Promise(() => {}) }, guildId: APP_GUILD, repliesOn: () => true })
     const r = rig({ onDispatch: alongside(ingest ?? (() => undefined), command.dispatch, () => {}) })
     // Saturate the client: 30 calls that may each wait up to two minutes for its turn, one a second, are queued ahead of the callback.
     const busy = discord.withMaxWait(120_000)
@@ -2406,8 +2406,12 @@ describe('"Delete on site" with the replies on and with them off, through the ga
   })
   const message = (over) => ({ id: MSG, postId: POST, authorId: ME, origin: 'site', ...over })
 
-  /** The whole path, with the store holding `held` (or never answering) and the guild holding `commands`. */
+  /**
+   * The whole path, with the store holding `held` (or never answering) and the guild holding `commands`. The replies are `repliesOn`
+   * when the command is made, and `flag.on` after that, as the outbox would say.
+   */
   function wired({ repliesOn, held = message(), commands = [] }) {
+    const flag = { on: repliesOn }
     const fetched = []
     const fetchImpl = async (url, init) => {
       const address = String(url)
@@ -2420,9 +2424,9 @@ describe('"Delete on site" with the replies on and with them off, through the ga
     const discord = createLibrariusDiscord({ fetchImpl, apiBase: 'https://d.test/api', botToken: 'secret-bot-token', guildId: APP_GUILD })
     const store = { outboxMessage: held === 'never' ? () => new Promise(() => {}) : async (id) => (id === MSG ? held : null) }
     const fed = []
-    const command = createCommand({ discord, store, guildId: APP_GUILD, repliesOn })
+    const command = createCommand({ discord, store, guildId: APP_GUILD, repliesOn: () => flag.on })
     const r = rig({ onDispatch: alongside(async (t) => void fed.push(t), command.dispatch, () => {}) })
-    return { r, fetched, fed }
+    return { r, fetched, fed, flag }
   }
   const COMMANDS = `https://d.test/api/v10/applications/${APP}/guilds/${APP_GUILD}/commands`
   const commandCalls = (fetched) => fetched.filter((f) => f.address === COMMANDS).map((f) => [f.method, f.body === undefined ? null : JSON.parse(f.body)])
@@ -2473,6 +2477,19 @@ describe('"Delete on site" with the replies on and with them off, through the ga
       expect(fetched.find((f) => f.address.includes('/callback')).at).toBe(came)
       r.gateway.stop()
     }
+  })
+
+  it('with the replies on at READY and the webhook refused since, tells the author at once that deleting from the site is off (rB11 M2)', async () => {
+    const { r, fetched, flag } = wired({ repliesOn: true })
+    const sock = await readyWithApplication(r)
+    expect(commandCalls(fetched)).toEqual([['GET', null], ['POST', { name: 'Delete on site', type: 3 }]])
+    flag.on = false
+    const came = Date.now()
+    sock.receive({ op: 0, t: 'INTERACTION_CREATE', s: 2, d: interaction() })
+    await tick(0)
+    expect(answers(fetched)).toEqual([{ type: 4, data: { content: OFF, flags: 64, allowed_mentions: { parse: [] } } }])
+    expect(fetched.find((f) => f.address.includes('/callback')).at).toBe(came)
+    r.gateway.stop()
   })
 
   it('with the replies off, still tells anyone that a message written in Discord is for Discord\'s own Delete', async () => {

@@ -267,10 +267,12 @@ if (librariusConfigured) {
     }
     // "Delete on site" in the Apps menu is made whenever the Librarius is, with the replies on or off (Ruling B12): on, it is made in
     // the guild at READY and sends a member to the site; off, it is not made, and one made while they were on still answers within
-    // the three seconds, that deleting from the site is off. A failure to make it leaves the command off and the rest as it is.
+    // the three seconds, that deleting from the site is off. The replies also go off while the API runs, when Discord refuses the
+    // webhook and the outbox stops for good (the write routes are 503 then), so the command asks at each answer, not only now
+    // (rB11 M2); READY goes by what it is told now. A failure to make it leaves the command off and the rest as it is.
     let command = null
     try {
-      command = createCommand({ discord, store, guildId: GUILD_ID, repliesOn: outbox !== null })
+      command = createCommand({ discord, store, guildId: GUILD_ID, repliesOn: () => outbox !== null && outbox.webhookRefused() === null })
     } catch (err) {
       console.error(`Librarius: the "Delete on site" command could not be set up, so it stays off: ${describeForLog(err)}`)
     }

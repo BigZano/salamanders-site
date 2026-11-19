@@ -20,7 +20,7 @@
  * given its try back when the site is too busy to work it). That is before any lookup and before the body is read, and it is on top of
  * the windows that count what is let through (3 replies and 20 edits a minute, 30 uploads an hour), which a refused try does not use. A
  * member has no more than 2 pictures in flight, from the moment one starts to arrive (429, before the try is taken, so it costs none).
- * A picture on its way holds no more than its own bytes, and it has 30 seconds from the request's start to come (408). Once it has
+ * A picture on its way holds no more than its own bytes, and it has 120 seconds from the request's start to come (400). Once it has
  * come it is held in memory several times over while it is read as a form, judged and stripped, so only 4 are worked at a time in
  * all (503, and the try is given back). What a member holds of pictures that are not sent yet is capped at 100 MiB (413).
  *
@@ -55,8 +55,9 @@
  *   as in Discord, the author included). 404, 403, 409 while it is being changed, 429 as for an edit. → 202.
  * upload(request, verdict): POST /librarius/uploads, multipart, one picture of 10 MB at most → 201 { id }. In this order: 429 "One
  *   picture at a time, please." for a member's third in flight (no try is taken); 429 over 10 tries a minute; 403 without the right
- *   to attach; 429 over 30 an hour (checked before the body is read, counted when the picture is held); 415, 413, and 408 "That
- *   picture took too long to arrive." for one that has not all come 30 s after the request's start (librariusBody.js receivePicture);
+ *   to attach; 429 over 30 an hour (checked before the body is read, counted when the picture is held); 415, 413, and 400 "That
+ *   picture took too long to arrive." for one that has not all come 120 s after the request's start (librariusBody.js receivePicture,
+ *   which says why it is not 408);
  *   503 "The site is busy with pictures; try again in a moment." when 4 are being worked already (the try is given back); 413, 400
  *   for a form that is not one picture or a file that is no PNG, JPEG, WebP or GIF by its bytes (librariusUploads.js sniff, then
  *   strip: a file strip refuses is never held), and 413 "You're holding too many pictures; send or remove some first." when the
@@ -81,7 +82,9 @@ import { sniff, strip } from './librariusUploads.js'
 const JSON_MAX_BYTES = 65_536
 // How long a picture has to arrive, from the request's start. Bun ends a body that stalls (its idleTimeout of 10 s, which index.js
 // leaves as it is), but not one that keeps coming slowly: this is what bounds how long a picture on its way keeps its member's place.
-const ARRIVAL_MS = 30_000
+// A picture on its way holds only its member's own 2 places: the place for all is taken once the bytes have come (place.work), so a
+// slow one keeps no one else waiting, and the time can be long. 10 MB and the form around it in 120 s is about 0.7 Mbit/s.
+const ARRIVAL_MS = 120_000
 // What a member may hold of pictures that are not sent yet, in all: 100 MiB, ten of the biggest there can be.
 const MAX_HELD_BYTES = 100 * 1024 * 1024
 const PENDING_WINDOW_MS = 86_400_000

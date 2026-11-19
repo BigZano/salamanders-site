@@ -7,26 +7,31 @@
  * createCommand({ discord, store, guildId, repliesOn, siteUrl = 'https://sm2salamanders.site', timers = { setTimeout, clearTimeout },
  *   now = Date.now, deadlineMs = 1500, log = console.error }) → { dispatch(type, data) → Promise<void> }
  *   `discord` is the Librarius's client (librariusDiscord.js: applicationCommands, createMessageCommand and interactionCallback, which goes
- *   around the client's limits and has a timeout of its own); `store` has outboxMessage (librariusOutboxStore.js). `repliesOn` is whether
- *   replying from the site is on (true or false, nothing else): the command is made whenever the Librarius is, and it is only with the
- *   replies on that it is made in the guild (Ruling B12). `now` is the clock, in milliseconds. dispatch never rejects:
+ *   around the client's limits and has a timeout of its own); `store` has outboxMessage (librariusOutboxStore.js). `repliesOn` is a
+ *   function that says whether replying from the site is on now: the command is made whenever the Librarius is, and it is only with the
+ *   replies on that it is made in the guild (Ruling B12). It is asked once when the command is made, and must answer true or false then
+ *   (a TypeError otherwise): that is what READY goes by, for as long as the API runs. It is asked again for each answer about a reply of
+ *   the site, since the replies can go off while the API runs (Discord refuses the webhook, and the outbox stops for good: rB11 M2),
+ *   and then anything but true, or a function that throws, is off. `now` is the clock, in milliseconds. dispatch never rejects:
  *   what goes wrong is logged (without a token or a link) and the event is over. Nothing in it can throw: every call to Discord and to the store
  *   is caught. It is for the gateway's onDispatch; it waits for the answer to an interaction (up to `deadlineMs` and the call that sends it),
  *   so a caller that has other work should not hold it up behind this. The gateway hands INTERACTION_CREATE over at once, outside the queue
  *   of its other events (librariusGateway.js), so this is begun when the event comes, and the time it has is counted from then.
  *
- * READY, with the replies on: makes sure the guild has the command. It lists the application's commands in the guild (the application's
- * id is in READY) and, only if none is a message command (type 3) named "Delete on site", makes it. It never overwrites the list, since
- * other commands may be there. If Discord refuses the bot the right (403), that is said once and the API goes on without the command; any
- * other failure is said each time and is tried again at the next READY. With the replies off, READY asks Discord nothing: the command is
- * neither made nor taken away, so one made while they were on is still in the Apps menu, and is still answered.
+ * READY, with the replies on when the command was made: makes sure the guild has the command. It lists the application's commands in the
+ * guild (the application's id is in READY) and, only if none is a message command (type 3) named "Delete on site", makes it. It never
+ * overwrites the list, since other commands may be there. If Discord refuses the bot the right (403), that is said once and the API goes
+ * on without the command; any other failure is said each time and is tried again at the next READY. With the replies off when it was made,
+ * READY asks Discord nothing: the command is neither made nor taken away, so one made while they were on is still in the Apps menu, and is
+ * still answered.
  *
  * INTERACTION_CREATE of that command in this guild: answers with `POST /interactions/<id>/<token>/callback`, type 4, `flags: 64`
  * (only they see it) and `allowed_mentions: { parse: [] }`, in one of these (the copy is the spec's and Ruling B12's):
  *   - the message is one this member wrote on the site, with the replies on: "This was written on the site. Delete it there:" and the
  *     link `<site>/reliquarium/librarius/<post>#m-<message>`, the post being the one the store has the message in;
  *   - the message was written on the site, with the replies off, whoever wrote it: "Deleting from the site is switched off right now. A
- *     moderator can delete this in Discord.";
+ *     moderator can delete this in Discord." Whether they are on is asked once the store has answered, so a member is not sent to a
+ *     site whose delete would be refused;
  *   - the message was written in Discord (by anyone): "Written in Discord: use Discord's own Delete.";
  *   - anything else, someone else's message of the site with the replies on, one the Librarius does not hold, or a target that is no
  *     message id (nothing is asked of the store for that one): "Only the author can delete this, on the site."
@@ -70,11 +75,24 @@ export function createCommand({ discord, store, guildId, repliesOn, siteUrl = SI
   }
   if (typeof store?.outboxMessage !== 'function') throw new TypeError('store.outboxMessage must be a function.')
   if (!isId(guildId)) throw new TypeError('guildId must be a Discord id.')
-  if (typeof repliesOn !== 'boolean') throw new TypeError('repliesOn must be true or false.')
+  if (typeof repliesOn !== 'function') throw new TypeError('repliesOn must be a function.')
   if (typeof now !== 'function') throw new TypeError('now must be a function.')
   if (!Number.isSafeInteger(deadlineMs) || deadlineMs < 1 || deadlineMs > MAX_DEADLINE_MS) throw new RangeError(`deadlineMs must be a whole number of milliseconds from 1 to ${MAX_DEADLINE_MS}.`)
   if (typeof log !== 'function') throw new TypeError('log must be a function.')
   const site = siteBase(siteUrl)
+  // What READY goes by: whether the replies were on when the command was made.
+  const onAtStart = repliesOn()
+  if (typeof onAtStart !== 'boolean') throw new TypeError('repliesOn must answer true or false.')
+
+  /** → whether the replies are on now. Anything but true is off, and so is a function that throws: a member is sent to the site only
+   * when they can delete there. */
+  function onNow() {
+    try {
+      return repliesOn() === true
+    } catch {
+      return false
+    }
+  }
 
   // Said at most once, so that a bot that may not make the command does not say so at every READY.
   let refusedSaid = false
@@ -112,8 +130,9 @@ export function createCommand({ discord, store, guildId, repliesOn, siteUrl = SI
     const found = await store.outboxMessage(messageId)
     if (found === null) return COPY.other
     if (found.origin === 'discord') return COPY.discord
-    // With the replies off nobody can delete it from the site: it is the same answer for its author and for anyone else.
-    if (found.origin === 'site' && !repliesOn) return COPY.off
+    // With the replies off nobody can delete it from the site: it is the same answer for its author and for anyone else. They are
+    // asked now, after the store, since they can go off while the API runs.
+    if (found.origin === 'site' && !onNow()) return COPY.off
     if (found.origin === 'site' && found.authorId === memberId) return COPY.site(linkTo(found.postId, messageId))
     return COPY.other
   }
@@ -169,7 +188,7 @@ export function createCommand({ discord, store, guildId, repliesOn, siteUrl = SI
     async dispatch(type, d) {
       if (type === 'READY') {
         const applicationId = d?.application?.id
-        if (repliesOn && isId(applicationId)) await ensure(applicationId)
+        if (onAtStart && isId(applicationId)) await ensure(applicationId)
       } else if (type === 'INTERACTION_CREATE') {
         // The three seconds are counted from here: the gateway hands the event over the moment it comes.
         const cameAt = now()

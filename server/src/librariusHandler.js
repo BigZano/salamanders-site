@@ -50,7 +50,8 @@
  * everyone a page names: its authors, those a message mentions, and the authors of the messages it replies to.
  */
 import { Upstream } from './discordRoles.js'
-import { readJson as readJsonWithin, reply, send } from './httpReply.js'
+import { reply, send } from './httpReply.js'
+import { readJsonWithin } from './librariusBody.js'
 import { createLimits } from './librariusLimits.js'
 import { automodUnchecked } from './librariusSend.js'
 import { BIGINT_MAX, isStoreId } from './librariusText.js'
@@ -86,7 +87,8 @@ const mentionsIn = (text) => Array.from(text.matchAll(MENTION), (m) => m[1])
 /** The first 200 characters of a message, counted as characters so that no pair is cut in two. */
 const quote = (text) => Array.from(text).slice(0, QUOTE_LENGTH).join('')
 
-/** → the 1 KB JSON request of a PUT: { body, blank } or { status, error }, as httpReply.readJson. */
+/** → the 1 KB JSON request of a PUT: { body, blank } or { status, error }. It is counted as it arrives, and a body past 1 KB is
+ * given up there (librariusBody.js readJsonWithin), so a member who sends a megabyte is not held for it. */
 const readJson = (request) => readJsonWithin(request, { maxBytes: JSON_MAX_BYTES, tooLarge: 'The request is too large (1 KB at most).' })
 
 /**
