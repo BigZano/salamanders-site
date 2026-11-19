@@ -110,6 +110,48 @@ describe('auth.signOut clears the Librarius', () => {
   })
 })
 
+// A read the server answers 401 (the token has run out, or was revoked): the reader is signed out as signOut() does it, so that the
+// pages ask them to sign in again, but what they had under way in this browser waits for them.
+describe('auth.expire', () => {
+  const SIGNED_IN = 'salamanders-discord-member'
+  beforeEach(() => {
+    localStorage.clear()
+    localStorage.setItem(SIGNED_IN, JSON.stringify({ id: '200000000000000001', username: 'invented', accessToken: 'tok', expiresAt: Date.now() + 60_000 }))
+  })
+
+  it('signs out: no member, no token, and the sign-in forgotten', () => {
+    const auth = useAuth()
+    expect(auth.token).toBe('tok')
+    auth.expire()
+    expect(auth.signedIn).toBe(false)
+    expect(auth.token).toBeNull()
+    expect(localStorage.getItem(SIGNED_IN)).toBeNull()
+  })
+
+  it('empties what signOut() empties: the roster, the Deathwatch and the Librarius', async () => {
+    const { useDeathwatch } = await import('./deathwatch')
+    const { useLibrarius } = await import('./librarius')
+    const roster = useRoster()
+    roster.$patch({ status: 'ready', roster: { fetchedAt: 'x' } })
+    const dw = useDeathwatch()
+    dw.$patch({ status: 'allowed', commander: true })
+    const lib = useLibrarius()
+    lib.$patch({ status: 'allowed', posts: [{ id: '200000000000000402', title: 'Invented post' }] })
+    useAuth().expire()
+    expect(roster).toMatchObject({ status: 'idle', roster: null })
+    expect(dw).toMatchObject({ status: 'idle', commander: false })
+    expect(lib).toMatchObject({ status: 'idle', posts: [] })
+  })
+
+  it('keeps the drafts of replies and the places in the posts, which signOut() does not', () => {
+    localStorage.setItem('lb-draft:200000000000000402:new', 'A reply half written')
+    sessionStorage.setItem('lb-anchor:200000000000000402', '200000000000000410')
+    useAuth().expire()
+    expect(localStorage.getItem('lb-draft:200000000000000402:new')).toBe('A reply half written')
+    expect(sessionStorage.getItem('lb-anchor:200000000000000402')).toBe('200000000000000410')
+  })
+})
+
 // What the server said about the Librarius at sign-in, kept as the nav hint (see discordAuth.rememberLibrarius). The page learns
 // it again on every visit to the Reliquarium, and tells the store here.
 describe('auth.noteLibrarius', () => {
