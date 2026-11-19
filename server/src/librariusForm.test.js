@@ -16,6 +16,7 @@ import {
   split,
   toDiscord,
 } from './librariusForm.js'
+import { automodMatcher, validateReply } from './librariusSend.js'
 
 // Every id, link and name here is invented.
 const AUTHOR = '200000000000000401'
@@ -33,6 +34,8 @@ const BUTTON = { type: 1, components: [{ type: 2, style: 5, label: 'Open On Site
 const WORST_ID = '9'.repeat(20)
 const WORST_BASE = `https://discord.com/channels/${WORST_ID}/${WORST_ID}`
 const SEP = { type: 14, divider: true, spacing: 1 }
+// The zero-width space that the form puts between marks that touch, and in a mark that a cut leaves with nothing in it.
+const ZW = '\u200b'
 
 const opts = (over = {}) => ({ form: 'v2', authorId: AUTHOR, replyTo: null, siteUrl: SITE, images: [], ...over })
 const v2 = (src, over) => toDiscord(src, opts(over))
@@ -98,7 +101,9 @@ const RE = {
   strike: /~~(?=\S)((?:\\[\s\S]|~(?!~)|[^\s~]|\s(?!~~))+?)~~/y,
   spoiler: /\|\|([\s\S]+?)\|\|/y,
 }
-// The rules to try at a character, in order.
+// The rules to try at a character, in order. Simple-markdown gives bold, italic and underline one order and takes the longest of
+// their matches (its `quality`), as far as the re-review recalls it, where this takes bold first: the two read alike but for a run
+// of three `*` or more, which the form writes only where bold and italic open or close together, as `***a***` (bold italic either way).
 const RULES_AT = { '\\': ['escape'], '`': ['code'], '<': ['angle'], '[': ['link'], '*': ['strong', 'star'], _: ['underline', 'score'], '~': ['strike'], '|': ['spoiler'] }
 // → [character, hidden][] of an inline run, pushed on `out`.
 function showInline(s, hidden, out) {
@@ -2000,11 +2005,76 @@ describe('toDiscord: emphasis that is written twice in a row', () => {
     expect(r.parts[0].files).toEqual(['u1.png'])
   })
 
-  it('writes bold that touches an italic, before it or after it, as bold and as an italic, and joins neither', () => {
-    expect(plain('**a***b*').parts[0].text).toBe(`**a***b*\n${PLAIN_FOOTER}`)
-    expect(plain('*a***b**').parts[0].text).toBe(`*a***b**\n${PLAIN_FOOTER}`)
-    expect(plain('_a_**b**').parts[0].text).toBe(`*a***b**\n${PLAIN_FOOTER}`)
-    expect(plain('**a**_b_').parts[0].text).toBe(`**a***b*\n${PLAIN_FOOTER}`)
+  it('writes bold that touches an italic, before it or after it, as bold and as an italic with a zero-width space between, and joins neither', () => {
+    expect(plain('**a***b*').parts[0].text).toBe(`**a**${ZW}*b*\n${PLAIN_FOOTER}`)
+    expect(plain('*a***b**').parts[0].text).toBe(`*a*${ZW}**b**\n${PLAIN_FOOTER}`)
+    expect(plain('_a_**b**').parts[0].text).toBe(`*a*${ZW}**b**\n${PLAIN_FOOTER}`)
+    expect(plain('**a**_b_').parts[0].text).toBe(`**a**${ZW}*b*\n${PLAIN_FOOTER}`)
+  })
+
+  it('puts a zero-width space between two marks of one character that touch, so that Discord closes each where it was written', () => {
+    const images = [{ ref: 1, name: 'u1.png' }]
+    expect(plain('**so****very**').parts[0].text).toBe(`**so**${ZW}**very**\n${PLAIN_FOOTER}`)
+    expect(plain('__so____very__').parts[0].text).toBe(`__so__${ZW}__very__\n${PLAIN_FOOTER}`)
+    // A picture that is attached shows nothing between them, so they touch as well.
+    expect(plain('**so**![p](upload:1)**very**', { images }).parts[0].text).toBe(`**so**${ZW}**very**\n${PLAIN_FOOTER}`)
+    expect(plain('__so__![p](upload:1)__very__', { images }).parts[0].text).toBe(`__so__${ZW}__very__\n${PLAIN_FOOTER}`)
+    expect(plain('*so*![p](upload:1)**very**', { images }).parts[0].text).toBe(`*so*${ZW}**very**\n${PLAIN_FOOTER}`)
+    expect(plain('`so`![p](upload:1)`very`', { images }).parts[0].text).toBe(`\`so\`${ZW}\`very\`\n${PLAIN_FOOTER}`)
+    expect(v2('**so****very**').parts[0].text).toBe(`**so**${ZW}**very**\n${FOOTER}`)
+  })
+
+  it('puts none between marks that something shows between, that are of two characters, or that Discord closes at the first chance', () => {
+    expect(plain('**so** **very**').parts[0].text).toBe(`**so** **very**\n${PLAIN_FOOTER}`)
+    expect(plain('*so*__very__').parts[0].text).toBe(`*so*__very__\n${PLAIN_FOOTER}`)
+    // A strike holds no `~~` and a spoiler closes at the next bars, so these are read as two already.
+    expect(plain('~~so~~~~very~~').parts[0].text).toBe(`~~so~~~~very~~\n${PLAIN_FOOTER}`)
+    expect(plain('||so||||very||').parts[0].text).toBe(`||so||||very||\n${PLAIN_FOOTER}`)
+    // A text that only ends with the character of a mark does not touch the mark before it, nor a text the next text, though the bold
+    // of a bold heading leaves only its text.
+    expect(plain('*so*very\\*').parts[0].text).toBe(`*so*very\\*\n${PLAIN_FOOTER}`)
+    expect(plain('#### so**os**').parts[0].text).toBe(`**soos**\n${PLAIN_FOOTER}`)
+  })
+
+  it('writes an italic inside an italic as its text, since Discord has none, and its marks would be read as bold', () => {
+    expect(plain('*_a_*').parts[0].text).toBe(`*a*\n${PLAIN_FOOTER}`)
+    expect(plain('*_a_ b*').parts[0].text).toBe(`*a b*\n${PLAIN_FOOTER}`)
+    expect(plain('_a *b*_').parts[0].text).toBe(`*a b*\n${PLAIN_FOOTER}`)
+    expect(plain('*a ||_b_|| c*').parts[0].text).toBe(`*a ||b|| c*\n${PLAIN_FOOTER}`)
+    // Two that touch inside it are not joined as italics are, for they have no marks to join.
+    expect(plain('*_a_![p](upload:1)_b_*', { images: [{ ref: 1, name: 'u1.png' }] }).parts[0].text).toBe(`*ab*\n${PLAIN_FOOTER}`)
+    // The italics after it have their marks again, and so do those of a note.
+    expect(plain('*_a_* *c*').parts[0].text).toBe(`*a* *c*\n${PLAIN_FOOTER}`)
+    expect(plain('x[^a]\n\n[^a]: *so* noted').parts[0].text).toBe(`x\\[^a]\n-# \\[^a]: *so* noted\n${PLAIN_FOOTER}`)
+  })
+
+  it('shows no spoiler of a reply where marks that touch would have paired with the marks in it', () => {
+    // The brief's line: Discord's italic would take `*so***`, and the bold left over would pair with the bold in the spoiler.
+    const touching = 'I was *so***very** moved. Later: ||the **captain** dies||'
+    // An italic in an italic, written `**a* b*`, would be a bold opened that pairs with the one in the spoiler.
+    const nested = '*_a_ b* and ||SECRET **x** y||'
+    for (const src of [touching, nested]) {
+      for (const form of FORMS) {
+        const r = toDiscord(src, opts({ form }))
+        expect(r.parts).toHaveLength(1)
+        expect(leaks(src, r.parts)).toEqual([])
+      }
+    }
+    expect(plain(touching).parts[0].text).toBe(`I was *so*${ZW}**very** moved. Later: ||the **captain** dies||\n${PLAIN_FOOTER}`)
+  })
+
+  it("is refused by Send's AutoMod for a keyword that a zero-width space splits, which its matcher reads as nothing", async () => {
+    const rule = { id: '200000000000000451', name: 'No Zorp', enabled: true, trigger_type: 1, trigger_metadata: { keyword_filter: ['zorp'], regex_patterns: [], allow_list: [] }, exempt_roles: [], exempt_channels: [], actions: [{ type: 1 }] }
+    const automod = automodMatcher([rule], { log: () => {} })
+    const upload = '200000000000000461'
+    // The source holds no "zorp", for the picture stands between its halves; what is sent does, with a zero-width space in it.
+    const source = '**zo**![p](upload:1)**rp**'
+    expect(automod(source)).toBeNull()
+    for (const form of FORMS) {
+      expect(toDiscord(source, opts({ form, images: [{ ref: 1, name: 'image-1.png' }] })).parts[0].text.startsWith(`**zo**${ZW}**rp**\n`)).toBe(true)
+      const r = await validateReply({ source, replyTo: null, mentions: [], uploads: [upload] }, { form, automod, ownUploadIds: [upload], authorId: AUTHOR, siteUrl: SITE })
+      expect(r).toEqual({ ok: false, status: 422, error: 'Blocked by the server\'s AutoMod rule "No Zorp".', rule: 'No Zorp', match: null })
+    }
   })
 
   it('writes an italic of nothing but a space, which has no mark to join, as the space', () => {
@@ -2049,6 +2119,20 @@ describe('toDiscord: what Discord shows of the spoilers of a reply that is cut',
     expect(hiddenOf('> ||ONE\n> two|| three')).toEqual({ ONE: 'all', two: 'all', three: 'none' })
     expect(hiddenOf('```\n||code||\n```\nafter')).toEqual({ code: 'none', after: 'none' })
     expect(hiddenOf('\\|\\|not\\|\\| `||code||` [t](<https://a.example/x||y>) ||HIDDEN||')).toEqual({ not: 'none', code: 'none', t: 'none', HIDDEN: 'all' })
+  })
+
+  it('has a model in which marks that touch pair as Discord pairs them, and a spoiler of a space pairs with itself', () => {
+    // The italic takes `*so***`, and the bold that is left pairs with the bold in the spoiler, whose bars it swallows.
+    expect(hiddenOf('I was *so***very** moved. Later: ||the **captain** dies||')).toMatchObject({ the: 'none', captain: 'none', dies: 'none' })
+    expect(hiddenOf(`I was *so*${ZW}**very** moved. Later: ||the **captain** dies||`)).toMatchObject({ so: 'none', very: 'none', the: 'all', captain: 'all', dies: 'all' })
+    expect(hiddenOf('**so****very** ||the **captain** dies||')).toMatchObject({ the: 'none' })
+    expect(hiddenOf(`**so**${ZW}**very** ||the **captain** dies||`)).toMatchObject({ so: 'none', very: 'none', the: 'all' })
+    // Bars that close nothing pair with the next ones; a space between them makes a spoiler of them.
+    expect(hiddenOf('**3/3** |||| then ||SECRET|| and ||OTHER|| end')).toMatchObject({ then: 'all', SECRET: 'none', and: 'all', OTHER: 'none' })
+    expect(hiddenOf('**3/3** || || then ||SECRET|| and ||OTHER|| end')).toEqual({ then: 'none', SECRET: 'all', and: 'none', OTHER: 'all', end: 'none' })
+    // An italic of a space is none, in Discord as in the model, and its second mark opens one; an italic of a zero-width space is one.
+    expect(hiddenOf('* *then ||SECRET.*b* x||')).toMatchObject({ then: 'none', SECRET: 'none', x: 'none' })
+    expect(hiddenOf(`*${ZW}*then ||SECRET.*b* x||`)).toEqual({ then: 'none', SECRET: 'all', b: 'all', x: 'all' })
   })
 
   // The marks that a cut keeps from leaving a pair of them with nothing in: each is read as the mark of what it holds.
@@ -2117,11 +2201,37 @@ describe('toDiscord: what Discord shows of the spoilers of a reply that is cut',
     expect(r.parts.map((p) => p.text)).toEqual([m(1, 2, `${'x'.repeat(1690)} ||\n${'c'.repeat(78)}||`), `${m(2, 2, `||${'c'.repeat(222)}||`)}\n${PLAIN_FOOTER}`])
   })
 
-  it('cuts a spoiler of nothing but spaces anywhere that leaves room, where no cut leaves it without bars that hide nothing', () => {
+  it('cuts a spoiler of nothing but spaces anywhere that leaves room, and gives the bars a space to hide, never `||||`', () => {
     // Every place in the spaces is right after the opening bars, and the last is right before the closing ones, so none is clean.
-    expect(plain(`||${' '.repeat(3000)}w||`).parts.map((p) => p.text)).toEqual(['**1/2** ||||', `${m(2, 2, '||w||')}\n${PLAIN_FOOTER}`])
+    expect(plain(`||${' '.repeat(3000)}w||`).parts.map((p) => p.text)).toEqual(['**1/2** || ||', `${m(2, 2, '||w||')}\n${PLAIN_FOOTER}`])
     const r = plain(`||${' '.repeat(5000)}w||tail`)
-    expect(r.parts.map((p) => p.text)).toEqual(['**1/3** ||||', '**2/3** ||||', `${m(3, 3, '||w||tail')}\n${PLAIN_FOOTER}`])
+    expect(r.parts.map((p) => p.text)).toEqual(['**1/3** || ||', '**2/3** || ||', `${m(3, 3, '||w||tail')}\n${PLAIN_FOOTER}`])
+  })
+
+  it('keeps the spoilers after a spoiler of spaces hidden, where the part that starts with its closing bars gives them a space (the re-review)', () => {
+    for (const [form, spaces] of [['plain', 3000], ['v2', 5000]]) {
+      const src = `||SPOILT${' '.repeat(spaces)}|| then ||SECRET|| and ||OTHER|| end`
+      const r = toDiscord(src, opts({ form }))
+      expect(r.parts.map(textOf)).toEqual(['**1/3** ||SPOIL||', '**2/3** ||T||', `**3/3** || || then ||SECRET|| and ||OTHER|| end\n${form === 'v2' ? FOOTER : PLAIN_FOOTER}`])
+      expect(leaks(src, r.parts)).toEqual([])
+      for (const part of r.parts) expect(textOf(part)).not.toMatch(/^\*\*\d\/\d\*\* \|\|\|\|/)
+    }
+  })
+
+  it('gives any other mark that a cut leaves with nothing in it a zero-width space, as Discord takes no italic or strike of a space', () => {
+    expect(plain(`**${' '.repeat(3000)}w**`).parts.map((p) => p.text)).toEqual([`**1/2** **${ZW}**`, `${m(2, 2, '**w**')}\n${PLAIN_FOOTER}`])
+    expect(plain(`~~${' '.repeat(3000)}w~~`).parts.map((p) => p.text)).toEqual([`**1/2** ~~${ZW}~~`, `${m(2, 2, '~~w~~')}\n${PLAIN_FOOTER}`])
+    const src = `**SPOILT${' '.repeat(3000)}** then ||SECRET|| and **b**`
+    const r = plain(src)
+    expect(r.parts.map((p) => p.text)).toEqual(['**1/3** **SPOIL**', '**2/3** **T**', `**3/3** **${ZW}** then ||SECRET|| and **b**\n${PLAIN_FOOTER}`])
+    expect(leaks(src, r.parts)).toEqual([])
+  })
+
+  it('counts what it gives the bars at the start of a part against the room of that part', () => {
+    // Part 3 starts with `|| ||`, and its space is a character of its room: with it the part is cut one word earlier.
+    const r = plain(`||SPOILT${' '.repeat(3000)}||${' q'.repeat(850)}`)
+    expect(r.parts.map((p) => p.text.slice(0, 20))).toEqual(['**1/4** ||SPOIL||', '**2/4** ||T||', '**3/4** || || q q q ', '**4/4** q q q q q q '])
+    expect(r.parts[2].text).toBe(`**3/4** || ||${' q'.repeat(375)}`)
   })
 
   it('cuts a long run of spaces in a spoiler in time that is linear in its length', () => {
@@ -2172,11 +2282,21 @@ describe('toDiscord: what Discord shows of the spoilers of a reply that is cut',
     { weight: 1, arbitrary: secret.map((s) => `||**${s}**||`) },
     { weight: 2, arbitrary: fc.tuple(lw, lw).map(([a, b]) => `*${a}*_${b}_`) },
     { weight: 1, arbitrary: fc.tuple(sw, sw).map(([a, b]) => `||*${a}*_${b}_||`) },
-    // Marks of other kinds that touch. An italic right before or after a bold (`*a***b**`) is not among them: Discord's rules pair
-    // the bold's marks with later ones, and that is so in a reply of one part, where no cut is made (a known limit, not this property's).
+    // Marks that touch: of other kinds, and of one character, where Discord's lazy rules would pair a bold's marks with later ones
+    // but for the zero-width space the form puts between them, even in a reply of one part. A picture that is attached shows nothing.
     { weight: 1, arbitrary: fc.tuple(lw, lw).map(([a, b]) => `**${a}**__${b}__`) },
     { weight: 1, arbitrary: fc.tuple(lw, lw).map(([a, b]) => `~~${a}~~**${b}**`) },
     { weight: 1, arbitrary: fc.tuple(sw, sw).map(([a, b]) => `||${a}||||${b}||`) },
+    { weight: 1, arbitrary: fc.tuple(lw, lw).map(([a, b]) => `*${a}***${b}**`) },
+    { weight: 1, arbitrary: fc.tuple(lw, lw).map(([a, b]) => `**${a}***${b}*`) },
+    { weight: 1, arbitrary: fc.tuple(lw, lw).map(([a, b]) => `**${a}****${b}**`) },
+    { weight: 1, arbitrary: fc.tuple(lw, lw).map(([a, b]) => `__${a}____${b}__`) },
+    { weight: 2, arbitrary: fc.tuple(lw, lw, fc.constantFrom('**', '__', '*', '`', '~~')).map(([a, b, mark]) => `${mark}${a}${mark}![p](upload:1)${mark}${b}${mark}`) },
+    { weight: 1, arbitrary: fc.tuple(lw, lw).map(([a, b]) => `*${a}*![p](upload:1)**${b}**`) },
+    { weight: 1, arbitrary: fc.tuple(sw, sw).map(([a, b]) => `||*${a}***${b}**||`) },
+    { weight: 1, arbitrary: fc.tuple(sw, sw).map(([a, b]) => `||**${a}****${b}**||`) },
+    // An italic in an italic, which the form writes as its text.
+    { weight: 1, arbitrary: fc.tuple(lw, lw).map(([a, b]) => `*_${a}_ ${b}*`) },
   )
   // A paragraph of units, on one line or on a few: a spoiler that is cut can fall anywhere in it.
   const paragraph = (least, most) =>
@@ -2196,7 +2316,7 @@ describe('toDiscord: what Discord shows of the spoilers of a reply that is cut',
       let cut = 0
       fc.assert(
         fc.property(docOf(form), replyTos, threads, (src, replyTo, thread) => {
-          const r = toDiscord(src, opts({ form, replyTo, thread }))
+          const r = toDiscord(src, opts({ form, replyTo, thread, images: [{ ref: 1, name: 'u1.png' }] }))
           if (r.parts.length > 1) cut++
           const found = leaks(src, r.parts)
           if (found.length > 0) throw new Error(found.join('\n'))
@@ -2214,6 +2334,66 @@ describe('toDiscord: what Discord shows of the spoilers of a reply that is cut',
       expect(cut).toBeGreaterThan(500)
     }, 180_000)
   }
+})
+
+describe('toDiscord: a reply with no place to cut that leaves each mark something in it (the re-review)', () => {
+  it('cuts a spoiler whose second line is a character and more spaces than a part has room for, and throws nothing (the repro)', () => {
+    expect(plain(`||\nA${' '.repeat(3000)}||`).parts.map((p) => p.text)).toEqual(['**1/2** ||\nA||', `**2/2** || ||\n${PLAIN_FOOTER}`])
+    expect(v2(`||\nA${' '.repeat(5000)}||`).parts.map((p) => p.text)).toEqual(['**1/2** ||\nA||', `**2/2** || ||\n${FOOTER}`])
+  })
+
+  it('does so after other text on the line of its bars, and after a paragraph', () => {
+    for (const form of FORMS) {
+      for (const before of ['x ', 'Intro.\n\n', 'Intro.\n\nx ']) {
+        const src = `${before}||\nA${' '.repeat(form === 'v2' ? 5000 : 3000)}||`
+        const r = toDiscord(src, opts({ form }))
+        // The text before the bars is cut off at its latest clean place first, so the reply takes a part more than it might.
+        const n = r.parts.length
+        expect(r.parts.slice(-2).map(textOf)).toEqual([`**${n - 1}/${n}** ||\nA||`, `**${n}/${n}** || ||\n${form === 'v2' ? FOOTER : PLAIN_FOOTER}`])
+        expect(leaks(src, r.parts)).toEqual([])
+        for (const part of r.parts) expect(textOf(part)).not.toContain('||||')
+      }
+    }
+  })
+
+  it('cuts a spoiler of three lines whose middle one all but fills a part, where neither line end is a place to cut', () => {
+    // The count of parts is cut for one part first: there neither line end is a place, nor anywhere in the bars of the first line
+    // or the last, so the part ends at the last line end it passed over. The parts sent are cut inside the long line.
+    expect(plain(`||\n${x(1900)}\n||`).parts.map((p) => p.text)).toEqual([m(1, 2, `||\n${x(1769)}||`), `${m(2, 2, `||${x(131)}\n||`)}\n${PLAIN_FOOTER}`])
+    expect(v2(`||\n${x(3945)}\n||`).parts.map((p) => p.text)).toEqual([m(1, 2, `||\n${x(3769)}||`), `${m(2, 2, `||${x(176)}\n||`)}\n${FOOTER}`])
+  })
+
+  it('cuts the line of the bars of a spoiler in its spaces, where its next line is too long to cut in', () => {
+    expect(plain(`||${' '.repeat(1900)}A\nB||`).parts.map((p) => p.text)).toEqual(['**1/2** || ||', `${m(2, 2, '||A\nB||')}\n${PLAIN_FOOTER}`])
+    expect(v2(`||${' '.repeat(3945)}A\nB||`).parts.map((p) => p.text)).toEqual(['**1/2** || ||', `${m(2, 2, '||A\nB||')}\n${FOOTER}`])
+  })
+
+  it('keeps room for what a mark is given to hold where a cut right after its marks leaves it empty, and else ends the part at a line end', () => {
+    // Part 1 runs out of room in the last line of the second spoiler. With 7 characters left there, the cut right after its underline's
+    // marks fits, as they are closed with a zero-width space in them; with 6 it does not, and the part ends at the line end before,
+    // after the bars that open the second spoiler, which are given a space.
+    const src = (n) => `||\n${'F'.repeat(n)}|| y ||\n__😀x__||\n\n${'w '.repeat(900)}`
+    for (const [form, n] of [['plain', 1756], ['v2', 3756]]) {
+      const r = toDiscord(src(n), opts({ form }))
+      expect(r.parts[0].text).toBe(m(1, r.parts.length, `||\n${'F'.repeat(n)}|| y ||\n__${ZW}__||`))
+      const s = toDiscord(src(n + 1), opts({ form }))
+      expect(s.parts[0].text).toBe(m(1, s.parts.length, `||\n${'F'.repeat(n + 1)}|| y || ||`))
+      expect(s.parts[1].text.startsWith(m(2, s.parts.length, '||__😀x__||\n\nw w'))).toBe(true)
+      expect(leaks(src(n + 1), s.parts)).toEqual([])
+    }
+  })
+
+  it('throws nothing for any length of these lines, near the room of a part or not', () => {
+    for (const form of FORMS) {
+      const near = form === 'v2' ? 3900 : 1850
+      for (let n = near; n < near + 120; n++) {
+        for (const src of [`||\n${x(n)}\n||`, `||${' '.repeat(n)}A\nB||`, `||\nA${' '.repeat(n)}||`, `x ||\n${x(n)}\n|| y`, `**||\n${x(n)}\n||**`]) {
+          const r = toDiscord(src, opts({ form }))
+          for (const part of r.parts) expect(displayableLength(part)).toBeLessThanOrEqual(form === 'v2' ? 4000 : 2000)
+        }
+      }
+    }
+  })
 })
 
 describe('budget', () => {
@@ -2299,6 +2479,32 @@ describe('toDiscord: properties over hostile replies', () => {
       { numRuns: 150 },
     )
   })
+
+  // Marks round lines of any length, a character and a run of spaces of any length, and the runs alone: the reply that leaves a cut no
+  // place but next to a mark, which the generators above never make, for their runs are short.
+  it('never throws on a reply of long runs of spaces, line ends and marks, of up to the 16,000 characters the route takes, and keeps every limit', () => {
+    const mark = fc.constantFrom('||', '**', '__', '~~', '*', '`')
+    const run = fc.tuple(fc.integer({ min: 1, max: 4200 }), fc.constantFrom('x', 'A ', 'ab ')).map(([n, unit]) => (unit === 'A ' ? `A${' '.repeat(n)}` : unit.repeat(n).slice(0, n)))
+    const piece = fc.oneof(
+      fc.tuple(mark, run).map(([k, r]) => `${k}\n${r}\n${k}`),
+      fc.tuple(mark, run).map(([k, r]) => `${k}\n${r}${k}`),
+      fc.tuple(mark, run).map(([k, r]) => `${k}${r}\n${k}`),
+      fc.tuple(mark, run).map(([k, r]) => `x ${k}\n${r}\n${k} y`),
+      fc.tuple(mark, run).map(([k, r]) => `${k}${r}${k} then ||S|| and ||T||`),
+      fc.integer({ min: 0, max: 5000 }).map((n) => ' '.repeat(n)),
+      fc.constantFrom('||', '**', '*', '__', '~~', '`', '\n', '\n\n', '> ', '- ', 'word', 'B. ', '\\', '![p](upload:1)', '[^a]', '\n[^a]: note\n'),
+    )
+    const reply = fc.array(piece, { minLength: 1, maxLength: 6 }).map((pieces) => pieces.join('').slice(0, 16_000))
+    fc.assert(
+      fc.property(reply, options, (src, o) => {
+        for (const part of toDiscord(src, build(o)).parts) {
+          expect(displayableLength(part)).toBeLessThanOrEqual(o.form === 'v2' ? 4000 : 2000)
+          if (o.form === 'v2') expect(count(part.components)).toBeLessThanOrEqual(40)
+        }
+      }),
+      { numRuns: 400 },
+    )
+  }, 60_000)
 
   it('counts every displayable character of every V2 part against 4000, links and all', () => {
     fc.assert(
