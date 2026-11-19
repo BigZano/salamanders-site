@@ -38,7 +38,9 @@
  *   is stored with the reactions it came with.
  * - MESSAGE_DELETE, MESSAGE_DELETE_BULK: delete the messages. A part of a reply of the site takes the whole reply with it
  *   (store.siteDeleted): the reply goes from the store, and the deletion of the parts that are left is queued for the outbox.
- *   A message that a re-read finds gone is deleted the same way.
+ *   A reply that an edit is on its way for is left to the edit, which is told: an edit removes the parts it no longer needs
+ *   before it is done, and each of those removals comes in here as a deletion. A message that a re-read finds gone is deleted
+ *   the same way.
  * - MESSAGE_REACTION_ADD, MESSAGE_REACTION_REMOVE: change one emoji's count by one. A reaction to any part of a reply of
  *   the site counts on the reply (store.messageOfPart), and so does a clear of them. The bot's own reaction is skipped,
  *   since the stored counts leave it out (parseMessage drops the `me` of each one), and so is an emoji that cannot be

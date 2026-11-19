@@ -60,8 +60,9 @@
  * finishEdit(id, { messageId, source, content, partIds, event }) → { stored, gone }: an edit is done, in one transaction: the
  *   message has its new source and content, its edit time and no state, its parts are the new list, and the entry is 'sent'.
  *   As for finishSend, an entry that is not 'sending' is left alone (`stored` true); nothing is written, and `stored` is false,
- *   for parts noted as deleted in Discord (`gone`), and, with `gone` empty, for a message that is not there any more: it is not
- *   brought back.
+ *   for parts of the new list noted as deleted in Discord (`gone`), and, with `gone` empty, for a message that is not there any
+ *   more: it is not brought back. A part noted that is not in the new list does not count: it is one the edit removed itself,
+ *   which Discord told of as of any deletion.
  * finishDelete(id, { messageId, partIds, event }) → a delete is done, in one transaction: the message is deleted, noted in the
  *   tombstones for the readers, and its parts are forgotten, and the entry is 'sent'. An entry that is not 'sending' is left
  *   alone.
@@ -94,8 +95,12 @@
  *   queued beside it: removing a part twice is harmless.) `plain` is the ids that are no part of one, which the caller deletes
  *   as messages of Discord. Of those, the ones that are parts of a reply or an edit still on its way (named in its progress,
  *   not stored yet) are noted in that entry (payload.gone), so that finishSend or finishEdit does not store what Discord lost.
- *   A reply that a delete of its own took while this waited for that delete's entry (see "The order of locks") is left as it is:
- *   nothing of it is left to delete, queue or note.
+ *   A reply that an edit is on its way for ('pending' or 'sending') does not go: the edit removes the parts it no longer needs
+ *   before it is done, and Discord tells of those removals as of any deletion. Its deleted parts are noted in the edit instead,
+ *   and the edit decides: finishEdit leaves out a part it removed, and a part it keeps that is gone makes the worker take the
+ *   whole reply, as here. A reply none of whose deleted parts is a part of it any more, by the time this has its entries (a
+ *   delete that took it, or an edit that removed them, was done while this waited: see "The order of locks"), is left as it
+ *   is: nothing of it is left to delete, queue or note.
  * blockedSince(since) → the times (ISO) of the blocks noted since `since`, oldest first: what the breaker is built from again
  *   after a restart.
  * ownWebhookIds() → the Set of the ids of the webhooks that ever sent a stored part (librarius_parts.webhook_id), or are sending a
@@ -110,9 +115,9 @@
  *   nothing, and takes no rev.
  *
  * The order of locks. A transaction here that locks an entry of the outbox and the message it names takes the entry first, and the
- * message after: outboxSet, finishSend, finishEdit, finishDelete and siteDeleted all do, and siteDeleted takes the replies it deletes
- * in the order of their ids. Two transactions that took them the other way round could each wait for the other, and Postgres would
- * end one of them.
+ * message after: outboxSet, finishSend, finishEdit, finishDelete and siteDeleted all do. siteDeleted locks every entry it reads or
+ * writes in one statement, in the order of their ids, before it reads any message, and then takes the replies it deletes in the order
+ * of their ids. Two transactions that took them the other way round could each wait for the other, and Postgres would end one of them.
  */
 import { createInTx } from './inTx.js'
 import { BIGINT_MAX, isStoreId } from './librariusText.js'
@@ -285,23 +290,26 @@ async function enqueueIn(q, { kind, messageKey, authorId, payload }) {
   return { id: rows[0].id }
 }
 
+// The entries on their way that siteDeleted reads or writes, locked in one statement and in the order of their ids, before it touches a
+// message: the replies and the edits that have sent one of the ids that no stored reply owns ($1), and the edits and the deletes of the
+// replies it hits ($2). One statement for all of them, so that two deletions in Discord at once take their entries in the same order.
+const ENTRIES_ON_THEIR_WAY = `select id, kind, message_key, payload from librarius_outbox
+  where state in ('pending', 'sending')
+    and ((kind in ('send', 'edit') and exists (select 1 from jsonb_array_elements(coalesce(payload->'progress'->'parts', '[]'::jsonb)) as part where part->>'id' = any($1::text[])))
+      or (kind in ('edit', 'delete') and message_key = any($2::text[])))
+  order by id for update`
+
 /**
- * Note in the entries still on their way that these parts were deleted in Discord: the ones of those entries that this
- * entry's progress names. finishSend and finishEdit read the note. Only the entries' payload.gone is written, never their
- * progress, which the worker writes whole.
+ * → note(entry, parts): notes in an entry on its way that these parts were deleted in Discord, beside what it was told before (of `entries`,
+ * the rows of the entries as they were read, and of the notes made since). finishSend and finishEdit read the note. Only the entry's
+ * payload.gone is written, never its progress, which the worker writes whole.
  */
-async function noteGone(q, ids) {
-  const { rows } = await q.query(
-    `select id, payload from librarius_outbox
-      where kind in ('send', 'edit') and state in ('pending', 'sending')
-        and exists (select 1 from jsonb_array_elements(coalesce(payload->'progress'->'parts', '[]'::jsonb)) as part where part->>'id' = any($1::text[]))
-      order by id for update`,
-    [ids],
-  )
-  for (const row of rows) {
-    const named = row.payload.progress.parts.map((part) => part.id).filter((part) => ids.includes(part))
-    const gone = [...new Set([...(row.payload.gone ?? []), ...named])]
-    await q.query("update librarius_outbox set payload = jsonb_set(payload, '{gone}', $2::jsonb, true) where id = $1", [row.id, JSON.stringify(gone)])
+function noteGone(q, entries) {
+  const told = new Map(entries.map((entry) => [entry.id, entry.payload.gone ?? []]))
+  return async (entry, parts) => {
+    const gone = [...new Set([...told.get(entry.id), ...parts])]
+    told.set(entry.id, gone)
+    await q.query("update librarius_outbox set payload = jsonb_set(payload, '{gone}', $2::jsonb, true) where id = $1", [entry.id, JSON.stringify(gone)])
   }
 }
 
@@ -728,15 +736,32 @@ export function createOutboxStore(pool) {
         const { rows: hit } = await q.query('select discord_id, message_id from librarius_parts where discord_id = any($1::bigint[]) order by message_id', [ids])
         const parts = new Set(hit.map((r) => r.discord_id))
         const plain = ids.filter((id) => !parts.has(id))
-        if (plain.length > 0) await noteGone(q, plain)
+        const replies = [...new Set(hit.map((r) => r.message_id))]
+        // The order of locks (see the top of the file): every entry this reads or writes first, at once, and the messages after.
+        const { rows: entries } = await q.query(ENTRIES_ON_THEIR_WAY, [plain, replies])
+        const note = noteGone(q, entries)
+        // An id that no stored reply owns may be a part that a reply or an edit on its way has sent: that entry is told.
+        for (const entry of entries) {
+          const sent = (entry.payload.progress?.parts ?? []).map((part) => part.id).filter((part) => plain.includes(part))
+          if (sent.length > 0) await note(entry, sent)
+        }
         if (hit.length === 0) return { plain }
         const rev = await nextRev(q)
-        for (const messageId of new Set(hit.map((r) => r.message_id))) {
-          // The order of locks (see the top of the file): the deletes of the reply that are on their way first, and its message after.
-          const { rows: queued } = await q.query("select payload from librarius_outbox where kind = 'delete' and message_key = $1 and state in ('pending', 'sending') for update", [messageId])
+        for (const messageId of replies) {
           const { rows: all } = await q.query('select discord_id, webhook_id from librarius_parts where message_id = $1 order by part_index', [messageId])
-          // A delete that finished while this waited for its entry took the whole reply already.
-          if (all.length === 0) continue
+          const deleted = all.map((r) => r.discord_id).filter((part) => parts.has(part))
+          // None of the parts deleted is a part of the reply any more: a delete that took the whole reply, or an edit that removed them, was
+          // done while this waited for its entry.
+          if (deleted.length === 0) continue
+          const mine = entries.filter((entry) => entry.message_key === messageId)
+          const edits = mine.filter((entry) => entry.kind === 'edit')
+          if (edits.length > 0) {
+            // An edit on its way removes the parts it no longer needs before it is done, and Discord tells of each removal as of any deletion:
+            // the edit is told, and the reply is left to it. finishEdit does not count a part it removed; a part it keeps that is gone ends the reply.
+            for (const edit of edits) await note(edit, deleted)
+            continue
+          }
+          const queued = mine.filter((entry) => entry.kind === 'delete')
           const left = all.map((r) => r.discord_id).filter((part) => !parts.has(part))
           const sentBy = all.find((r) => r.webhook_id !== null)?.webhook_id ?? null
           const { rows: stored } = await q.query('select post_id, author_id from librarius_messages where id = $1', [messageId])
