@@ -351,7 +351,7 @@ describe.skipIf(!runnable)('the outbox store on a real Postgres 16, as the data-
       await sentReply([A, B, C])
       const { id: edit } = await store.enqueueOutbox({ kind: 'edit', messageKey: A, authorId: OTHER, payload: { postId: POST, source: 'Shorter.', mentions: [] } })
       await store.claimOutbox(Date.now())
-      const drop = { kind: 'delete', messageKey: B, payload: { postId: POST, partIds: [B, C], webhookId: HOOK } }
+      const drop = { kind: 'delete', messageKey: B, payload: { postId: POST, partIds: [B, C], webhookId: HOOK, replyId: A } }
       expect(await store.finishEdit(edit, { messageId: A, source: 'Shorter.', content: 'Shorter.', partIds: [A], event: { action: 'edit', postId: POST, messageId: A, note: '1 part' }, queue: [drop] })).toEqual({ stored: true, gone: [] })
       expect(await partsOf(A)).toEqual([[A, 0, HOOK]])
       expect(await message(A)).toMatchObject({ source: 'Shorter.', state: null })
@@ -436,8 +436,9 @@ describe.skipIf(!runnable)('the outbox store on a real Postgres 16, as the data-
       expect(await message(A)).toBeUndefined()
     })
 
-    // The worker removes the parts an edit no longer needs before finishEdit writes the new list (librariusOutbox.js runEdit), and Discord's
-    // gateway tells of each removal with a MESSAGE_DELETE, which the live feed hands to siteDeleted.
+    // A part is deleted in Discord while an edit of its reply is on its way: by a moderator, or by an edit of an earlier version of the worker,
+    // which removed the parts it no longer needed before finishEdit wrote the new list (this one queues their delete with finishEdit, above).
+    // Discord's gateway tells of each deletion with a MESSAGE_DELETE, which the live feed hands to siteDeleted.
     describe('a deletion in Discord while an edit of the reply is on its way', () => {
       /** Queues an edit of the reply A, and takes it as the worker does unless it is to stay pending. → the entry's id */
       async function editOfA({ take = true } = {}) {
