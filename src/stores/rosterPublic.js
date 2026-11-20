@@ -1,10 +1,11 @@
 import { defineStore } from 'pinia'
-import { markRaw } from 'vue'
+import { markRaw, toRaw } from 'vue'
 import * as api from '../lib/rosterApi'
 import { loadFixture } from '../lib/rosterFixture'
 import { buildPublicView } from '../lib/rosterPublicView'
 
-// One load at a time per store: a second call while one runs waits for it instead of asking again.
+// One load at a time per store: a second call while one runs waits for it instead of asking again. It is keyed by the plain store
+// (toRaw): in a dev build Pinia's devtools plugin calls every action with a new Proxy of the store as `this`.
 const running = new WeakMap()
 
 /**
@@ -16,9 +17,10 @@ export const useRosterPublic = defineStore('rosterPublic', {
   state: () => ({ status: 'idle', snapshot: null, view: null }),
   actions: {
     load() {
-      if (running.has(this)) return running.get(this)
-      const run = this.fetchOnce().finally(() => running.delete(this))
-      running.set(this, run)
+      const key = toRaw(this)
+      if (running.has(key)) return running.get(key)
+      const run = this.fetchOnce().finally(() => running.delete(key))
+      running.set(key, run)
       return run
     },
 
