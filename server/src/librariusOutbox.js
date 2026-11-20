@@ -38,18 +38,23 @@
  * - An edit (kind 'edit'): payload { postId, source, mentions }, the key the id of the message. The text is cut again; the
  *   parts that are there are edited in place and new ones added, and the first is edited last to carry the links. The parts
  *   that are not needed any more are removed last, once the edit is stored: finishEdit queues a delete of them, { postId,
- *   partIds, webhookId }, keyed by the first of them, in the same transaction. Until it has run, a reader of Discord sees the
- *   reply as edited, then the old parts after it, which still say "k/N" of the old count and link back to the first. An edit
- *   that ends for good has removed nothing, so the restore below finds every part; a removal that fails for good is that
- *   delete's, and the edit is done. Pictures are fixed when a reply is sent: the webhook cannot change the files of a message,
- *   so an edit that would put a picture in another part, or take one away, or add one (placement() of the form says) is
- *   refused: "That edit would move or change a picture...". An edit sends no `attachments`, so Discord keeps each part's files.
+ *   partIds, webhookId, replyId }, keyed by the first of them, in the same transaction. Until it has run, a reader of Discord
+ *   sees the reply as edited, then the old parts after it, which still say "k/N" of the old count and link back to the first.
+ *   An edit that ends for good has removed nothing, so the restore below finds every part; a removal that fails for good is
+ *   that delete's, and the edit is done (the delete is told, see below). Pictures are fixed when a reply is sent: the webhook
+ *   cannot change the files of a message, so an edit that would put a picture in another part, or take one away, or add one
+ *   (placement() of the form says) is refused: "That edit would move or change a picture...". An edit sends no `attachments`,
+ *   so Discord keeps each part's files.
  *   An edit that ends for good (failed or blocked) after it began to change Discord queues an edit of its own, { postId, mentions:
  *   [], restore: true }, that puts the message back as the store has it (it takes the text from the store, and is never put back
  *   in its turn). That is queued for any edit that was tried more than once, too: an earlier try may have changed Discord.
- * - A delete (kind 'delete'): payload { postId, partIds? }, the key the id of the message. A reply of the site is removed from
- *   Discord part by part, through the webhook; a message a person wrote in Discord, by the bot. Then the message is deleted
- *   from the store.
+ * - A delete (kind 'delete'): payload { postId, partIds?, webhookId?, replyId? }, the key the id of the message. A reply of the site is
+ *   removed from Discord part by part, through the webhook; a message a person wrote in Discord, by the bot. Then the message is deleted
+ *   from the store. A delete keyed by no stored message names the parts it removes (partIds): the worker queues one for the parts an edit
+ *   dropped (keyed by the first of them, and naming the reply), and for what an entry that ended for good left; the store, for what is left
+ *   of a reply that Discord deleted a part of. The site lists a member's entries under the message they are for, so it shows such a delete
+ *   on no reply: one that ends for good is told in the log, once, with its post, its parts and the reply it names, for a moderator to
+ *   remove what may still be in Discord.
  * The parts the worker has sent are in payload.progress: { form, parts: [{ id, at, attachments }], inflight, images, linked,
  * done }. `parts` are the parts this entry made (for an edit, only the ones it added), `inflight` the index of a part it was
  * sending when it stopped, or null: it is written BEFORE a part is sent and cleared once the part's id is written, so a restart
@@ -591,9 +596,9 @@ export function createOutbox({ store, webhook, discord, form = DEFAULT_FORM, gui
     // The parts a reply made shorter no longer needs. They are removed last, once the store has the edit: by a delete queued with it, in the
     // same transaction, of the kind an entry that ends for good queues for the parts it leaves, and run as an entry of its own. An edit that
     // ends for good before then has removed nothing, so the restore finds every part where it was; a removal that fails for good is the
-    // delete's, and leaves the edit done.
+    // delete's, and leaves the edit done. The delete names the reply (replyId), which its key does not, so that an end for good of it is told with the reply.
     const surplus = existing.slice(wanted)
-    const queue = surplus.length === 0 ? [] : [{ kind: 'delete', messageKey: surplus[0], payload: { postId: p.postId, partIds: surplus, webhookId: message.webhookId } }]
+    const queue = surplus.length === 0 ? [] : [{ kind: 'delete', messageKey: surplus[0], payload: { postId: p.postId, partIds: surplus, webhookId: message.webhookId, replyId: message.id } }]
     let done
     try {
       for (let i = 0; i < Math.min(existing.length, wanted); i++) await once(entry, `edit:${existing[i]}`, () => editCall(ctx, existing[i], body(plan.parts[i])))
@@ -639,6 +644,9 @@ export function createOutbox({ store, webhook, discord, form = DEFAULT_FORM, gui
       progress.partIds = p.partIds ?? (message === null ? [] : message.parts)
       await save(entry)
     }
+    // A delete keyed by no stored message (what an edit dropped, what an entry that ended for good left, what the gateway left of a reply it
+    // took) is shown on no reply of the site, which lists a member's entries under their message: if it ends for good, its parts are told (endFor).
+    entry.strays = message === null ? progress.partIds : []
     // The parts of another webhook (one that was replaced) are removed through the bot: this webhook may not delete them.
     const sentBy = p.webhookId ?? message?.webhookId ?? null
     return purge(entry, ctx, entry.messageKey, progress.partIds, null, sentBy !== null && sentBy !== webhook.id)
@@ -664,11 +672,21 @@ export function createOutbox({ store, webhook, discord, form = DEFAULT_FORM, gui
     return queue
   }
 
-  /** → what to write for an entry that ended for good in `state` ('failed' or 'blocked'): the member's words, and what puts Discord right. */
+  /**
+   * → what to write for an entry that ended for good in `state` ('failed' or 'blocked'): the member's words, and what puts Discord right. A
+   * delete whose parts no reply of the site shows (strays, see runDelete) is told once, when its end is written: what it was to remove may
+   * still be in Discord, and only a moderator can take it now.
+   */
   function endFor(entry, state, error, event, hold) {
     const queue = leftovers(entry)
     const messageState = state === 'blocked' ? 'blocked' : null
-    return () => store.outboxSet(entry.id, { state, error, messageState, queue, hold, event: { ...event, postId: entry.payload.postId, messageId: entry.kind === 'send' ? null : entry.messageKey } })
+    return async () => {
+      await store.outboxSet(entry.id, { state, error, messageState, queue, hold, event: { ...event, postId: entry.payload.postId, messageId: entry.kind === 'send' ? null : entry.messageKey } })
+      if (entry.strays?.length > 0) {
+        const { postId, replyId } = entry.payload
+        report(`the delete ${entry.id} ended for good (${error}), so these parts${replyId === undefined ? '' : ` of the reply ${replyId}`} in post ${postId} may still be in Discord, for a moderator to remove: ${entry.strays.join(', ')}.`)
+      }
+    }
   }
 
   /** The entry cannot be done, and the member is told why. */
@@ -783,6 +801,7 @@ export function createOutbox({ store, webhook, discord, form = DEFAULT_FORM, gui
       return false
     }
     // Store writes only, made again when the store fails under one (the entry stays in hand until it is written).
+    // This assumes one worker per database: a held settle is guarded by state = 'sending' only, not by the entry still being this worker's.
     for (const entry of resumeQueue.filter((held) => held.settling !== undefined)) {
       await entry.settling()
       resumeQueue.splice(resumeQueue.indexOf(entry), 1)

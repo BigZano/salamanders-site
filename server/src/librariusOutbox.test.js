@@ -80,6 +80,8 @@ function makeWorld() {
     postMissing: false,
     nextEntry: 1,
     nextUpload: 1,
+    // Whether the last read of each message (outboxMessage, by its id) was answered: a delete whose read failed did not learn whether its key is a stored message.
+    reads: new Map(),
     nextId,
   }
 
@@ -250,7 +252,9 @@ function makeWorld() {
       w.events.push({ at: Date.now(), actor: e.authorId, ...event })
     },
     async outboxMessage(messageId) {
+      w.reads.set(messageId, false)
       maybeFail('outboxMessage')
+      w.reads.set(messageId, true)
       const m = w.messages.get(messageId)
       return m === undefined ? null : { ...clone(m), parts: [...(w.parts.get(messageId) ?? [])] }
     },
@@ -3372,7 +3376,7 @@ describe('an edit that makes the reply shorter removes the parts it no longer ne
     expect(w.calls.map((c) => [c.kind, c.messageId])).toEqual([...ids.slice(0, left).map((m) => ['edit', m]), ...ids.slice(left).map((m) => ['remove', m])])
     expect(gaps().every((g) => g === 1500)).toBe(true)
     expect(w.entry(e).state).toBe('sent')
-    expect(ofKind('delete')).toMatchObject([{ state: 'sent', messageKey: ids[left], authorId: MEMBER, origin: e, payload: { postId: THREAD, partIds: ids.slice(left), webhookId: HOOK } }])
+    expect(ofKind('delete')).toMatchObject([{ state: 'sent', messageKey: ids[left], authorId: MEMBER, origin: e, payload: { postId: THREAD, partIds: ids.slice(left), webhookId: HOOK, replyId: id } }])
     expect(w.ours().map((m) => m.id)).toEqual(ids.slice(0, left))
     expect(w.parts.get(id)).toEqual(ids.slice(0, left))
     expect(w.messages.get(id)).toMatchObject({ source: after, state: null })
@@ -3468,6 +3472,130 @@ describe('an edit that makes the reply shorter removes the parts it no longer ne
     expect(w.parts.get(id)).toEqual([id])
     expect(ofKind('delete')).toMatchObject([{ state: 'sent', payload: { partIds: ids.slice(1) } }])
     expect(w.ours().map((m) => m.id)).toEqual([id])
+  })
+})
+
+// A delete keyed by no stored message is one the worker queued itself: the parts an edit dropped (keyed by the first of them), what an entry
+// that ended for good left, or what the gateway left of a reply it took. The site lists a member's entries under the message they are for,
+// so it shows such a delete on no reply, and one that ends for good is told instead (the log is the owner's), once: its post, the parts it
+// was to remove, and the reply an edit dropped them from.
+describe('a delete keyed by no stored message that ends for good is told, since no reply of the site shows it', () => {
+  const forbidden = () => answer(403, { code: 50013, message: 'Missing Permissions' })
+  const edit = (key, source) => w.enqueue({ kind: 'edit', key, payload: { postId: THREAD, source, mentions: [] } })
+  const remove = (key, payload) => w.enqueue({ kind: 'delete', key, payload })
+  const deletes = () => [...w.entries.values()].filter((e) => e.kind === 'delete')
+  /** What the worker tells of the delete `d` that ended for good. */
+  const told = (d, parts, reply) =>
+    `Librarius outbox: the delete ${d.id} ended for good (${d.lastError}), so these parts${reply === undefined ? '' : ` of the reply ${reply}`} in post ${THREAD} may still be in Discord, for a moderator to remove: ${parts.join(', ')}.`
+  let lines
+  const tellings = () => lines.filter((line) => line.startsWith('Librarius outbox: the delete '))
+  beforeEach(() => {
+    lines = []
+    outbox = make({ log: (line) => lines.push(line) })
+  })
+
+  it.each([
+    ['the post is locked', [null, null, forbidden()], 100_000, COPY.locked],
+    ['Discord fails it through the ladder', [null, null, ...Array.from({ length: 5 }, () => answer(502))], 1_000_000, 'Discord did not take this delete. Try again in a little while.'],
+  ])('tells of the parts an edit dropped when their delete ends for good because %s, naming the reply and its post', async (_, script, ms, error) => {
+    const id = await sentReply(THREE('a', 'b', 'c'))
+    const ids = w.ours().map((m) => m.id)
+    // The edit of the first part, the removal of the second, and then the third's.
+    w.script.push(...script)
+    const e = edit(id, 'Short.')
+    outbox.kick()
+    await later(ms)
+    expect(w.entry(e).state).toBe('sent')
+    const [d] = deletes()
+    expect(d).toMatchObject({ state: 'failed', lastError: error, messageKey: ids[1], payload: { replyId: id, partIds: ids.slice(1) } })
+    expect(tellings()).toEqual([told(d, ids.slice(1), id)])
+    // What the reader sees is unchanged by the telling: the reply as edited, and the third part, which a moderator removes.
+    expect(w.ours().map((m) => m.id)).toEqual([id, ids[2]])
+  })
+
+  it.each([
+    ['the store fails under the write of that end', 'storeFails'],
+    ['the store makes the write of that end and its answer is lost', 'storeFailsAfter'],
+  ])('tells it once when %s, and the write is made again', async (_, how) => {
+    const id = await sentReply(THREE('a', 'b', 'c'))
+    const ids = w.ours().map((m) => m.id)
+    w.script.push(null, null, forbidden())
+    w[how].outboxSet = [new Error('connection lost')]
+    edit(id, 'Short.')
+    outbox.kick()
+    await later(100_000)
+    const [d] = deletes()
+    expect(d.state).toBe('failed')
+    expect(w[how].outboxSet).toEqual([])
+    expect(tellings()).toEqual([told(d, ids.slice(1), id)])
+  })
+
+  it('tells, with no reply to name, of what a reply that ended for good left, when the delete of it ends for good too', async () => {
+    // The first part lands, the second is refused (the post was locked), and so is the removal of the first.
+    w.script.push(null, forbidden(), forbidden())
+    const r = w.enqueue({ payload: sendPayload({ source: TWO() }) })
+    await run(100_000)
+    expect(w.entry(r)).toMatchObject({ state: 'failed', lastError: COPY.locked })
+    const [first] = w.ours().map((m) => m.id)
+    const [d] = deletes()
+    expect(d).toMatchObject({ state: 'failed', lastError: COPY.locked, messageKey: first })
+    expect(tellings()).toEqual([told(d, [first])])
+  })
+
+  it('tells, with no reply to name, of what the gateway left of a reply it took, when the delete of it ends for good', async () => {
+    const id = await sentReply(THREE('a', 'b', 'c'))
+    const [p1, p2, p3] = w.ours().map((m) => m.id)
+    // Part 2 was deleted in Discord: the store took the reply and its parts, and queued the removal of what was left (siteDeleted).
+    w.thread.splice(w.thread.findIndex((m) => m.id === p2), 1)
+    w.messages.delete(id)
+    w.parts.delete(id)
+    w.script.push(forbidden())
+    const d = remove(id, { postId: THREAD, partIds: [p1, p3], webhookId: HOOK })
+    outbox.kick()
+    await later(100_000)
+    expect(w.entry(d)).toMatchObject({ state: 'failed', lastError: COPY.locked })
+    expect(tellings()).toEqual([told(w.entry(d), [p1, p3])])
+  })
+
+  it('tells nothing of a delete of a stored message that ends for good: the site shows it on that reply, as before', async () => {
+    const id = await sentReply(TWO())
+    w.script.push(forbidden())
+    const d = remove(id, { postId: THREAD })
+    outbox.kick()
+    await later(100_000)
+    expect(w.entry(d)).toMatchObject({ state: 'failed', attempts: 0, lastError: COPY.locked })
+    expect(w.messages.get(id)).toMatchObject({ state: null })
+    expect(w.parts.get(id)).toHaveLength(2)
+    expect(tellings()).toEqual([])
+  })
+
+  it('tells nothing of a delete keyed by no stored message that had nothing to remove, when it ends for good', async () => {
+    // The store's message went before the delete read its parts: there is nothing it knows of to remove, and the store fails under its end each time.
+    w.storeFails.finishDelete = Array.from({ length: 5 }, () => new Error('connection lost'))
+    const d = remove('200000000000000996', { postId: THREAD })
+    await run(1_000_000)
+    expect(w.entry(d)).toMatchObject({ state: 'failed', attempts: 4, lastError: COPY.unsendable })
+    expect(w.calls).toEqual([])
+    expect(tellings()).toEqual([])
+  })
+
+  it('tells nothing of such a delete that is done, at the first try or a later one', async () => {
+    const id = await sentReply(THREE('a', 'b', 'c'))
+    const other = await sentReply(TWO('d', 'e'))
+    // The edit of the first part, and the removal of the second, which fails once.
+    w.script.push(null, answer(502))
+    edit(id, 'Short.')
+    outbox.kick()
+    await later(100_000)
+    edit(other, 'Short too.')
+    outbox.kick()
+    await later(100_000)
+    expect(deletes().map((d) => [d.state, d.attempts])).toEqual([
+      ['sent', 1],
+      ['sent', 0],
+    ])
+    expect(w.ours()).toHaveLength(2)
+    expect(tellings()).toEqual([])
   })
 })
 
@@ -3812,6 +3940,19 @@ function everyEntryOver() {
   expect([...w.entries.values()].filter((e) => !['sent', 'failed', 'blocked'].includes(e.state)).map((e) => [e.id, e.kind, e.state])).toEqual([])
 }
 
+/**
+ * What the worker told (`lines`) of the deletes that ended for good: a delete keyed by no stored message, which shows on no reply of the site,
+ * is told once, with the parts it was to remove; no other delete is told. The ones of a property are the deletes the worker queued itself, which
+ * name their parts (payload.partIds): what an edit dropped, and what an entry that ended for good left. One whose last run could not read its
+ * message did not learn that it is keyed by none, and is not told (w.reads).
+ */
+function toldOfStrays(lines) {
+  const told = lines.filter((line) => line.startsWith('Librarius outbox: the delete '))
+  const strays = [...w.entries.values()].filter((e) => e.kind === 'delete' && ['failed', 'blocked'].includes(e.state) && e.payload.partIds !== undefined && w.reads.get(e.messageKey) === true)
+  const of = (e) => (e.payload.replyId === undefined ? '' : ` of the reply ${e.payload.replyId}`)
+  expect(told.toSorted()).toEqual(strays.map((e) => `Librarius outbox: the delete ${e.id} ended for good (${e.lastError}), so these parts${of(e)} in post ${e.payload.postId} may still be in Discord, for a moderator to remove: ${e.payload.partIds.join(', ')}.`).toSorted())
+}
+
 /** What an action of a property does to the world, other than a wait or a restart. */
 function disturb(a) {
   if (a.type === 'storefail') (w.storeFails[a.name] ??= []).push(new Error('connection lost'))
@@ -3886,14 +4027,16 @@ describe('never twice, never lost (property)', () => {
         try {
           for (const o of script) w.script.push(OUTCOMES[o]())
           const ids = parts.map((n, i) => w.enqueue({ payload: sendPayload({ source: sourceOf(i, n) }), nextAt: T0 + i * 700 }))
-          outbox = make()
+          const lines = []
+          const log = (line) => lines.push(line)
+          outbox = make({ log })
           outbox.start()
           for (const a of actions) {
             if (a.type === 'wait') await vi.advanceTimersByTimeAsync(a.ms)
             else if (a.type === 'restart') {
               await outbox.stop()
               w.life++
-              outbox = make()
+              outbox = make({ log })
               outbox.start()
             } else disturb(a)
           }
@@ -3921,6 +4064,7 @@ describe('never twice, never lost (property)', () => {
           })
           everyEntryOver()
           onlyWithTheLock()
+          toldOfStrays(lines)
           // The limits hold within one run of the worker.
           const byLife = Map.groupBy(w.calls, (c) => c.life)
           for (const calls of byLife.values()) {
@@ -3981,7 +4125,9 @@ describe('edits and deletes never leave a part twice, nor a reply that is gone h
         outbox = null
         try {
           const sent = parts.map((n, i) => w.enqueue({ payload: sendPayload({ source: sourceOf(i, n, 1) }) }))
-          outbox = make()
+          const lines = []
+          const log = (line) => lines.push(line)
+          outbox = make({ log })
           outbox.start()
           await vi.advanceTimersByTimeAsync(600_000)
           const keys = parts.map((_, i) => [...w.messages.values()].find((m) => m.source === sourceOf(i, parts[i], 1)).id)
@@ -3999,7 +4145,7 @@ describe('edits and deletes never leave a part twice, nor a reply that is gone h
             else if (a.type === 'restart') {
               await outbox.stop()
               w.life++
-              outbox = make()
+              outbox = make({ log })
               outbox.start()
             } else disturb(a)
           }
@@ -4046,6 +4192,7 @@ describe('edits and deletes never leave a part twice, nor a reply that is gone h
           })
           everyEntryOver()
           onlyWithTheLock()
+          toldOfStrays(lines)
           const byLife = Map.groupBy(w.calls, (c) => c.life)
           for (const calls of byLife.values()) for (let j = 1; j < calls.length; j++) expect(calls[j].at - calls[j - 1].at).toBeGreaterThanOrEqual(SPACING)
         } finally {
