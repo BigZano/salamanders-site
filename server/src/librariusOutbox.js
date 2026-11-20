@@ -22,7 +22,9 @@
  * does not send, says so once, and asks again every 30 s (the one that holds it may have stopped). stop() lets it go. The lock is
  * held by a connection, which may fail: the worker asks (store.holdsWorkerLock) before every call to Discord and before it takes
  * an entry, and one that has lost it makes no call more. It leaves the entry it was on as a stop does, for whoever holds the lock,
- * and takes the lock again as at a start, then reads what the store keeps again (what it had in memory may be another's by then).
+ * and takes the lock again as at a start, then reads what the store keeps again (what it had in memory may be another's by then). What
+ * it had decided for an entry and could not write, the store having failed too (a block, say), it writes first, as it was decided, there
+ * and at a start after a stop: an entry whose end is decided is not run again.
  *
  * The worker runs one entry at a time, the oldest due first (a resumed one before them).
  * - A reply (kind 'send'): payload { postId, source, replyTo: { messageId, authorId, url } | null, mentions: [ids], uploads:
@@ -34,8 +36,12 @@
  *   store learns, when it stores the reply, that a part was deleted in Discord meanwhile, the reply is not stored: the rest of its
  *   parts are removed, as when the links edit finds the first deleted. If its post is not stored, the reply fails.
  * - An edit (kind 'edit'): payload { postId, source, mentions }, the key the id of the message. The text is cut again; the
- *   parts that are there are edited in place, parts that are not needed are deleted and new ones added, and the first is
- *   edited last to carry the links. Pictures are fixed when a reply is sent: the webhook cannot change the files of a message,
+ *   parts that are there are edited in place and new ones added, and the first is edited last to carry the links. The parts
+ *   that are not needed any more are removed last, once the edit is stored: finishEdit queues a delete of them, { postId,
+ *   partIds, webhookId }, keyed by the first of them, in the same transaction. Until it has run, a reader of Discord sees the
+ *   reply as edited, then the old parts after it, which still say "k/N" of the old count and link back to the first. An edit
+ *   that ends for good has removed nothing, so the restore below finds every part; a removal that fails for good is that
+ *   delete's, and the edit is done. Pictures are fixed when a reply is sent: the webhook cannot change the files of a message,
  *   so an edit that would put a picture in another part, or take one away, or add one (placement() of the form says) is
  *   refused: "That edit would move or change a picture...". An edit sends no `attachments`, so Discord keeps each part's files.
  *   An edit that ends for good (failed or blocked) after it began to change Discord queues an edit of its own, { postId, mentions:
@@ -222,8 +228,9 @@ export function createOutbox({ store, webhook, discord, form = DEFAULT_FORM, gui
   let running = null
   let wake = null
   // The entries a stop left half-done, read when the worker starts, and whether to read them again (set after the store failed): a claim
-  // whose answer was lost leaves an entry 'sending' that the worker does not have.
-  let resumeQueue
+  // whose answer was lost leaves an entry 'sending' that the worker does not have. Until the first start it holds nothing; after that, the
+  // entries it holds whose end was decided and not written are kept for the next take of the lock (initialise).
+  let resumeQueue = []
   let reread
   let refused = null
   // When the last webhook call ended (set when the worker starts), when a global 429 lets them go on, and until when the breaker has stopped everything.
@@ -581,6 +588,12 @@ export function createOutbox({ store, webhook, discord, form = DEFAULT_FORM, gui
     if (plan.overBudget) throw new Refusal(COPY.tooLong)
     const wanted = plan.parts.length
     const body = (built) => bodyOf(layout.form, built, { username: layout.username, avatarUrl: layout.avatarUrl, mentions: p.mentions })
+    // The parts a reply made shorter no longer needs. They are removed last, once the store has the edit: by a delete queued with it, in the
+    // same transaction, of the kind an entry that ends for good queues for the parts it leaves, and run as an entry of its own. An edit that
+    // ends for good before then has removed nothing, so the restore finds every part where it was; a removal that fails for good is the
+    // delete's, and leaves the edit done.
+    const surplus = existing.slice(wanted)
+    const queue = surplus.length === 0 ? [] : [{ kind: 'delete', messageKey: surplus[0], payload: { postId: p.postId, partIds: surplus, webhookId: message.webhookId } }]
     let done
     try {
       for (let i = 0; i < Math.min(existing.length, wanted); i++) await once(entry, `edit:${existing[i]}`, () => editCall(ctx, existing[i], body(plan.parts[i])))
@@ -589,7 +602,6 @@ export function createOutbox({ store, webhook, discord, form = DEFAULT_FORM, gui
         const built = toDiscord(source, options(known)).parts[index]
         await sendPart(entry, ctx, { index, known, built, body: body(built), files: [] })
       }
-      for (let i = wanted; i < existing.length; i++) await once(entry, `remove:${existing[i]}`, () => removeCall(ctx, existing[i]))
       // A reply that grew has its first part edited last, to carry the links forward. (A conditional expression, not an `if` with no else: V8 gives
       // an implicit else no counter of its own, and the coverage report works it out by subtraction from counts that an `await` makes swing.)
       await (wanted > existing.length ? once(entry, 'links', () => editCall(ctx, known[0], body(toDiscord(source, options(known)).parts[0]))) : undefined)
@@ -599,6 +611,7 @@ export function createOutbox({ store, webhook, discord, form = DEFAULT_FORM, gui
         content: contentOf(source),
         partIds: known.slice(0, wanted),
         event: { action: 'edit', postId: p.postId, messageId: message.id, note: `${wanted} ${wanted === 1 ? 'part' : 'parts'}` },
+        queue,
       })
     } catch (err) {
       if (!(err instanceof WebhookError) || !err.messageGone) {
@@ -755,6 +768,11 @@ export function createOutbox({ store, webhook, discord, form = DEFAULT_FORM, gui
   /**
    * Takes the lock, and reads what only the store knows, again at each start: the pause and the global hold that were in force, the sends of the
    * last minute, the blocks of the last hour, and the entries a stop left half-done. → false when another worker holds the lock: this one does not send.
+   * A worker that takes the lock again, after it lost it or at a start after a stop, may hold entries whose end it had decided, and whose write the
+   * store did not take (a block, a step of the ladder, a note of a part that landed, which the settle writes first): those are written first, as
+   * they were decided, and before the store is read, so that what is read has them (the block and the pause it caused too). Such an entry is never
+   * run again: it would look for a part that Discord blocked, find none, and send it again. (A note the store did not take always has a settle
+   * with it: the failure that left it unwritten is what decided the settle.) What else the worker held is let go, and read again from the store.
    */
   async function initialise() {
     if (!(await store.takeWorkerLock())) {
@@ -763,6 +781,11 @@ export function createOutbox({ store, webhook, discord, form = DEFAULT_FORM, gui
         report('another worker holds the outbox, so this one does not send.')
       }
       return false
+    }
+    // Store writes only, made again when the store fails under one (the entry stays in hand until it is written).
+    for (const entry of resumeQueue.filter((held) => held.settling !== undefined)) {
+      await entry.settling()
+      resumeQueue.splice(resumeQueue.indexOf(entry), 1)
     }
     const t = now()
     const held = await store.outboxHold()

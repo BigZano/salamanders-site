@@ -44,17 +44,21 @@
  *    page is the whole post, so anything stored that is not on it is gone, and is deleted here (older ones with no
  *    question: only a newer one may have come in after the page was read). That is the limit of the catch-up for a post
  *    of more than `windowSize` messages: one deleted while the gateway was down and older than the window stays until the
- *    post is reimported.
+ *    post is reimported. A stored message made less than 5 s before the page was read (its id holds the time) is taken for
+ *    one newer than the page, wherever it falls, and Discord is asked for it: Discord may take a moment to show a message it
+ *    has made (the outbox waits as long before it looks for one), so the page may leave out one it has while a later one is
+ *    on it.
  *    A reply of the site is one stored message but up to three in Discord, and a moderator may delete its part 2 or 3 while
  *    the gateway is down. So each later part of each stored reply of the window that is not gone already (store.windowIds
  *    names them) is judged in the same way, by its own id: on the page it is there; inside the page's range, or older than a
  *    page that is the whole post, it is gone; older than a full page it is out of view, and left alone; newer than the whole
- *    page, Discord is asked for it. Those questions are capped, at 10 for a post's page and 50 for a run (a part is newer than
- *    the page only when its reply was stored after the page was read, or when it was the newest message of the post and was
- *    deleted): a part past the caps is kept, and a later run judges it. A part that is gone takes the whole reply with it, as
- *    a first part does (store.siteDeleted). The parts of a reply that an edit or a delete is at work on are not judged at all
- *    (windowIds names none): an edit removes the parts it no longer needs before it stores the change. A question Discord
- *    cannot answer, about a message or a part, ends the run with nothing of that post deleted.
+ *    page (or made less than 5 s before the page was read), Discord is asked for it. Those questions are capped, at 10 for a
+ *    post's page and 50 for a run (a part is newer than the page only when its reply was stored after the page was read, or
+ *    when it was the newest message of the post and was deleted): a part past the caps is kept, and a later run judges it. A
+ *    part that is gone takes the whole reply with it, as a first part does (store.siteDeleted). The parts of a reply that an
+ *    edit or a delete is at work on are not judged at all (windowIds names none): an edit decides itself what a deletion of
+ *    one of them means. A question Discord cannot answer, about a message or a part, ends the run with nothing of that post
+ *    deleted.
  * 4. sets import_done, last_ok_at and a clear last_error.
  *
  * Any failure ends the run where it stands, with the cursors it has already set: last_error says why, and the next run
@@ -91,6 +95,10 @@ const PART_LOOKS_PER_PAGE = 10
 const PART_LOOKS_PER_RUN = 50
 // The longest a timer can hold: a longer delay makes it fire at once.
 const MAX_TIMER_MS = 2_147_483_647
+// Discord may take a moment to show a message it has made (the outbox waits as long before it looks for one): a message made less than
+// this long before the page was read may be missing from it and still be there.
+const SETTLE_MS = 5_000
+const DISCORD_EPOCH_MS = 1_420_070_400_000
 const DISCORD_METHODS = ['activeThreads', 'archivedThreads', 'messagesAfter', 'newest', 'message', 'thread']
 const STORE_METHODS = [
   'knownPostIds',
@@ -262,6 +270,7 @@ export function createImport({
   /** `run` is { left }: how many questions about later parts the run may still ask, all posts together. */
   async function catchUp(postId, run) {
     const fetched = new Map()
+    const readAt = now()
     const page = await discord.newest(postId, windowSize)
     for (const message of page) {
       // What is not on the page is judged gone, so a page with an entry that cannot be read is not one to judge by.
@@ -286,12 +295,15 @@ export function createImport({
      * say and Discord is not asked. Newer than the whole page, or the page is empty (which every id is newer than): the page cannot say
      * what became of it, since it may have been deleted while the gateway was down, or come in after the page was read, so Discord is
      * asked for it, when `ask()` lets it. Older than the whole page: out of view, not gone, unless the page is the whole post, which has
-     * nothing older. Inside the range of the page, or older than a page that is the whole post, and not on it: gone.
+     * nothing older. Inside the range of the page, or older than a page that is the whole post, and not on it: gone. A message made less
+     * than SETTLE_MS before the page was read (its id holds the time) is judged as one newer than the page, wherever it falls: Discord may
+     * not show it yet.
      */
     const lookUp = async (id, ask) => {
       const at = BigInt(id)
+      const young = Number(at >> 22n) + DISCORD_EPOCH_MS > readAt - SETTLE_MS
       // Stryker disable next-line EqualityOperator: this id is not on the page, so no id of the page equals it
-      if (onPage.every((p) => p < at)) return ask() ? discord.message(postId, id) : undefined
+      if (young || onPage.every((p) => p < at)) return ask() ? discord.message(postId, id) : undefined
       // Stryker disable next-line EqualityOperator: as above
       return !whole && onPage.every((p) => p > at) ? undefined : null
     }

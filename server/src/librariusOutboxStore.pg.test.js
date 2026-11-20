@@ -4,6 +4,7 @@ import { randomBytes } from 'node:crypto'
 import { readFileSync } from 'node:fs'
 import { createLibrariusStore } from './librariusStore.js'
 import { createImport } from './librariusImport.js'
+import { createOutbox } from './librariusOutbox.js'
 import { parseMessage } from './librariusParse.js'
 
 // The SQL of the outbox store (librariusOutboxStore.js), run for real: a throwaway Postgres 16 in a container of its own (a unique name,
@@ -32,6 +33,7 @@ const HOOK = '200000000000000415'
 const OLD_HOOK = '200000000000000416'
 const REPLIED = '200000000000000418'
 const FORUM = '200000000000000419'
+const GUILD = '200000000000000421'
 const EPOCH = 1420070400000n
 /** → a Discord snowflake made at `ms`, as text. */
 const snow = (ms, n = 0) => String(((BigInt(ms) - EPOCH) << 22n) | BigInt(n))
@@ -342,6 +344,31 @@ describe.skipIf(!runnable)('the outbox store on a real Postgres 16, as the data-
       expect(await message(A)).toBeUndefined()
       expect(await partsOf(A)).toEqual([])
       expect((await rows('select message_id from librarius_tombstones')).map((r) => r.message_id)).toEqual([A])
+    })
+
+    it('queues, with an edit that makes a reply shorter, the delete of the parts it drops: the reply stays as edited while that delete runs and after', async () => {
+      await sentReply([A, B, C])
+      const { id: edit } = await store.enqueueOutbox({ kind: 'edit', messageKey: A, authorId: OTHER, payload: { postId: POST, source: 'Shorter.', mentions: [] } })
+      await store.claimOutbox(Date.now())
+      const drop = { kind: 'delete', messageKey: B, payload: { postId: POST, partIds: [B, C], webhookId: HOOK } }
+      expect(await store.finishEdit(edit, { messageId: A, source: 'Shorter.', content: 'Shorter.', partIds: [A], event: { action: 'edit', postId: POST, messageId: A, note: '1 part' }, queue: [drop] })).toEqual({ stored: true, gone: [] })
+      expect(await partsOf(A)).toEqual([[A, 0, HOOK]])
+      expect(await message(A)).toMatchObject({ source: 'Shorter.', state: null })
+      // The delete is the edit's author's, keyed by the first part it removes: no message has that id, so none shows a delete on its way.
+      const queued = await rows("select id, state, message_key, author_id, payload from librarius_outbox where kind = 'delete'")
+      expect(queued).toMatchObject([{ state: 'pending', message_key: B, author_id: OTHER, payload: drop.payload }])
+      // The worker takes it, and asks for its message: there is none, so it removes the parts it names (runDelete).
+      const del = await store.claimOutbox(Date.now())
+      expect(del).toMatchObject({ id: queued[0].id, kind: 'delete', messageKey: B })
+      expect(await store.outboxMessage(B)).toBeNull()
+      // Discord tells of each removal while the delete is at work: no reply has those parts any more, so they are messages the store does not have.
+      expect(await store.siteDeleted([B], POST)).toEqual({ plain: [B] })
+      await store.finishDelete(del.id, { messageId: B, partIds: [B, C], event: { action: 'delete', postId: POST, messageId: B, note: null } })
+      expect(await store.siteDeleted([C], POST)).toEqual({ plain: [C] })
+      expect(await message(A)).toMatchObject({ source: 'Shorter.', content: 'Shorter.', state: null, origin: 'site' })
+      expect(await partsOf(A)).toEqual([[A, 0, HOOK]])
+      expect(await rows('select message_id from librarius_tombstones')).toEqual([])
+      expect((await rows('select state from librarius_outbox where id = $1', [del.id]))[0].state).toBe('sent')
     })
 
     it('answers the message the worker acts on, with its webhook and its parts', async () => {
@@ -682,6 +709,90 @@ describe.skipIf(!runnable)('the outbox store on a real Postgres 16, as the data-
         await otherPool.end()
       }
     })
+
+    // The worker of librariusOutbox.js on this store, with a fake webhook: the two halves of the lock's contract, held together. The store answers
+    // holdsWorkerLock() at once; the worker asks it before every call to Discord, and one whose connection the server ended sends nothing more until
+    // it has taken the lock again.
+    it('drives the outbox worker: it sends only while it holds the lock, and a lock the server takes away stops the sends until the worker has it again', async () => {
+      const options = { host: '127.0.0.1', port, user: 'salamanders_app', password, database: 'salamanders_builds', max: 3, connectionTimeoutMillis: 5_000 }
+      const workerPool = new pg.Pool(options)
+      const otherPool = new pg.Pool(options)
+      workerPool.on('error', () => {})
+      otherPool.on('error', () => {})
+      const real = createLibrariusStore(workerPool)
+      const other = createLibrariusStore(otherPool)
+      // Each send makes a message of one part, and notes who held the lock when it was made.
+      const sent = []
+      const webhook = {
+        id: HOOK,
+        async send(threadId) {
+          const at = Date.now()
+          const id = snow(at, sent.length + 1)
+          sent.push({ id, threadId, mine: real.holdsWorkerLock(), others: other.holdsWorkerLock() })
+          return { id, timestamp: new Date(at).toISOString(), attachments: [] }
+        },
+        edit: async () => {
+          throw new Error('this test makes no edit')
+        },
+        remove: async () => {
+          throw new Error('this test removes nothing')
+        },
+      }
+      const discord = { setArchived: async () => true, deleteMessage: async () => undefined, messagesAfter: async () => [] }
+      // Its waits are cut to 50 ms at most: the 1500 ms between two calls is waited for in steps, and a lock another holds is asked for every 50 ms.
+      const timers = { setTimeout: (fn, ms) => setTimeout(fn, Math.min(ms, 50)), clearTimeout: (timer) => clearTimeout(timer) }
+      const outbox = createOutbox({ store: real, webhook, discord, guildId: GUILD, timers, log: () => {} })
+      const reply = async (source) => {
+        const payload = { postId: POST, source, replyTo: null, mentions: [], uploads: [], username: 'Invented Name', avatarUrl: AVATAR, siteUrl: 'https://site.example/post', form: 'v2' }
+        return (await real.enqueueOutbox({ kind: 'send', messageKey: keyOf(), authorId: MEMBER, payload })).id
+      }
+      const stateOf = async (id) => (await rows('select state from librarius_outbox where id = $1', [id]))[0].state
+      const until = async (what, done) => {
+        for (let tries = 0; !(await done()); tries++) {
+          if (tries > 200) throw new Error(`${what} never came`)
+          await new Promise((resolve) => setTimeout(resolve, 50))
+        }
+      }
+      try {
+        // The store's answer is a boolean, at once: no promise, and no question to the server.
+        expect(real.holdsWorkerLock()).toBe(false)
+        const first = await reply('The first invented reply.')
+        outbox.start()
+        await until('the first reply', async () => (await stateOf(first)) === 'sent')
+        expect(real.holdsWorkerLock()).toBe(true)
+        expect(await other.takeWorkerLock()).toBe(false)
+        // The server ends the connection that holds the lock, and another worker takes it.
+        const held = await rows("select pid from pg_locks where locktype = 'advisory' and classid = 0 and objid = 19000001 and objsubid = 1 and granted")
+        expect(held).toHaveLength(1)
+        await sql('select pg_terminate_backend($1)', [held[0].pid])
+        await until('the end of the connection', async () => !real.holdsWorkerLock())
+        expect(await other.takeWorkerLock()).toBe(true)
+        // A reply queued now is not sent: the worker finds it holds no lock, and asks for it again and again.
+        const second = await reply('The second invented reply.')
+        outbox.kick()
+        await new Promise((resolve) => setTimeout(resolve, 2500))
+        expect(sent).toHaveLength(1)
+        expect(await stateOf(second)).toBe('pending')
+        // The other lets it go: this one takes it again, and sends.
+        await other.releaseWorkerLock()
+        await until('the second reply', async () => (await stateOf(second)) === 'sent')
+        expect(real.holdsWorkerLock()).toBe(true)
+        expect(sent.map(({ threadId, mine, others }) => ({ threadId, mine, others }))).toEqual([
+          { threadId: POST, mine: true, others: false },
+          { threadId: POST, mine: true, others: false },
+        ])
+        // Each is stored as the worker stores a reply: a message of the site, of one part.
+        for (const { id } of sent) {
+          expect(await message(id)).toMatchObject({ origin: 'site', author_id: MEMBER, webhook_id: HOOK })
+          expect(await partsOf(id)).toEqual([[id, 0, HOOK]])
+        }
+      } finally {
+        await outbox.stop()
+        await other.releaseWorkerLock().catch(() => {})
+        await workerPool.end()
+        await otherPool.end()
+      }
+    }, 60_000)
 
     it('lets one connection hold the worker lock, and another take it when it is let go', async () => {
       const otherPool = new pg.Pool({ host: '127.0.0.1', port, user: 'salamanders_app', password, database: 'salamanders_builds', max: 2 })

@@ -1224,6 +1224,127 @@ describe('the catch-up and the later parts of a reply of the site', () => {
   })
 })
 
+// Discord may take a moment to show a message it has made, and the outbox waits 5 s for it before it looks. A reply's part stored a second
+// or two before the page was read may be missing from the page while a message after it is on it: an id made less than 5 s before the page
+// was read is judged as one newer than the page, so Discord is asked about it (within the caps, for a later part), and it is not judged gone.
+describe('the catch-up and a message made just before the page was read', () => {
+  const HOOK = '200000000000000450'
+  const READ_AT = Date.parse('2026-11-18T10:00:00.000Z')
+  const EPOCH = 1420070400000n
+  /** → the id of a message made `ago` ms before the page was read. */
+  const madeAgo = (ago, n = 0) => String(((BigInt(READ_AT - ago) - EPOCH) << 22n) | BigInt(n))
+  const person = (id) => raw(1, 0, { id })
+  const ours = (id) => raw(1, 0, { id, webhook_id: HOOK, author: { id: HOOK, username: 'Invented Name', bot: true } })
+  const rereads = (w) => w.discord.calls.filter((c) => c[0] === 'message').map((c) => c[2])
+  const OLD = madeAgo(60_000)
+  const NEWEST = madeAgo(1000)
+
+  /**
+   * A post of a message of a person, a reply of the site of two parts, and the newest message, another person's, which the page shows.
+   * Discord holds every message of `held` (all of them unless said); the page leaves out those of `unshown`, which it has not shown yet.
+   */
+  function world({ first, second, held = [OLD, first, second, NEWEST], unshown = [] }) {
+    const chan = [OLD, first, second, NEWEST].filter((id) => held.includes(id)).map((id) => (id === OLD || id === NEWEST ? person(id) : ours(id)))
+    const w = setup({
+      active: [thread(1)],
+      channels: { [postId(1)]: chan },
+      store: {
+        posts: [known(1)],
+        messages: [OLD, first, NEWEST].map((id) => parseMessage(person(id))),
+        cursors: { [postId(1)]: madeAgo(0, 999) },
+        parts: [
+          [first, first],
+          [second, first],
+        ],
+        hooks: [HOOK],
+      },
+      webhookId: HOOK,
+      windowSize: 5,
+      now: () => READ_AT,
+    })
+    const newest = w.discord.newest
+    w.discord.newest = async (ch, limit) => (await newest(ch, limit)).filter((m) => !unshown.includes(m.id))
+    return w
+  }
+
+  it.each([
+    ['2 s', 2000],
+    ['4999 ms', 4999],
+  ])('asks about a later part made %s before the page was read that the page does not show yet, and keeps the reply that Discord still has', async (_, ago) => {
+    const first = madeAgo(10_000)
+    const second = madeAgo(ago)
+    const w = world({ first, second, unshown: [second] })
+    await w.imp.run()
+    expect(rereads(w)).toEqual([second])
+    expect(idsOf(w, 1)).toEqual([OLD, first, NEWEST])
+    expect([...w.store.parts.keys()]).toEqual([first, second])
+    expect(w.store.queued).toEqual([])
+    expect(await w.imp.status()).toMatchObject({ importDone: true, lastError: null })
+  })
+
+  it('takes the reply when Discord answers that the young part is gone', async () => {
+    const first = madeAgo(10_000)
+    const second = madeAgo(2000)
+    const w = world({ first, second, held: [OLD, first, NEWEST] })
+    await w.imp.run()
+    expect(rereads(w)).toEqual([second])
+    expect(idsOf(w, 1)).toEqual([OLD, NEWEST])
+    expect(w.store.queued).toEqual([{ messageKey: first, postId: postId(1), partIds: [first] }])
+  })
+
+  it.each([
+    ['5 s', 5000],
+    ['30 s', 30_000],
+  ])('judges a part made %s before the page was read as before: inside the page and not on it, it is gone, with no question', async (_, ago) => {
+    const first = madeAgo(40_000)
+    const second = madeAgo(ago)
+    const w = world({ first, second, unshown: [second] })
+    await w.imp.run()
+    expect(rereads(w)).toEqual([])
+    expect(idsOf(w, 1)).toEqual([OLD, NEWEST])
+    expect(w.store.queued).toEqual([{ messageKey: first, postId: postId(1), partIds: [first] }])
+  })
+
+  it('keeps a young part when Discord answers anything but null for it: only null is gone', async () => {
+    const first = madeAgo(10_000)
+    const second = madeAgo(2000)
+    const w = world({ first, second, held: [OLD, first, NEWEST] })
+    const message = w.discord.message
+    w.discord.message = async (ch, id) => (id === second ? (w.discord.calls.push(['message', ch, id]), undefined) : message(ch, id))
+    await w.imp.run()
+    expect(rereads(w)).toEqual([second])
+    expect(idsOf(w, 1)).toEqual([OLD, first, NEWEST])
+    expect(w.store.queued).toEqual([])
+  })
+
+  it('asks about a first part made just before the page was read that the page does not show yet, and keeps the reply that Discord still has', async () => {
+    const first = madeAgo(3000)
+    const second = madeAgo(2000)
+    const w = world({ first, second, unshown: [first] })
+    await w.imp.run()
+    expect(rereads(w)).toEqual([first])
+    expect(idsOf(w, 1)).toEqual([OLD, first, NEWEST])
+    expect([...w.store.parts.keys()]).toEqual([first, second])
+    expect(w.store.queued).toEqual([])
+  })
+
+  it('takes the reply when Discord answers that its young first part is gone; a first part made 5 s before is judged as before, with no question', async () => {
+    const first = madeAgo(3000)
+    const second = madeAgo(2000)
+    const w = world({ first, second, held: [OLD, second, NEWEST] })
+    await w.imp.run()
+    expect(rereads(w)).toEqual([first])
+    expect(idsOf(w, 1)).toEqual([OLD, NEWEST])
+    expect(w.store.queued).toEqual([{ messageKey: first, postId: postId(1), partIds: [second] }])
+
+    const old = madeAgo(5000)
+    const later = world({ first: old, second: madeAgo(4000), held: [OLD, madeAgo(4000), NEWEST] })
+    await later.imp.run()
+    expect(rereads(later)).toEqual([])
+    expect(idsOf(later, 1)).toEqual([OLD, NEWEST])
+  })
+})
+
 describe('the catch-up window', () => {
   const EDITED = '2026-11-01T10:00:00.123456+00:00'
   const smallWindow = (over = {}) => ({ windowSize: 5, ...over })
