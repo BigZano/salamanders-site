@@ -47,11 +47,18 @@ function makeWorld() {
     // progress the store did not take, with the parts the look would have seen or the note told of (`covers(message, entry)`). A note
     // the store did not take is a doubt only when the worker that held it was gone before the store had it (`takes`, the seq of each
     // time the lock was taken afresh: a stop and a start, or a lock that was lost). An entry that ends for good has the seq of its end
-    // (`endSeq`), and an entry it queued to put Discord right names it (`origin`).
+    // (`endSeq`), and an entry it queued to put Discord right names it (`origin`). What undoes a doubt: `madeFor`, the entry and the part
+    // each message a send made was sent for (the entry and part of the last note that said a part was on its way, which is written just
+    // before the send); `found`, each look that answered whole (the thread, then knownPartIds), with the entries and parts it was a look
+    // for (`for`: the entries on their way whose note of the part on its way says the send began 5 s after the look's start).
     made: new Map(),
+    madeFor: new Map(),
     doubts: [],
+    found: [],
     takes: [],
     seq: 0,
+    inflight: null,
+    looking: null,
     // What the worker holds in the store (ISO text or null), whether the lock is free for it, whether it holds it, and what it did with
     // the lock. A test takes the lock away with `lockHeld = false` (and gives it to another worker with `lockFree = false`).
     holds: { pausedUntil: null, globalUntil: null },
@@ -174,6 +181,7 @@ function makeWorld() {
       }
       const e = w.entries.get(id)
       if (e !== undefined && e.state === 'sending') e.payload.progress = clone(progress)
+      if ((progress.inflight ?? null) !== null) w.inflight = { entryId: id, index: progress.inflight }
       for (const d of w.doubts) if (d.entryId === id && !d.taken && !w.takes.some((t) => t > d.seq) && d.parts.every((part) => parts.includes(part))) d.taken = true
     },
     async outboxSet(id, { state, attempts, nextAt, error = null, messageState, event, queue = [], hold }) {
@@ -211,7 +219,7 @@ function makeWorld() {
       w.events.push({ at: Date.now(), actor: message.authorId, ...event })
       return { stored: true, gone: [] }
     },
-    async finishEdit(id, { messageId, source, content, partIds, event }) {
+    async finishEdit(id, { messageId, source, content, partIds, event, queue = [] }) {
       maybeFail('finishEdit')
       const e = w.entries.get(id)
       if (e.state !== 'sending') return { stored: true, gone: [] }
@@ -223,6 +231,8 @@ function makeWorld() {
       w.parts.set(messageId, [...partIds])
       e.state = 'sent'
       w.events.push({ at: Date.now(), actor: e.authorId, ...event })
+      // As outboxSet does: what puts Discord right is queued in the same transaction (the parts an edit no longer needs).
+      for (const item of queue) w.enqueue({ kind: item.kind, key: item.messageKey, authorId: e.authorId, payload: item.payload, origin: id })
       return { stored: true, gone: [] }
     },
     async finishDelete(id, { messageId, partIds, event }) {
@@ -249,12 +259,15 @@ function makeWorld() {
       return ids.filter((id) => w.uploads.get(id)?.authorId === authorId).map((id) => w.uploads.get(id))
     },
     async knownPartIds(ids) {
+      const look = w.looking
+      w.looking = null
       try {
         maybeFail('knownPartIds')
       } catch (err) {
         w.doubts.push({ seq: w.seq++, covers: (m) => ids.includes(m.id) })
         throw err
       }
+      if (look !== null) w.found.push({ seq: w.seq++, for: look })
       return new Set(ids.filter((id) => partOwner(id) !== null))
     },
     async blockedSince(since) {
@@ -328,6 +341,7 @@ function makeWorld() {
       }
       w.thread.push(message)
       w.made.set(id, w.seq++)
+      w.madeFor.set(id, w.inflight)
       return answer(200, message)
     }
     const at = w.thread.findIndex((m) => m.id === messageId)
@@ -376,6 +390,9 @@ function makeWorld() {
         w.doubts.push({ seq: w.seq++, covers: (m) => Date.parse(m.timestamp) > since })
         throw fail
       }
+      // The entries and parts this is a look for: a look reads from 5 s before the send of the part began, which the part's note says.
+      const on = [...w.entries.values()].filter((e) => e.state === 'sending' && (e.payload.progress?.inflight ?? null) !== null && e.payload.progress.inflightAt - 5000 === since)
+      w.looking = on.map((e) => ({ entryId: e.id, index: e.payload.progress.inflight }))
       return w.thread.filter((m) => m.timestamp === undefined || Date.parse(m.timestamp) > since).slice(0, limit)
     },
     async setArchived(threadId, archived) {
@@ -3242,8 +3259,8 @@ describe('an edit that ends for good puts the message back as the store has it',
     ['the part that an append sends', 'Short.', TWO('a', 'b'), [null, block()], 'blocked'],
     ['the second part that an append sends, the first having landed', 'Short.', THREE('a', 'b', 'c'), [null, null, block()], 'blocked'],
     ['the links edit after an append', 'Short.', TWO('a', 'b'), [null, null, forbidden()], 'failed'],
-    ['the first removal of a surplus part', THREE('a', 'b', 'c'), 'Short.', [null, forbidden()], 'failed'],
-    ['the removal of a surplus part when parts stay', THREE('a', 'b', 'c'), TWO('A', 'B'), [null, null, forbidden()], 'failed'],
+    ['the edit of the first part of a reply made shorter', THREE('a', 'b', 'c'), 'Short.', [block()], 'blocked'],
+    ['the edit of a part that stays, of a reply made shorter', THREE('a', 'b', 'c'), TWO('A', 'B'), [null, forbidden()], 'failed'],
   ])('leaves Discord and the store as they were when it fails at %s', async (_, before, after, script, end) => {
     const id = await sentReply(before)
     const ids = w.ours().map((m) => m.id)
@@ -3323,18 +3340,134 @@ describe('an edit that ends for good puts the message back as the store has it',
     expect(ofKind('edit')[1].payload.source).toBeUndefined()
   })
 
-  it('cannot bring back a part the edit removed: the reply goes whole, as a part deleted in Discord takes it', async () => {
+})
+
+// An edit that makes a reply shorter removes the parts it no longer needs last, once the store has taken the edit: they are a delete queued
+// with it, in the same transaction. So an edit that ends for good has removed nothing, and the restore finds every part where it was.
+describe('an edit that makes the reply shorter removes the parts it no longer needs once the edit is stored', () => {
+  const edit = (key, source) => w.enqueue({ kind: 'edit', key, payload: { postId: THREAD, source, mentions: [] } })
+  const forbidden = () => answer(403, { code: 50013, message: 'Missing Permissions' })
+  const texts = () => w.ours().map((m) => w.textOf(m))
+  const ofKind = (kind) => [...w.entries.values()].filter((e) => e.kind === kind)
+
+  it.each([
+    ['three parts to one', THREE('a', 'b', 'c'), 'Short.', 1],
+    ['three parts to two', THREE('a', 'b', 'c'), TWO('A', 'B'), 2],
+    ['two parts to one', TWO('a', 'b'), 'Short.', 1],
+  ])('from %s: the store has the edit before any part is removed, and the parts it drops go by a delete queued with it', async (_, before, after, left) => {
+    const id = await sentReply(before)
+    const ids = w.ours().map((m) => m.id)
+    w.calls.length = 0
+    // What Discord had been asked when the store took the edit.
+    let askedWhenStored = null
+    const finishEdit = w.store.finishEdit
+    w.store.finishEdit = async (...args) => {
+      askedWhenStored ??= w.calls.map((c) => [c.kind, c.messageId])
+      return finishEdit(...args)
+    }
+    const e = edit(id, after)
+    outbox.kick()
+    await later(30_000)
+    expect(askedWhenStored).toEqual(ids.slice(0, left).map((m) => ['edit', m]))
+    expect(w.calls.map((c) => [c.kind, c.messageId])).toEqual([...ids.slice(0, left).map((m) => ['edit', m]), ...ids.slice(left).map((m) => ['remove', m])])
+    expect(gaps().every((g) => g === 1500)).toBe(true)
+    expect(w.entry(e).state).toBe('sent')
+    expect(ofKind('delete')).toMatchObject([{ state: 'sent', messageKey: ids[left], authorId: MEMBER, origin: e, payload: { postId: THREAD, partIds: ids.slice(left), webhookId: HOOK } }])
+    expect(w.ours().map((m) => m.id)).toEqual(ids.slice(0, left))
+    expect(w.parts.get(id)).toEqual(ids.slice(0, left))
+    expect(w.messages.get(id)).toMatchObject({ source: after, state: null })
+  })
+
+  it('queues no delete for an edit that keeps as many parts, or adds some', async () => {
+    const same = await sentReply(TWO('a', 'b'))
+    edit(same, TWO('c', 'd'))
+    const grown = await sentReply('Short.')
+    edit(grown, TWO('e', 'f'))
+    outbox.kick()
+    await later(60_000)
+    expect(ofKind('edit').map((e) => e.state)).toEqual(['sent', 'sent'])
+    expect(ofKind('delete')).toEqual([])
+    expect(w.ours()).toHaveLength(4)
+  })
+
+  it('leaves every part, and the reply as it was, when the store never takes the edit: the restore finds each part where it was', async () => {
     const id = await sentReply(THREE('a', 'b', 'c'))
-    // The edit removes the second part, and is refused at the third.
+    const ids = w.ours().map((m) => m.id)
+    const was = texts()
+    const { editedAt: _edited, ...row } = structuredClone(w.messages.get(id))
+    // The first run and the four of the ladder.
+    w.storeFails.finishEdit = Array.from({ length: 5 }, () => new Error('connection lost'))
+    w.calls.length = 0
+    const e = edit(id, 'Short.')
+    outbox.kick()
+    await later(1_000_000)
+    expect(w.entry(e)).toMatchObject({ state: 'failed', attempts: 4, lastError: COPY.unsendable })
+    expect(w.calls.filter((c) => c.kind === 'remove')).toEqual([])
+    expect(w.ours().map((m) => m.id)).toEqual(ids)
+    expect(texts()).toEqual(was)
+    const { editedAt: _again, ...now } = w.messages.get(id)
+    expect(now).toEqual(row)
+    expect(w.parts.get(id)).toEqual(ids)
+    expect(ofKind('edit').map((x) => x.state)).toEqual(['failed', 'sent'])
+    expect(ofKind('delete')).toEqual([])
+  })
+
+  it('removes the part when its removal fails after the edit is stored: the reply is stored at one part, and the delete tries again', async () => {
+    const id = await sentReply(THREE('a', 'b', 'c'))
+    const ids = w.ours().map((m) => m.id)
+    w.script.push(null, answer(502))
+    const e = edit(id, 'Short.')
+    outbox.kick()
+    // The edit at 0, the first removal at 1500, which fails: the delete is tried again at 6500.
+    await later(6000)
+    expect(w.entry(e)).toMatchObject({ state: 'sent', attempts: 0 })
+    expect(w.parts.get(id)).toEqual([id])
+    expect(w.messages.get(id)).toMatchObject({ source: 'Short.', state: null })
+    const [d] = ofKind('delete')
+    expect(d).toMatchObject({ state: 'pending', attempts: 1 })
+    // Meanwhile a reader of Discord sees the reply as edited, and its old parts 2 and 3 after it.
+    expect(w.ours().map((m) => m.id)).toEqual(ids)
+    expect(w.textOf(w.ours()[0])).toBe(`Short.\n-# <@${MEMBER}>`)
+    expect(w.textOf(w.ours()[1])).toContain('**2/3**')
+    await later(30_000)
+    expect(d.state).toBe('sent')
+    expect(w.ours().map((m) => m.id)).toEqual([id])
+    expect(texts()).toEqual([`Short.\n-# <@${MEMBER}>`])
+    expect(ofKind('edit')).toHaveLength(1)
+  })
+
+  it('counts the edit as done when a part cannot be removed for good: the reply is stored as edited, and the part left is the delete\'s, which fails', async () => {
+    const id = await sentReply(THREE('a', 'b', 'c'))
+    const ids = w.ours().map((m) => m.id)
+    // The edit of the first part, the removal of the second, and the removal of the third is refused.
     w.script.push(null, null, forbidden())
     const e = edit(id, 'Short.')
     outbox.kick()
     await later(100_000)
-    expect(w.entry(e).state).toBe('failed')
-    expect(w.ours()).toEqual([])
-    expect(w.messages.has(id)).toBe(false)
-    expect(ofKind('edit')[1].state).toBe('sent')
-    expect(w.events.at(-1)).toMatchObject({ action: 'delete', messageId: id, note: 'A part was deleted in Discord.' })
+    expect(w.entry(e).state).toBe('sent')
+    expect(w.messages.get(id)).toMatchObject({ source: 'Short.', state: null })
+    expect(w.parts.get(id)).toEqual([id])
+    expect(ofKind('delete')).toMatchObject([{ state: 'failed', lastError: COPY.locked, payload: { partIds: ids.slice(1) } }])
+    // No restore: the edit is done. What a reader of Discord sees is the reply as edited, and the old third part, which a moderator removes.
+    expect(ofKind('edit')).toHaveLength(1)
+    expect(w.ours().map((m) => m.id)).toEqual([id, ids[2]])
+    expect(texts()[0]).toBe(`Short.\n-# <@${MEMBER}>`)
+    expect(texts()[1]).toContain('**3/3**')
+  })
+
+  it('stores the edit when Discord tells, while it is on its way, of a part it drops being deleted: the delete finds that part gone, and is done', async () => {
+    const id = await sentReply(THREE('a', 'b', 'c'))
+    const ids = w.ours().map((m) => m.id)
+    const e = edit(id, 'Short.')
+    // A moderator deletes part 3 before the edit is run, and the store notes it in the edit (siteDeleted).
+    w.thread.splice(w.thread.findIndex((m) => m.id === ids[2]), 1)
+    ;(w.entry(e).gone ??= []).push(ids[2])
+    outbox.kick()
+    await later(30_000)
+    expect(w.entry(e).state).toBe('sent')
+    expect(w.parts.get(id)).toEqual([id])
+    expect(ofKind('delete')).toMatchObject([{ state: 'sent', payload: { partIds: ids.slice(1) } }])
+    expect(w.ours().map((m) => m.id)).toEqual([id])
   })
 })
 
@@ -3666,17 +3799,17 @@ describe('a try of the ladder goes on from what the one before it did', () => {
 })
 
 /**
- * Whether a message that an entry which ended for good left in Discord is a part the outbox cannot know of: one whose id the store never
- * got (it is not among the entry's parts), and which, between the send that made it and the entry's end, a look at the thread that threw
- * would have seen, or a note of progress that the store did not take would have told of. The look is the only way to learn of such a
- * part, so one that no look could find is left. Any other part left behind is a fault: a part with no doubt on it is always found.
- */
-/**
  * Whether what an entry queued to put Discord right when it ended for good is all done, and what that queued in its turn: only then is
- * the entry held to have left nothing. A cleanup that failed excuses its own entry, and no other.
+ * the entry held to have left nothing. A cleanup that failed for good excuses its own entry, and no other. Every one of them is over by
+ * then, one way or another (everyEntryOver): one still on its way is a fault, not an excuse.
  */
 function cleanedUp(entry) {
   return [...w.entries.values()].filter((e) => e.origin === entry.id).every((e) => e.state === 'sent' && cleanedUp(e))
+}
+
+/** Never lost, and never stuck: every entry of the world is over at the end, the ones queued to put Discord right too. */
+function everyEntryOver() {
+  expect([...w.entries.values()].filter((e) => !['sent', 'failed', 'blocked'].includes(e.state)).map((e) => [e.id, e.kind, e.state])).toEqual([])
 }
 
 /** What an action of a property does to the world, other than a wait or a restart. */
@@ -3695,10 +3828,19 @@ function onlyWithTheLock() {
   expect(w.bot.filter((b) => b.kind === 'delete' && !b.held)).toEqual([])
 }
 
+/**
+ * Whether a message that an entry which ended for good left in Discord is a part the outbox cannot know of: one whose id the store never
+ * got (it is not among the entry's parts), and which, between the send that made it and the entry's end, a look at the thread that threw
+ * would have seen, or a note of progress that the store did not take would have told of, with no look for that part of that entry that
+ * answered after it, and before the end: such a look finds it (the fake shows a message at once). The look is the only way to learn of
+ * such a part, so one that no look could find is left. Any other part left behind is a fault: a part with no doubt on it is always found.
+ */
 function unknowable(entry, message) {
   const made = w.made.get(message.id)
   if (made === undefined || (entry.payload.progress?.parts ?? []).some((part) => part.id === message.id)) return false
-  return w.doubts.some((d) => d.seq > made && d.seq < entry.endSeq && d.covers(message, entry))
+  const sentFor = w.madeFor.get(message.id)
+  const foundAfter = (seq) => w.found.some((l) => l.seq > seq && l.seq < entry.endSeq && l.for.some((f) => f.entryId === sentFor?.entryId && f.index === sentFor.index))
+  return w.doubts.some((d) => d.seq > made && d.seq < entry.endSeq && d.covers(message, entry) && !foundAfter(d.seq))
 }
 
 describe('never twice, never lost (property)', () => {
@@ -3777,6 +3919,7 @@ describe('never twice, never lost (property)', () => {
               if (cleanedUp(entry)) for (let k = 1; k <= n; k++) for (const m of holders(i, k)) expect(unknowable(entry, m)).toBe(true)
             }
           })
+          everyEntryOver()
           onlyWithTheLock()
           // The limits hold within one run of the worker.
           const byLife = Map.groupBy(w.calls, (c) => c.life)
@@ -3880,7 +4023,10 @@ describe('edits and deletes never leave a part twice, nor a reply that is gone h
             } else if (kind === 'edit' && entry.state === 'sent' && row !== undefined) {
               expect(row.source).toBe(sourceOf(i, n2, 2))
               expect(row.state).toBeNull()
-              for (let k = 1; k <= 3; k++) expect(holders(i, k)).toHaveLength(k <= n2 ? 1 : 0)
+              for (let k = 1; k <= n2; k++) expect(holders(i, k)).toHaveLength(1)
+              // The parts it no longer needs are gone once the delete it queued for them is done. A delete that ended for good leaves them, as
+              // any cleanup that fails for good does (it ended: no entry of the world is left on its way, below).
+              if (cleanedUp(entry)) for (let k = n2 + 1; k <= 3; k++) expect(holders(i, k)).toHaveLength(0)
               expect(w.parts.get(keys[i])).toEqual(Array.from({ length: n2 }, (_, k) => holders(i, k + 1)[0].id))
             } else if (row !== undefined && !ghost(keys[i])) {
               // Whatever became of the edit or delete, a message that is stored has its parts, in order, in Discord, or says it is on its way.
@@ -3898,6 +4044,7 @@ describe('edits and deletes never leave a part twice, nor a reply that is gone h
             }
             if (row !== undefined && (kind === 'none' || entry.state === 'sent' || entry.state === 'failed' || entry.state === 'blocked')) expect(w.messages.get(keys[i]).state === 'sending').toBe(false)
           })
+          everyEntryOver()
           onlyWithTheLock()
           const byLife = Map.groupBy(w.calls, (c) => c.life)
           for (const calls of byLife.values()) for (let j = 1; j < calls.length; j++) expect(calls[j].at - calls[j - 1].at).toBeGreaterThanOrEqual(SPACING)
@@ -4008,6 +4155,26 @@ describe('one worker sends at a time: the lock', () => {
     expect(w.entry(id).state).toBe('sent')
   })
 
+  // A stop and a start of the same worker hold on to what it had decided and could not write, as a lost lock does (below).
+  it('writes a block it had decided at the next start, when it was stopped while the store could not take it, and does not send the part again', async () => {
+    w.script.push(answer(400, { code: 200000 }))
+    w.storeFails.outboxSet = [new Error('connection lost')]
+    const id = w.enqueue({ payload: sendPayload() })
+    outbox = make()
+    outbox.start()
+    await later(SPACING + 100)
+    expect(w.sends()).toHaveLength(1)
+    expect(w.entry(id).state).toBe('sending')
+    await outbox.stop()
+    outbox.start()
+    await later(30_000)
+    expect(w.lockCalls).toEqual(['take', 'release', 'take'])
+    expect(w.sends()).toHaveLength(1)
+    expect(w.looks).toEqual([])
+    expect(w.entry(id)).toMatchObject({ state: 'blocked', lastError: 'Discord blocked this reply.' })
+    expect(w.events.filter((e) => e.action === 'blocked')).toHaveLength(1)
+  })
+
   describe('lost while it works', () => {
     // The connection that held the lock may fail: another worker may take the lock then, and only that one may send.
     it('sends nothing more when it loses the lock in the middle of the queue, leaves the entry for whoever holds it, and goes on once it has it again', async () => {
@@ -4066,6 +4233,53 @@ describe('one worker sends at a time: the lock', () => {
       await later(30_000)
       expect(w.entry(id).state).toBe('sent')
       expect(w.calls.every((c) => c.held)).toBe(true)
+    })
+
+    // What it had decided for an entry, and could not write because the store failed, is written once it holds the lock again, as it was
+    // decided, before it reads what the store keeps: it is not run again, which would send a part that Discord blocked.
+    it('writes a block it had decided when the lock went while the store could not take it, and does not send the part again', async () => {
+      w.script.push(answer(400, { code: 200000 }))
+      w.storeFails.outboxSet = [new Error('connection lost')]
+      const id = w.enqueue({ payload: sendPayload() })
+      outbox = make()
+      outbox.start()
+      await later(SPACING + 100)
+      // The block is decided, and its write failed: it is made again in 5 s. Meanwhile the connection that held the lock is gone.
+      expect(w.sends()).toHaveLength(1)
+      expect(w.entry(id).state).toBe('sending')
+      w.lockHeld = false
+      await later(30_000)
+      expect(w.lockCalls).toEqual(['take', 'take'])
+      expect(w.sends()).toHaveLength(1)
+      expect(w.looks).toEqual([])
+      expect(w.entry(id)).toMatchObject({ state: 'blocked', lastError: 'Discord blocked this reply.' })
+      expect(w.events.filter((e) => e.action === 'blocked')).toHaveLength(1)
+      expect(w.ours()).toEqual([])
+      // The block counts towards the breaker: a second one within the hour stops everything.
+      w.script.push(answer(400, { code: 200000 }))
+      w.enqueue({ payload: sendPayload({ source: 'Another.' }) })
+      outbox.kick()
+      await later(5000)
+      expect(outbox.sendingPausedUntil()).not.toBeNull()
+    })
+
+    it('writes the note of a part that landed, which the store did not take, when the lock went before the store came back: the part is not looked for', async () => {
+      const id = w.enqueue({ payload: sendPayload({ source: TWO() }) })
+      // The note of part 1, and the same note written again with the step of the ladder.
+      w.storeFails.outboxProgress = [null, new Error('connection lost'), new Error('connection lost')]
+      outbox = make()
+      outbox.start()
+      await later(SPACING + 100)
+      expect(w.sends()).toHaveLength(1)
+      expect(w.entry(id).payload.progress.parts).toEqual([])
+      w.lockHeld = false
+      await later(60_000)
+      expect(w.lockCalls).toEqual(['take', 'take'])
+      expect(w.looks).toEqual([])
+      expect(w.entry(id)).toMatchObject({ state: 'sent', attempts: 1 })
+      expect(w.sends()).toHaveLength(2)
+      expect(w.ours()).toHaveLength(2)
+      expect(w.parts.get(w.ours()[0].id)).toEqual(w.ours().map((m) => m.id))
     })
 
     it('makes no delete through the bot once it has lost the lock, and makes the rest, once each, when it holds it again', async () => {

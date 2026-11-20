@@ -57,12 +57,13 @@
  *   lost) is left alone, and answers true too. Nothing is written, and `stored` is false, when `gone` lists parts that Discord
  *   was told of as deleted while the reply was on its way (siteDeleted noted them in the entry), or, with `gone` null, when the
  *   reply's post is not stored: the caller deals with what is in Discord.
- * finishEdit(id, { messageId, source, content, partIds, event }) → { stored, gone }: an edit is done, in one transaction: the
- *   message has its new source and content, its edit time and no state, its parts are the new list, and the entry is 'sent'.
+ * finishEdit(id, { messageId, source, content, partIds, event, queue }) → { stored, gone }: an edit is done, in one transaction: the
+ *   message has its new source and content, its edit time and no state, its parts are the new list, the entry is 'sent', and
+ *   `queue` (as outboxSet's, at most 2, for the entry's author) is queued: the delete of the parts that an edit which made the reply
+ *   shorter no longer needs. The worker removes them only once the edit is stored, so that an edit that ends for good has removed none.
  *   As for finishSend, an entry that is not 'sending' is left alone (`stored` true); nothing is written, and `stored` is false,
  *   for parts of the new list noted as deleted in Discord (`gone`), and, with `gone` empty, for a message that is not there any
- *   more: it is not brought back. A part noted that is not in the new list does not count: it is one the edit removed itself,
- *   which Discord told of as of any deletion.
+ *   more: it is not brought back. A part noted that is not in the new list does not count: it is one the edit drops anyway.
  * finishDelete(id, { messageId, partIds, event }) → a delete is done, in one transaction: the message is deleted, noted in the
  *   tombstones for the readers, and its parts are forgotten, and the entry is 'sent'. An entry that is not 'sending' is left
  *   alone.
@@ -95,12 +96,12 @@
  *   queued beside it: removing a part twice is harmless.) `plain` is the ids that are no part of one, which the caller deletes
  *   as messages of Discord. Of those, the ones that are parts of a reply or an edit still on its way (named in its progress,
  *   not stored yet) are noted in that entry (payload.gone), so that finishSend or finishEdit does not store what Discord lost.
- *   A reply that an edit is on its way for ('pending' or 'sending') does not go: the edit removes the parts it no longer needs
- *   before it is done, and Discord tells of those removals as of any deletion. Its deleted parts are noted in the edit instead,
- *   and the edit decides: finishEdit leaves out a part it removed, and a part it keeps that is gone makes the worker take the
- *   whole reply, as here. A reply none of whose deleted parts is a part of it any more, by the time this has its entries (a
- *   delete that took it, or an edit that removed them, was done while this waited: see "The order of locks"), is left as it
- *   is: nothing of it is left to delete, queue or note.
+ *   A reply that an edit is on its way for ('pending' or 'sending') does not go: the edit may drop the part that was deleted (and
+ *   an edit of an earlier version of the worker removed the parts it no longer needed before it was done, which Discord tells of
+ *   as of any deletion). Its deleted parts are noted in the edit instead, and the edit decides: finishEdit leaves out a part it
+ *   drops, and a part it keeps that is gone makes the worker take the whole reply, as here. A reply none of whose deleted parts
+ *   is a part of it any more, by the time this has its entries (a delete that took it, or an edit that removed them, was done
+ *   while this waited: see "The order of locks"), is left as it is: nothing of it is left to delete, queue or note.
  * blockedSince(since) → the times (ISO) of the blocks noted since `since`, oldest first: what the breaker is built from again
  *   after a restart.
  * ownWebhookIds() → the Set of the ids of the webhooks that ever sent a stored part (librarius_parts.webhook_id), or are sending a
@@ -567,13 +568,14 @@ export function createOutboxStore(pool) {
       })
     },
 
-    async finishEdit(id, { messageId, source, content, partIds, event }) {
+    async finishEdit(id, { messageId, source, content, partIds, event, queue = [] }) {
       needSerial(id, 'id')
       needId(messageId, 'messageId')
       if (typeof source !== 'string' || typeof content !== 'string') throw new TypeError('source and content must be text')
       needParts(partIds)
       if (partIds[0] !== messageId) throw new TypeError('the first part is the message')
       const noted = needEvent(event)
+      const queued = needQueue(queue)
       return inTx(async (q) => {
         const held = await goneOf(q, id, partIds)
         if (held === null) return { stored: true, gone: [] }
@@ -588,6 +590,8 @@ export function createOutboxStore(pool) {
         await writeParts(q, messageId, partIds)
         const { rows: entry } = await q.query("update librarius_outbox set state = 'sent', last_error = null where id = $1 returning author_id", [id])
         await logEvent(q, entry[0].author_id, noted)
+        // The delete of the parts it drops: a part is only removed from Discord once the store no longer has it as a part.
+        for (const item of queued) await enqueueIn(q, { ...item, authorId: entry[0].author_id })
         return { stored: true, gone: [] }
       })
     },
@@ -756,8 +760,8 @@ export function createOutboxStore(pool) {
           const mine = entries.filter((entry) => entry.message_key === messageId)
           const edits = mine.filter((entry) => entry.kind === 'edit')
           if (edits.length > 0) {
-            // An edit on its way removes the parts it no longer needs before it is done, and Discord tells of each removal as of any deletion:
-            // the edit is told, and the reply is left to it. finishEdit does not count a part it removed; a part it keeps that is gone ends the reply.
+            // An edit on its way may drop the part that was deleted (and an edit of an earlier worker removed the parts it no longer needed before it
+            // was done): the edit is told, and the reply is left to it. finishEdit does not count a part it drops; a part it keeps that is gone ends the reply.
             for (const edit of edits) await note(edit, deleted)
             continue
           }

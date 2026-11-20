@@ -657,8 +657,9 @@ describe('finishEdit', () => {
     expect(await r.done).toEqual({ stored: true, gone: [] })
   })
 
-  // The parts an edit no longer needs are removed before it is done, and Discord tells of each removal: siteDeleted notes those in the entry.
-  it('does not count the parts the edit removed itself: a reply of three parts made one is stored, with its one part', async () => {
+  // A part the edit no longer needs may be noted as deleted in Discord while the edit is on its way (a moderator took it, or an edit of an
+  // earlier version of the worker removed it before it was done): siteDeleted notes those in the entry, and the edit drops it anyway.
+  it('does not count the parts the edit drops: a reply of three parts made one is stored, with its one part', async () => {
     const r = run([["payload->'gone'", [{ gone: [MSG_2, MSG_3], author_id: AUTHOR }]]], { partIds: [MSG] })
     expect(await r.done).toEqual({ stored: true, gone: [] })
     expect(r.log.find((l) => l.sql.startsWith('insert into librarius_parts')).params).toEqual([MSG, [MSG]])
@@ -669,6 +670,67 @@ describe('finishEdit', () => {
     const r = run([["payload->'gone'", [{ gone: [MSG_3, MSG] }]]], { partIds: [MSG, MSG_2] })
     expect(await r.done).toEqual({ stored: false, gone: [MSG] })
     expect(r.sqls()).toEqual(['begin', GONE_SQL, 'commit'])
+  })
+
+  describe('queue: the delete of the parts an edit no longer needs, queued with it', () => {
+    const insert = 'insert into librarius_outbox (kind, message_key, author_id, payload) values ($1, $2, $3, $4::jsonb) returning id'
+    const messageState = "update librarius_messages set state = 'sending', rev = nextval('librarius_rev') where id = $1"
+    const surplus = { kind: 'delete', messageKey: MSG_2, payload: { postId: POST, partIds: [MSG_2, MSG_3], webhookId: HOOK } }
+
+    it('queues it for the author of the entry, after the event, in the same transaction', async () => {
+      const r = run([['insert into librarius_outbox', [{ id: '31' }]]], { partIds: [MSG], queue: [surplus] })
+      expect(await r.done).toEqual({ stored: true, gone: [] })
+      expect(r.sqls()).toEqual([
+        'begin',
+        GONE_SQL,
+        has('update librarius_messages set source = $2'),
+        'delete from librarius_parts where message_id = $1',
+        has('insert into librarius_parts'),
+        "update librarius_outbox set state = 'sent', last_error = null where id = $1 returning author_id",
+        has('insert into librarius_events'),
+        insert,
+        messageState,
+        'commit',
+      ])
+      expect(r.log[7].params).toEqual(['delete', MSG_2, AUTHOR, JSON.stringify(surplus.payload)])
+      expect(r.log[8].params).toEqual([MSG_2])
+    })
+
+    it.each([
+      ['the entry is not sending any more', [["payload->'gone'", []]], { stored: true, gone: [] }],
+      ['a part it keeps was deleted in Discord', [["payload->'gone'", [{ gone: [MSG] }]]], { stored: false, gone: [MSG] }],
+      ['the message is gone', [['update librarius_messages', []]], { stored: false, gone: [] }],
+    ])('queues nothing when %s: nothing of the edit is written', async (_, script, answer) => {
+      const r = run(script, { partIds: [MSG], queue: [surplus] })
+      expect(await r.done).toEqual(answer)
+      expect(r.sqls().filter((q) => q === insert)).toEqual([])
+    })
+
+    it('queues nothing when it is given nothing', async () => {
+      const r = run([], { queue: [] })
+      expect(await r.done).toEqual({ stored: true, gone: [] })
+      expect(r.sqls().filter((q) => q.startsWith('insert into librarius_outbox'))).toEqual([])
+    })
+
+    it('rolls back the whole edit when the delete cannot be queued', async () => {
+      const err = boom()
+      const r = run([['insert into librarius_outbox', err]], { partIds: [MSG], queue: [surplus] })
+      await expect(r.done).rejects.toBe(err)
+      expect(r.sqls().at(-1)).toBe('rollback')
+    })
+
+    it.each([
+      ...labelled([null, 'x', {}, 7]).map(([name, queue]) => [`queue ${name}`, queue, LIST_MSG('queue')]),
+      ['three entries', [surplus, surplus, surplus], 'queue must hold at most 2 entries'],
+      ...labelled([undefined, null, 'x', []]).map(([name, item]) => [`an entry ${name}`, [item], OBJECT_MSG('a queued entry')]),
+      ...labelled(['send', 'SEND', '', undefined, 7]).map(([name, kind]) => [`a kind ${name}`, [{ ...surplus, kind }], 'the kind of a queued entry must be one of edit, delete']),
+      ...labelled(BAD_IDS).map(([name, messageKey]) => [`a messageKey ${name}`, [{ ...surplus, messageKey }], ID_MSG('the messageKey of a queued entry')]),
+      ...labelled([undefined, null, 'x', []]).map(([name, payload]) => [`a payload ${name}`, [{ ...surplus, payload }], OBJECT_MSG('the payload of a queued entry')]),
+      ...labelled([...BAD_IDS, undefined]).map(([name, postId]) => [`a payload.postId ${name}`, [{ ...surplus, payload: { postId } }], ID_MSG('the payload.postId of a queued entry')]),
+    ])('refuses %s before any query', async (_, queue, message) => {
+      const rig = fakePool()
+      await refused(rig, () => store(rig.pool).finishEdit('12', { messageId: MSG, source: 's', content: 'c', partIds: [MSG], event: { action: 'edit' }, queue }), message)
+    })
   })
 
   it('rolls back and throws what failed', async () => {
@@ -1055,7 +1117,7 @@ describe('siteDeleted', () => {
   })
 
   describe('a reply that an edit is on its way for', () => {
-    // The edit may be removing these parts itself (the parts it no longer needs go before finishEdit writes the new list), so it decides.
+    // The edit may drop these parts (and an edit of an earlier worker removed the parts it no longer needed before finishEdit), so it decides.
     it('leaves the reply to the edit: notes the parts deleted in the edit, and deletes, queues and notes nothing of the reply', async () => {
       const r = revPool([
         partsOf([
