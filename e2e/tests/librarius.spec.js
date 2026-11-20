@@ -32,6 +32,17 @@ async function signIn(page, token) {
   await expect(page.locator('.auth-name')).toBeVisible()
 }
 
+/**
+ * Clicks a button of the thread. The librarian may reply, so the post page docks the composer under the thread, and from 900px it
+ * stays at the foot of the window over up to half of it, as the site bar stays at its top: the button is first put a quarter of the
+ * way down the window, clear of both, where a reader would have it to click. At once: the page scrolls smoothly otherwise, and a
+ * button on its way is no button to click.
+ */
+async function clickInThread(button) {
+  await button.evaluate((el) => window.scrollTo({ top: el.getBoundingClientRect().top + window.scrollY - window.innerHeight / 4, behavior: 'instant' }))
+  await button.click()
+}
+
 const reliquariumLink = (page) => page.locator('.nav-links').getByRole('link', { name: 'Reliquarium' })
 const topic = (page, title) => page.locator('a.lb-topic', { hasText: title })
 // What the api holds as the librarian's read mark in the active post, as the api says it.
@@ -162,12 +173,12 @@ test.describe('Librarius pages', () => {
     await expect(page.locator('.lb-attachment')).toHaveCount(1)
 
     const older = page.getByRole('button', { name: 'Load older' })
-    await older.click()
+    await clickInThread(older)
     await expect(messages).toHaveCount(101)
     // Four pages bring everything back to the first reply: 229 replies in all, and the opening message once.
     for (let pages = 1; (await older.count()) > 0; pages++) {
       expect(pages, 'pages of older messages').toBeLessThan(8)
-      await older.click()
+      await clickInThread(older)
       await expect.poll(() => messages.count()).toBeGreaterThan(50 * pages + 51)
     }
     await expect(messages).toHaveCount(230)
@@ -224,6 +235,8 @@ test.describe('Librarius pages', () => {
     // 15 seconds: the page's poll (10) and what the api needs. After a drop: 3 down, a backoff of up to 4, the catch-up run, and a poll.
     await expect(live).toBeVisible({ timeout: dropped ? 30_000 : 15_000 })
     await expect(live.locator('.lb-body')).toHaveText(text)
+    // Under the name its author has: the Scribe's, after the Archivist's reply 229, starts a run of its own, with its name over it.
+    await expect(live.locator('.lb-head .lb-name')).toHaveText('E2E Scribe')
     await expect(messages).toHaveCount(held + 1)
   })
 })
