@@ -34,6 +34,14 @@
  * The selection that comes back is what a person would go on typing over: the words a line action or a wrap was pressed on,
  * the address or text of a new link, the first heading of a table, and otherwise a caret after what went in.
  *
+ * What the post page puts in, from outside the toolbar:
+ *   asQuote(words) → the words as a quote: each of their lines behind "> " (an empty one behind ">" alone), with the blank lines
+ *     at either end and the white space at the end of each line left out. Words that are not text are a TypeError; words with
+ *     nothing in them, a RangeError.
+ *   insertBlock(text, selection, block) → { text, selection }: the block on lines of its own after the selection, as an image or
+ *     a table goes, and a caret on a new line under it, where the reply goes on. A block that is not text is a TypeError, one
+ *     with nothing in it a RangeError, and the text and the selection are taken as apply() takes them.
+ *
  * Drafts live in the member's own browser, under draftKey(postId, replyTo): lb-draft:<postId>:<replyTo|new>. The storage is
  * given (localStorage, in the page), and one that throws (full, or blocked in a private window) never makes these throw;
  * ids that are not ids still do, since that is the caller's mistake.
@@ -364,6 +372,31 @@ function emoji(text, start, end, { text: md }) {
   if (typeof md !== 'string') throw new TypeError('an emoji needs its text, as a string')
   if (md === '' || /[\r\n]/.test(md)) throw new RangeError('an emoji is one line of text, not empty')
   return replaced(text, start, end, md, start + md.length, start + md.length)
+}
+
+// --- from the post page ---
+
+const isBlank = (text) => !/\S/.test(text)
+
+export function asQuote(words) {
+  if (typeof words !== 'string') throw new TypeError('the words to quote must be a string')
+  if (isBlank(words)) throw new RangeError('there is nothing to quote')
+  const lines = words.replace(/\r\n?/g, '\n').split('\n').map((line) => line.trimEnd())
+  const first = lines.findIndex((line) => line !== '')
+  const last = lines.findLastIndex((line) => line !== '')
+  return lines
+    .slice(first, last + 1)
+    .map((line) => (line === '' ? '>' : `> ${line}`))
+    .join('\n')
+}
+
+export function insertBlock(text, selection, md) {
+  if (typeof text !== 'string') throw new TypeError('the text must be a string')
+  const [, end] = bounds(text, selection)
+  if (typeof md !== 'string') throw new TypeError('a block is text')
+  if (isBlank(md)) throw new RangeError('a block has something in it')
+  const placed = `${md}\n`
+  return block(text, end, placed, placed.length, placed.length)
 }
 
 // --- drafts ---

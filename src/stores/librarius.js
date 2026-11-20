@@ -771,6 +771,16 @@ export const useLibrarius = defineStore('librarius', {
       return { n, name: nameOf(file) }
     },
 
+    // → whether a reply sent now would carry the picture `upload:N` names, N from 1 to 10: whether this page has held a picture at
+    // every place up to N in the open post (see upload(); a reply carries the places from 1 that have no gap). A draft that shows a
+    // place held by none (one written before the page was loaded again, or before a reply took its pictures) needs it added again.
+    holdsPicture(n) {
+      if (!Number.isInteger(n)) throw new TypeError('holdsPicture takes the place of a picture, a whole number.')
+      if (n < 1 || n > MAX_PICTURES) throw new RangeError('A picture goes in place 1 to 10.')
+      const ids = pictures.get(this)?.get(this.post?.id)?.ids ?? []
+      return picturesUpTo(ids, n).length === n
+    },
+
     // Asks now what the reader has on its way in the open post, and follows it while any of it is sending. The page asks this when
     // it opens a post, so that what was sent before (a page loaded again) is shown. → once the answer has landed.
     pending(token) {

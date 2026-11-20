@@ -1168,3 +1168,130 @@ a.lb-file {
     border-color: var(--color-ash-2);
   }
 }
+
+/* Writing on the post page. The composer is docked under the thread: on a phone it is the end of the page, and from 900px it
+ * stays in view at the foot of the window while the thread scrolls, scrolling within itself when it is taller than half of it.
+ * A locked post says so in its place. */
+.lb-dock {
+  margin-top: 1.2rem;
+}
+.lb-locked {
+  margin: 0;
+  padding: 0.8rem;
+  font-size: var(--text-md);
+  color: var(--color-smoke);
+  border: 1px dashed var(--color-ash-2);
+  border-radius: var(--radius-md);
+}
+@media (min-width: 900px) {
+  .lb-dock {
+    position: sticky;
+    bottom: 0;
+    z-index: 20;
+    max-height: 50vh;
+    overflow-y: auto;
+    padding-top: 0.6rem;
+    background: var(--color-basalt);
+  }
+}
+/* The bar that says the composer edits a reply, beside the one that says what it replies to. */
+.lb-editing {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+}
+.lb-editing-text {
+  margin: 0;
+  font-size: var(--text-sm);
+  color: var(--color-drake);
+}
+.lb-unedit {
+  min-height: var(--tap);
+  padding: 0.2rem 0.6rem;
+  font: inherit;
+  font-size: var(--text-sm);
+  color: var(--color-pewter);
+  background: transparent;
+  border: 1px solid var(--color-ash);
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+}
+.lb-unedit:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+.lb-dead-pictures {
+  margin: 0;
+  font-size: var(--text-md);
+  color: var(--color-ember);
+}
+
+/* A reply written on the site: the "site" tag by its name (or, on a grouped one, above its text). */
+.lb-site-tag {
+  align-self: center;
+  padding: 0 0.45rem;
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  letter-spacing: 0.06em;
+  color: var(--color-drake);
+  border: 1px solid var(--color-drake-deep);
+  border-radius: var(--radius-pill);
+}
+.lb-main > .lb-site-tag {
+  display: inline-block;
+  margin-bottom: 0.2rem;
+}
+
+/* What the reader has on its way: a reply under the thread, laid out as a message is, and a message whose edit or delete is
+ * going, both greyed until it lands; how it stands under its text, and the buttons for what to do with it. */
+.lb-outgoing {
+  display: grid;
+  grid-template-columns: 2.5rem minmax(0, 1fr);
+  gap: 0 0.75rem;
+  padding: 0.7rem 0 0.2rem;
+  color: var(--color-bone);
+}
+.lb-pending {
+  opacity: 0.55;
+}
+.lb-state,
+.lb-action-error {
+  margin: 0.3rem 0 0;
+  font-size: var(--text-sm);
+  color: var(--color-smoke);
+}
+.lb-state-blocked,
+.lb-state-failed,
+.lb-action-error {
+  color: var(--color-ember);
+}
+.lb-actions,
+.lb-state-tools {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.3rem;
+  margin-top: 0.3rem;
+}
+.lb-act {
+  min-height: var(--tap);
+  min-width: var(--tap);
+  padding: 0.2rem 0.6rem;
+  font: inherit;
+  font-size: var(--text-xs);
+  color: var(--color-faint);
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+}
+.lb-state-tools .lb-act {
+  color: var(--color-pewter);
+  border-color: var(--color-ash);
+}
+@media (hover: hover) and (pointer: fine) {
+  .lb-act:hover,
+  .lb-unedit:hover:not(:disabled) {
+    color: var(--color-bone);
+    border-color: var(--color-ash-2);
+  }
+}

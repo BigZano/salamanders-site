@@ -40,13 +40,25 @@ const SITE_URL = 'https://sm2salamanders.site'
 // returns. A promise that resolves means the reply is on its way: the text and its draft go, and `sent` passes on what it
 // resolved with. One that rejects keeps both, and shows why from the error's `status` and `message` (the server's words) and,
 // for an AutoMod refusal (422), its `rule` and `match` ({ start, end } in the source), whose words are selected in the editor.
-// A 403 says "You can't reply here right now.", with the server's reason after it. Styles are in librarius.css.
+// A 403 says "You can't reply here right now.", with the server's reason after it.
+//
+// Editing one of the member's own replies (`editing`, { id, source, replyTo }): the composer opens with the reply's source, says it
+// is editing, and sends { source, mentions, edit: id } in its place; the reply that was being written is kept as its draft, and is
+// back once the edit ends (sent, or left by Cancel or Escape: `update:editing` null). An edit keeps no draft of its own, and adds
+// no pictures: a reply's pictures are fixed once it is sent (the server refuses an edit that moves or changes one). It is measured
+// with the line of the message the reply answers, which is the reply's own, as the server measures it.
+//
+// A draft can show a picture that nothing holds any more (`held(n)` says no: the page was loaded again since it was written, and
+// pictures are held in its memory only). The composer says so, keeps the text, and sends nothing until those pictures are taken
+// out, so that a reply never names one that is gone. When the server ends the sign-in, or the member signs out, what was typed in
+// the last second is kept at once, before the sign-in goes (signing out then takes every draft away). `insert(block)` puts a block
+// the page gives (a quote of a message, say) on lines of its own after the selection. Styles are in librarius.css.
 import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 import ArchiveMarkdown from '../archive/ArchiveMarkdown'
 import EmojiPicker from './EmojiPicker.vue'
 import MentionPopover from './MentionPopover.vue'
 import { parse, walk } from '../../lib/archive/markdown'
-import { apply, clearDraft, draftStorage, loadDraft, saveDraft } from '../../lib/librarius/composer'
+import { apply, clearDraft, draftStorage, insertBlock, loadDraft, saveDraft } from '../../lib/librarius/composer'
 import { createUploadQueue, paced } from '../../lib/librarius/requests'
 import { DEFAULT_FORM, MAX_PARTS, budget, toDiscord } from '../../../server/src/librariusForm.js'
 import { useAuth } from '../../stores/auth'
@@ -74,6 +86,7 @@ const COPY = {
   pictureFailed: "Couldn't add that picture. Try again.",
   retrying: 'Trying again in a moment.',
   adding: (n) => `Adding ${n} ${n === 1 ? 'picture' : 'pictures'}…`,
+  deadPictures: 'Pictures from before the reload need adding again.',
 }
 
 // The toolbar, in groups, in the order of the design: what each button shows, its accessible name, and the action it applies.
@@ -138,8 +151,12 @@ const props = defineProps({
   customEmoji: { type: Array, default: () => [] },
   // One try at holding a picture at place n: (file, n) → a promise of { n, name } or { status, error }. None, no pictures.
   upload: { type: Function, default: null },
+  // Whether place n holds a picture that a reply would carry: (n) → boolean. None, no question is asked.
+  held: { type: Function, default: null },
+  // The member's own reply being edited, { id, source, replyTo: { id, authorId } | null }, or null for a new reply.
+  editing: { type: Object, default: null },
 })
-const emit = defineEmits(['update:replyTo', 'sent'])
+const emit = defineEmits(['update:replyTo', 'update:editing', 'sent'])
 
 const auth = useAuth()
 const uid = `lb-composer-${++instances}`
@@ -151,7 +168,14 @@ const replyId = computed(() => props.replyTo?.id ?? null)
 const replyName = computed(() => props.replyTo?.authorName || 'unknown member')
 // The people picked for a mention, by id → the name the search gave them (null for one a draft held).
 const picked = reactive(new Map())
-const text = ref(loadDraft(draftStorage(), props.postId, replyId.value) ?? '')
+// The reply being written, kept aside while an edit is open, else null.
+let aside = null
+const draft = loadDraft(draftStorage(), props.postId, replyId.value) ?? ''
+const text = ref(draft)
+if (props.editing !== null) {
+  aside = draft
+  text.value = props.editing.source
+}
 remember(text.value)
 const tab = ref('preview')
 const full = ref(false)
@@ -192,12 +216,14 @@ const previewCtx = computed(() => ({
 }))
 const pictureOf = (name) => `Picture ${images.value.find((image) => image.name === name).ref}`
 
-// What the server gives the form for this reply (librariusWrites.js): the same author, links and pictures, so the same cuts.
+// What the server gives the form for this reply (librariusWrites.js): the same author, links and pictures, so the same cuts. An
+// edit answers the message its reply answered.
+const answering = computed(() => (props.editing === null ? props.replyTo : props.editing.replyTo))
 const formOptions = computed(() => ({
   form: props.form,
   authorId: props.authorId,
   siteUrl: `${props.siteUrl}/reliquarium/librarius/${props.postId}`,
-  replyTo: props.replyTo === null ? null : { authorId: props.replyTo.authorId, url: `https://discord.com/channels/${props.guildId}/${props.postId}/${props.replyTo.id}` },
+  replyTo: answering.value === null ? null : { authorId: answering.value.authorId, url: `https://discord.com/channels/${props.guildId}/${props.postId}/${answering.value.id}` },
   images: images.value,
 }))
 
@@ -217,7 +243,9 @@ const budgetText = computed(() => {
   if (pictures > 0) words.push(`${pictures} ${pictures === 1 ? 'picture' : 'pictures'}`)
   return words.join(' · ')
 })
-const canSend = computed(() => !sending.value && !blank.value && measured.value !== null && !over.value && uploading.value === 0)
+// Whether the text shows a picture that nothing holds now (the page was loaded again since it was written). An edit's are its own.
+const dead = computed(() => props.editing === null && props.held !== null && images.value.some(({ ref }) => !props.held(ref)))
+const canSend = computed(() => !sending.value && !blank.value && measured.value !== null && !over.value && uploading.value === 0 && !dead.value)
 
 // The Discord view: each message as its blocks, worked out only while the tab is shown.
 const discord = computed(() => {
@@ -244,23 +272,26 @@ function blocksOf(component) {
 // Applies a toolbar action, or one the page gives ({ type: 'mention', id } and the like), at the selection, and selects what
 // apply() says a person would type over next. One at a time: two pictures held at once must each see the other's text.
 let acting = Promise.resolve()
-function act(action) {
-  const run = acting.then(() => applyAt(action))
+function inTurn(change) {
+  const run = acting.then(() => changeAt(change))
   acting = run.catch(() => {})
   return run
 }
-async function applyAt(action) {
+const act = (action) => inTurn((value, selection) => apply(value, selection, action))
+// A block the page gives (insertBlock): on lines of its own after the selection.
+const insert = (md) => inTurn((value, selection) => insertBlock(value, selection, md))
+async function changeAt(change) {
   if (sending.value) return
   const el = area.value
-  const result = apply(el.value, { start: el.selectionStart, end: el.selectionEnd }, action)
+  const result = change(el.value, { start: el.selectionStart, end: el.selectionEnd })
   text.value = result.text
   await nextTick()
   el.focus()
   el.setSelectionRange(result.selection.start, result.selection.end)
 }
 
-// Whether a button that opens something can: the page gave what it needs.
-const unavailable = (tool) => (tool.opens === 'mention' && props.searchMembers === null) || (tool.opens === 'picture' && props.upload === null)
+// Whether a button that opens something can: the page gave what it needs, and an edit takes no pictures.
+const unavailable = (tool) => (tool.opens === 'mention' && props.searchMembers === null) || (tool.opens === 'picture' && !canTakePictures())
 
 function press(tool) {
   if (unavailable(tool)) return
@@ -309,7 +340,7 @@ const retryCopy = ref(null)
 const pictureAlert = ref(null)
 const queue = createUploadQueue({ upload: (file, n) => props.upload(file, n), onRetry: ({ error }) => (retryCopy.value = error) })
 const uploadingText = computed(() => (retryCopy.value === null ? COPY.adding(uploading.value) : `${retryCopy.value} ${COPY.retrying}`))
-const canTakePictures = () => !sending.value && props.upload !== null
+const canTakePictures = () => !sending.value && props.upload !== null && props.editing === null
 
 /** → the first place from 1 to 10 that neither the text nor a picture on its way holds, or null. */
 function freePlace() {
@@ -417,7 +448,36 @@ watch(text, () => {
   saved.value = false
   failure.value = null
   clearTimeout(saveTimer)
-  saveTimer = setTimeout(() => (saved.value = keep()), DRAFT_MS)
+  saveTimer = null
+  // An edit keeps no draft: the draft of the post and message is the reply that was being written.
+  if (props.editing === null) saveTimer = setTimeout(() => (saved.value = keep()), DRAFT_MS)
+})
+
+// An edit opens with its reply's source; the reply that was being written is kept (its last second too) and comes back after.
+watch(
+  () => props.editing,
+  (now, before) => {
+    if (before === null) {
+      keep()
+      aside = text.value
+    }
+    text.value = now === null ? aside : now.source
+    if (now === null) aside = null
+    remember(text.value)
+  },
+)
+const leaveEdit = () => {
+  if (!sending.value) emit('update:editing', null)
+}
+// Escape leaves full screen first, then an edit.
+function onEscape() {
+  if (full.value) full.value = false
+  else if (props.editing !== null) leaveEdit()
+}
+
+// What was typed in the last second is kept before the sign-in goes, whoever ends it.
+const stopWatchingAuth = auth.$onAction(({ name }) => {
+  if (name === 'expire' || name === 'signOut') flush()
 })
 
 watch([() => props.postId, replyId], ([post, reply], [oldPost, oldReply]) => {
@@ -443,6 +503,7 @@ onMounted(() => {
   document.addEventListener('mousedown', onPressOutside)
 })
 onBeforeUnmount(() => {
+  stopWatchingAuth()
   window.removeEventListener('pagehide', flush)
   document.removeEventListener('mousedown', onPressOutside)
   queue.stop()
@@ -476,9 +537,10 @@ async function send() {
   sending.value = true
   failure.value = null
   let answer
+  const edit = props.editing?.id ?? null
   try {
     const mentions = mentioned.value.filter((id) => picked.has(id))
-    answer = await props.onSend({ source, replyTo: replyId.value, pingReply: replyId.value !== null && ping.value, mentions })
+    answer = await props.onSend(edit === null ? { source, replyTo: replyId.value, pingReply: replyId.value !== null && ping.value, mentions } : { source, mentions, edit })
   } catch (err) {
     sending.value = false
     failure.value = failureOf(err, source)
@@ -491,19 +553,29 @@ async function send() {
     return
   }
   sending.value = false
+  if (edit !== null) {
+    // The reply that was being written comes back once the page leaves the edit.
+    emit('sent', answer)
+    emit('update:editing', null)
+    return
+  }
   clearDraft(draftStorage(), props.postId, replyId.value)
   text.value = ''
   emit('sent', answer)
 }
 
-defineExpose({ act, focus: () => area.value.focus() })
+defineExpose({ act, insert, focus: () => area.value.focus() })
 </script>
 
 <template>
-  <section class="lb-composer" :class="{ 'lb-composer-full': full }" aria-label="Reply composer" @keydown.esc="full = false">
+  <section class="lb-composer" :class="{ 'lb-composer-full': full }" aria-label="Reply composer" @keydown.esc="onEscape">
     <div class="lb-composer-head">
       <p class="lb-composer-where">Replying in: <b>{{ postTitle }}</b></p>
-      <div v-if="replyTo" class="lb-replying-to">
+      <div v-if="editing" class="lb-editing">
+        <span class="lb-editing-text">✎ Editing your reply</span>
+        <button type="button" class="lb-unedit" :disabled="sending" @click="leaveEdit">Cancel</button>
+      </div>
+      <div v-else-if="replyTo" class="lb-replying-to">
         <span class="lb-replying-text">↪ replying to <b>{{ replyName }}</b></span>
         <button type="button" class="lb-ping" :aria-label="`Ping ${replyName}`" :aria-pressed="String(ping)" @click="ping = !ping">@ {{ ping ? 'on' : 'off' }}</button>
         <button type="button" class="lb-unreply" :aria-label="`Stop replying to ${replyName}`" @click="emit('update:replyTo', null)"><span aria-hidden="true">✕</span></button>
@@ -598,6 +670,7 @@ defineExpose({ act, focus: () => area.value.focus() })
     </div>
 
     <p v-if="uploading > 0" class="lb-uploading" role="status">{{ uploadingText }}</p>
+    <p v-if="dead" class="lb-dead-pictures" role="status">{{ COPY.deadPictures }}</p>
     <p v-if="pictureAlert" class="lb-composer-error" role="alert">{{ pictureAlert }}</p>
     <p v-if="failure" class="lb-composer-error" role="alert">{{ failure.text }}<template v-if="failure.match"> The words it matched are selected in your reply.</template></p>
 
@@ -612,7 +685,7 @@ defineExpose({ act, focus: () => area.value.focus() })
         <span v-if="over" class="lb-budget-over">{{ COPY.over }}</span>
       </div>
       <p v-if="sending" class="lb-sending" role="status">Sending…</p>
-      <button type="button" class="btn-ember btn-sm lb-send" :disabled="!canSend" @click="send">Reply</button>
+      <button type="button" class="btn-ember btn-sm lb-send" :disabled="!canSend" @click="send">{{ editing ? 'Save edit' : 'Reply' }}</button>
     </div>
   </section>
 </template>

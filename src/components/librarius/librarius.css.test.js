@@ -118,6 +118,28 @@ describe('librarius.css', () => {
     expect(wide).toMatch(/\.lb-rail \{[^}]*grid-column:\s*2[^}]*grid-row:\s*1/)
   })
 
+  it.each(['.lb-act', '.lb-unedit'])('%s, a button on a message or in the composer, is a full-size tap target', (selector) => {
+    expect(rule(selector), selector).toMatch(/min-height:\s*var\(--tap\)/)
+  })
+
+  it('sizes the words of what is written on the site, and what is on its way, from the ramp', () => {
+    for (const selector of ['.lb-site-tag', '.lb-act', '.lb-locked', '.lb-editing-text', '.lb-dead-pictures', '.lb-unedit']) {
+      expect(rule(selector), selector).toMatch(/font-size:\s*var\(--text-(?:xs|sm|md|base)\)/)
+    }
+    expect(css).toMatch(/\.lb-state,\s*\.lb-action-error\s*\{[^}]*font-size:\s*var\(--text-sm\)/)
+  })
+
+  it('greys what is on its way, and lays a reply on its way out as a message', () => {
+    expect(rule('.lb-pending')).toMatch(/opacity:\s*0\.\d+/)
+    expect(rule('.lb-outgoing')).toMatch(/grid-template-columns:\s*2\.5rem minmax\(0,\s*1fr\)/)
+  })
+
+  it('docks the composer at the end of the page on a phone, and keeps it in view at the foot of the window from 900px, scrolling within itself', () => {
+    expect(rule('.lb-dock')).not.toMatch(/position:/)
+    const wide = [...withoutComments.matchAll(/@media \(min-width: 900px\) \{([\s\S]*?\n)\}/g)].map((m) => m[1]).join('')
+    expect(wide).toMatch(/\.lb-dock \{[^}]*position:\s*sticky[^}]*bottom:\s*0[^}]*max-height:\s*50vh[^}]*overflow-y:\s*auto/)
+  })
+
   it('has no hover rule outside the real-pointer media query: nothing depends on hover', () => {
     expect(css).toContain(':hover')
     expect(withoutHoverMedia(css)).not.toContain(':hover')

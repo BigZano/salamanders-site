@@ -403,6 +403,102 @@ describe('librarius store: pictures', () => {
   })
 })
 
+describe('librarius store: whether a picture a draft shows will go with it', () => {
+  const at = async (...places) => {
+    for (const n of places) {
+      uploadPicture.mockResolvedValueOnce({ id: `7${n}` })
+      await s.upload('tok', picture(), n)
+    }
+  }
+
+  it('holds none with no post open, and none in a post before a picture is sent', () => {
+    expect(s.holdsPicture(1)).toBe(false)
+    seed()
+    for (let n = 1; n <= 10; n++) expect(s.holdsPicture(n)).toBe(false)
+  })
+
+  it('holds the places sent, and only those', async () => {
+    seed()
+    await at(1, 2)
+    expect([1, 2, 3, 10].map((n) => s.holdsPicture(n))).toEqual([true, true, false, false])
+  })
+
+  it('does not hold a place past one never held, which a reply would not carry', async () => {
+    seed()
+    await at(1, 3)
+    expect([1, 2, 3].map((n) => s.holdsPicture(n))).toEqual([true, false, false])
+    await at(2)
+    expect([1, 2, 3].map((n) => s.holdsPicture(n))).toEqual([true, true, true])
+  })
+
+  it('does not hold a place whose picture was refused', async () => {
+    seed()
+    uploadPicture.mockRejectedValueOnce(apiError(413, 'Too large.'))
+    await s.upload('tok', picture(), 1)
+    expect(s.holdsPicture(1)).toBe(false)
+  })
+
+  it('holds none once a reply took them, and keeps them when the reply was refused', async () => {
+    seed()
+    await at(1)
+    postReply.mockRejectedValueOnce(apiError(422, 'Blocked.')).mockResolvedValue(queued('k-1'))
+    await expect(s.reply('tok', { source: '![a](upload:1)' })).rejects.toMatchObject({ status: 422 })
+    expect(s.holdsPicture(1)).toBe(true)
+    await s.reply('tok', { source: '![a](upload:1)' })
+    expect(s.holdsPicture(1)).toBe(false)
+  })
+
+  it("holds each post's pictures for it alone", async () => {
+    seed(POST)
+    await at(1)
+    seed(OTHER)
+    expect(s.holdsPicture(1)).toBe(false)
+    seed(POST)
+    expect(s.holdsPicture(1)).toBe(true)
+    // A post that is gone (deleted in Discord) is no post open: no picture of it is sent.
+    s.$patch((state) => {
+      state.post = null
+    })
+    expect(s.holdsPicture(1)).toBe(false)
+  })
+
+  it('holds them through a new load(), and none after a reset()', async () => {
+    seed()
+    await at(1)
+    getMe.mockReturnValue(new Promise(() => {}))
+    s.load('tok')
+    expect(s.holdsPicture(1)).toBe(true)
+    s.reset()
+    seed()
+    expect(s.holdsPicture(1)).toBe(false)
+  })
+
+  it('refuses what is no place', () => {
+    seed()
+    for (const n of [undefined, null, '1', 1.5, NaN]) expect(() => s.holdsPicture(n), String(n)).toThrow(TypeError)
+    for (const n of [0, -1, 11]) expect(() => s.holdsPicture(n), String(n)).toThrow(RangeError)
+  })
+
+  it('holds a place exactly when a reply that shows it would carry it (property)', async () => {
+    await fc.assert(
+      fc.asyncProperty(fc.array(fc.integer({ min: 1, max: 10 }), { maxLength: 12 }), fc.integer({ min: 1, max: 10 }), async (places, shown) => {
+        setActivePinia(createPinia())
+        vi.resetAllMocks()
+        s = useLibrarius()
+        seed()
+        uploadPicture.mockImplementation(async () => ({ id: '71' }))
+        for (const n of places) await s.upload('tok', picture(), n)
+        const held = s.holdsPicture(shown)
+        postReply.mockResolvedValue(queued('k-1'))
+        await s.reply('tok', { source: `![x](upload:${shown})` })
+        expect(held).toBe(bodyOf(postReply).uploads.length === shown)
+        s.reset()
+      }),
+      { numRuns: 100 },
+    )
+  })
+})
+
 describe('librarius store: editing and deleting', () => {
   it('queues an edit of a message with the people it mentions, and holds it as sending', async () => {
     seed()

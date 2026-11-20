@@ -1,7 +1,7 @@
 import { describe, it, expect, afterEach } from 'vitest'
 import fc from 'fast-check'
 import { parse, plainText, walk } from '../archive/markdown'
-import { ACTIONS, apply, draftKey, draftStorage, saveDraft, loadDraft, clearDraft, clearAllDrafts } from './composer'
+import { ACTIONS, apply, asQuote, insertBlock, draftKey, draftStorage, saveDraft, loadDraft, clearDraft, clearAllDrafts } from './composer'
 
 // Every id here is invented.
 const POST = '200000000000000410'
@@ -793,6 +793,110 @@ function refusingStorage() {
     removeItem: no,
   }
 }
+
+describe('asQuote', () => {
+  it('puts each line of the words behind a quote mark, and an empty line behind the bare mark', () => {
+    expect(asQuote('One line')).toBe('> One line')
+    expect(asQuote('First\nSecond')).toBe('> First\n> Second')
+    expect(asQuote('Before\n\nAfter')).toBe('> Before\n>\n> After')
+    expect(asQuote('Before\n   \nAfter')).toBe('> Before\n>\n> After')
+  })
+
+  it('reads a Windows or an old Mac line break as a line break', () => {
+    expect(asQuote('One\r\nTwo\rThree')).toBe('> One\n> Two\n> Three')
+  })
+
+  it('leaves out the blank lines at either end, and the white space at the end of each line', () => {
+    expect(asQuote('\n\n  Words  \t\n\n')).toBe('>   Words')
+    expect(asQuote('\r\n\tIndented\r\n')).toBe('> \tIndented')
+    expect(asQuote('a  \nb\t')).toBe('> a\n> b')
+  })
+
+  it('keeps the marks the words have, so that a quoted list or heading is still one inside the quote', () => {
+    expect(asQuote('- item\n# Heading\n> quoted')).toBe('> - item\n> # Heading\n> > quoted')
+    expect(asQuote('>>> all of it')).toBe('> >>> all of it')
+  })
+
+  it('keeps every character of the words, an emoji\'s two halves included', () => {
+    expect(asQuote('Ash 😀 é')).toBe('> Ash 😀 é')
+  })
+
+  it('refuses words that are not text', () => {
+    for (const value of [undefined, null, 1, ['a'], { text: 'a' }, new String('a')]) expect(() => asQuote(value), String(value)).toThrow(TypeError)
+  })
+
+  it('refuses words with nothing in them to quote', () => {
+    for (const value of ['', ' ', '\n', '\r\n\t \n', ' \n']) expect(() => asQuote(value), JSON.stringify(value)).toThrow(RangeError)
+  })
+
+  it('is one quote, whatever the words, and its lines are the words\' own lines, trimmed', () => {
+    fc.assert(
+      fc.property(anyText.filter((t) => /\S/.test(t)), (words) => {
+        const out = asQuote(words)
+        const lines = out.split('\n')
+        for (const line of lines) expect(line === '>' || line.startsWith('> ')).toBe(true)
+        expect(lines[0]).not.toBe('>')
+        expect(lines.at(-1)).not.toBe('>')
+        const own = words.replace(/\r\n?/g, '\n').split('\n').map((line) => line.trimEnd())
+        const first = own.findIndex((line) => line !== '')
+        const last = own.findLastIndex((line) => line !== '')
+        expect(lines.map((line) => line.slice(2))).toEqual(own.slice(first, last + 1))
+        const nodes = blocks(out)
+        expect(nodes.map((node) => node.type)).toEqual(['quote'])
+      }),
+      { numRuns: 600 },
+    )
+  })
+})
+
+describe('insertBlock', () => {
+  it('puts the block on lines of its own after the selection, and the caret on a new line under it', () => {
+    expect(show(insertBlock('', { start: 0, end: 0 }, '> q'))).toBe('> q\n‸')
+    expect(show(insertBlock('My words', { start: 8, end: 8 }, '> q'))).toBe('My words\n> q\n‸')
+    expect(show(insertBlock('abcdef', { start: 3, end: 3 }, '> q'))).toBe('abc\n> q\n‸\ndef')
+    expect(show(insertBlock('abc\ndef', { start: 3, end: 3 }, '> q'))).toBe('abc\n> q\n‸\ndef')
+    expect(show(insertBlock('abc\ndef', { start: 4, end: 4 }, '> q'))).toBe('abc\n> q\n‸\ndef')
+    expect(show(insertBlock('abc\n', { start: 4, end: 4 }, '> q\n> r'))).toBe('abc\n> q\n> r\n‸')
+  })
+
+  it('goes after the selection and keeps what was selected', () => {
+    expect(show(insertBlock('one two three', { start: 4, end: 7 }, 'B'))).toBe('one two\nB\n‸\n three')
+    expect(show(insertBlock('one\ntwo', { start: 0, end: 7 }, 'B'))).toBe('one\ntwo\nB\n‸')
+  })
+
+  it('refuses a text, a selection or a block of the wrong kind, or a selection outside the text', () => {
+    expect(() => insertBlock(1, { start: 0, end: 0 }, 'B')).toThrow(TypeError)
+    expect(() => insertBlock('ab', null, 'B')).toThrow(TypeError)
+    expect(() => insertBlock('ab', { start: 0.5, end: 1 }, 'B')).toThrow(TypeError)
+    expect(() => insertBlock('ab', { start: 2, end: 1 }, 'B')).toThrow(RangeError)
+    expect(() => insertBlock('ab', { start: 0, end: 3 }, 'B')).toThrow(RangeError)
+    expect(() => insertBlock('ab', { start: -1, end: 0 }, 'B')).toThrow(RangeError)
+    for (const value of [undefined, null, 1, ['B'], new String('B')]) expect(() => insertBlock('ab', { start: 0, end: 0 }, value)).toThrow(TypeError)
+  })
+
+  it('refuses a block with nothing in it', () => {
+    for (const value of ['', ' ', '\n\n', '\t\r\n']) expect(() => insertBlock('ab', { start: 0, end: 0 }, value), JSON.stringify(value)).toThrow(RangeError)
+  })
+
+  it('never loses the text, and the block always stands on lines of its own with the caret after it', () => {
+    fc.assert(
+      fc.property(anyText.chain(withSelection), anyText.filter((t) => /\S/.test(t)), ({ text, selection }, words) => {
+        const quote = asQuote(words)
+        const out = insertBlock(text, selection, quote)
+        const at = selection.end
+        const before = at === 0 || text[at - 1] === '\n' ? '' : '\n'
+        const after = at === text.length || text[at] === '\n' ? '' : '\n'
+        expect(out.text).toBe(text.slice(0, at) + before + quote + '\n' + after + text.slice(at))
+        const caret = at + before.length + quote.length + 1
+        expect(out.selection).toEqual({ start: caret, end: caret })
+        expect(out.text[caret - 1]).toBe('\n')
+        // What comes back can be given to the toolbar.
+        expect(() => apply(out.text, out.selection, 'bold')).not.toThrow()
+      }),
+      { numRuns: 600 },
+    )
+  })
+})
 
 describe('draftKey', () => {
   it('names the key a draft is kept under: the post, then the message replied to or "new"', () => {

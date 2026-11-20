@@ -9,7 +9,7 @@ import Composer from './Composer.vue'
 import ArchiveMarkdown from '../archive/ArchiveMarkdown'
 import { parse } from '../../lib/archive/markdown'
 import { createRenderCtx } from '../../lib/librarius/render'
-import { ACTIONS, apply, draftKey } from '../../lib/librarius/composer'
+import { ACTIONS, apply, asQuote, draftKey, insertBlock } from '../../lib/librarius/composer'
 import { MAX_PARTS, budget, limitFor, toDiscord } from '../../../server/src/librariusForm.js'
 import { SEARCHES } from '../../lib/librarius/requests'
 import { useAuth } from '../../stores/auth'
@@ -113,6 +113,23 @@ const referenceText = (nodes, ctx) => mount(ArchiveMarkdown, { props: { nodes, c
 const failure = (status, message, more = {}) => Object.assign(new Error(message), { status }, more)
 const paragraphs = (n, length) => Array.from({ length: n }, () => 'a'.repeat(length)).join('\n\n')
 const formOptions = (over = {}) => ({ form: 'v2', authorId: TOR, siteUrl: POST_URL, ...over })
+/**
+ * → the first length of three paragraphs that the line of the message replied to pushes into a fourth message, or undefined.
+ * It is found by halving, since the parts only grow with the length: budget() of 12,000 characters is slow, and a search one
+ * length at a time runs past a test's time on a busy machine.
+ */
+function lengthPushedByReplyLine() {
+  const replying = { replyTo: { authorId: IXEN, url: REPLY_URL } }
+  const parts = (n, over) => budget(paragraphs(3, n), formOptions(over)).parts
+  let lo = 3500
+  let hi = 4000
+  while (lo < hi) {
+    const half = (lo + hi) >> 1
+    if (parts(half, replying) >= 4) hi = half
+    else lo = half + 1
+  }
+  return parts(lo, {}) === 3 && parts(lo, replying) === 4 ? lo : undefined
+}
 
 describe('Composer: the toolbar', () => {
   it('is a toolbar of named buttons, in the order the design draws them', () => {
@@ -418,8 +435,7 @@ describe('Composer: the budget', () => {
   })
 
   it('counts the line of the message replied to, so a reply it pushes into a fourth message is over', async () => {
-    const length = [...Array(500).keys()].map((i) => 3500 + i).find((n) => budget(paragraphs(3, n), formOptions()).parts === 3
-      && budget(paragraphs(3, n), formOptions({ replyTo: { authorId: IXEN, url: REPLY_URL } })).parts === 4)
+    const length = lengthPushedByReplyLine()
     expect(length).toBeDefined()
     const plain = mountComposer()
     await type(plain, paragraphs(3, length))
@@ -1196,5 +1212,270 @@ describe('Composer: pictures', () => {
     close(w)
     await vi.advanceTimersByTimeAsync(60_000)
     expect(up.calls).toHaveLength(1)
+  })
+})
+
+describe('Composer: editing a reply', () => {
+  const EDIT = { id: OTHER_MSG, source: 'The **old** words', replyTo: null }
+  const saveButton = (w) => button(w, 'Save edit')
+  const kept = (replyTo = null) => localStorage.getItem(draftKey(POST, replyTo))
+
+  it('opens with the message\'s source, says it is editing, and offers to save the edit rather than to reply', async () => {
+    const w = mountComposer({ replyTo: IXEN_REPLY })
+    await w.setProps({ editing: EDIT })
+    expect(area(w).element.value).toBe('The **old** words')
+    expect(w.get('.lb-editing').text()).toContain('Editing your reply')
+    expect(w.find('.lb-replying-to').exists()).toBe(false)
+    expect(saveButton(w).attributes('disabled')).toBeUndefined()
+    expect(w.findAll('button').some((b) => b.text() === 'Reply')).toBe(false)
+  })
+
+  it('sends the new source and the people picked for that message, and leaves the edit once it is on its way', async () => {
+    const onSend = vi.fn(async () => ({ pending: { key: OTHER_MSG, state: 'sending' } }))
+    const w = mountComposer({ onSend, editing: { ...EDIT, source: `Hello <@${IXEN}>` } })
+    await type(w, `Hello <@${IXEN}>, again`)
+    await saveButton(w).trigger('click')
+    await flushPromises()
+    expect(onSend).toHaveBeenCalledWith({ source: `Hello <@${IXEN}>, again`, mentions: [IXEN], edit: OTHER_MSG })
+    expect(w.emitted('sent')).toEqual([[{ pending: { key: OTHER_MSG, state: 'sending' } }]])
+    expect(w.emitted('update:editing')).toEqual([[null]])
+  })
+
+  it('gives the reply that was being written back when the edit ends, and never keeps the edit as its draft', async () => {
+    fakeTimers()
+    const w = mountComposer({ replyTo: IXEN_REPLY })
+    await type(w, 'My half-written reply')
+    await w.setProps({ editing: EDIT })
+    // The reply's last second was kept as the edit began.
+    expect(kept(MSG)).toBe('My half-written reply')
+    await type(w, 'The edited words')
+    vi.advanceTimersByTime(5000)
+    await nextTick()
+    expect(kept(MSG)).toBe('My half-written reply')
+    expect(w.find('.lb-draft-saved').exists()).toBe(false)
+    close(w)
+    expect(kept(MSG)).toBe('My half-written reply')
+    expect(Object.keys(localStorage)).toEqual([draftKey(POST, MSG)])
+  })
+
+  it('leaves the edit on Cancel, and gives the reply back as it was', async () => {
+    const w = mountComposer({ replyTo: IXEN_REPLY })
+    await type(w, 'Kept aside')
+    await w.setProps({ editing: EDIT })
+    await button(w, 'Cancel').trigger('click')
+    expect(w.emitted('update:editing')).toEqual([[null]])
+    await w.setProps({ editing: null })
+    expect(area(w).element.value).toBe('Kept aside')
+    expect(w.find('.lb-editing').exists()).toBe(false)
+    expect(w.get('.lb-replying-to').text()).toContain('Ixen Calloway')
+    expect(replyButton(w).exists()).toBe(true)
+  })
+
+  it('leaves full screen first on Escape, then the edit', async () => {
+    const w = mountComposer({ editing: EDIT })
+    await w.get('.lb-full').trigger('click')
+    await area(w).trigger('keydown', { key: 'Escape' })
+    expect(w.get('.lb-full').attributes('aria-pressed')).toBe('false')
+    expect(w.emitted('update:editing')).toBeUndefined()
+    await area(w).trigger('keydown', { key: 'Escape' })
+    expect(w.emitted('update:editing')).toEqual([[null]])
+  })
+
+  it('does nothing on Escape when it is neither full screen nor editing', async () => {
+    const w = mountComposer()
+    await area(w).trigger('keydown', { key: 'Escape' })
+    expect(w.emitted('update:editing')).toBeUndefined()
+  })
+
+  it('takes no pictures in an edit: a reply\'s pictures are fixed once it is sent', async () => {
+    const up = uploads()
+    const w = mountComposer({ upload: up.upload, editing: { ...EDIT, source: 'Map ![map](upload:1)' } })
+    expect(button(w, 'Add a picture').attributes('aria-disabled')).toBe('true')
+    let opened = 0
+    fileInput(w).element.addEventListener('click', () => opened++)
+    await button(w, 'Add a picture').trigger('click')
+    const paste = withFiles('paste', 'clipboardData', [picture()])
+    area(w).element.dispatchEvent(paste)
+    const drop = withFiles('drop', 'dataTransfer', [picture()])
+    w.get('.lb-compose-body').element.dispatchEvent(drop)
+    await choose(w, [picture()])
+    await settled()
+    expect(opened).toBe(0)
+    expect(paste.defaultPrevented).toBe(false)
+    expect(drop.defaultPrevented).toBe(false)
+    expect(up.calls).toEqual([])
+  })
+
+  it('measures the edit with the line of the message it replied to, as the server does', async () => {
+    const length = lengthPushedByReplyLine()
+    expect(length).toBeDefined()
+    const lone = mountComposer({ editing: { ...EDIT, source: paragraphs(3, length) } })
+    expect(saveButton(lone).attributes('disabled')).toBeUndefined()
+    const answering = mountComposer({ editing: { ...EDIT, source: paragraphs(3, length), replyTo: { id: MSG, authorId: IXEN } } })
+    expect(saveButton(answering).attributes('disabled')).toBeDefined()
+    // The composer's own message replied to has nothing to do with an edit.
+    const elsewhere = mountComposer({ replyTo: IXEN_REPLY, editing: { ...EDIT, source: paragraphs(3, length) } })
+    expect(saveButton(elsewhere).attributes('disabled')).toBeUndefined()
+  })
+
+  it('keeps the edit and says why when it is refused, and is still editing', async () => {
+    const onSend = vi.fn(async () => {
+      throw failure(400, 'That edit would move or change a picture.')
+    })
+    const w = mountComposer({ onSend, editing: EDIT })
+    await type(w, 'Changed')
+    await saveButton(w).trigger('click')
+    await flushPromises()
+    expect(area(w).element.value).toBe('Changed')
+    expect(w.get('[role="alert"]').text()).toBe('That edit would move or change a picture.')
+    expect(w.emitted('update:editing')).toBeUndefined()
+    expect(w.get('.lb-editing').exists()).toBe(true)
+  })
+
+  it('cannot be cancelled while the edit is being sent', async () => {
+    const w = mountComposer({ onSend: () => new Promise(() => {}), editing: EDIT })
+    await saveButton(w).trigger('click')
+    expect(button(w, 'Cancel').attributes('disabled')).toBeDefined()
+    await area(w).trigger('keydown', { key: 'Escape' })
+    expect(w.emitted('update:editing')).toBeUndefined()
+  })
+
+  it('opens straight into an edit, and gives the draft of its reply back after it', async () => {
+    localStorage.setItem(draftKey(POST), 'A draft from before')
+    const w = mountComposer({ editing: EDIT })
+    expect(area(w).element.value).toBe('The **old** words')
+    await w.setProps({ editing: null })
+    expect(area(w).element.value).toBe('A draft from before')
+  })
+
+  it('goes from one edit to another without keeping either', async () => {
+    const w = mountComposer({ editing: EDIT })
+    await type(w, 'Half an edit')
+    await w.setProps({ editing: { id: MSG, source: 'Another message', replyTo: null } })
+    expect(area(w).element.value).toBe('Another message')
+    await w.setProps({ editing: null })
+    expect(area(w).element.value).toBe('')
+    expect(localStorage.length).toBe(0)
+  })
+})
+
+describe('Composer: pictures from before the page was loaded again', () => {
+  const NOTE = 'Pictures from before the reload need adding again.'
+
+  it('says so for a draft whose pictures are held by none, keeps the text, and sends nothing until they are gone', async () => {
+    localStorage.setItem(draftKey(POST), 'See ![map](upload:1) and ![ford](upload:2)')
+    const onSend = vi.fn(async () => ({}))
+    const w = mountComposer({ onSend, held: () => false })
+    expect(area(w).element.value).toBe('See ![map](upload:1) and ![ford](upload:2)')
+    expect(w.get('.lb-dead-pictures').text()).toBe(NOTE)
+    expect(replyButton(w).attributes('disabled')).toBeDefined()
+    await replyButton(w).trigger('click')
+    expect(onSend).not.toHaveBeenCalled()
+    await type(w, 'See ![map](upload:1)')
+    expect(w.find('.lb-dead-pictures').exists()).toBe(true)
+    await type(w, 'See the map')
+    expect(w.find('.lb-dead-pictures').exists()).toBe(false)
+    expect(replyButton(w).attributes('disabled')).toBeUndefined()
+  })
+
+  it('asks the page about each picture the text shows, and only those', async () => {
+    const asked = []
+    const w = mountComposer({ held: (n) => (asked.push(n), n !== 3) })
+    await type(w, '![a](upload:1) ![b](upload:2) ![a again](upload:1) `![c](upload:3)` upload:3')
+    expect(new Set(asked)).toEqual(new Set([1, 2]))
+    expect(w.find('.lb-dead-pictures').exists()).toBe(false)
+    await type(w, '![c](upload:3)')
+    expect(w.find('.lb-dead-pictures').exists()).toBe(true)
+  })
+
+  it('counts a picture held in this composer as held, once the page holds it', async () => {
+    const places = new Set()
+    const up = uploads()
+    const w = mountComposer({ upload: up.upload, held: (n) => places.has(n) })
+    await choose(w, [picture('map.png')])
+    await settled()
+    places.add(1)
+    up.calls[0].resolve({ n: 1, name: 'map' })
+    await settled()
+    expect(area(w).element.value).toContain('![map](upload:1)')
+    expect(w.find('.lb-dead-pictures').exists()).toBe(false)
+    expect(replyButton(w).attributes('disabled')).toBeUndefined()
+  })
+
+  it('asks nothing when the page gives no way to, and nothing in an edit, whose pictures are the message\'s own', async () => {
+    const free = mountComposer()
+    await type(free, '![map](upload:1)')
+    expect(free.find('.lb-dead-pictures').exists()).toBe(false)
+    const held = vi.fn(() => false)
+    const editing = mountComposer({ held, editing: { id: MSG, source: '![map](upload:1)', replyTo: null } })
+    expect(editing.find('.lb-dead-pictures').exists()).toBe(false)
+    expect(button(editing, 'Save edit').attributes('disabled')).toBeUndefined()
+    expect(held).not.toHaveBeenCalled()
+  })
+})
+
+describe('Composer: when the sign-in ends', () => {
+  beforeEach(fakeTimers)
+
+  it('keeps what was typed in the last second at once when the server ends the sign-in, so none of it is lost', async () => {
+    const w = mountComposer()
+    await type(w, 'Typed just before it ran out')
+    useAuth().expire()
+    expect(localStorage.getItem(draftKey(POST))).toBe('Typed just before it ran out')
+    vi.advanceTimersByTime(1000)
+    close(w)
+    expect(localStorage.getItem(draftKey(POST))).toBe('Typed just before it ran out')
+  })
+
+  it('keeps nothing when the member signs out: their drafts go with them', async () => {
+    const w = mountComposer()
+    await type(w, 'Not for the next reader')
+    useAuth().signOut()
+    expect(localStorage.getItem(draftKey(POST))).toBeNull()
+    close(w)
+    expect(localStorage.getItem(draftKey(POST))).toBeNull()
+  })
+
+  it('takes no notice of anything else the sign-in does, and none once it is closed', async () => {
+    const w = mountComposer()
+    await type(w, 'Still typing')
+    useAuth().noteLibrarius(true)
+    expect(localStorage.getItem(draftKey(POST))).toBeNull()
+    close(w)
+    localStorage.clear()
+    useAuth().expire()
+    expect(localStorage.length).toBe(0)
+  })
+})
+
+describe('Composer: a block the page puts in', () => {
+  it('goes in on lines of its own after the selection, with the caret under it, as insertBlock() says', async () => {
+    const w = mountComposer()
+    await type(w, 'My answer', 2, 5)
+    await w.vm.insert(asQuote('Their words\nover two lines'))
+    const want = insertBlock('My answer', { start: 2, end: 5 }, asQuote('Their words\nover two lines'))
+    expect(area(w).element.value).toBe(want.text)
+    expect(selection(w)).toEqual(want.selection)
+    expect(document.activeElement).toBe(area(w).element)
+  })
+
+  it('goes in one at a time with the toolbar\'s actions, and one that is refused stops none after it', async () => {
+    const w = mountComposer()
+    await type(w, '')
+    const first = w.vm.insert('> one')
+    const refused = w.vm.insert('   ')
+    const last = w.vm.act({ type: 'emoji', text: '😀' })
+    await first
+    await expect(refused).rejects.toThrow(RangeError)
+    await last
+    expect(area(w).element.value).toBe('> one\n😀')
+  })
+
+  it('does nothing while a reply is being sent', async () => {
+    const w = mountComposer({ onSend: () => new Promise(() => {}) })
+    await type(w, 'Sending')
+    await replyButton(w).trigger('click')
+    await w.vm.insert('> late')
+    expect(area(w).element.value).toBe('Sending')
   })
 })
