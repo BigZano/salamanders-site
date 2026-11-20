@@ -100,6 +100,9 @@ export default {
   // Two test runners, not one per core: with Stryker's default the runners' memory grows past what the dev host has
   // (7.7 GB) and the full run is killed part way. Two finish the whole gate in about 45 minutes.
   concurrency: 2,
+  // The initial test run, every test once with the instrumented code, takes about 13 minutes on the dev host since the Librarius's
+  // replies; Stryker's default allows it 5.
+  dryRunTimeoutMinutes: 60,
   reporters: ['clear-text', 'progress'],
   ignoreStatic: true,
   // Stryker copies the whole project into its sandbox and does not read .gitignore: leave the nested worktrees out.

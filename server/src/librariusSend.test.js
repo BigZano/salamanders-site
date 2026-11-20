@@ -2099,9 +2099,10 @@ describe('automodMatcher: the keywords of a rule are looked for in one pass over
     const wanted = matcher([...rulesOf(1_000).slice(0, 5), keywordRule([...last, '비밀단어'], {}, { name: 'Last' })])
     expect(wanted(`${text.slice(0, 5_000)} 비밀단어 ${text.slice(5_000)}`)).toEqual({ rule: 'Last', start: 5_001, end: 5_005 })
     const { ratio, ms } = versus(() => few(text), () => many(text), 10)
-    // About 1 to 3 times as long, where one pass for each keyword is a thousand times as long; and under a second in any case.
+    // About 1 to 3 times as long, where one pass for each keyword is a thousand times as long; and under a second in any case (ten
+    // under Stryker, where every statement asks which mutant is on).
     expect(ratio).toBeLessThan(10)
-    expect(ms).toBeLessThan(1_000)
+    expect(ms).toBeLessThan(globalThis.__stryker__ ? 10_000 : 1_000)
   })
 
   it('takes about as long for 1,000 keywords that start with the same two units as for one, over a text of those two units, in Latin and in Hangul', () => {
@@ -2317,8 +2318,8 @@ describe('automodMatcher: a text that folds to far more than it is', () => {
   it('answers 11,000 characters that fold to 18 each in a few milliseconds, where reading them took seconds', () => {
     const started = performance.now()
     throwsAs(() => guard(FDFA.repeat(11_000)), Unfoldable, 'the text folds to more than it may')
-    // 7 s on Node and 0.33 s on Bun before the bound; about 5 ms now.
-    expect(performance.now() - started).toBeLessThan(250)
+    // 7 s on Node and 0.33 s on Bun before the bound; about 5 ms now (Stryker's instrumented copy is about ten times slower).
+    expect(performance.now() - started).toBeLessThan(globalThis.__stryker__ ? 2_500 : 250)
   })
 
   it('does not fold a keyword, which the people who manage the server wrote, against the bound', () => {
@@ -3852,13 +3853,24 @@ describe('validateReply: the regular expressions of the server\'s rules', () => 
 
   describe('for any source that is one line of text, made of letters, marks and escapes (the property)', () => {
     // A source that the parser reads as one line of nothing but text is what its text nodes say, with the member's own escapes read:
-    // the plain reading, which is what the member meant to show.
+    // the plain reading, which is what the member meant to show. It is read in the site's dialect, the one a reply is written in:
+    // in Discord's, `---` is a line of text, but on the site it is a divider, which is sent as no text at all.
     const piece = fc.constantFrom('z', 'o', 'r', 'p', 'zo', 'rp', 'free', 'nitro', ' ', '*', '_', '~', '|', '<', '>', '[', ']', '\\', '`', '#', '-', '.', '1', '(', ')', ':', '!', '@', '​')
     const lineOf = (source) => {
-      const tree = parse(source)
+      const tree = parse(source, { dialect: 'extended' })
       if (tree.length !== 1 || tree[0].type !== 'line' || !tree[0].children.every((node) => node.type === 'text')) return null
       return tree[0].children.map((node) => node.value).join('')
     }
+
+    it('asks the patterns nothing of a divider, which is sent as no text (seed 601580538 found it with the oracle in the wrong dialect)', async () => {
+      for (const form of ['v2', 'plain']) {
+        const asked = []
+        const automod = Object.assign(() => null, { regex: async (texts) => (asked.push(...texts), null) })
+        expect(await send(reply('---'), { automod, form })).toMatchObject({ ok: true })
+        expect(lineOf('---')).toBeNull()
+        expect(asked).toEqual([])
+      }
+    })
 
     it('gives the patterns that plain reading, whatever the marks in it, in both forms', async () => {
       let lines = 0
@@ -3942,7 +3954,7 @@ describe('validateReply: the regular expressions of the server\'s rules', () => 
       let refused = 0
       await fc.assert(
         fc.asyncProperty(source, fc.constantFrom(...patterns), fc.constantFrom('v2', 'plain'), async (text, pattern, form) => {
-          const tree = parse(text)
+          const tree = parse(text, { dialect: 'extended' })
           if (tree.length !== 1 || tree[0].type !== 'line' || !onlyMarks(tree[0].children) || lost(tree[0].children)) return
           if (!(await send(reply(text), { form })).ok) return
           lines++
@@ -3991,8 +4003,9 @@ describe('validateReply: a reply whose texts fold to far more than they are', ()
   it('refuses 11,000 characters that fold to 18 each as a reply that could not be checked, within a few milliseconds', async () => {
     const started = performance.now()
     expect(await send(reply(FDFA.repeat(11_000)), { automod: zorp() })).toEqual(UNCHECKED)
-    // The keywords took 7 s on Node and 0.33 s on Bun for this before the bound; the bound answers in about 5 ms on both.
-    expect(performance.now() - started).toBeLessThan(250)
+    // The keywords took 7 s on Node and 0.33 s on Bun for this before the bound; the bound answers in about 5 ms on both (Stryker's
+    // instrumented copy is about ten times slower).
+    expect(performance.now() - started).toBeLessThan(globalThis.__stryker__ ? 2_500 : 250)
   })
 
   it('refuses it in the fallback form too, and when it is a part of a longer reply', async () => {
