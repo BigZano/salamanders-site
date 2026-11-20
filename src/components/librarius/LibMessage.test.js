@@ -387,6 +387,40 @@ describe('LibMessage: the reply line', () => {
     expect(w.find('.lb-reply').exists()).toBe(true)
     expect(w.find('.lb-head').exists()).toBe(false)
   })
+
+  describe('to a reply written on the site', () => {
+    // A reply of the site is written in the site's own markdown (the extended dialect): a picture, a table, a spoiler, a mention, a link.
+    const SOURCE =
+      'Look: ![a map](upload:1)\n\n| Squad | Role |\n|---|---|\n| Invented | Tank |\n\nThe traitor is ||Invented Name||, ask <@200000000000000412> or see [the page](https://example.org/a).'
+    const READ_ON_SITE = 'Look: picture Squad Role Invented Tank The traitor is ▒▒▒, ask or see the page.'
+    const READ_IN_DISCORD = 'Look: ![a map](upload:1) | Squad | Role | |---|---| | Invented | Tank | The traitor is ▒▒▒, ask or see the page.'
+    const quoteOf = (to) => mountMsg(message({ replyTo: replyTo(to) })).find('.lb-reply-quote').text()
+
+    it("quotes it from its source in the site's dialect: a picture is a word, a table its text, a spoiler masked, a mention dropped, a link its words", () => {
+      const w = mountMsg(message({ replyTo: replyTo({ origin: 'site', source: SOURCE, content: 'ZQ the content' }) }))
+      expect(w.find('.lb-reply').text()).toBe(`↪ replying to Ixen Calloway: ${READ_ON_SITE}`)
+      expect(w.find('.lb-reply').text()).not.toMatch(/ZQ|Invented Name/)
+    })
+
+    it("quotes one with no source by its content, in the site's dialect still", () => {
+      expect(quoteOf({ origin: 'site', source: null, content: SOURCE })).toBe(READ_ON_SITE)
+    })
+
+    it('quotes a message of Discord, or one whose origin is not exactly the site, by its content in the Discord dialect, never by a source', () => {
+      for (const origin of ['discord', 'Site', ' site', undefined, null]) {
+        expect(quoteOf({ origin, source: '![ZQ](upload:1) ZQ a stray source', content: SOURCE }), String(origin)).toBe(READ_IN_DISCORD)
+      }
+      // Beside a reply of the site, so that the line tells them apart.
+      expect(quoteOf({ origin: 'site', source: SOURCE, content: 'ZQ' })).toBe(READ_ON_SITE)
+    })
+
+    it('leaves out the colon when a reply of the site has nothing to quote', () => {
+      for (const to of [{ source: '', content: SOURCE }, { source: '   ', content: SOURCE }, { source: null, content: null }, { source: 5, content: undefined }]) {
+        const line = mountMsg(message({ replyTo: replyTo({ origin: 'site', ...to }) })).find('.lb-reply')
+        expect(line.text(), JSON.stringify(to)).toBe('↪ replying to Ixen Calloway')
+      }
+    })
+  })
 })
 
 describe('LibMessage: attachments', () => {

@@ -459,7 +459,7 @@ describe('GET /librarius/posts', () => {
     lastActivityAt: '2026-11-02T18:30:00.000Z',
     replies: 3,
     unread: 1,
-    latest: { id: M2, authorId: ALICE, authorName: 'Test Alice', authorAvatar: avatar(ALICE), content: 'the latest line', image: null },
+    latest: { id: M2, authorId: ALICE, authorName: 'Test Alice', authorAvatar: avatar(ALICE), content: 'the latest line', image: null, origin: 'discord' },
     posterIds: [ALICE],
     ...over,
   })
@@ -565,6 +565,7 @@ describe('GET /librarius/posts', () => {
           authorAvatar: avatar(ALICE),
           content: 'a line',
           image: { id, url: oldUrl(id), expiresAt },
+          origin: 'discord',
         },
         ...over,
       })
@@ -707,6 +708,94 @@ describe('GET /librarius/posts', () => {
         },
       })
       await expect(get('/librarius/posts')).rejects.toThrow('each attachment must have an id')
+    })
+  })
+
+  describe('who made the latest message: origin, and the start of the source of a reply of the site', () => {
+    const SOURCE = `Look: ![a map](upload:1) and <@${CARA}>`
+    // The latest message as the store answers it, with both columns as they are stored (listPosts cuts the source to 400 characters).
+    const latest = (id, over = {}) => ({ id, authorId: ALICE, authorName: 'Test Alice', authorAvatar: avatar(ALICE), content: 'the latest line', image: null, origin: 'discord', source: null, ...over })
+    const sent = (id, over = {}) => ({ id, authorId: ALICE, authorName: 'Test Alice', authorAvatar: avatar(ALICE), content: 'the latest line', image: null, origin: 'discord', ...over })
+    const listing = (list) => setup({ store: { listPosts: () => list }, roster: () => [member(BOB, 'Bob Now'), member(CARA, 'Cara Now'), member(DAN, 'Dan Now')] }).get('/librarius/posts')
+    // A title for a value of any type, undefined included (which JSON cannot print).
+    const labelled = (list) => list.map((v) => [JSON.stringify(v) ?? String(v), v])
+
+    it("says origin 'site' with its source for a reply of the site, and 'discord' with none for a message of Discord, whatever its row holds", async () => {
+      const list = [post(POST, { latest: latest(M1, { origin: 'site', source: SOURCE, content: SOURCE }) }), post(POST_2, { latest: latest(M2, { source: 'A source in a row of Discord.' }) })]
+      const out = await body(await listing(list))
+      expect(out.posts.map((p) => p.latest)).toEqual([sent(M1, { origin: 'site', source: SOURCE, content: SOURCE }), sent(M2)])
+      expect(Object.hasOwn(out.posts[1].latest, 'source')).toBe(false)
+      // The rest of each post is as the store has it.
+      const rest = ({ latest: _, ...others }) => others
+      expect(out.posts.map(rest)).toEqual(list.map(rest))
+    })
+
+    it.each(labelled(['Site', 'SITE', ' site', 'site ', 'site\n', '', 'discord', 'webhook', null, undefined, 1, true, ['site'], { site: true }]))(
+      'fails closed: an origin of %s is not the site, so it says discord and sends no source',
+      async (_, origin) => {
+        const list = [post(POST, { latest: latest(M1, { origin, source: 'stray' }) }), post(POST_2, { latest: latest(M2, { origin: 'site', source: SOURCE }) })]
+        const [first, second] = (await body(await listing(list))).posts.map((p) => p.latest)
+        expect(first.origin).toBe('discord')
+        expect(Object.hasOwn(first, 'source')).toBe(false)
+        expect([second.origin, second.source]).toEqual(['site', SOURCE])
+      },
+    )
+
+    it("sends a reply of the site's source as the store holds it, null included (the list then reads its content), and none of Discord's", async () => {
+      const start = `${'word '.repeat(80)}`
+      const list = [
+        post(POST, { latest: latest(M1, { origin: 'site', source: start }) }),
+        post(POST_2, { latest: latest(M2, { origin: 'site', source: null }) }),
+        post('200000000000000412', { latest: latest(M3, { source: start }) }),
+      ]
+      const out = await body(await listing(list))
+      expect(out.posts.map((p) => [p.latest.origin, Object.hasOwn(p.latest, 'source') ? p.latest.source : 'none'])).toEqual([
+        ['site', start],
+        ['site', null],
+        ['discord', 'none'],
+      ])
+    })
+
+    it('names those the start of a reply of the site mentions in its source, and reads no source of Discord', async () => {
+      const list = [
+        post(POST, { latest: latest(M1, { origin: 'site', source: `see <@${CARA}>`, content: 'no mention in the content' }), posterIds: [] }),
+        post(POST_2, { latest: latest(M2, { content: `<@${BOB}>`, source: `<@${DAN}>` }), posterIds: [] }),
+      ]
+      expect(Object.keys((await body(await listing(list))).people).sort()).toEqual([ALICE, BOB, CARA].sort())
+      // A reply of the site with no source is named from its content.
+      const bare = [post(POST, { latest: latest(M1, { origin: 'site', source: null, content: `<@${DAN}>` }), posterIds: [] })]
+      expect(Object.keys((await body(await listing(bare))).people).sort()).toEqual([ALICE, DAN].sort())
+    })
+
+    it('renews the thumbnail of a latest message whoever made it, and still sends no source of Discord', async () => {
+      const due = (id) => ({ id, url: `https://cdn.example.test/attachments/${id}/thumb.png?ex=old`, expiresAt: at(0) })
+      const list = [post(POST, { latest: latest(M1, { origin: 'site', source: SOURCE, image: due(ATT) }) }), post(POST_2, { latest: latest(M2, { source: 'stray', image: due(ATT_2) }) })]
+      const fresh = (given) => new Map(given.map(({ id }) => [id, { url: `https://cdn.example.test/${id}/fresh`, expiresAt: null }]))
+      const out = await body(await setup({ store: { listPosts: () => list }, refresh: fresh }).get('/librarius/posts'))
+      expect(out.posts.map((p) => p.latest)).toEqual([
+        sent(M1, { origin: 'site', source: SOURCE, image: { id: ATT, url: `https://cdn.example.test/${ATT}/fresh`, expiresAt: null } }),
+        sent(M2, { image: { id: ATT_2, url: `https://cdn.example.test/${ATT_2}/fresh`, expiresAt: null } }),
+      ])
+    })
+
+    it('answers origin and source by the one rule, for any origin and source a row holds (property)', async () => {
+      await fc.assert(
+        fc.asyncProperty(
+          fc.array(fc.record({ origin: fc.constantFrom('site', 'discord', 'Site', '', null, undefined), source: fc.option(fc.string({ maxLength: 40 }), { nil: null }) }), { minLength: 1, maxLength: 6 }),
+          async (made) => {
+            const list = made.map(({ origin, source }, i) => post(String(BigInt(POST) + BigInt(i)), { latest: latest(String(BigInt(M1) + BigInt(i)), { origin, source }) }))
+            const out = await body(await setup({ store: { listPosts: () => list } }).get('/librarius/posts'))
+            expect(out.posts).toHaveLength(made.length)
+            out.posts.forEach(({ latest: m }, i) => {
+              const site = made[i].origin === 'site'
+              expect(m.origin).toBe(site ? 'site' : 'discord')
+              expect(Object.hasOwn(m, 'source')).toBe(site)
+              if (site) expect(m.source).toBe(made[i].source)
+            })
+          },
+        ),
+        { numRuns: 150, examples: [[[{ origin: 'site', source: 'x' }]]] },
+      )
     })
   })
 })
@@ -1206,7 +1295,7 @@ describe('the reply line of a message', () => {
     const { get, calls } = setup({ store: page(rows) })
     const out = await body(await get(messagesPath()))
     expect(out.messages[0].replyTo).toBeNull()
-    expect(out.messages[1].replyTo).toEqual({ id: M1, authorId: BOB, authorName: 'Test Bob', content: 'the question' })
+    expect(out.messages[1].replyTo).toEqual({ id: M1, authorId: BOB, authorName: 'Test Bob', content: 'the question', origin: 'discord' })
     expect(calls('quotedMessages')).toEqual([])
   })
 
@@ -1235,7 +1324,7 @@ describe('the reply line of a message', () => {
     const { get } = setup({ store: { ...page(rows), quotedMessages: () => [{ id: M2, authorId: BOB, authorName: 'Test Bob', authorAvatar: null, content: 'kept' }] } })
     const out = await body(await get(messagesPath()))
     expect(out.messages[0].replyTo).toBeNull()
-    expect(out.messages[1].replyTo).toEqual({ id: M2, authorId: BOB, authorName: 'Test Bob', content: 'kept' })
+    expect(out.messages[1].replyTo).toEqual({ id: M2, authorId: BOB, authorName: 'Test Bob', content: 'kept', origin: 'discord' })
   })
 
   it('asks the store about nothing when no message is a reply', async () => {
@@ -1332,6 +1421,114 @@ describe('the reply line of a message', () => {
         expect(Array.from(quoted).length).toBe(Math.min(length, 200))
         expect(content.startsWith(quoted)).toBe(true)
       }),
+    )
+  })
+})
+
+describe('the reply line of a message: who made the message it quotes', () => {
+  const Q1 = '200000000000000445'
+  const Q2 = '200000000000000446'
+  const SOURCE = `![a map](upload:1) and <@${CARA}>`
+  const siteRow = (id, over = {}) => row(id, { origin: 'site', source: SOURCE, content: SOURCE, webhookId: '200000000000000495', ...over })
+  // A message a reply quotes that is not on the page, as quotedMessages answers it (the store cuts both texts to 200 characters).
+  const stored = (id, over = {}) => ({ id, authorId: BOB, authorName: 'Test Bob', authorAvatar: null, content: 'the start', origin: 'discord', source: null, ...over })
+  const page = (rows) => ({ listMessages: () => ({ rows, hasOlder: false, hasNewer: false }) })
+  const changed = (rows) => ({ changes: () => ({ rows, deleted: [], rev: 'unused', full: false }) })
+  // The two routes that answer messages, both through present().
+  const ROUTES = [
+    ['a page', page, messagesPath()],
+    ['the changes', changed, changesPath('?since=100')],
+  ]
+  // A title for a value of any type, undefined included (which JSON cannot print).
+  const labelled = (list) => list.map((v) => [JSON.stringify(v) ?? String(v), v])
+  const lines = async (rows, quoted = [], route = ROUTES[0]) => {
+    const [, store, path] = route
+    const out = await body(await setup({ roster: () => [member(CARA, 'Cara Now'), member(DAN, 'Dan Now')], store: { ...store(rows), quotedMessages: () => quoted } }).get(path))
+    return { lines: out.messages.map((m) => m.replyTo), people: out.people }
+  }
+
+  it.each(ROUTES)(
+    "%s: quotes a reply of the site with origin 'site' and its source, and a message of Discord with 'discord' and none, from the page or the store",
+    async (...route) => {
+      const rows = [siteRow(M1), row(M2, { source: 'A source in a row of Discord.' }), row(M3, { replyTo: M1 }), row(M4, { replyTo: M2 }), row(M5, { replyTo: Q1 }), row('200000000000000447', { replyTo: Q2 })]
+      const quoted = [stored(Q1, { origin: 'site', source: SOURCE, content: SOURCE }), stored(Q2, { source: 'A stray source.' })]
+      const { lines: got } = await lines(rows, quoted, route)
+      expect(got.slice(2)).toEqual([
+        { id: M1, authorId: ALICE, authorName: 'Test Alice', content: SOURCE, origin: 'site', source: SOURCE },
+        { id: M2, authorId: ALICE, authorName: 'Test Alice', content: `hello ${M2}`, origin: 'discord' },
+        { id: Q1, authorId: BOB, authorName: 'Test Bob', content: SOURCE, origin: 'site', source: SOURCE },
+        { id: Q2, authorId: BOB, authorName: 'Test Bob', content: 'the start', origin: 'discord' },
+      ])
+      expect(Object.hasOwn(got[3], 'source') || Object.hasOwn(got[5], 'source')).toBe(false)
+    },
+  )
+
+  it.each(labelled(['Site', 'SITE', ' site', 'site ', 'site\n', '', 'discord', 'webhook', null, undefined, 1, true, ['site'], { site: true }]))(
+    'fails closed: a quoted message whose origin is %s is not the site, so its line says discord and has no source',
+    async (_, origin) => {
+      const rows = [row(M1, { origin, source: 'stray' }), siteRow(M2), row(M3, { replyTo: M1 }), row(M4, { replyTo: M2 }), row(M5, { replyTo: Q1 })]
+      const { lines: got } = await lines(rows, [stored(Q1, { origin, source: 'stray' })])
+      for (const line of [got[2], got[4]]) {
+        expect(line.origin).toBe('discord')
+        expect(Object.hasOwn(line, 'source')).toBe(false)
+      }
+      expect([got[3].origin, got[3].source]).toEqual(['site', SOURCE])
+    },
+  )
+
+  it('cuts the source it quotes to 200 characters, as the content, whether the message was on the page or stored, and never splits a pair', async () => {
+    const pair = `${'a'.repeat(199)}\u{1F600}\u{1F600} tail`
+    const rows = [
+      siteRow(M1, { source: pair, content: 'short' }),
+      siteRow(M2, { source: 'y'.repeat(200) }),
+      row(M3, { replyTo: M1 }),
+      row(M4, { replyTo: M2 }),
+      row(M5, { replyTo: Q1 }),
+    ]
+    const { lines: got } = await lines(rows, [stored(Q1, { origin: 'site', source: 'z'.repeat(250), content: 'z'.repeat(250) })])
+    expect(got[2]).toMatchObject({ content: 'short', source: `${'a'.repeat(199)}\u{1F600}` })
+    expect(got[3].source).toBe('y'.repeat(200))
+    expect(got[4]).toMatchObject({ content: 'z'.repeat(200), source: 'z'.repeat(200) })
+  })
+
+  it('quotes a reply of the site with no source as null, so the page reads its content', async () => {
+    for (const source of [null, undefined]) {
+      const rows = [siteRow(M1, { source }), row(M2, { replyTo: M1 }), row(M3, { replyTo: Q1 })]
+      const { lines: got } = await lines(rows, [stored(Q1, { origin: 'site', source })])
+      expect([got[1].origin, got[1].source, got[2].origin, got[2].source], String(source)).toEqual(['site', null, 'site', null])
+    }
+  })
+
+  it('names whoever the start of a quoted reply of the site mentions in its source, and reads no source of Discord', async () => {
+    const rows = [row(M3, { replyTo: Q1, content: 'plain' }), row(M4, { replyTo: Q2, content: 'plain' })]
+    const quoted = [stored(Q1, { origin: 'site', source: `see <@${CARA}>`, content: 'no mention in the content' }), stored(Q2, { content: 'plain', source: `<@${DAN}>` })]
+    expect(Object.keys((await lines(rows, quoted)).people).sort()).toEqual([ALICE, BOB, CARA].sort())
+    // Past the 200 characters of the quote it is not shown, so not named; a reply with no source is named from its content.
+    const far = [stored(Q1, { origin: 'site', source: `${'x'.repeat(200)}<@${CARA}>`, content: 'plain' }), stored(Q2, { origin: 'site', source: null, content: `<@${DAN}>` })]
+    expect(Object.keys((await lines(rows, far)).people).sort()).toEqual([ALICE, BOB, DAN].sort())
+  })
+
+  it('answers origin and a cut source by the one rule, for any message quoted, on either route (property)', async () => {
+    await fc.assert(
+      fc.asyncProperty(
+        fc.constantFrom('site', 'discord', 'Site', '', null, undefined),
+        fc.option(fc.string({ unit: 'binary', maxLength: 260 }), { nil: null }),
+        fc.boolean(),
+        async (origin, source, viaChanges) => {
+          const rows = [row(M1, { origin, source }), row(M2, { replyTo: M1 })]
+          const { lines: got } = await lines(rows, [], ROUTES[viaChanges ? 1 : 0])
+          const line = got[1]
+          const site = origin === 'site'
+          expect(line.origin).toBe(site ? 'site' : 'discord')
+          expect(Object.hasOwn(line, 'source')).toBe(site)
+          if (site && source === null) expect(line.source).toBeNull()
+          if (site && source !== null) {
+            expect(Array.from(line.source).length).toBe(Math.min(Array.from(source).length, 200))
+            expect(source.startsWith(line.source)).toBe(true)
+          }
+        },
+      ),
+      { numRuns: 150, examples: [['site', 'x', false]] },
     )
   })
 })
@@ -1745,7 +1942,7 @@ describe('GET /librarius/posts/:id/changes', () => {
       refresh: refreshAll(),
     })
     const out = await body(await get(changesPath('?since=250')))
-    expect(out.messages[0].replyTo).toEqual({ id: M1, authorId: BOB, authorName: 'Test Bob', content: 'quoted' })
+    expect(out.messages[0].replyTo).toEqual({ id: M1, authorId: BOB, authorName: 'Test Bob', content: 'quoted', origin: 'discord' })
     expect(out.messages[0].attachments[0].url).toBe('https://cdn.example.test/fresh')
     expect(refreshed).toHaveLength(1)
     expect(calls('quotedMessages')).toEqual([[POST, [M1]]])

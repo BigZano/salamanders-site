@@ -393,6 +393,39 @@ describe('TopicList: a row', () => {
   })
 })
 
+describe('TopicList: the latest line of a reply written on the site', () => {
+  // A reply of the site is written in the site's own markdown (the extended dialect): a picture, a table, a spoiler, a mention, a link.
+  const SOURCE =
+    'Look: ![a map](upload:1)\n\n| Squad | Role |\n|---|---|\n| Invented | Tank |\n\nThe traitor is ||Invented Name||, ask <@200000000000000412> or see [the page](https://example.org/a).'
+  const READ_ON_SITE = 'Look: picture Squad Role Invented Tank The traitor is ▒▒▒, ask or see the page.'
+  const READ_IN_DISCORD = 'Look: ![a map](upload:1) | Squad | Role | |---|---| | Invented | Tank | The traitor is ▒▒▒, ask or see the page.'
+  const latest = (n, over) => ({ ...post(n).latest, ...over })
+  const texts = (w) => w.findAll('.lb-topic-text').map((t) => t.text())
+
+  it("reads it from its source in the site's dialect, and a message of Discord, or one whose origin is not exactly the site, as before", async () => {
+    const w = await show([
+      post(430, { latest: latest(430, { origin: 'site', source: SOURCE, content: 'ZQ the content' }) }),
+      post(431, { latest: latest(431, { origin: 'discord', source: 'ZQ a stray source', content: SOURCE }) }),
+      post(432, { latest: latest(432, { origin: 'Site', source: 'ZQ a stray source', content: SOURCE }) }),
+    ])
+    expect(texts(w)).toEqual([READ_ON_SITE, READ_IN_DISCORD, READ_IN_DISCORD])
+    expect(w.text()).not.toMatch(/ZQ|Invented Name/)
+  })
+
+  it("reads one with no source by its content, in the site's dialect still", async () => {
+    const w = await show([post(430, { latest: latest(430, { origin: 'site', source: null, content: SOURCE }) })])
+    expect(texts(w)).toEqual([READ_ON_SITE])
+  })
+
+  it('cuts it to about 120 characters, after the picture became its word', async () => {
+    const w = await show([post(430, { latest: latest(430, { origin: 'site', source: `![a](upload:1) ${'word '.repeat(100)}`, content: '' }) })])
+    const [text] = texts(w)
+    expect(text.startsWith('picture word word')).toBe(true)
+    expect(Array.from(text)).toHaveLength(120)
+    expect(text.endsWith('…')).toBe(true)
+  })
+})
+
 describe('TopicList: a spoiler thumbnail', () => {
   const SPOILER = 'https://cdn.discordapp.com/attachments/200000000000000401/200000000000000460/SPOILER_file.png?ex=65f0&hm=ab12'
   const withImage = (url, over = {}) => post(430, { latest: { ...post(430).latest, image: { id: mid(460), url, expiresAt: null, ...over } } })

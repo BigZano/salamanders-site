@@ -955,6 +955,8 @@ describe('listPosts', () => {
     latest_author_name: 'Test Author',
     latest_author_avatar: 'https://cdn.discordapp.com/avatars/x.png',
     latest_content: 'the newest words',
+    latest_origin: 'discord',
+    latest_source: null,
     image_id: ATT,
     image_url: 'https://cdn.discordapp.com/attachments/1/2/a.png?ex=6540a0b3',
     image_expires_at: new Date('2023-10-31T06:37:39.000Z'),
@@ -1014,7 +1016,7 @@ describe('listPosts', () => {
   })
 
   it('answers one entry per row: times as ISO text, ids as strings, the latest message and its image', async () => {
-    const { pool } = fakePool([['from librarius_posts p', [dbPost(), dbPost({ id: POST_2, pinned: false, latest_id: null, latest_author_id: null, latest_author_name: null, latest_author_avatar: null, latest_content: null, image_id: null, image_url: null, image_expires_at: null, poster_ids: [], replies: 0, unread: 0, last_activity_at: new Date('2026-11-01T10:00:00.123Z') })]]])
+    const { pool } = fakePool([['from librarius_posts p', [dbPost(), dbPost({ id: POST_2, pinned: false, latest_id: null, latest_author_id: null, latest_author_name: null, latest_author_avatar: null, latest_content: null, latest_origin: null, latest_source: null, image_id: null, image_url: null, image_expires_at: null, poster_ids: [], replies: 0, unread: 0, last_activity_at: new Date('2026-11-01T10:00:00.123Z') })]]])
     expect(await store(pool).listPosts(MEMBER)).toEqual([
       {
         id: POST,
@@ -1033,6 +1035,8 @@ describe('listPosts', () => {
           authorName: 'Test Author',
           authorAvatar: 'https://cdn.discordapp.com/avatars/x.png',
           content: 'the newest words',
+          origin: 'discord',
+          source: null,
           image: { id: ATT, url: 'https://cdn.discordapp.com/attachments/1/2/a.png?ex=6540a0b3', expiresAt: '2023-10-31T06:37:39.000Z' },
         },
         posterIds: [AUTHOR, OWNER],
@@ -1059,6 +1063,50 @@ describe('listPosts', () => {
     const out = await store(pool).listPosts(MEMBER)
     expect(out[0].latest.image).toEqual({ id: ATT, url: expect.any(String), expiresAt: null })
     expect(out[1].latest.image).toBeNull()
+  })
+
+  describe('who made the latest message: its origin, and the start of its source', () => {
+    // A reply of the site's source is its whole extended markdown, up to three Discord messages long; the list shows a line of it.
+    const SOURCE = 'A reply of the **site**, with ![a map](upload:1) and <@200000000000000416>.'
+
+    it('reads both, and only the first 400 characters of the source, as of the content', async () => {
+      const { pool, log } = fakePool()
+      await store(pool).listPosts(MEMBER)
+      expect(log[0].sql).toContain('left(lm.content, 400) as latest_content, lm.origin as latest_origin, left(lm.source, 400) as latest_source,')
+      // The whole source is never read for the list.
+      expect(log[0].sql).not.toMatch(/(?<!left\()lm\.source(?!, 400\))/)
+    })
+
+    it('answers them on the latest message as they are stored: the rule of who made it is the handler\'s', async () => {
+      const { pool } = fakePool([
+        ['from librarius_posts p', [dbPost({ latest_origin: 'site', latest_source: SOURCE }), dbPost({ id: POST_2, latest_id: MSG_2, latest_source: 'a stray source' })]],
+      ])
+      const out = await store(pool).listPosts(MEMBER)
+      expect(out.map((p) => [p.latest.id, p.latest.origin, p.latest.source])).toEqual([
+        [MSG, 'site', SOURCE],
+        [MSG_2, 'discord', 'a stray source'],
+      ])
+    })
+
+    it.each(labelled(['', ' ', '\u0000', '\uD800', 'null', '__proto__', '<b>bold</b>', '![x](upload:10)', 'line\r\nline', null]))(
+      'passes a source of %s through untouched',
+      async (_, source) => {
+        const { pool } = fakePool([['from librarius_posts p', [dbPost({ latest_origin: 'site', latest_source: source })]]])
+        const [post] = await store(pool).listPosts(MEMBER)
+        expect([post.latest.origin, post.latest.source]).toEqual(['site', source])
+      },
+    )
+
+    it('answers whatever pair a row holds (property)', async () => {
+      await fc.assert(
+        fc.asyncProperty(fc.constantFrom('site', 'discord'), fc.option(fc.string({ maxLength: 60 }), { nil: null }), async (origin, source) => {
+          const { pool } = fakePool([['from librarius_posts p', [dbPost({ latest_origin: origin, latest_source: source })]]])
+          const [post] = await store(pool).listPosts(MEMBER)
+          expect([post.latest.origin, post.latest.source]).toEqual([origin, source])
+        }),
+        { numRuns: 100 },
+      )
+    })
   })
 })
 
@@ -1705,9 +1753,9 @@ describe('who made a message: its origin and its source', () => {
 
 describe('quotedMessages', () => {
   const SQL =
-    'select id, author_id, author_name, author_avatar, left(content, 200) as content from librarius_messages where post_id = $1 and id = any($2::bigint[])'
+    'select id, author_id, author_name, author_avatar, left(content, 200) as content, origin, left(source, 200) as source from librarius_messages where post_id = $1 and id = any($2::bigint[])'
 
-  it('asks for the named messages of the post in one plain statement, with the first 200 characters of each', async () => {
+  it('asks for the named messages of the post in one plain statement, with the first 200 characters of each, and of its source', async () => {
     const { pool, log, release } = fakePool([[SQL, []]])
     await store(pool).quotedMessages(POST, [MSG, MSG_2])
     expect(log).toEqual([{ sql: SQL, params: [POST, [MSG, MSG_2]] }])
@@ -1719,14 +1767,34 @@ describe('quotedMessages', () => {
       [
         SQL,
         [
-          { id: MSG_2, author_id: AUTHOR, author_name: 'Test Author', author_avatar: 'https://cdn.discordapp.com/avatars/x.png', content: 'the start' },
-          { id: MSG, author_id: OWNER, author_name: 'Other', author_avatar: null, content: '' },
+          { id: MSG_2, author_id: AUTHOR, author_name: 'Test Author', author_avatar: 'https://cdn.discordapp.com/avatars/x.png', content: 'the start', origin: 'discord', source: null },
+          { id: MSG, author_id: OWNER, author_name: 'Other', author_avatar: null, content: '', origin: 'discord', source: null },
         ],
       ],
     ])
     expect(await store(pool).quotedMessages(POST, [MSG, MSG_2, MSG_3])).toEqual([
-      { id: MSG_2, authorId: AUTHOR, authorName: 'Test Author', authorAvatar: 'https://cdn.discordapp.com/avatars/x.png', content: 'the start' },
-      { id: MSG, authorId: OWNER, authorName: 'Other', authorAvatar: null, content: '' },
+      { id: MSG_2, authorId: AUTHOR, authorName: 'Test Author', authorAvatar: 'https://cdn.discordapp.com/avatars/x.png', content: 'the start', origin: 'discord', source: null },
+      { id: MSG, authorId: OWNER, authorName: 'Other', authorAvatar: null, content: '', origin: 'discord', source: null },
+    ])
+  })
+
+  it("answers who made each, and the start of a reply of the site's source, as they are stored: the rule of who made it is the handler's", async () => {
+    const source = 'A reply of the **site**: ![a map](upload:1)'
+    const { pool } = fakePool([
+      [
+        SQL,
+        [
+          { id: MSG, author_id: AUTHOR, author_name: 'Test Author', author_avatar: null, content: 'the start', origin: 'site', source },
+          { id: MSG_2, author_id: OWNER, author_name: 'Other', author_avatar: null, content: 'in Discord', origin: 'discord', source: 'a stray source' },
+          { id: MSG_3, author_id: OWNER, author_name: 'Other', author_avatar: null, content: 'no source', origin: 'site', source: null },
+        ],
+      ],
+    ])
+    const out = await store(pool).quotedMessages(POST, [MSG, MSG_2, MSG_3])
+    expect(out.map((q) => [q.id, q.origin, q.source])).toEqual([
+      [MSG, 'site', source],
+      [MSG_2, 'discord', 'a stray source'],
+      [MSG_3, 'site', null],
     ])
   })
 

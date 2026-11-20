@@ -13,7 +13,7 @@ const NONE = Object.freeze([])
 // A reply written on the site (`origin: 'site'`) has the "site" tag, and its text is read in the site's own markdown (the
 // extended dialect), from its whole source where the message has it (its content is cut to what one Discord message holds), so
 // that it reads as the composer previewed it. Its pictures (`upload:N` in the text, the files the site named picture-N.<type>)
-// are shown where the text puts them, not again under it.
+// are shown where the text puts them, not again under it. The reply line of a message that quotes one reads it the same way.
 //
 // At the end of the message are what the page offers on it (`actions`) and how what the reader has on its way for it stands
 // (`entry`, an edit or a delete: LibActions.vue), and the message is greyed while that is going; what is pressed is passed on
@@ -22,7 +22,7 @@ import { computed, h, reactive } from 'vue'
 import ArchiveMarkdown from '../archive/ArchiveMarkdown'
 import LibActions from './LibActions.vue'
 import { parse, walk } from '../../lib/archive/markdown'
-import { excerpt, isImage, isSpoilerFile, sizeText } from '../../lib/librarius/layout'
+import { isImage, isSpoilerFile, messageExcerpt, sizeText } from '../../lib/librarius/layout'
 import { attachmentUrl, httpsUrl, proxyImageUrl } from '../../lib/librarius/render'
 import { initials, safeAvatar } from '../../lib/rosterAvatar'
 import './librarius.css'
@@ -118,7 +118,8 @@ const inText = (a) => [...placed.value.entries()].some(([place, pic]) => pic.id 
 const reply = computed(() => {
   const to = props.message.replyTo
   if (!to) return null
-  return { id: to.id, name: known(to.authorId)?.name || to.authorName, quote: excerpt(to.content ?? '') }
+  // The message quoted is read as it is on the page: a reply of the site in its own dialect, from its source.
+  return { id: to.id, name: known(to.authorId)?.name || to.authorName, quote: messageExcerpt(to) }
 })
 
 // An image or an avatar that failed to load, by its address: a renewed link is a new address, so it is tried again.
