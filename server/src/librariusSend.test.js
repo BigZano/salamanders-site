@@ -3,10 +3,13 @@ import { EventEmitter } from 'node:events'
 import { readFileSync, readlinkSync, realpathSync } from 'node:fs'
 import { dirname } from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { setFlagsFromString } from 'node:v8'
+import { runInNewContext } from 'node:vm'
 import { describe, it, expect, vi, beforeAll, afterEach } from 'vitest'
 import * as fc from 'fast-check'
 import { toDiscord } from './librariusForm.js'
-import { MAX_SOURCE, MENTION_CAP, Unfoldable, answerJob, automodMatcher, automodUnchecked, cleanName, createRegexRunner, killRunners, scanInWorker, scanPatterns, shownBy, spawnRegexWorker, translatePattern, unmasked, unwrapped, validateReply } from './librariusSend.js'
+import { parse } from './librariusMarkdown.js'
+import { MAX_SOURCE, MENTION_CAP, Unfoldable, answerJob, automodMatcher, automodUnchecked, cleanName, createRegexRunner, killRunners, scanInWorker, scanPatterns, shownBy, spawnRegexWorker, translatePattern, typed, unmasked, validateReply } from './librariusSend.js'
 
 // Every id, name, keyword, rule and link here is invented.
 const U1 = '200000000000000421'
@@ -275,6 +278,37 @@ describe('automodMatcher: the wildcards', () => {
     expect(matcher([keywordRule(['a*b*c'])])('axxcxb')).toBeNull()
   })
 
+  it('takes a later place of a middle part when the first one leads nowhere, so an early decoy hides no match', () => {
+    // The `b` at 1 is 78 from the `c`, too far; the `b` at 30 is 29 from the `a` and 49 from the `c`.
+    const text = `ab${'x'.repeat(28)}b${'x'.repeat(49)}c`
+    for (const keyword of ['a*b*c', '*a*b*c*', 'a*b*c*', '*a*b*c']) {
+      expect(find([keyword], text), keyword).toEqual(hit(0, 81))
+      expect(find([keyword], text.replace('ab', 'ax')), keyword).toEqual(hit(0, 81))
+    }
+    // A decoy for each of two middle parts, and one that is a space too far: the second `b` is past a space.
+    expect(find(['a*b*c*d'], `ab${'x'.repeat(40)}bc${'x'.repeat(20)}c${'x'.repeat(50)}d`)).toEqual(hit(0, 116))
+    expect(find(['a*b*c'], `ab${'x'.repeat(28)} b${'x'.repeat(49)}c`)).toBeNull()
+    // The last part where its edge holds, after a decoy of the middle one: `c` at 80 is inside a word, the one at 82 ends it.
+    expect(find(['a*b*c'], `ab${'x'.repeat(28)}b${'x'.repeat(49)}cxc`)).toEqual(hit(0, 83))
+    // An allow entry is read the same way, and holds the match of a keyword that the decoy kept it from holding.
+    expect(find(['*x*'], text, { allow_list: ['a*b*c'] })).toBeNull()
+    expect(find(['*x*'], text, { allow_list: ['a*b*cc'] })).toEqual(hit(0, 81))
+  })
+
+  it('finds a keyword of several parts over a word that holds its first part at every place and the rest of it nowhere, and further on', () => {
+    const word = 'n'.repeat(11_000)
+    expect(find(['*n*gg*r*'], word)).toBeNull()
+    expect(find(['*n*gg*r*'], `${word}ggr`)).toEqual(hit(0, 11_003))
+    expect(find(['*n*gg*r*'], `${word} ggr`)).toBeNull()
+    expect(find(['*n*gg*r'], `${word}ggrx`)).toBeNull()
+    expect(find(['*n*gg*r', 'zz'], `${word}ggr zz`)).toEqual(hit(0, 11_003))
+    // A keyword that does not start a word is only found where one starts.
+    expect(find(['n*gg'], `${word}gg ngg`)).toEqual(hit(11_003, 11_006))
+    // The first part at the very end of the text, where nothing can follow it.
+    expect(find(['a*b'], 'xa')).toBeNull()
+    expect(find(['a*b', 'xa'], 'xa')).toEqual(hit(0, 2))
+  })
+
   it('a middle * with a star at an end too', () => {
     expect(find(['*c*t*'], 'xx coats yy')).toEqual(hit(3, 8))
     expect(find(['c*t*'], 'coats')).toEqual(hit(0, 5))
@@ -507,47 +541,81 @@ describe('automodMatcher: the cap on mentions', () => {
   })
 })
 
-// What the checks of the time that a text takes are made of. A check at four times the length takes about four times as long when the walk
-// is linear and about sixteen times as long when it is quadratic, whatever the speed of the host or of Stryker's instrumented copy of the
-// module, so the ratio is what is measured. The two sizes are run in turn, 5 times each, and the least time of each is taken: load on the
-// host (the collector, other test files that run at the same time) only ever adds time, and in turn it falls on both. A loose ceiling on
-// the time of the longer one is kept besides, for a walk that is slow and not quadratic.
-const RATIO = 8
+// What the checks of the time that a text takes are made of. A check at eight times the length takes about eight times as long when the walk
+// is linear and about 64 times as long when it is quadratic, whatever the speed of the host or of Stryker's instrumented copy of the module, so
+// the ratio is what is measured, against RATIO, which is far from both: load on the host can make the longer run twice as slow as the shorter
+// for each character (its data falls out of a cache that other processes share), which at four times the length, against a RATIO of 8, failed
+// the linear walks at 9.1 and passed the quadratic one at 7.1. So that load falls on the two sizes alike, the shorter is run 8 times for each run
+// of the longer (a round of each takes about as long when the walk is linear), the two are run in turn, 5 times each, and the least time of
+// each is taken: load (the collector, other test files, other work on the host) only ever adds time. A ratio on the wrong side of RATIO is
+// measured again, twice at most, before it is believed. A loose ceiling on the time of the longer one is kept besides, for a walk that is slow
+// and not quadratic.
+const RATIO = 20
 const BOUND_MS = 4_000
-const median = (list) => [...list].sort((a, b) => a - b)[Math.floor(list.length / 2)]
-// → the median time of the thunk over 5 runs, after one that is not counted (it pays for the compiling of the code it runs).
+const MEASURES = 3
+// → the least time of the thunk over 5 runs, after one that is not counted (it pays for the compiling of the code it runs).
 function timeOf(thunk) {
   thunk()
-  return median(
-    Array.from({ length: 5 }, () => {
-      const started = performance.now()
-      thunk()
-      return performance.now() - started
-    }),
-  )
+  let least = Number.POSITIVE_INFINITY
+  for (let run = 0; run < 5; run++) {
+    const started = performance.now()
+    thunk()
+    least = Math.min(least, performance.now() - started)
+  }
+  return least
 }
-// → what a check takes at 4n against what it takes at n, as `make(n)` gives the thunk for a text of about n characters: 8,000 and 32,000 by
-// default, which is long enough for a walk that flattens a string for each space, or one that looks over a word for each place of it, to show.
+// → { ratio, ms }: what a check takes at 8n against what it takes at n, as `make(n)` gives the thunk for a text of about n characters (8,000
+// and 64,000 by default, which is long enough for a walk that flattens a string for each space, or one that looks over a word for each place
+// of it, to show), and the least time of the longer.
 function scaling(make, n = 8_000) {
   const small = make(n)
-  const large = make(4 * n)
+  const large = make(8 * n)
+  const smalls = () => {
+    for (let k = 0; k < 8; k++) small()
+  }
   // One run of each is not counted (it pays for the compiling of the code it runs).
-  small()
+  smalls()
   large()
   let least = [Number.POSITIVE_INFINITY, Number.POSITIVE_INFINITY]
   for (let round = 0; round < 5; round++) {
-    least = [small, large].map((thunk, k) => {
+    least = [smalls, large].map((thunk, k) => {
       const started = performance.now()
       thunk()
       return Math.min(least[k], performance.now() - started)
     })
   }
-  return { ratio: least[1] / Math.max(least[0], 0.05), ms: least[1] }
+  return { ratio: (8 * least[1]) / Math.max(least[0], 0.4), ms: least[1] }
+}
+// → the measure of scaling() that is on the side of RATIO that `under` asks for, or the last of MEASURES that are not.
+function measured(make, n, under) {
+  let found = scaling(make, n)
+  for (let again = 1; again < MEASURES && found.ratio < RATIO !== under; again++) found = scaling(make, n)
+  return found
 }
 function expectLinear(label, make, n) {
-  const { ratio, ms } = scaling(make, n)
+  const { ratio, ms } = measured(make, n, true)
   expect(ratio, label).toBeLessThan(RATIO)
   expect(ms, label).toBeLessThan(BOUND_MS)
+}
+// → { ratio, ms }: what `heavy` takes against what `light` takes, run in turn 5 times each, with the least of each (as scaling() does), and the
+// least time of `heavy`; measured again, twice at most, while the ratio is not under `limit`. For a check that a list of many costs about what
+// a list of one does.
+function versus(light, heavy, limit) {
+  let found = null
+  for (let again = 0; again < MEASURES && (found === null || found.ratio >= limit); again++) {
+    light()
+    heavy()
+    let least = [Number.POSITIVE_INFINITY, Number.POSITIVE_INFINITY]
+    for (let round = 0; round < 5; round++) {
+      least = [light, heavy].map((thunk, k) => {
+        const started = performance.now()
+        thunk()
+        return Math.min(least[k], performance.now() - started)
+      })
+    }
+    found = { ratio: least[1] / Math.max(least[0], 0.05), ms: least[1] }
+  }
+  return found
 }
 
 describe('translatePattern: a pattern of Rust\'s, as the pattern JavaScript runs', () => {
@@ -1696,8 +1764,8 @@ describe('automodMatcher: it stays linear in the length of the text', TIMED, () 
       for (let i = 0; i < n * 64; i++) sum += i ^ 3
       return sum
     }
-    expect(scaling(quadratic, 2_000).ratio).toBeGreaterThan(RATIO)
-    expect(scaling(linear, 2_000).ratio).toBeLessThan(RATIO)
+    expect(measured(quadratic, 2_000, false).ratio).toBeGreaterThan(RATIO)
+    expect(measured(linear, 2_000, true).ratio).toBeLessThan(RATIO)
   })
 
   it('answers `*a*`, `*ab*` and `*ass*` over one long word, and says where', () => {
@@ -1807,7 +1875,7 @@ describe('automodMatcher: it stays linear in the length of the text', TIMED, () 
       const copies = matcher([keywordRule(Array(200).fill(keyword), { allow_list: ['*a*'] })])
       expect(copies(text), keyword).toBeNull()
       expect(matcher([keywordRule(Array(200).fill(keyword))])(text), keyword).toEqual(hit(0, 11_000))
-      expect(timeOf(() => copies(text)) / Math.max(timeOf(() => one(text)), 0.05), keyword).toBeLessThan(10)
+      expect(versus(() => one(text), () => copies(text), 10).ratio, keyword).toBeLessThan(10)
     }
   })
 
@@ -1830,28 +1898,29 @@ describe('automodMatcher: it stays linear in the length of the text', TIMED, () 
 
 describe('automodMatcher: keywords of several pieces and joiners that are no letters, against a plain list of every span', () => {
   // The spans of a keyword as it is written for Discord's filter, worked out the plain way: every place of the first piece is looked at,
-  // none is skipped, and the allow list is every one of its spans (a span lies inside the allow list when any one of them holds it).
-  // The text is made of the letters a to c, `-` and `1` (which end a word and are no space), and single spaces.
-  const letter = (c) => c !== undefined && c >= 'a' && c <= 'c'
+  // none is skipped, every place of each later piece within its reach is tried in turn until the rest follows (the first way through, by
+  // the places of the pieces in order), and the allow list is every one of its spans (a span lies inside the allow list when any one of
+  // them holds it). The text is made of the letters a to c and x, `-` and `1` (which end a word and are no space), and single spaces.
+  // `firstOnly` is the reading that took the first place of a middle piece and no other, which an early decoy of the piece led astray.
+  const letter = (c) => c !== undefined && ((c >= 'a' && c <= 'c') || c === 'x')
   const MAX_GAP = 60
-  const reachOf = (t, pos, pieces, k, needEdge) => {
+  const reachOf = (t, pos, pieces, k, needEdge, firstOnly) => {
     if (k === pieces.length) return needEdge && letter(t[pos]) ? -1 : pos
-    const last = k === pieces.length - 1
     for (let p = pos; p <= pos + MAX_GAP; p++) {
       if (t.startsWith(pieces[k], p)) {
-        const end = reachOf(t, p + pieces[k].length, pieces, k + 1, needEdge)
-        if (end !== -1 || !last) return end
+        const end = reachOf(t, p + pieces[k].length, pieces, k + 1, needEdge, firstOnly)
+        if (end !== -1 || (firstOnly && k !== pieces.length - 1)) return end
       }
       if (t[p] === ' ') break
     }
     return -1
   }
-  const spansOf = (t, k) => {
+  const spansOf = (t, k, firstOnly = false) => {
     const out = []
     for (let i = t.indexOf(k.pieces[0]); i !== -1; i = t.indexOf(k.pieces[0], i + 1)) {
       const inside = letter(t[i - 1])
       if (!k.lead && inside) continue
-      const stop = reachOf(t, i + k.pieces[0].length, k.pieces.slice(1), 0, !k.trail)
+      const stop = reachOf(t, i + k.pieces[0].length, k.pieces.slice(1), 0, !k.trail, firstOnly)
       if (stop === -1) continue
       let a = i
       if (inside) while (letter(t[a - 1])) a--
@@ -1861,11 +1930,11 @@ describe('automodMatcher: keywords of several pieces and joiners that are no let
     }
     return out
   }
-  const modelOf = (t, keywords, allow) => {
-    const held = allow.flatMap((k) => spansOf(t, k))
+  const modelOf = (t, keywords, allow, firstOnly = false) => {
+    const held = allow.flatMap((k) => spansOf(t, k, firstOnly))
     let best = null
     for (const k of keywords) {
-      const found = spansOf(t, k).find(([a, b]) => !held.some(([c, d]) => c <= a && b <= d))
+      const found = spansOf(t, k, firstOnly).find(([a, b]) => !held.some(([c, d]) => c <= a && b <= d))
       if (found !== undefined && (best === null || found[0] < best.start)) best = { start: found[0], end: found[1] }
     }
     return best === null ? null : { rule: 'Test Rule', ...best }
@@ -1918,6 +1987,48 @@ describe('automodMatcher: keywords of several pieces and joiners that are no let
       ),
       { numRuns: 4_000 },
     )
+  })
+
+  it('finds the first match that the list of every span says, through gaps of up to 60 and the decoys of middle pieces (the property)', () => {
+    // Long runs of `x` between the pieces, so that the first place of a middle piece is often too far from the next piece, where a later one is not.
+    // A decoy is a place of a middle piece too far from the next piece, before one that is not (`a x25 b x25 b x40 c` for `a*b*c`). The texts are
+    // built from a keyword: each piece, with a second place of it now and then, and runs of `x` of any length up to 58 between them, with a
+    // joiner or a space put in at times; the other keywords and the allow list are made of the same pieces.
+    const piece = fc.constantFrom('a', 'b', 'c', 'ab', 'bc', 'a-', '1')
+    const keyword = fc.record({ pieces: fc.array(piece, { minLength: 2, maxLength: 4 }), lead: fc.boolean(), trail: fc.boolean() })
+    const run = fc.integer({ min: 0, max: 58 }).map((n) => 'x'.repeat(n))
+    const step = fc.tuple(fc.constantFrom(0, 0, 0, 1), run, run, fc.constantFrom('', '', '', '', '-', ' ', 'a', 'c'))
+    const built = keyword.chain((k) =>
+      fc.tuple(
+        fc.constant(k),
+        fc.array(step, { minLength: k.pieces.length, maxLength: k.pieces.length }).map((steps) =>
+          k.pieces
+            .map((p, i) => {
+              const [twice, before, after, odd] = steps[i]
+              return `${twice ? `${p}${before}` : ''}${p}${after}${odd}`
+            })
+            .join('')
+            .replace(/ {2,}/g, ' ')
+            .trim(),
+        ),
+      ),
+    )
+    let found = 0
+    let decoys = 0
+    fc.assert(
+      fc.property(built, fc.array(keyword, { maxLength: 2 }), fc.array(keyword, { maxLength: 2 }), ([k, t], others, allow) => {
+        const keywords = [k, ...others]
+        const m = matcher([keywordRule(keywords.map(written), { allow_list: allow.map(written) })])
+        const expected = modelOf(t, keywords, allow)
+        if (expected !== null) found++
+        if (JSON.stringify(expected) !== JSON.stringify(modelOf(t, keywords, allow, true))) decoys++
+        expect(m(t), JSON.stringify({ t, keywords: keywords.map(written), allow: allow.map(written) })).toEqual(expected)
+      }),
+      { numRuns: 4_000 },
+    )
+    // Not a property that holds for want of matches, nor of the texts where the first place of a middle piece is not the one to take.
+    expect(found).toBeGreaterThan(800)
+    expect(decoys).toBeGreaterThan(25)
   })
 })
 
@@ -1984,11 +2095,102 @@ describe('automodMatcher: the keywords of a rule are looked for in one pass over
     const last = Array.from({ length: 1_000 }, () => hangul(3))
     const wanted = matcher([...rulesOf(1_000).slice(0, 5), keywordRule([...last, '비밀단어'], {}, { name: 'Last' })])
     expect(wanted(`${text.slice(0, 5_000)} 비밀단어 ${text.slice(5_000)}`)).toEqual({ rule: 'Last', start: 5_001, end: 5_005 })
-    const small = timeOf(() => few(text))
-    const large = timeOf(() => many(text))
+    const { ratio, ms } = versus(() => few(text), () => many(text), 10)
     // About 1 to 3 times as long, where one pass for each keyword is a thousand times as long; and under a second in any case.
-    expect(large / Math.max(small, 0.05)).toBeLessThan(10)
-    expect(large).toBeLessThan(1_000)
+    expect(ratio).toBeLessThan(10)
+    expect(ms).toBeLessThan(1_000)
+  })
+
+  it('takes about as long for 1,000 keywords that start with the same two units as for one, over a text of those two units, in Latin and in Hangul', () => {
+    // Addresses that start with `di`, as a list against scams has them, and words that start with the syllable 시, whose two letters are the
+    // first two units of each. The index by two units tried every keyword of such a group at every place that held them: 41 and 26 times as
+    // long on Bun. No keyword is found in the text, which is the two units over and over (one word of Hangul, and no full stop).
+    let seed = 20_261_119
+    const next = () => (seed = (Math.imul(seed, 1_103_515_245) + 12_345) >>> 0)
+    const letters = (n) => Array.from({ length: n }, () => String.fromCharCode(97 + (next() % 26))).join('')
+    const syllable = () => String.fromCodePoint(0xac00 + (next() % 11_172))
+    for (const [unit, keywordOf] of [['di', () => `di${letters(4 + (next() % 6))}.com`], ['시', () => `시${syllable()}${syllable()}`]]) {
+      const text = unit.repeat(11_000 / unit.length)
+      const list = Array.from({ length: 1_000 }, keywordOf)
+      const one = matcher([keywordRule(list.slice(0, 1))])
+      const many = matcher([keywordRule(list)])
+      expect(many(text), unit).toBeNull()
+      // The last of the list put after the text: found there.
+      expect(many(`${text} ${list[999]}`), unit).toEqual(hit(text.length + 1, text.length + 1 + list[999].length))
+      const { ratio, ms } = versus(() => one(text), () => many(text), 10)
+      expect(ratio, unit).toBeLessThan(10)
+      // A ceiling for a walk that is slow for one keyword as much as for many: about 5 ms on Node.
+      expect(ms, unit).toBeLessThan(2_000)
+    }
+  })
+
+  it('takes about as long for 6 rules of 1,000 addresses, 300 of each starting with `di`, as for 6 rules of one, over 11,000 characters of `di`', () => {
+    let seed = 20_261_120
+    const next = () => (seed = (Math.imul(seed, 1_103_515_245) + 12_345) >>> 0)
+    const address = (start) => `${start}${Array.from({ length: 4 + (next() % 6) }, () => String.fromCharCode(97 + (next() % 26))).join('')}.com`
+    const rulesOf = (per, di) => Array.from({ length: 6 }, (_, r) => keywordRule(Array.from({ length: per }, (_, k) => address(k < di ? 'di' : '')), {}, { name: `Rule ${r}` }))
+    const text = 'di'.repeat(5_500)
+    const few = matcher(rulesOf(1, 1))
+    const many = matcher(rulesOf(1_000, 300))
+    expect(many(text)).toBeNull()
+    const { ratio, ms } = versus(() => few(text), () => many(text), 10)
+    expect(ratio).toBeLessThan(10)
+    expect(ms).toBeLessThan(2_000)
+  })
+
+  it('takes about as long for 50 keywords with a `*` inside as for one, over a word of their first letter that holds the rest of them nowhere or out of reach', () => {
+    // `*n*gg…r*` over a word of `n`: the old reach looked 61 places on from every `n` for the next piece, for each keyword, 2.3 s on Bun for 50.
+    const tail = (i) => `${String.fromCharCode(97 + (i % 26))}${String.fromCharCode(97 + Math.floor(i / 26))}`
+    const word = 'n'.repeat(11_000)
+    const shapes = [
+      [(i) => `*n*gg${tail(i)}r*`, word],
+      [(i) => `*n*gg${tail(i)}r`, word],
+      // The rest of each after a space, which a `*` does not reach over, and 70 places after the end of the word, more than 60 from any `n`.
+      [(i) => `*n*gg${tail(i)}r*`, `${word} gg${tail(0)}r gg${tail(49)}r`],
+      [(i) => `*n*gg*${tail(i)}r*`, `${word}gg${'x'.repeat(70)}${tail(0)}r`],
+    ]
+    for (const [keywordOf, text] of shapes) {
+      const list = Array.from({ length: 50 }, (_, i) => keywordOf(i))
+      const one = matcher([keywordRule(list.slice(0, 1))])
+      const many = matcher([keywordRule(list)])
+      expect(many(text), list[0]).toBeNull()
+      const { ratio, ms } = versus(() => one(text), () => many(text), 10)
+      expect(ratio, list[0]).toBeLessThan(10)
+      expect(ms, list[0]).toBeLessThan(2_000)
+    }
+    // And each is found where the rest of it is in reach.
+    expect(matcher([keywordRule(Array.from({ length: 50 }, (_, i) => `*n*gg${tail(i)}r*`))])(`${word}gg${tail(49)}r`)).toEqual(hit(0, 11_005))
+  })
+
+  it('takes about as long for 200 copies of a keyword of several pieces as for one, over a word that holds it at every place', () => {
+    // A keyword of several pieces is looked for at every place, as no match lets it skip one (see nextPlace), so once one of its matches is
+    // not held by the allow list it is not tried again: it has nothing more to say. Without that, 200 copies of `*a*a*` over a word of 11,000 are
+    // 2.2 million matches.
+    const text = 'a'.repeat(11_000)
+    for (const keyword of ['*a*a*', '*a*aa*a*', 'a*a*']) {
+      const one = matcher([keywordRule([keyword])])
+      const copies = matcher([keywordRule(Array(200).fill(keyword))])
+      expect(copies(text), keyword).toEqual(hit(0, 11_000))
+      expect(versus(() => one(text), () => copies(text), 10).ratio, keyword).toBeLessThan(10)
+    }
+  })
+
+  it('makes a small tree of the first pieces: 6 rules of 1,000 keywords take a few MB, and not a node for every unit of every keyword', () => {
+    // A node for each unit was 105 MB a matcher for these lists, and a matcher is made for each reply.
+    setFlagsFromString('--expose-gc')
+    const gc = runInNewContext('gc')
+    let seed = 20_261_121
+    const next = () => (seed = (Math.imul(seed, 1_103_515_245) + 12_345) >>> 0)
+    const word = () => Array.from({ length: 20 + (next() % 30) }, () => String.fromCharCode(97 + (next() % 26))).join('')
+    const rules = Array.from({ length: 6 }, () => keywordRule(Array.from({ length: 1_000 }, word)))
+    gc()
+    const before = process.memoryUsage().heapUsed
+    const made = Array.from({ length: 3 }, () => matcher(rules))
+    gc()
+    const each = (process.memoryUsage().heapUsed - before) / made.length
+    expect(made.map((m) => m('a b c'))).toEqual([null, null, null])
+    // About 3 MB on Node.
+    expect(each).toBeLessThan(20_000_000)
   })
 })
 
@@ -2124,27 +2326,89 @@ describe('automodMatcher: what shows as blank', () => {
   })
 })
 
-describe('unwrapped: the links of a text out of the angle brackets that the form puts them in', TIMED, () => {
+describe('typed: the text as the member typed it, with what the form wrote for its links and its marks undone', TIMED, () => {
   it('writes `[text](<address>)` as `[text](address)` and `<address>` as `address`, for http and https', () => {
-    expect(unwrapped('[a](<https://e.com>)')).toBe('[a](https://e.com)')
-    expect(unwrapped('see <https://e.com> now')).toBe('see https://e.com now')
-    expect(unwrapped('<http://e.com/x?y=1&z=2#f>')).toBe('http://e.com/x?y=1&z=2#f')
-    expect(unwrapped('<https://e.com/a%3Eb>')).toBe('https://e.com/a%3Eb')
-    expect(unwrapped('<https://a.com> <http://b.com>\n[c](<https://d.com>)')).toBe('https://a.com http://b.com\n[c](https://d.com)')
-    expect(unwrapped('<<https://e.com>>')).toBe('<https://e.com>')
+    expect(typed('[a](<https://e.com>)')).toBe('[a](https://e.com)')
+    expect(typed('see <https://e.com> now')).toBe('see https://e.com now')
+    expect(typed('<http://e.com/x?y=1&z=2#f>')).toBe('http://e.com/x?y=1&z=2#f')
+    expect(typed('<https://e.com/a%3Eb>')).toBe('https://e.com/a%3Eb')
+    expect(typed('<https://a.com> <http://b.com>\n[c](<https://d.com>)')).toBe('https://a.com http://b.com\n[c](https://d.com)')
+    expect(typed('<<https://e.com>>')).toBe('<https://e.com>')
+    // What is in an address is the address: the form escapes nothing in it, so nothing in it is undone.
+    expect(typed('[a\\_b](<https://e.com/a_b\\*c>)')).toBe('[a_b](https://e.com/a_b\\*c)')
   })
 
-  it('leaves what the form does not put there as it is: mentions, timestamps, emoji, channels, and what is no whole address', () => {
-    for (const text of ['<@200000000000000421>', '<@!200000000000000421>', '<t:1700000000:R>', '<:name:200000000000000421>', '<a:name:200000000000000421>', '<#200000000000000421>', '<id:customize>', '<https://e.com', 'https://e.com>', '<https://e.com >', '<https://e .com>', '<HTTPS://e.com>', '<ftp://e.com>', '<https:/e.com>', '< https://e.com>', '<>', '', 'zorp']) {
-      expect(unwrapped(text), text).toBe(text)
+  it('takes the backslash out of every escape that the form writes: before a mark of Discord\'s markdown, and before what would start a line', () => {
+    expect(typed('z\\*rp')).toBe('z*rp')
+    expect(typed('free\\_nitro')).toBe('free_nitro')
+    expect(typed('see z\\*rp now')).toBe('see z*rp now')
+    for (const mark of ['\\', '*', '_', '~', '|', '`', '<', '[', ']', '#', '-', '>', '.']) expect(typed(`z\\${mark}rp`), mark).toBe(`z${mark}rp`)
+    // The escapes of the start of a line, and of a footnote reference.
+    expect(typed('\\# zorp')).toBe('# zorp')
+    expect(typed('\\- zorp')).toBe('- zorp')
+    expect(typed('\\-# zorp')).toBe('-# zorp')
+    expect(typed('\\>zorp')).toBe('>zorp')
+    expect(typed('12\\. zorp')).toBe('12. zorp')
+    expect(typed('\\[^1]')).toBe('[^1]')
+    expect(typed('\\*\\*\\_\\_\\~\\~\\|\\|')).toBe('**__~~||')
+  })
+
+  it('reads the escapes from left to right, so that a backslash the form doubled is one backslash, and what follows it is read on its own', () => {
+    expect(typed('\\\\')).toBe('\\')
+    expect(typed('a\\\\b')).toBe('a\\b')
+    expect(typed('\\\\\\\\')).toBe('\\\\')
+    expect(typed('z\\\\\\*rp')).toBe('z\\*rp')
+    expect(typed('z\\\\*rp')).toBe('z\\*rp')
+    // A doubled backslash before a link, and an escaped angle bracket, which is no link: the member typed the bracket.
+    expect(typed('\\\\<https://e.com>')).toBe('\\https://e.com')
+    expect(typed('\\<https://e.com>')).toBe('<https://e.com>')
+    expect(typed('\\<https://e.com\\>')).toBe('<https://e.com>')
+  })
+
+  it('leaves a backslash before anything that the form does not escape, and one at the end, as it is', () => {
+    for (const text of ['\\a', 'a\\', '\\', '\\ ', '\\1', '\\é', '\\(', '\\)', '\\!', '\\@', '\\:', '\\^', '\\\n', 'zo\\rp', '\\\u{10428}']) {
+      expect(typed(text), JSON.stringify(text)).toBe(text)
     }
   })
 
-  it('takes four times as long for four times the text, whatever the shape of the text that is no link, or half of one', () => {
-    for (const unit of ['<https://', '<h', '<', '<https://a', '<https://a>', '<https://a <', '[a](<https://a>) ']) {
+  it('takes out every zero-width space: those that the form puts between marks, and those of the member, as the text that is sent is read too', () => {
+    // Between two marks of one character that touch, after an escaped one, in a run of three backticks, and in a mark that a cut leaves empty.
+    expect(typed('*a*\u200b**b**')).toBe('*a***b**')
+    expect(typed('__a__\u200b__b__')).toBe('__a____b__')
+    expect(typed('`a`\u200b`b`')).toBe('`a``b`')
+    expect(typed('\\*\u200b**b**')).toBe('***b**')
+    expect(typed('``\u200b`')).toBe('```')
+    expect(typed('**\u200b**')).toBe('****')
+    expect(typed('~~\u200b~~')).toBe('~~~~')
+    expect(typed('z\u200bo\u200b\u200brp')).toBe('zorp')
+    expect(typed('\u200b')).toBe('')
+    // The space that a spoiler is given, and every other character that shows as nothing, are left: they are no part of what this undoes.
+    for (const text of ['|| ||', 'z\u200corp', 'z\u200dorp', 'z\u2060orp', 'z\ufeffo', 'z\u00adorp']) expect(typed(text), JSON.stringify(text)).toBe(text)
+  })
+
+  it('leaves what the form does not put there as it is: mentions, timestamps, emoji, channels, and what is no whole address', () => {
+    for (const text of ['<@200000000000000421>', '<@!200000000000000421>', '<t:1700000000:R>', '<:name:200000000000000421>', '<a:name:200000000000000421>', '<#200000000000000421>', '<id:customize>', '<https://e.com', 'https://e.com>', '<https://e.com >', '<https://e .com>', '<HTTPS://e.com>', '<ftp://e.com>', '<https:/e.com>', '< https://e.com>', '<>', '', 'zorp', 'z*rp', 'free_nitro']) {
+      expect(typed(text), text).toBe(text)
+    }
+  })
+
+  it('is never longer than the text, and is the text when it holds no backslash, no angle bracket and no zero-width space (the property)', () => {
+    const unit = fc.constantFrom('\\', '*', '_', '<', '>', 'https://', 'h', 'a', ' ', '\u200b', '`', '#', '.', '-', '[', ']', '(', ')')
+    fc.assert(
+      fc.property(fc.oneof(fc.array(unit, { maxLength: 30 }).map((list) => list.join('')), fc.string({ unit: 'binary', maxLength: 30 })), (text) => {
+        const copy = typed(text)
+        expect(copy.length).toBeLessThanOrEqual(text.length)
+        if (!/[\\<\u200b]/.test(text)) expect(copy).toBe(text)
+      }),
+      { numRuns: 2_000 },
+    )
+  })
+
+  it('takes four times as long for four times the text, whatever the shape of the text that is no link, or half of one, or escapes', () => {
+    for (const unit of ['<https://', '<h', '<', '<https://a', '<https://a>', '<https://a <', '[a](<https://a>) ', '\\', '\\*', '\\\\*', '*\u200b', '\u200b', '\\<https://a>', '<https://a\\']) {
       expectLinear(JSON.stringify(unit), (n) => {
         const text = unit.repeat(Math.ceil(n / unit.length))
-        return () => unwrapped(text)
+        return () => typed(text)
       })
     }
   })
@@ -3396,6 +3660,117 @@ describe('validateReply: the regular expressions of the server\'s rules', () => 
     expect(asked[0].length).toBeGreaterThan(1)
     for (const [text, copy] of [asked[0].slice(0, 2)]) expect(copy.length).toBeLessThan(text.length)
     expect(Math.max(...asked[0].map((t) => t.length))).toBeLessThan(4_100)
+  })
+
+  it('reads what the member typed and not the escapes that the form wrote for it: a pattern for `z*rp` or `free_nitro` refuses them, in both forms', async () => {
+    // The form escapes every mark of a text (`z*rp` is sent as `z\*rp`), so a pattern written for the spelling a member types would see none of
+    // them in what is sent. The patterns are the rules that catch a word written with a symbol in it, which a keyword cannot (its `*` is a wildcard).
+    const cases = [
+      ['z[o*]rp', 'z*rp'],
+      ['z.rp', 'z*rp'],
+      ['z.rp', 'z_rp'],
+      ['z.rp', 'z|rp'],
+      ['z.rp', 'z~rp'],
+      ['z[o<]rp', 'z<rp'],
+      ['free.nitro', 'free_nitro'],
+      ['z[^a-z]rp', 'z[rp'],
+      ['z\\]rp', 'z]rp'],
+      ['z`rp', 'z`rp'],
+      ['z[o*]rp', 'see z*rp now'],
+      ['n[i1!*]gg', 'n*gg'],
+      ['fr[e3]{2}.?n[i1]tro', 'free_nitro'],
+      ['z\\\\rp', 'z\\\\rp'],
+      ['^# zorp$', '\\# zorp'],
+    ]
+    for (const form of ['v2', 'plain']) {
+      for (const [pattern, source] of cases) {
+        expect(await by([withRegex([pattern], { name: 'No Zorp' })], source, { options: { form } }), `${form} ${pattern} ${source}`).toEqual({
+          ok: false,
+          status: 422,
+          error: 'Blocked by the server\'s AutoMod rule "No Zorp".',
+          rule: 'No Zorp',
+          match: null,
+        })
+      }
+      // What is sent is read as well: a pattern for the escaped spelling still refuses it, and one for no spelling of it refuses nothing.
+      expect((await by([withRegex(['z\\\\\\*rp'], { name: 'Sent' })], 'z*rp', { options: { form } })).rule, form).toBe('Sent')
+      expect((await by([withRegex(['z[o*]rp'])], 'zarp z​xrp', { options: { form } })).ok, form).toBe(true)
+    }
+  })
+
+  it('reads the text a second time only when the member\'s spelling is not the sent one, and the copy is never longer than the text', async () => {
+    const asked = []
+    const automod = Object.assign(() => null, { regex: async (texts) => (asked.push(texts), null) })
+    await send(reply('z*rp'), { automod, form: 'plain' })
+    await send(reply('free_nitro and [a](https://e.com)'), { automod, form: 'plain' })
+    await send(reply('Say hi'), { automod, form: 'plain' })
+    await send(reply('a **b** c'), { automod, form: 'plain' })
+    expect(asked).toEqual([['z\\*rp', 'z*rp'], ['free\\_nitro and [a](<https://e.com>)', 'free_nitro and [a](https://e.com)'], ['Say hi'], ['a **b** c']])
+    // Every mark of a long text escaped, in each part of it: each copy is shorter than its text, and no text is longer than a message.
+    asked.length = 0
+    await send(reply('z*rp_x '.repeat(1_200)), { automod, form: 'v2' })
+    expect(asked[0].length).toBeGreaterThan(2)
+    for (let k = 0; k < asked[0].length; k += 2) expect(asked[0][k + 1].length).toBeLessThan(asked[0][k].length)
+    expect(Math.max(...asked[0].map((t) => t.length))).toBeLessThan(4_100)
+  })
+
+  describe('for any source that is one line of text, made of letters, marks and escapes (the property)', () => {
+    // A source that the parser reads as one line of nothing but text is what its text nodes say, with the member's own escapes read:
+    // the plain reading, which is what the member meant to show.
+    const piece = fc.constantFrom('z', 'o', 'r', 'p', 'zo', 'rp', 'free', 'nitro', ' ', '*', '_', '~', '|', '<', '>', '[', ']', '\\', '`', '#', '-', '.', '1', '(', ')', ':', '!', '@', '​')
+    const lineOf = (source) => {
+      const tree = parse(source)
+      if (tree.length !== 1 || tree[0].type !== 'line' || !tree[0].children.every((node) => node.type === 'text')) return null
+      return tree[0].children.map((node) => node.value).join('')
+    }
+
+    it('gives the patterns that plain reading, whatever the marks in it, in both forms', async () => {
+      let lines = 0
+      await fc.assert(
+        fc.asyncProperty(fc.array(piece, { minLength: 1, maxLength: 16 }), fc.constantFrom('v2', 'plain'), async (list, form) => {
+          const source = list.join('')
+          const plain = lineOf(source)
+          if (plain === null || plain.trim() === '') return
+          const asked = []
+          const automod = Object.assign(() => null, { regex: async (texts) => (asked.push(...texts), null) })
+          // A reply that is refused before the rules are asked (`[zo](rp)` is a link that is not http) has nothing to say here.
+          if (!(await send(reply(source), { automod, form })).ok) return
+          lines++
+          expect(asked, JSON.stringify(source)).toContain(plain.trim().replaceAll('​', ''))
+        }),
+        { numRuns: 3_000 },
+      )
+      // Not a property that holds for want of sources: most are one line of text.
+      expect(lines).toBeGreaterThan(1_000)
+    })
+
+    it('refuses the reply when a pattern matches the plain reading, and refuses it only for what the plain reading or the sent text holds', async () => {
+      // Sources made more of the spellings that the patterns are for, so that a good part of them is refused.
+      const spelling = fc.constantFrom('z*rp', 'z_rp', 'z~rp', 'z|rp', 'z<rp', 'z[rp', 'z]rp', 'z\\rp', 'z`rp', 'free_nitro', 'free.nitro', 'o*', 'r_p', '[o]', '<z', 'z~~r', '\\# ', '\\-', '\\>')
+      const patterns = ['z.rp', 'z[o*_~|<\\[\\]\\\\`]rp', 'z[^a-z]rp', 'free.nitro', '[*_~|<\\[\\]\\\\`]{2}', 'o\\*', 'r_p', 'z\\\\', '<z', '\\[o\\]', 'z~+r', '^[#>-]']
+      let refused = 0
+      await fc.assert(
+        fc.asyncProperty(fc.array(fc.oneof(piece, spelling), { minLength: 1, maxLength: 8 }), fc.constantFrom(...patterns), fc.constantFrom('v2', 'plain'), async (list, pattern, form) => {
+          const source = list.join('')
+          const plain = lineOf(source)
+          if (plain === null || plain.trim() === '') return
+          if (!(await send(reply(source), { form })).ok) return
+          const holds = (text) => new RegExp(translatePattern(pattern), 'giu').test(text)
+          const r = await by([withRegex([pattern], { name: 'No Zorp' })], source, { options: { form } })
+          if (holds(plain)) {
+            refused++
+            expect(r, `${form} ${pattern} ${JSON.stringify(source)}`).toEqual({ ok: false, status: 422, error: 'Blocked by the server\'s AutoMod rule "No Zorp".', rule: 'No Zorp', match: null })
+          }
+          if (!r.ok) {
+            // The line of the reply, without the footer that the site writes under it.
+            const sent = toDiscord(source, { form, authorId: U1, siteUrl: SITE, replyTo: null, images: [] }).parts[0].text.split('\n')[0]
+            expect(holds(plain.trim().replaceAll('​', '')) || holds(sent), `${form} ${pattern} ${JSON.stringify(source)}`).toBe(true)
+          }
+        }),
+        { numRuns: 600 },
+      )
+      expect(refused).toBeGreaterThan(100)
+    })
   })
 
   it('asks for the texts that are sent, in one go, and never for the source', async () => {
