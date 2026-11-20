@@ -41,8 +41,14 @@
  *   for a spoiler (`|| ||`, which pairs with itself), a zero-width space for any other, as Discord takes no italic or strike of
  *   a space;
  * - an italic that comes right after another is written as one, since `*a**b*` is not two italics, and one inside another as its
- *   text, since `**a**` is bold; two marks of one character that touch (`*a*` then `**b**`, `**a**` then `**b**`, `__`, code) have
- *   a zero-width space between them, else Discord's lazy rules would read their marks together and pair them with later ones;
+ *   text, since `**a**` is bold; so is a bold inside a bold, which `***` makes (a bold that holds an italic), since Discord would
+ *   read `***||**a**||***` as an italic of two bolds and show `a`; two marks of one character that touch (`*a*` then `**b**`,
+ *   `**a**` then `**b**`, `__`, code) have a zero-width space between them, else Discord's lazy rules would read their marks
+ *   together and pair them with later ones;
+ * - an italic or a strike that starts or ends with a space has the space written outside its marks (`*a* ` for an italic of `a `
+ *   and a picture), since Discord takes neither so, and would pair its marks with later ones;
+ * - a line of a spoiler, but its first and its last, that shows nothing but spaces (a picture that is attached, a mark of spaces)
+ *   is left out, since a blank line would end the block, and the spoiler's bars would pair with no other;
  * - the text that starts a line is escaped (`\#`, `\-`, `1\.`) after a line break inside a spoiler too, and at the start of a part
  *   that starts inside a line, where its mark is followed by a space and not a line end: what was in the middle of a line is no
  *   heading, list item or quote.
@@ -242,9 +248,23 @@ function escape(value, atStart) {
   return atStart ? marked.replace(LINE_START, '$1\\') : marked
 }
 
-const wrapped = (mark) => (node, ic) => {
+/**
+ * → a mark round what its node holds. One inside a mark of its own kind is the text it holds, for Discord closes a mark at the first
+ * chance: `**a**` in an italic is bold, and `***||**a**||***` (a bold that holds an italic, a spoiler and a bold) would be read as an
+ * italic of two bolds, the one in the spoiler closing the one before it. A mark of nothing but spaces, or of a picture that is attached,
+ * is what it holds. Discord takes no italic or strike (`flanked`) that starts or ends with a space, and leaves its marks to pair with
+ * later ones, so the spaces at the edges of one are written outside its marks: `*a* ` for an italic of `a `.
+ */
+const wrapped = (mark, flanked) => (node, ic) => {
+  if (ic.open.has(mark)) return inline(node.children, ic)
+  ic.open.add(mark)
   const text = inline(node.children, ic)
-  return text.trim() === '' ? text : `${mark}${text}${mark}`
+  ic.open.delete(mark)
+  if (text.trim() === '') return text
+  if (!flanked) return `${mark}${text}${mark}`
+  const from = text.length - text.trimStart().length
+  const to = text.trimEnd().length
+  return `${text.slice(0, from)}${mark}${text.slice(from, to)}${mark}${text.slice(to)}`
 }
 
 const INLINE = {
@@ -267,19 +287,13 @@ const INLINE = {
     ic.cites.add(node.label)
     return `\\[^${escape(node.label)}]`
   },
-  // A bold heading holds no bold of its own: two pairs of asterisks in one would end it early.
-  strong: (node, ic) => (ic.bold ? inline(node.children, ic) : wrapped('**')(node, ic)),
+  // A bold heading is a bold, and holds no bold of its own: two pairs of asterisks in one would end it early.
+  strong: wrapped('**', false),
   // An italic inside an italic is the text it holds: Discord has no such thing, and `**a**`, or `**a* b*`, would be read as bold.
-  em: (node, ic) => {
-    if (ic.italic) return inline(node.children, ic)
-    ic.italic = true
-    const text = wrapped('*')(node, ic)
-    ic.italic = false
-    return text
-  },
-  underline: wrapped('__'),
-  strike: wrapped('~~'),
-  spoiler: wrapped('||'),
+  em: wrapped('*', true),
+  underline: wrapped('__', false),
+  strike: wrapped('~~', true),
+  spoiler: wrapped('||', false),
   br: () => '\n',
 }
 
@@ -289,19 +303,23 @@ function inline(nodes, ic, atStart = false) {
   // A line starts where the first thing that is shown does, and after a line break: a picture shows nothing here, so what follows
   // it is the start.
   let start = atStart
-  // Whether `out` ends with the mark that closes an italic. An italic that comes next is joined to it, since `*a**b*` is not
-  // two italics but an italic with bold marks in it.
+  // Whether `out` ends with the mark that closes an italic. An italic that starts with its mark next is joined to it, since `*a**b*`
+  // is not two italics but an italic with bold marks in it.
   let italic = false
   for (const node of nodes) {
-    const piece = INLINE[node.type](node, ic, start)
+    // A line of a spoiler after its first that shows nothing but spaces (a picture that is attached, a mark of spaces) is left out with
+    // its line break: a blank line ends a block, and the bars on either side of it would pair with no other, showing what they hold. (The
+    // first line holds the bars that open the spoiler.) Only the last line is read, so a spoiler of many lines takes the time of its length.
+    const end = out.lastIndexOf('\n')
+    const piece = node.type === 'br' && end !== -1 && out.slice(end + 1).trim() === '' ? '' : INLINE[node.type](node, ic, start)
     // An italic of nothing but spaces, or of a picture that is attached, is written as what it holds, with no mark, and so is one
-    // inside an italic.
-    const isItalic = node.type === 'em' && !ic.italic && piece.trim() !== ''
+    // inside an italic. One with a space at an edge has the space outside its marks, so it may start or end with no mark.
+    const isItalic = node.type === 'em' && !ic.open.has('*') && piece.trim() !== ''
     // Any other mark that starts with the character `out` ends with has a zero-width space before it: `*a***b**` is read as an
     // italic of `a**`, and the bold left over pairs with the next one, however far on. (After an escape it changes nothing.)
     const joint = out.at(-1)
-    out = isItalic && italic ? out.slice(0, -1) + piece.slice(1) : out + (TOUCHING.includes(joint) && piece.startsWith(joint) ? ZWSP : '') + piece
-    if (isItalic) italic = true
+    out = isItalic && italic && piece.startsWith('*') ? out.slice(0, -1) + piece.slice(1) : out + (TOUCHING.includes(joint) && piece.startsWith(joint) ? ZWSP : '') + piece
+    if (isItalic) italic = piece.endsWith('*')
     else if (piece !== '') italic = false
     start = node.type === 'br' || (start && piece === '')
   }
@@ -339,11 +357,13 @@ const defuse = (text) => text.replaceAll('```', `\`\`${ZWSP}\``)
 
 /** → { text, cites, images } of a line, heading or subtext node; the text is '' when there is nothing to show but images. */
 function render(node, names) {
-  const ic = { names, cites: new Set(), images: [], alt: false, bold: node.level > 3, italic: false }
+  // `open` holds the marks that what is written is inside: a bold heading is in a bold.
+  const bold = node.level > 3
+  const ic = { names, cites: new Set(), images: [], alt: false, open: new Set(bold ? ['**'] : []) }
   const text = inline(node.children, ic, true)
   let shown = ''
   if (text.trim() !== '') {
-    if (ic.bold) shown = `**${text}**`
+    if (bold) shown = `**${text}**`
     else if (node.type === 'heading') shown = `${'#'.repeat(node.level)} ${text}`
     else shown = node.type === 'subtext' ? `-# ${text}` : text
   }
@@ -351,7 +371,7 @@ function render(node, names) {
 }
 
 function noteLine(item, names) {
-  const ic = { names, cites: new Set(), alt: true, bold: false, italic: false }
+  const ic = { names, cites: new Set(), alt: true, open: new Set() }
   return `-# \\[^${escape(item.label)}]: ${inline(item.children[0].children, ic)}`
 }
 

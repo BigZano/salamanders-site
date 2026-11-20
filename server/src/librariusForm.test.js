@@ -101,10 +101,13 @@ const RE = {
   strike: /~~(?=\S)((?:\\[\s\S]|~(?!~)|[^\s~]|\s(?!~~))+?)~~/y,
   spoiler: /\|\|([\s\S]+?)\|\|/y,
 }
-// The rules to try at a character, in order. Simple-markdown gives bold, italic and underline one order and takes the longest of
-// their matches (its `quality`), as far as the re-review recalls it, where this takes bold first: the two read alike but for a run
-// of three `*` or more, which the form writes only where bold and italic open or close together, as `***a***` (bold italic either way).
+// The rules to try at a character. Where more than one matches (bold and italic at a `*`, underline and italic at a `_`), the longest
+// match is taken, and of two as long the italic: simple-markdown gives the three one order and weighs each match by its length, with
+// 0.2 more for an italic and 0.1 for a bold (its `quality`). That tells at a run of three `*` or more, as in `***a**\**`, which the form
+// writes for `_**a***_` and which is an italic of a bold and an asterisk, not a bold of `*a`.
 const RULES_AT = { '\\': ['escape'], '`': ['code'], '<': ['angle'], '[': ['link'], '*': ['strong', 'star'], _: ['underline', 'score'], '~': ['strike'], '|': ['spoiler'] }
+const QUALITY = { strong: 0.1, star: 0.2, score: 0.2 }
+const weight = (t) => t.found[0].length + (QUALITY[t.name] ?? 0)
 // → [character, hidden][] of an inline run, pushed on `out`.
 function showInline(s, hidden, out) {
   const push = (text, h) => {
@@ -115,7 +118,7 @@ function showInline(s, hidden, out) {
       RE[name].lastIndex = i
       return { name, found: RE[name].exec(s) }
     })
-    const rule = tried.find((t) => t.found !== null)
+    const rule = tried.filter((t) => t.found !== null).sort((a, b) => weight(b) - weight(a))[0]
     if (rule === undefined) {
       push(s[i], hidden)
       i++
@@ -1905,6 +1908,21 @@ describe('toDiscord: the start of a line after a line break inside a spoiler', (
   it('writes the same text in V2 as in plain', () => {
     expect(displays(v2('||first line\n\\# not a heading||').parts[0])).toEqual([`||first line\n\\# not a heading||\n${FOOTER}`])
   })
+
+  it('leaves no line of nothing but spaces in a spoiler, where a picture that is attached or a mark of spaces was all of a line', () => {
+    // A blank line ends a block, so the bars on either side of one would pair with no other, and show what they hold.
+    const images = [{ ref: 1, name: 'u1.png' }]
+    expect(plain('x ||ALPHA\n![p](upload:1)\nBRAVO|| y', { images }).parts[0].text).toBe(`x ||ALPHA\nBRAVO|| y\n${PLAIN_FOOTER}`)
+    expect(displays(v2('x ||ALPHA\n![p](upload:1)\nBRAVO|| y', { images }).parts[0])).toEqual(['x ||ALPHA\nBRAVO|| y', FOOTER])
+    expect(plain('||ALPHA\n__ __\n![](upload:2)\nBRAVO|| y').parts[0].text).toBe(`||ALPHA\n BRAVO|| y\n${PLAIN_FOOTER}`)
+    expect(plain('> ||ALPHA\n> *![p](upload:1)*\n> BRAVO||', { images }).parts[0].text).toBe(`> ||ALPHA\n> BRAVO||\n${PLAIN_FOOTER}`)
+    // The line after it starts a line all the same, and is escaped as one. The first line and the last hold the bars, and stay.
+    expect(plain('||ALPHA\n![p](upload:1)\n\\# BRAVO||', { images }).parts[0].text).toBe(`||ALPHA\n\\# BRAVO||\n${PLAIN_FOOTER}`)
+    expect(plain('||![p](upload:1)\n![p](upload:1)\nALPHA\n![p](upload:1)||', { images }).parts[0].text).toBe(`||\nALPHA\n||\n${PLAIN_FOOTER}`)
+    for (const src of ['x ||ALPHA\n![p](upload:1)\nBRAVO|| y', '||ALPHA\n__ __\n![](upload:2)\nBRAVO|| y', '> ||ALPHA\n> *![p](upload:1)*\n> BRAVO||']) {
+      for (const form of FORMS) expect(leaks(src, toDiscord(src, opts({ form, images })).parts)).toEqual([])
+    }
+  })
 })
 
 describe('toDiscord: a part that starts inside a line', () => {
@@ -2104,6 +2122,64 @@ describe('toDiscord: emphasis that is written twice in a row', () => {
   })
 })
 
+describe('toDiscord: marks that Discord reads otherwise than the parser, at a space or inside a mark of their own kind', () => {
+  const images = [{ ref: 1, name: 'u1.png' }]
+
+  it('writes the spaces at the inner edges of an italic or a strike outside its marks, which Discord would leave to pair with a spoiler (the re-review)', () => {
+    // Discord takes no italic or strike that starts or ends with a space: `*a *` is no italic, and its second mark opens one with the
+    // first mark of the spoiler, which shows what it holds. A picture that is attached shows nothing, and leaves the space at the edge.
+    expect(plain('*a ![p](upload:1)*||*SECRET*||', { images }).parts[0].text).toBe(`*a* ||*SECRET*||\n${PLAIN_FOOTER}`)
+    expect(plain('~~ a~~||~~SECRET~~||').parts[0].text).toBe(`~~a~~||~~SECRET~~||\n${PLAIN_FOOTER}`)
+    expect(plain('_![](upload:2) |_||*a*||').parts[0].text).toBe(`*\\|*||*a*||\n${PLAIN_FOOTER}`)
+    expect(plain('so ~~ a~~ and ~~b ~~||~~SECRET~~||').parts[0].text).toBe(`so  ~~a~~ and ~~b~~ ||~~SECRET~~||\n${PLAIN_FOOTER}`)
+    // A mark of nothing but spaces in it leaves the spaces at its edge too, and so does one that starts with a picture.
+    expect(plain('*a __ __*||*SECRET*||').parts[0].text).toBe(`*a*  ||*SECRET*||\n${PLAIN_FOOTER}`)
+    expect(plain('*![p](upload:1) a*||*SECRET*||', { images }).parts[0].text).toBe(`*a*||*SECRET*||\n${PLAIN_FOOTER}`)
+    expect(v2('*a ![p](upload:1)*||*SECRET*||', { images }).parts[0].text).toBe(`*a* ||*SECRET*||\n${FOOTER}`)
+    // Bold, underline and a spoiler are marks to Discord with a space at their edges, and keep it.
+    expect(plain('** a **||**SECRET**|| and __b __||__OTHER__|| and || c||').parts[0].text).toBe(`** a **||**SECRET**|| and __b __||__OTHER__|| and || c||\n${PLAIN_FOOTER}`)
+    for (const src of ['*a ![p](upload:1)*||*SECRET*||', '~~ a~~||~~SECRET~~||', '~~a ~~||~~SECRET~~||', '*![p](upload:1) a*||*SECRET*||', '*a __ __*||*SECRET*||', '** a **||**SECRET**||']) {
+      for (const form of FORMS) expect(leaks(src, toDiscord(src, opts({ form, images })).parts)).toEqual([])
+    }
+  })
+
+  it('joins an italic to the one before it only where the two marks touch, now that a space may stand between them', () => {
+    expect(plain('*a*_b ![p](upload:1)_*c*', { images }).parts[0].text).toBe(`*ab* *c*\n${PLAIN_FOOTER}`)
+    expect(plain('*a*_![p](upload:1) b_', { images }).parts[0].text).toBe(`*a* *b*\n${PLAIN_FOOTER}`)
+    expect(plain('**a**_![p](upload:1) b_ and ~~c ![p](upload:1)~~~~d~~', { images }).parts[0].text).toBe(`**a** *b* and ~~c~~ ~~d~~\n${PLAIN_FOOTER}`)
+  })
+
+  it('cuts an italic or a strike whose edges were spaces as one that ends in its last word, the spaces left outside it', () => {
+    // The strike ends at 1700, and the space after it is the latest place that fits; a bold of an italic keeps the spaces in its bold.
+    expect(plain(`~~ ${'a '.repeat(849)}~~${'b'.repeat(500)}`).parts.map((p) => p.text)).toEqual([m(1, 2, `~~${'a '.repeat(848)}a~~`), `${m(2, 2, 'b'.repeat(500))}\n${PLAIN_FOOTER}`])
+    expect(plain(`*** ${'a '.repeat(849)}***${'b'.repeat(500)}`).parts.map((p) => p.text)).toEqual([m(1, 2, `** *${'a '.repeat(847)}a***`), `${m(2, 2, `***a* **${'b'.repeat(500)}`)}\n${PLAIN_FOOTER}`])
+    // A mark that opens with a space is opened again in the next part before its first word, with no space and no mark left empty.
+    for (const [mark, opened] of [['~~', '~~'], ['***', '** *']]) {
+      const r = plain(`${'q '.repeat(850)}${mark} ${'z'.repeat(2000)}${mark}`)
+      expect(r.parts).toHaveLength(3)
+      expect(r.parts[0].text).toBe(m(1, 3, `${'q '.repeat(849)}q`))
+      expect(r.parts[1].text.startsWith(`**2/3** ${opened}zzz`)).toBe(true)
+    }
+  })
+
+  it('writes a bold inside a bold as its text, for Discord reads the italic between them as holding bolds, the one in a spoiler closing the one before it (the re-review)', () => {
+    // `***` is a bold that holds an italic, so `***||**A**||***` is a bold in a bold: Discord's longest match takes the italic, and in it
+    // `**||**` is a bold, which shows A.
+    expect(plain('***||**A**||***').parts[0].text).toBe(`***||A||***\n${PLAIN_FOOTER}`)
+    expect(plain('***a ||**B**|| c***').parts[0].text).toBe(`***a ||B|| c***\n${PLAIN_FOOTER}`)
+    expect(plain('***[a **b** c](https://a.example/x)***').parts[0].text).toBe(`***[a b c](<https://a.example/x>)***\n${PLAIN_FOOTER}`)
+    // The bolds after it have their marks again.
+    expect(plain('***a **b** c*** **d**').parts[0].text).toBe(`***a b c*** **d**\n${PLAIN_FOOTER}`)
+    for (const src of ['***||**A**||***', '***a ||**B**|| c***', 'x ***y ||**SECRET**|| z*** and ||OTHER||']) {
+      for (const form of FORMS) expect(leaks(src, toDiscord(src, opts({ form })).parts)).toEqual([])
+    }
+    // The parser closes an underline, a strike and a spoiler at the first of its marks, so none of them is ever inside one of its own.
+    for (const src of ['___||__A__||___', '~~~||~~A~~||~~~', '__a __||__B__|| c__', '~~a ~~||~~B~~|| c~~', '||a ||B|| c||', '|| a **||B||** c ||']) {
+      for (const form of FORMS) expect(leaks(src, toDiscord(src, opts({ form })).parts)).toEqual([])
+    }
+  })
+})
+
 describe('toDiscord: what Discord shows of the spoilers of a reply that is cut', () => {
   const hiddenOf = (text) => Object.fromEntries(discordWords(text).map((w) => [w.word, w.hidden]))
   const spaced = (n) => Array(n).fill('a').join(' ')
@@ -2135,8 +2211,19 @@ describe('toDiscord: what Discord shows of the spoilers of a reply that is cut',
     expect(hiddenOf(`*${ZW}*then ||SECRET.*b* x||`)).toEqual({ then: 'none', SECRET: 'all', b: 'all', x: 'all' })
   })
 
-  // The marks that a cut keeps from leaving a pair of them with nothing in: each is read as the mark of what it holds.
-  const PAIRS = ['||', '**', '__', '~~', '`', '***']
+  it('has a model that takes the longest of the bold and the italic that match at a run of asterisks, and the italic of two as long, as Discord does', () => {
+    // `_**a***_` is written `***a**\**`, an italic of a bold and an asterisk. Were bold taken first, it would be a bold of `*a`, and the
+    // asterisk left over would open an italic with the first mark of the spoiler.
+    expect(hiddenOf('***a**\\**||*u*||')).toEqual({ a: 'none', u: 'all' })
+    expect(hiddenOf('***a*** ||**u**||')).toEqual({ a: 'none', u: 'all' })
+    const src = '_**a***_||_u_||'
+    expect(plain(src).parts[0].text).toBe(`***a**\\**||*u*||\n${PLAIN_FOOTER}`)
+    for (const form of FORMS) expect(leaks(src, toDiscord(src, opts({ form })).parts)).toEqual([])
+  })
+
+  // The marks that a cut keeps from leaving a pair of them with nothing in: each is read as the mark of what it holds. (An italic or a
+  // strike has the spaces at its edges written outside it, so a cut never finds one there.)
+  const PAIRS = ['||', '**', '__', '`']
 
   for (const mark of PAIRS) {
     it(`cuts ${mark} that ends in a space before the space, so that no part starts with the ${mark} that closes it`, () => {
@@ -2220,7 +2307,10 @@ describe('toDiscord: what Discord shows of the spoilers of a reply that is cut',
 
   it('gives any other mark that a cut leaves with nothing in it a zero-width space, as Discord takes no italic or strike of a space', () => {
     expect(plain(`**${' '.repeat(3000)}w**`).parts.map((p) => p.text)).toEqual([`**1/2** **${ZW}**`, `${m(2, 2, '**w**')}\n${PLAIN_FOOTER}`])
-    expect(plain(`~~${' '.repeat(3000)}w~~`).parts.map((p) => p.text)).toEqual([`**1/2** ~~${ZW}~~`, `${m(2, 2, '~~w~~')}\n${PLAIN_FOOTER}`])
+    // The innermost mark is given it, here in a strike or an italic, whose own spaces at an edge are written outside them.
+    expect(plain(`~~__${' '.repeat(3000)}w__~~`).parts.map((p) => p.text)).toEqual([`**1/2** ~~__${ZW}__~~`, `${m(2, 2, '~~__w__~~')}\n${PLAIN_FOOTER}`])
+    expect(plain(`*__${' '.repeat(3000)}w__*`).parts.map((p) => p.text)).toEqual([`**1/2** *__${ZW}__*`, `${m(2, 2, '*__w__*')}\n${PLAIN_FOOTER}`])
+    expect(plain(`~~${' '.repeat(3000)}w~~`).parts.map((p) => p.text)).toEqual(['**1/2**', `${m(2, 2, '~~w~~')}\n${PLAIN_FOOTER}`])
     const src = `**SPOILT${' '.repeat(3000)}** then ||SECRET|| and **b**`
     const r = plain(src)
     expect(r.parts.map((p) => p.text)).toEqual(['**1/3** **SPOIL**', '**2/3** **T**', `**3/3** **${ZW}** then ||SECRET|| and **b**\n${PLAIN_FOOTER}`])
@@ -2297,6 +2387,18 @@ describe('toDiscord: what Discord shows of the spoilers of a reply that is cut',
     { weight: 1, arbitrary: fc.tuple(sw, sw).map(([a, b]) => `||**${a}****${b}**||`) },
     // An italic in an italic, which the form writes as its text.
     { weight: 1, arbitrary: fc.tuple(lw, lw).map(([a, b]) => `*_${a}_ ${b}*`) },
+    // A mark with a space at an inner edge, then a spoiler that opens with the same mark: Discord takes no italic or strike so, and
+    // would pair its marks with the spoiler's but for the spaces that the form writes outside it. A picture that is attached shows
+    // nothing, and leaves a space at the edge of an italic. Bold and underline are marks with the spaces in them.
+    { weight: 1, arbitrary: fc.tuple(lw, sw).map(([a, b]) => `*${a} ![p](upload:1)*||*${b}*||`) },
+    { weight: 1, arbitrary: fc.tuple(lw, sw).map(([a, b]) => `*![p](upload:1) ${a}*||*${b}*||`) },
+    { weight: 1, arbitrary: fc.tuple(lw, sw, fc.constantFrom('~~', '**', '__')).map(([a, b, mark]) => `${mark} ${a}${mark}||${mark}${b}${mark}||`) },
+    { weight: 1, arbitrary: fc.tuple(lw, sw, fc.constantFrom('~~', '**', '__')).map(([a, b, mark]) => `${mark}${a} ${mark}||${mark}${b}${mark}||`) },
+    // A bold in a bold, which `***` makes (a bold that holds an italic), and which the form writes as its text.
+    { weight: 1, arbitrary: sw.map((a) => `***||**${a}**||***`) },
+    { weight: 1, arbitrary: fc.tuple(lw, sw, lw).map(([a, b, c]) => `***${a} ||**${b}**|| ${c}***`) },
+    // A spoiler over lines, one of which is all a picture that is attached, or a mark of spaces: it shows nothing.
+    { weight: 1, arbitrary: fc.tuple(sw, sw, fc.constantFrom('![p](upload:1)', '__ __', '*![p](upload:1)*')).map(([a, b, line]) => `||${a}\n${line}\n${b}||`) },
   )
   // A paragraph of units, on one line or on a few: a spoiler that is cut can fall anywhere in it.
   const paragraph = (least, most) =>
