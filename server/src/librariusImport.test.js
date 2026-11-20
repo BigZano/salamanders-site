@@ -289,8 +289,13 @@ function setup({ active, archived, channels, threads, pageSize, archivedAnswer, 
   const store = fakeStore(storeOptions)
   const logs = []
   const timers = fakeTimers()
-  const imp = createImport({ discord, store, forumId: FORUM, windowSize, now: clock.now, timers, log: (...a) => logs.push(a.join(' ')), ...over })
-  return { clock, discord, store, logs, timers, imp }
+  // Each time the run tells the outbox to look, what the store had queued for it by then (the keys of the deletions).
+  const told = []
+  const kickOutbox = () => {
+    told.push(store.queued.map((q) => q.messageKey))
+  }
+  const imp = createImport({ discord, store, forumId: FORUM, windowSize, now: clock.now, timers, log: (...a) => logs.push(a.join(' ')), kickOutbox, ...over })
+  return { clock, discord, store, logs, timers, imp, told }
 }
 
 const reads = (w) => w.discord.calls.filter((c) => c[0] === 'messagesAfter')
@@ -423,6 +428,14 @@ describe('our own webhook: the parts of a reply of the site are the outbox\'s, n
     await w.imp.run()
     expect(w.store.messages.get(mid(1, 2)).content).toBe('the reply of the site')
     expect(w.store.writes).toEqual([])
+  })
+
+  it('takes a kickOutbox that is a function, or none, and refuses anything else', () => {
+    const o = () => ({ discord: fakeDiscord(), store: fakeStore(), forumId: FORUM })
+    for (const kickOutbox of [undefined, () => {}]) expect(() => createImport({ ...o(), kickOutbox })).not.toThrow()
+    for (const kickOutbox of [null, 'kick', {}, { kick: () => {} }, 1, true]) {
+      expect(() => createImport({ ...o(), kickOutbox }), String(kickOutbox)).toThrow(new TypeError('kickOutbox must be a function.'))
+    }
   })
 
   it('refuses a webhookId that is neither a Discord id nor null', () => {
@@ -948,6 +961,88 @@ describe('the catch-up and a reply of the site whose first part is gone from Dis
     expect(idsOf(w, 1)).toEqual([1, 2, 3, 4].map((n) => mid(1, n)))
     expect(await w.imp.status()).toMatchObject({ importDone: false, lastError: 'Error: connection lost' })
   })
+
+  // The outbox sleeps while it has nothing to do, and only a kick wakes it: without one, the rest of the reply stays in Discord until the
+  // next write from the site. Each `told` entry is what the store had queued when the outbox was told.
+  describe('the outbox is told', () => {
+    it('once the store has queued the deletion of the parts that are left', async () => {
+      const w = world(THREE)
+      await w.imp.run()
+      expect(w.told).toEqual([[mid(1, 2)]])
+    })
+
+    it('only once the store has answered: not while its transaction is still going', async () => {
+      const w = world(THREE)
+      const gate = Promise.withResolvers()
+      const siteDeleted = w.store.siteDeleted
+      w.store.siteDeleted = async (...args) => {
+        await gate.promise
+        return siteDeleted(...args)
+      }
+      const run = w.imp.run()
+      await new Promise((resolve) => setImmediate(resolve))
+      expect(w.store.queued).toEqual([])
+      expect(w.told).toEqual([])
+      gate.resolve()
+      await run
+      expect(w.told).toEqual([[mid(1, 2)]])
+    })
+
+    it('before the messages of Discord that are gone are deleted: a store that fails there leaves the outbox told all the same', async () => {
+      const w = world(THREE)
+      w.store.failWhen('deleteMessages', () => true, new Error('connection lost'))
+      await w.imp.run()
+      expect(await w.imp.status()).toMatchObject({ importDone: false, lastError: 'Error: connection lost' })
+      expect(w.told).toEqual([[mid(1, 2)]])
+    })
+
+    it('not when siteDeleted fails, since nothing was queued, and then by the run after, which takes the reply', async () => {
+      const w = world(THREE)
+      let down = true
+      w.store.failWhen('siteDeleted', () => down, new Error('connection lost'))
+      await w.imp.run()
+      expect(w.told).toEqual([])
+      down = false
+      await w.imp.run()
+      expect(w.told).toEqual([[mid(1, 2)]])
+    })
+
+    it('when a reply of one part goes, and never when only messages of Discord are gone, or nothing is', async () => {
+      // Message 3 of a person is gone, and nothing else: no reply went, so there is nothing to tell.
+      const plain = setup({
+        active: [thread(1)],
+        channels: { [postId(1)]: [raw(1, 1), raw(1, 2), raw(1, 4)] },
+        store: { posts: [known(1)], messages: [1, 2, 3, 4].map((n) => parseMessage(raw(1, n))), cursors: { [postId(1)]: mid(1, 100) }, parts: THREE.slice(0, 1) },
+        windowSize: 5,
+      })
+      await plain.imp.run()
+      await plain.imp.run()
+      expect(idsOf(plain, 1)).toEqual([1, 2, 4].map((n) => mid(1, n)))
+      expect(plain.told).toEqual([])
+      // A reply of one part leaves nothing to delete, but the store took a reply, and that is all the run can know of what it queued.
+      const single = world(THREE.slice(0, 1))
+      await single.imp.run()
+      expect(single.store.queued).toEqual([])
+      expect(single.told).toEqual([[]])
+    })
+
+    it('with the replies off there is no outbox to tell, and the reply goes all the same', async () => {
+      const w = setup({
+        active: [thread(1)],
+        channels: { [postId(1)]: [raw(1, 1), raw(1, 4)] },
+        store: { posts: [known(1)], messages: [1, 2, 3, 4].map((n) => parseMessage(raw(1, n))), cursors: { [postId(1)]: mid(1, 100) }, parts: THREE, hooks: [HOOK] },
+        windowSize: 5,
+        kickOutbox: undefined,
+      })
+      await w.imp.run()
+      expect(idsOf(w, 1)).toEqual([1, 4].map((n) => mid(1, n)))
+      expect(w.store.queued).toEqual([{ messageKey: mid(1, 2), postId: postId(1), partIds: [mid(1, 20), mid(1, 21)] }])
+      expect(await w.imp.status()).toMatchObject({ importDone: true, lastError: null })
+      expect(w.told).toEqual([])
+      // A kickOutbox of null is no "replies off": it is refused, so that a wiring mistake is not silent.
+      expect(() => createImport({ discord: fakeDiscord(), store: fakeStore(), forumId: FORUM, kickOutbox: null })).toThrow(new TypeError('kickOutbox must be a function.'))
+    })
+  })
 })
 
 // A moderator may delete part 2 or 3 of a reply of the site while the gateway is down. The catch-up then judges each later part of each
@@ -1201,6 +1296,9 @@ describe('the catch-up and the later parts of a reply of the site', () => {
             .filter((q) => q.partIds.length > 0)
           const sortQ = (list) => [...list].sort((a, b) => (a.messageKey < b.messageKey ? -1 : 1))
           expect(sortQ(w.store.queued.map(({ messageKey, partIds }) => ({ messageKey, partIds })))).toEqual(sortQ(expectQueued))
+          // The outbox is told once, after the store took the replies, when any went; and never when none did.
+          const tookReply = [...removed].some((n) => replyOf.has(n))
+          expect(w.told).toEqual(tookReply ? [w.store.queued.map((q) => q.messageKey)] : [])
         },
       ),
       { numRuns: 400 },
@@ -1209,6 +1307,18 @@ describe('the catch-up and the later parts of a reply of the site', () => {
     expect(seen.kept).toBeGreaterThan(20)
     expect(seen.byFirst).toBeGreaterThan(10)
     expect(seen.byLater).toBeGreaterThan(10)
+  })
+
+  it('tells the outbox once for each post whose catch-up took a reply, after the store queued its deletion, and for no other post', async () => {
+    // Post 1 loses part 3 of its reply inside the page, post 2 only a message of a person, and post 3 part 2 of its reply.
+    const w = world([{ top: 8, missing: [7], replies: [[3, 5, 7]] }, { top: 4, missing: [2] }, { top: 8, missing: [5], replies: [[3, 5, 7]] }])
+    await w.imp.run()
+    expect(w.store.queued.map((q) => [q.messageKey, q.partIds])).toEqual([
+      [mid(1, 3), [mid(1, 3), mid(1, 5)]],
+      [mid(3, 3), [mid(3, 3), mid(3, 7)]],
+    ])
+    expect(idsOf(w, 2)).toEqual([1, 3, 4].map((n) => mid(2, n)))
+    expect(w.told).toEqual([[mid(1, 3)], [mid(1, 3), mid(3, 3)]])
   })
 
   it('ends the run, deleting nothing of the post, when Discord cannot answer about a part, and moves on to no other post', async () => {

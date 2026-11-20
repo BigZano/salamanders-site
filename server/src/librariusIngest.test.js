@@ -229,6 +229,8 @@ async function rig({ posts = [POST], messages = [], parts = [], hooks = [], load
   const access = fakeAccess()
   const fetch = fakeFetch(answers)
   const readies = { count: 0 }
+  // Each time the ingest tells the outbox to look, what the store had queued for it by then (the keys of the deletions).
+  const told = []
   const ingest = createIngest({
     store,
     guild,
@@ -238,11 +240,14 @@ async function rig({ posts = [POST], messages = [], parts = [], hooks = [], load
     onReady: () => {
       readies.count += 1
     },
+    kickOutbox: () => {
+      told.push(store.queued.map((q) => q.messageKey))
+    },
     log: () => {},
     ...over,
   })
   if (load) await ingest.load()
-  return { ingest, store, guild, access, fetch, readies, send: ingest.dispatch }
+  return { ingest, store, guild, access, fetch, readies, told, send: ingest.dispatch }
 }
 
 const reactionsOf = (w, id = MSG) => w.store.messages.get(id).reactions
@@ -317,6 +322,22 @@ describe('createIngest options', () => {
 
   it('takes a webhookId of 17 and of 20 digits', () => {
     for (const webhookId of ['12345678901234567', '12345678901234567890']) expect(() => createIngest({ ...options(), webhookId })).not.toThrow()
+  })
+
+  it('takes a kickOutbox that is a function, or none, and refuses anything else', () => {
+    for (const kickOutbox of [undefined, () => {}]) expect(() => createIngest({ ...options(), kickOutbox })).not.toThrow()
+    for (const kickOutbox of [null, 'kick', {}, { kick: () => {} }, 1, true]) {
+      expect(() => createIngest({ ...options(), kickOutbox }), String(kickOutbox)).toThrow(new TypeError('kickOutbox must be a function.'))
+    }
+  })
+
+  it('needs no kickOutbox: with the replies off there is no outbox to tell, and a reply whose part is deleted goes all the same', async () => {
+    const w = await rig({ ...siteReply(), kickOutbox: undefined })
+    await expect(w.send('MESSAGE_DELETE', { id: PART_2, channel_id: POST })).resolves.toBeUndefined()
+    expect([...w.store.messages.keys()]).toEqual([MSG_2])
+    expect(w.store.queued).toEqual([{ messageKey: MSG, postId: POST, partIds: [MSG, PART_3] }])
+    // A kickOutbox of null is no "replies off": it is refused, so that a wiring mistake is not silent.
+    expect(() => createIngest({ ...options(), kickOutbox: null })).toThrow(new TypeError('kickOutbox must be a function.'))
   })
 
   it('needs no log: it logs to console.error when none is given', async () => {
@@ -1215,6 +1236,125 @@ describe('a part of a reply of the site, deleted in Discord', () => {
     w.store.failWhen('siteDeleted', () => true, new Error('connection lost'))
     await expect(w.send('MESSAGE_DELETE', { id: PART_2, channel_id: POST })).rejects.toThrow('connection lost')
     expect(w.store.messages.size).toBe(2)
+  })
+})
+
+// The outbox sleeps while it has nothing to do, and only a kick wakes it: without one, the rest of a reply whose part was deleted in
+// Discord stays there until the next write from the site. Each `told` entry is what the store had queued when the outbox was told.
+describe('a part of a reply of the site, deleted in Discord: the outbox is told', () => {
+  const PART_4 = '200000000000000436'
+  const PART_5 = '200000000000000437'
+
+  it.each([
+    ['the first part', MSG],
+    ['a part after it', PART_2],
+    ['the last part', PART_3],
+  ])('once the store has queued the deletion of the rest, for a delete of %s', async (_, part) => {
+    const w = await rig({ ...siteReply() })
+    await w.send('MESSAGE_DELETE', { id: part, channel_id: POST })
+    expect(w.told).toEqual([[MSG]])
+  })
+
+  it('once for a bulk delete that takes a reply, with plain messages beside it', async () => {
+    const w = await rig({ ...siteReply() })
+    await w.send('MESSAGE_DELETE_BULK', { ids: [MSG_2, PART_2, PART_3, MSG_4], channel_id: POST })
+    expect(w.store.queued).toEqual([{ messageKey: MSG, postId: POST, partIds: [MSG] }])
+    expect(w.told).toEqual([[MSG]])
+  })
+
+  it('when a re-read finds a part gone', async () => {
+    const w = await rig({ ...siteReply(), answers: new Map() })
+    await w.send('MESSAGE_UPDATE', { id: PART_3, channel_id: POST, embeds: [] })
+    expect(w.told).toEqual([[MSG]])
+  })
+
+  it('only once the store has answered: not while its transaction is still going', async () => {
+    const w = await rig({ ...siteReply() })
+    const gate = Promise.withResolvers()
+    const siteDeleted = w.store.siteDeleted
+    w.store.siteDeleted = async (...args) => {
+      await gate.promise
+      return siteDeleted(...args)
+    }
+    const event = w.send('MESSAGE_DELETE', { id: PART_2, channel_id: POST })
+    await flush()
+    expect(w.told).toEqual([])
+    gate.resolve()
+    await event
+    expect(w.told).toEqual([[MSG]])
+  })
+
+  it('before the plain messages are deleted: a store that fails there leaves the outbox told all the same', async () => {
+    const w = await rig({ ...siteReply() })
+    w.store.failWhen('deleteMessages', () => true, new Error('connection lost'))
+    await expect(w.send('MESSAGE_DELETE_BULK', { ids: [PART_2, MSG_2], channel_id: POST })).rejects.toThrow('connection lost')
+    expect(w.told).toEqual([[MSG]])
+  })
+
+  it('not when the store fails to take the reply, since nothing was queued, and then when the next delete is taken', async () => {
+    const w = await rig({ ...siteReply() })
+    let down = true
+    w.store.failWhen('siteDeleted', () => down, new Error('connection lost'))
+    await expect(w.send('MESSAGE_DELETE', { id: PART_2, channel_id: POST })).rejects.toThrow('connection lost')
+    expect(w.told).toEqual([])
+    down = false
+    await w.send('MESSAGE_DELETE', { id: PART_2, channel_id: POST })
+    expect(w.told).toEqual([[MSG]])
+  })
+
+  it('never for a message of Discord, a channel it does not listen to, an id the store cannot take, or a delete of nothing', async () => {
+    const w = await rig({ ...siteReply(), answers: new Map() })
+    await w.send('MESSAGE_DELETE', { id: MSG_2, channel_id: POST })
+    await w.send('MESSAGE_DELETE_BULK', { ids: [MSG_3, MSG_4, MSG_3], channel_id: POST })
+    await w.send('MESSAGE_UPDATE', { id: MSG_4, channel_id: POST, embeds: [] })
+    await w.send('MESSAGE_DELETE', { id: PART_2, channel_id: STRANGER })
+    await w.send('MESSAGE_DELETE', { id: OUT_OF_RANGE, channel_id: POST })
+    await w.send('MESSAGE_DELETE_BULK', { ids: [OUT_OF_RANGE, 'x', null], channel_id: POST })
+    await w.send('MESSAGE_DELETE_BULK', { ids: [], channel_id: POST })
+    await w.send('MESSAGE_CREATE', gw({ id: MSG_3 }))
+    await w.send('MESSAGE_UPDATE', gw({ id: MSG_3, content: 'edited' }))
+    await w.send('MESSAGE_REACTION_ADD', { user_id: MEMBER, channel_id: POST, message_id: PART_2, emoji: FIRE })
+    expect(w.told).toEqual([])
+    // And the part that is deleted after all that is told of.
+    await w.send('MESSAGE_DELETE', { id: PART_3, channel_id: POST })
+    expect(w.told).toEqual([[MSG]])
+    await w.send('THREAD_DELETE', { id: POST, parent_id: FORUM })
+    expect(w.told).toEqual([[MSG]])
+  })
+
+  it('after every event whose store call took a reply, once, and after no other event (property)', async () => {
+    const ID = fc.constantFrom(MSG, PART_2, PART_3, MSG_2, MSG_3, PART_4, PART_5, MSG_4, OUT_OF_RANGE)
+    const event = fc.oneof(
+      ID.map((id) => ['MESSAGE_DELETE', { id, channel_id: POST }]),
+      fc.array(ID, { maxLength: 5 }).map((ids) => ['MESSAGE_DELETE_BULK', { ids, channel_id: POST }]),
+      ID.map((id) => ['MESSAGE_UPDATE', { id, channel_id: POST, embeds: [] }]),
+      ID.map((id) => ['MESSAGE_DELETE', { id, channel_id: STRANGER }]),
+    )
+    const seen = { told: 0, quiet: 0 }
+    await fc.assert(
+      fc.asyncProperty(fc.array(event, { minLength: 1, maxLength: 8 }), async (events) => {
+        // Two replies of the site: MSG of three parts, and MSG_3 of two.
+        const w = await rig({
+          messages: [...siteReply().messages, storedMessage({ id: MSG_3, webhookId: HOOK, authorId: MEMBER }), storedMessage({ id: MSG_4 })],
+          parts: [...siteReply().parts, [MSG_3, MSG_3], [PART_4, MSG_3], [PART_5, MSG_3]],
+          answers: new Map(),
+        })
+        for (const [type, d] of events) {
+          const parts = w.store.parts.size
+          const queued = w.store.queued.length
+          const told = w.told.length
+          await w.send(type, d)
+          const took = w.store.parts.size < parts
+          expect(w.told.length - told).toBe(took ? 1 : 0)
+          // Never a deletion queued that the outbox was not told of, and it was told once the store had queued it.
+          if (w.store.queued.length > queued) expect(w.told.at(-1)).toEqual(w.store.queued.map((q) => q.messageKey))
+          seen[took ? 'told' : 'quiet'] += 1
+        }
+      }),
+      { numRuns: 200 },
+    )
+    expect(seen.told).toBeGreaterThan(50)
+    expect(seen.quiet).toBeGreaterThan(50)
   })
 })
 

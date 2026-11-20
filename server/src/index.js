@@ -279,6 +279,11 @@ if (librariusConfigured) {
     // What the webhook posts is the outbox's to store, whole: the import and the live feed must know it by its id, or a catch-up
     // would store parts 2 and 3 of a reply as messages of their own, and the first part over the reply.
     const webhookId = webhook === null ? null : webhook.id
+    // A part of a reply deleted in Discord takes the whole reply, and the store queues the deletion of the rest (store.siteDeleted). The
+    // import and the live feed then wake the outbox, which sleeps while it has nothing to do: without the kick, the rest would stay in
+    // Discord until the next write from the site. A kick before the outbox has started does nothing, and its start looks at all that is
+    // due. With the replies off there is no outbox, and nothing to wake.
+    const kickOutbox = outbox === null ? undefined : () => outbox.kick()
     // The import may queue for Discord longer than a reader's request may: it is given a view of the REST client that
     // waits up to a minute for its turn. Everything else keeps the five seconds.
     const importer = createImport({
@@ -289,6 +294,7 @@ if (librariusConfigured) {
       // been told of. `ingest` is made below, and is only called once the import runs.
       onPostsListed: () => ingest.load(),
       webhookId,
+      kickOutbox,
     })
     const links = createLinkRefresh({ discord, store })
     const ingest = createIngest({
@@ -301,6 +307,7 @@ if (librariusConfigured) {
       // starts as the going one ends (librariusImport.js).
       onReady: () => importer.run(),
       webhookId,
+      kickOutbox,
     })
     // The command answers an interaction within the three seconds Discord gives, so it runs beside the live feed and never in front of it
     // (librariusDispatch.js).
