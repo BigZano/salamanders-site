@@ -1748,7 +1748,10 @@ describe('scanInWorker: the one child process, the real one', () => {
 // far over the 5 s that a test has.
 const TIMED = { timeout: 120_000 }
 
-describe('automodMatcher: it stays linear in the length of the text', TIMED, () => {
+// Under Stryker these runs of n against 8n, each taken several times and measured again, take longer than even TIMED allows, once
+// for every mutant. They guard how the work grows with the text. A mutant that stops a walk advancing is a hang, which Stryker counts
+// as a kill, so the mutation run leaves them out.
+describe.skipIf(process.env.STRYKER_MUTATOR_WORKER)('automodMatcher: it stays linear in the length of the text', TIMED, () => {
   // One word of 16,000 characters, which the old reading walked end to end for every place a keyword met it: seconds, on Bun
   // 7 s for `*ass*` and 20 s for `*a*`.
   const word = (unit, n = 16_000) => unit.repeat(Math.ceil(n / unit.length)).slice(0, n)
