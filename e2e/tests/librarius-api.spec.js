@@ -181,7 +181,8 @@ test.describe('Librarius API', () => {
     const target = messages.find((m) => m.content === 'E2E message 3')
     // The target is not among the 50 the page holds, so only the store can say who wrote it and what it said.
     expect(page.messages.map((m) => m.id)).not.toContain(target.id)
-    expect(quoting.replyTo).toEqual({ id: target.id, authorId: ARCHIVIST, authorName: 'E2E Archivist', content: 'E2E message 3' })
+    // A message of Discord, quoted: it says so, and carries no source (only a reply of the site has one).
+    expect(quoting.replyTo).toEqual({ id: target.id, authorId: ARCHIVIST, authorName: 'E2E Archivist', content: 'E2E message 3', origin: 'discord' })
     expect(page.people[ARCHIVIST]).toEqual({ name: 'E2E Archivist', avatar: null })
     // A message that replies to nothing quotes nothing.
     expect(page.messages.find((m) => m.content === 'E2E message 229').replyTo).toBeNull()
