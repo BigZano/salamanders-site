@@ -3,12 +3,13 @@
 // filter, a sort, the archived posts behind a button, and a button to start a post in Discord (posts are started there
 // only). Each row shows the title, its tags, how many messages the reader has not seen, who wrote the newest message and
 // its first line, a thumbnail when that message carries a picture, the reply count, the time of the last activity and the
-// last three people to post. It asks the server for the list when it is shown and again every 30 seconds while the page is
-// visible. What Discord sends goes on the page as text, never as markup. Styles are in librarius.css.
+// last three people to post. The first line of a reply written on the site is read in the site's own markdown, as the post
+// page reads it. It asks the server for the list when it is shown and again every 30 seconds while the page is visible. What
+// Discord sends goes on the page as text, never as markup. Styles are in librarius.css.
 import { computed, onBeforeUnmount, onMounted, reactive, ref } from 'vue'
 import { useAuth } from '../../stores/auth'
 import { useLibrarius } from '../../stores/librarius'
-import { ago, excerpt, isSpoilerFile, repliesText, sortPosts } from '../../lib/librarius/layout'
+import { ago, isSpoilerFile, messageExcerpt, repliesText, sortPosts } from '../../lib/librarius/layout'
 import { attachmentUrl } from '../../lib/librarius/render'
 import { initials, safeAvatar } from '../../lib/rosterAvatar'
 import './librarius.css'
@@ -99,7 +100,8 @@ function row(post, now) {
     tags: list(post.tagIds).map((id) => tagNames.value.get(id)).filter(Boolean),
     latest: latest && {
       name: known(latest.authorId)?.name || latest.authorName,
-      text: typeof latest.content === 'string' ? excerpt(latest.content, 120) : '',
+      // A reply of the site in its own dialect, from its source, as the post page reads it.
+      text: messageExcerpt(latest, 120),
       thumb,
       spoiler: isSpoilerFile(thumb),
     },

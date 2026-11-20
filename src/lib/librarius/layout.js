@@ -18,6 +18,13 @@
  *   wherever it sits (in bold, a quote, a list, a link's label), is "▒▒▒" whatever it hides, and the cut is made after.
  *   It fails closed: a `||` that no `||` closes (a preview cut the spoiler open, or it runs over lines, or it was escaped
  *   or is a lone bar) is masked from there to the end, and nothing after it is shown. In code a `||` is only text.
+ *   `dialect` is the markdown's (librariusMarkdown.js): 'discord' (the default) for a message written in Discord, 'extended'
+ *   for a reply written on the site, and anything else a RangeError. In the extended dialect a picture is the word "picture"
+ *   (never the words under it), a table is the text of its cells, row by row, and a `||` in a cell is masked as anywhere else.
+ * messageExcerpt(message, max = 120) → the excerpt of a message in the words and the dialect the post page reads it by
+ *   (LibMessage.vue): a reply of the site (`origin` exactly 'site') from its `source` when that is text, else its `content`, in
+ *   the extended dialect; any other message from its `content`, in Discord's. '' when that is no text. It takes a message, the
+ *   latest message of a row of the topic list, or the message a reply line quotes; anything that is no object is a TypeError.
  * firstUnread(messages, lastRead) → the id of the first message in the list that is newer than `lastRead`, or null.
  *   `lastRead` null or undefined means the reader has read nothing: null, and there is no divider.
  * isSpoilerFile(nameOrUrl) → whether a file name, or the last segment of an address's path (before any ? or #), begins
@@ -55,6 +62,8 @@ const WHITE_SPACE = /\s+/g
 const SPOILER_MASK = '▒▒▒'
 const SPOILER_OPENER = '||'
 const SPOILER_FILE = /^spoiler_/i
+// What a picture of a reply of the site is in an excerpt. The spaces keep it a word of its own; the excerpt makes them one.
+const PICTURE_WORD = ' picture '
 const MINUTE_MS = 60_000
 const HOUR_MS = 60 * MINUTE_MS
 const DAY_MS = 24 * HOUR_MS
@@ -180,7 +189,8 @@ const maskedFrom = (text) => text.slice(0, text.indexOf(SPOILER_OPENER)) + SPOIL
 /**
  * → a copy of the nodes in which every spoiler, nested ones included, is a text node of the mask, and in which the first
  * text or address that holds a `||` (one no spoiler took, so it has no closing `||`) is cut there and ends with the mask,
- * and every node after it, in the reading order, is gone.
+ * and every node after it, in the reading order, is gone. A picture is a text node of its word, and a table's cells are
+ * read in their order, the head's first, as plainText reads them.
  */
 function previewNodes(nodes) {
   let closed = false
@@ -189,10 +199,12 @@ function previewNodes(nodes) {
     for (const node of list) {
       if (closed) break
       if (node.type === 'spoiler') kept.push({ type: 'text', value: SPOILER_MASK })
+      else if (node.type === 'image') kept.push({ type: 'text', value: PICTURE_WORD })
       else if (readable(node)?.includes(SPOILER_OPENER)) {
         closed = true
         kept.push({ type: 'text', value: maskedFrom(readable(node)) })
-      } else if (node.children) kept.push({ ...node, children: take(node.children) })
+      } else if (node.type === 'table') kept.push({ ...node, head: node.head.map(take), rows: node.rows.map((row) => row.map(take)) })
+      else if (node.children) kept.push({ ...node, children: take(node.children) })
       else if (node.items) kept.push({ ...node, items: node.items.map((item) => ({ ...item, children: take(item.children) })) })
       else kept.push(node)
     }
@@ -201,13 +213,28 @@ function previewNodes(nodes) {
   return take(nodes)
 }
 
-/** → the first line of a message as plain text, spoilers masked, white space collapsed, at most `max` characters. */
-export function excerpt(content, max = 120) {
+function needLength(max) {
   if (!Number.isSafeInteger(max) || max < 1) throw new RangeError('The length of an excerpt is a whole number from 1.')
-  const text = plainText(previewNodes(parse(content))).replace(WHITE_SPACE, ' ').trim()
+}
+
+/** → the first line of a message as plain text, spoilers masked, white space collapsed, at most `max` characters. */
+export function excerpt(content, max = 120, { dialect = 'discord' } = {}) {
+  needLength(max)
+  const text = plainText(previewNodes(parse(content, { dialect }))).replace(WHITE_SPACE, ' ').trim()
   const characters = Array.from(text)
   if (characters.length <= max) return text
   return characters.slice(0, max - 1).join('').trimEnd() + '…'
+}
+
+/** → the excerpt of a message as the post page reads it: a reply of the site from its source in the extended dialect, else Discord's. */
+export function messageExcerpt(message, max = 120) {
+  if (typeof message !== 'object' || message === null) throw new TypeError('messageExcerpt takes a message.')
+  needLength(max)
+  // Exactly 'site', as LibMessage.vue reads it: anything else is a message of Discord (fail closed).
+  const fromSite = message.origin === 'site'
+  const text = fromSite && typeof message.source === 'string' ? message.source : message.content
+  if (typeof text !== 'string') return ''
+  return excerpt(text, max, { dialect: fromSite ? 'extended' : 'discord' })
 }
 
 function idOf(value) {

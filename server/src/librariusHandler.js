@@ -96,6 +96,22 @@ const fromSite = (m) => m.origin === 'site'
  */
 const textOf = (m) => (fromSite(m) && typeof m.source === 'string' ? m.source : m.content)
 
+/**
+ * → who made a message, as the site is told it: { origin: 'site', source } for a reply of the site, else { origin: 'discord' } and no
+ * source, whatever the row holds (fail closed). `cut` gives what of the source is sent: all of it as the store holds it, unless the site
+ * reads only its start.
+ */
+const madeBy = (m, cut = (source) => source) => (fromSite(m) ? { origin: 'site', source: cut(m.source) } : { origin: 'discord' })
+
+/** The start of a source a reply line quotes, as of its content (200 characters); null when there is no source. */
+const quotedSource = (source) => (typeof source === 'string' ? quote(source) : null)
+
+/**
+ * → the latest message of a row of the topic list as the site is told it: what the list shows of it, and who made it. A reply of the
+ * site carries the start of its source (the store reads the first 400 characters), which the list reads its line from.
+ */
+const latestOut = (m) => ({ id: m.id, authorId: m.authorId, authorName: m.authorName, authorAvatar: m.authorAvatar, content: m.content, image: m.image, ...madeBy(m) })
+
 /** → the 1 KB JSON request of a PUT: { body, blank } or { status, error }. It is counted as it arrives, and a body past 1 KB is
  * given up there (librariusBody.js readJsonWithin), so a member who sends a megabyte is not held for it. */
 const readJson = (request) => readJsonWithin(request, { maxBytes: JSON_MAX_BYTES, tooLarge: 'The request is too large (1 KB at most).' })
@@ -175,7 +191,8 @@ export function createLibrariusHandler({
   /**
    * → { messages, people } for message rows of a post: each as the site shows it, and everyone they name. A message says who made it,
    * `origin` 'site' or 'discord', and a reply of the site also its `source` (as the store holds it: text, or null for none); the people
-   * a reply of the site names are those its source mentions.
+   * a reply of the site names are those its source mentions. The message a reply quotes says who made it by the same rule, a reply of
+   * the site with the start of its source, which the page reads the quote from.
    */
   async function present(postId, rows) {
     const renewed = await renewedLinks(rows.flatMap((m) => m.attachments))
@@ -190,8 +207,8 @@ export function createLibrariusHandler({
       const target = quoted.get(m.replyTo)
       if (target !== undefined) {
         directory.note(target.authorId, target.authorName, target.authorAvatar, target.id)
-        // The quote shows only its first 200 characters, and so only the mentions in those.
-        for (const id of mentionsIn(quote(target.content))) directory.want(id)
+        // The quote shows only its first 200 characters, and so only the mentions in those (of the source, for a reply of the site).
+        for (const id of mentionsIn(quote(textOf(target)))) directory.want(id)
       }
       for (const id of mentionsIn(textOf(m))) directory.want(id)
     }
@@ -215,6 +232,7 @@ export function createLibrariusHandler({
                 authorId: target.authorId,
                 authorName: directory.shown(target.authorId, { name: target.authorName }).name,
                 content: quote(target.content),
+                ...madeBy(target, quotedSource),
               },
         attachments: m.attachments.map((a) => ({
           id: a.id,
@@ -229,7 +247,7 @@ export function createLibrariusHandler({
         stickers: m.stickers,
         reactions: m.reactions,
         // A reply of the site carries its source, which the page reads in the extended dialect and edits; a message of Discord never does.
-        ...(fromSite(m) ? { origin: 'site', source: m.source } : { origin: 'discord' }),
+        ...madeBy(m),
       }
     })
     return { messages, people: directory.people() }
@@ -285,13 +303,15 @@ export function createLibrariusHandler({
       for (const id of post.posterIds) directory.want(id)
       if (post.latest === null) continue
       directory.note(post.latest.authorId, post.latest.authorName, post.latest.authorAvatar, post.latest.id)
-      // The list shows the latest line, with the mentions in it.
-      for (const id of mentionsIn(post.latest.content)) directory.want(id)
+      // The list shows the latest line, with the mentions in it (read from the source, for a reply of the site).
+      for (const id of mentionsIn(textOf(post.latest))) directory.want(id)
     }
     const shown = list.map((post) => {
-      const fresh = renewed.get(post.latest?.image?.id)
-      if (fresh === undefined) return post
-      return { ...post, latest: { ...post.latest, image: { ...post.latest.image, url: fresh.url, expiresAt: fresh.expiresAt } } }
+      if (post.latest === null) return post
+      const latest = latestOut(post.latest)
+      const fresh = renewed.get(latest.image?.id)
+      if (fresh === undefined) return { ...post, latest }
+      return { ...post, latest: { ...latest, image: { ...latest.image, url: fresh.url, expiresAt: fresh.expiresAt } } }
     })
     return reply(200, { posts: shown, people: directory.people() })
   }

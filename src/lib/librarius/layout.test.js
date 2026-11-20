@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest'
 import fc from 'fast-check'
 import { parse, plainText, walk } from '../archive/markdown'
-import { isArticle, groupMessages, articleMemo, samePeople, isRead, excerpt, firstUnread, railMonths, isImage, isSpoilerFile, ago, sortPosts, repliesText, sizeText } from './layout'
+import { isArticle, groupMessages, articleMemo, samePeople, isRead, excerpt, messageExcerpt, firstUnread, railMonths, isImage, isSpoilerFile, ago, sortPosts, repliesText, sizeText } from './layout'
 
 // Invented ids only (the 200000000000000400 range), and invented names.
 const ID = (n) => `2000000000000004${String(n).padStart(2, '0')}`
@@ -607,6 +607,233 @@ describe('excerpt', () => {
       expect(fastest(() => excerpt(run))).toBeLessThan(200)
       expect(excerpt(run)).toBe('▒'.repeat(119) + '…')
     })
+  })
+})
+
+describe('excerpt in the extended dialect: a reply written on the site', () => {
+  const MASK = '▒▒▒'
+  const EXTENDED = { dialect: 'extended' }
+  const site = (content, max = 120) => excerpt(content, max, EXTENDED)
+  // P1's example: a picture, then a table. The Discord dialect has neither, so it shows them as they were written.
+  const MAP_AND_TABLE = '![a map](upload:1)\n\n| Squad | Role |\n|---|---|\n| Invented | Tank |'
+
+  it('reads a picture as the word "picture" and a table as the text of its cells, where the Discord dialect shows what was written', () => {
+    expect(site(MAP_AND_TABLE)).toBe('picture Squad Role Invented Tank')
+    expect(excerpt(MAP_AND_TABLE)).toBe('![a map](upload:1) | Squad | Role | |---|---| | Invented | Tank |')
+    expect(excerpt(MAP_AND_TABLE, 120, { dialect: 'discord' })).toBe(excerpt(MAP_AND_TABLE))
+  })
+
+  it('reads every picture as the word, wherever it sits, and never shows the words under it', () => {
+    expect(site('Look: ![a map of the hive](upload:1) and ![](upload:10)')).toBe('Look: picture and picture')
+    expect(site('![a](upload:1)![b](upload:2)')).toBe('picture picture')
+    expect(site('**see ![a](upload:3) here** and > not a quote')).toBe('see picture here and > not a quote')
+    expect(site('- one ![a](upload:4)\n- two')).toBe('one picture two')
+    for (const alt of ['ZQ hidden words', '||ZQ||', '**ZQ**', '<@200000000000000412>', '`ZQ`', ' ']) {
+      expect(site(`a ![${alt}](upload:2) b`), alt).toBe('a picture b')
+    }
+  })
+
+  it('leaves an image that is no upload as the Discord dialect shows it: a link after a "!", or the text itself', () => {
+    expect(site('see ![a sketch](https://example.org/a.png) here, then ![b](upload:9)')).toBe('see !a sketch here, then picture')
+    expect(site('![a](upload:0) ![b](upload:11) ![c](upload:01) ![d](upload:5)')).toBe('![a](upload:0) ![b](upload:11) ![c](upload:01) picture')
+  })
+
+  it('reads a table row by row, and cuts it as any text', () => {
+    const table = '| Squad | Role |\n|:--|--:|\n| Invented | Tank |\n| Other | Medic |\n| short |'
+    expect(site(table)).toBe('Squad Role Invented Tank Other Medic short')
+    expect(site(table, 12)).toBe('Squad Role…')
+    expect(site(`before\n\n${table}\n\nafter`)).toBe('before Squad Role Invented Tank Other Medic short after')
+  })
+
+  it('reads a fenced block as its text, and a divider, headings 4 to 6 and notes as what they say', () => {
+    expect(site('```js\nconst road = 1\n```\nafter')).toBe('const road = 1 after')
+    expect(site('above\n\n---\n\nbelow')).toBe('above below')
+    expect(site('#### Four\n##### Five\n###### Six')).toBe('Four Five Six')
+    expect(site('cited[^1] here\n\n[^1]: the note')).toBe('cited here the note')
+  })
+
+  it('drops a mention and shows a link as its words or its address, as the Discord dialect does', () => {
+    const content = 'hi <@200000000000000412> and <@&200000000000000420> see [the page](https://example.org/a) or https://example.org/b ![x](upload:1)'
+    expect(site(content)).toBe('hi and see the page or https://example.org/b picture')
+  })
+
+  it('masks a spoiler as the Discord dialect does, in the marks only the site has too', () => {
+    expect(site('The traitor is ||Invented Name||. ![a](upload:1)')).toBe(`The traitor is ${MASK}. picture`)
+    expect(site('#### Four ||ZQ hidden||\n##### Five')).toBe(`Four ${MASK} Five`)
+    expect(site('noted[^1]\n\n[^1]: the note ||ZQ hidden||')).toBe(`noted the note ${MASK}`)
+    expect(site('||![a map](upload:1) ZQ hidden||')).toBe(MASK)
+    expect(site('a ||ZQ open ![a](upload:1) | x | y |')).toBe(`a ${MASK}`)
+  })
+
+  it('masks a `||` in a cell of a table from there on, as it does anywhere: nothing after it shows', () => {
+    // A pipe in a cell is written \|, so a `||` there is two escaped pipes: no spoiler, and a preview cannot tell it from one.
+    const row = '| Who | Fate |\n|---|---|\n| Invented | \\|\\|ZQ the traitor\\|\\| |\n| ZQ after | ZQ more |\n\nZQ tail'
+    expect(site(row)).toBe(`Who Fate Invented ${MASK}`)
+    expect(site(row, 100_000)).not.toMatch(/ZQ/)
+    expect(site('| \\|\\|ZQ | b |\n|---|---|\n| ZQ | ZQ |')).toBe(MASK)
+    expect(site('| a | b |\n|---|---|\n| c | d \\|\\| ZQ |')).toBe(`a b c d ${MASK}`)
+  })
+
+  it('refuses a dialect that is neither, as the parser does, and reads Discord for none', () => {
+    for (const dialect of ['Extended', 'site', 'Discord', '', null, 5]) expect(() => excerpt('a', 120, { dialect }), String(dialect)).toThrow(RangeError)
+    expect(excerpt(MAP_AND_TABLE, 120, {})).toBe(excerpt(MAP_AND_TABLE))
+    expect(excerpt(MAP_AND_TABLE, 120, { dialect: undefined })).toBe(excerpt(MAP_AND_TABLE))
+  })
+
+  it('cuts after the word of a picture as after any text', () => {
+    expect(site('![a](upload:1) and more', 8)).toBe('picture…')
+    expect(site('![a](upload:1)', 7)).toBe('picture')
+    expect(site('![a](upload:1)', 6)).toBe('pictu…')
+  })
+
+  it('stays quick on a hostile run of pictures and pipes', () => {
+    const pictures = '![a](upload:1)'.repeat(2000)
+    const table = `| ${'a | '.repeat(10)}\n|${'---|'.repeat(10)}\n${'| b | \\|\\| |\n'.repeat(50)}`
+    const pipes = Array.from({ length: 20 }, () => table).join('\n\n')
+    for (const run of [pictures, pipes]) expect(fastest(() => site(run))).toBeLessThan(200)
+    expect(site(pictures)).toBe(`${Array.from({ length: 15 }, () => 'picture').join(' ')}…`)
+    // The first row's `||` ends what the excerpt shows.
+    expect(site(pipes)).toBe(`${'a '.repeat(10)}b ▒▒▒`)
+  })
+
+  it('is the plain text of the extended parse, each picture the word, spoilers masked, collapsed and cut, whatever the content (property)', () => {
+    // The model is the Discord one's (above) over the extended parse, with each picture made the word in place first.
+    const maskedText = (content) => {
+      const nodes = parse(content, EXTENDED)
+      let closed = false
+      walk(nodes, (node) => {
+        if (node.type === 'image') Object.assign(node, { type: 'text', value: ' picture ' })
+        else if (node.type === 'spoiler') Object.assign(node, { type: 'text', value: '▒▒▒', children: undefined })
+        else if (!closed && node.type === 'url' && node.href.includes('||')) {
+          closed = true
+          Object.assign(node, { type: 'text', value: node.href.slice(0, node.href.indexOf('||')) + '▒▒▒\u0000' })
+        } else if (!closed && node.type === 'text' && node.value.includes('||')) {
+          closed = true
+          node.value = node.value.slice(0, node.value.indexOf('||')) + '▒▒▒\u0000'
+        }
+      })
+      return plainText(nodes).split('\u0000')[0].replace(/\s+/g, ' ').trim()
+    }
+    const cut = (chars, max) => (chars.length <= max ? chars.join('') : chars.slice(0, max - 1).join('').trimEnd() + '…')
+    fc.assert(
+      fc.property(fc.string({ maxLength: 400 }), fc.integer({ min: 1, max: 150 }), (content, max) => {
+        expect(site(content, max)).toBe(cut(Array.from(maskedText(content)), max))
+      }),
+    )
+    const piece = fc.constantFrom(
+      '![a](upload:1)',
+      '![||b||](upload:2)',
+      '| a | b |\n|---|---|\n| c | \\|\\|d |\n',
+      '| e | f |\n|---|---|\n| g | h |\n',
+      '||i j||',
+      '#### k',
+      '---\n',
+      'x[^1]',
+      '[^1]: note ||l||\n',
+      '```\n||m||\n```\n',
+      '\\||n',
+      '**||o||**',
+      '> p',
+      ' ',
+      '\n',
+      '\n\n',
+    )
+    fc.assert(
+      fc.property(fc.array(piece, { maxLength: 30 }), fc.integer({ min: 1, max: 40 }), (pieces, max) => {
+        const content = pieces.join('')
+        expect(site(content, max)).toBe(cut(Array.from(maskedText(content)), max))
+      }),
+    )
+  })
+
+  it('never lets what a spoiler hides, a `||` in a table hides, or the words under a picture reach the excerpt (property)', () => {
+    // A secret begins with ZQ and plain text is digits, so no word of the plain text can be mistaken for one.
+    const secret = fc.stringMatching(/^[a-z]{4,10}$/).map((word) => `ZQ${word}`)
+    const plain = fc.stringMatching(/^[0-9]{1,8}$/)
+    const piece = fc.oneof(
+      secret.map((w) => `||${w}||`),
+      secret.map((w) => `![${w}](upload:3)`),
+      secret.map((w) => `||![a](upload:1) **${w}**||`),
+      fc.tuple(secret, fc.constantFrom('**', '__', '~~', '*')).map(([w, mark]) => `${mark}7 ||${w}|| x${mark}`),
+      plain,
+    )
+    const line = fc.tuple(fc.constantFrom('', '', '#### ', '###### ', '> ', '- ', '-# '), fc.array(piece, { minLength: 1, maxLength: 4 })).map(([lead, ps]) => lead + ps.join(' '))
+    const table = fc.tuple(plain, secret, secret).map(([a, s, after]) => `| ${a} | b |\n|---|---|\n| \\|\\|${s}\\|\\| | ${after} |`)
+    const note = fc.tuple(plain, secret).map(([a, s]) => `${a}[^1]\n\n[^1]: a note ||${s}||`)
+    const fence = secret.map((w) => `\`\`\`\n${'1'.repeat(3)}\n\`\`\`\n||${w}||`)
+    fc.assert(
+      fc.property(fc.array(fc.oneof(line, table, note, fence), { minLength: 1, maxLength: 6 }), fc.integer({ min: 1, max: 200 }), (blocks, max) => {
+        const content = blocks.join('\n\n')
+        expect(site(content, max)).not.toMatch(/ZQ|zq/)
+        expect(site(content, 100_000)).not.toMatch(/ZQ|zq/)
+      }),
+      { numRuns: 300 },
+    )
+  })
+})
+
+describe('messageExcerpt', () => {
+  const MAP_AND_TABLE = '![a map](upload:1)\n\n| Squad | Role |\n|---|---|\n| Invented | Tank |'
+  const READ_ON_SITE = 'picture Squad Role Invented Tank'
+  const READ_IN_DISCORD = '![a map](upload:1) | Squad | Role | |---|---| | Invented | Tank |'
+  const fromSite = (over = {}) => ({ origin: 'site', content: 'ZQ the content, cut where one Discord message ends', source: MAP_AND_TABLE, ...over })
+  // A title for a value of any type, undefined included (which JSON cannot print).
+  const labelled = (list) => list.map((v) => [JSON.stringify(v) ?? String(v), v])
+
+  it('reads a reply of the site from its source, in the extended dialect', () => {
+    expect(messageExcerpt(fromSite())).toBe(READ_ON_SITE)
+  })
+
+  it('reads a reply of the site with no source as text from its content, in the extended dialect still', () => {
+    for (const source of [null, undefined, 5, {}, ['x']]) expect(messageExcerpt(fromSite({ source, content: MAP_AND_TABLE })), String(source)).toBe(READ_ON_SITE)
+  })
+
+  it('reads a message of Discord from its content in the Discord dialect, and never from a source it carries', () => {
+    expect(messageExcerpt({ origin: 'discord', content: MAP_AND_TABLE, source: 'ZQ stray source' })).toBe(READ_IN_DISCORD)
+    expect(messageExcerpt({ content: MAP_AND_TABLE })).toBe(READ_IN_DISCORD)
+  })
+
+  it.each(labelled(['Site', 'SITE', ' site', 'site ', 'site\n', '', 'discord', 'webhook', null, undefined, 1, true, ['site'], { site: true }]))(
+    'fails closed: an origin of %s is not the site, so it reads the content in the Discord dialect',
+    (_, origin) => {
+      expect(messageExcerpt({ origin, content: MAP_AND_TABLE, source: '![ZQ](upload:1)' })).toBe(READ_IN_DISCORD)
+    },
+  )
+
+  it('is empty when the text it would read is no text, from the site or from Discord', () => {
+    for (const content of [null, undefined, 42, {}, ['a']]) {
+      expect(messageExcerpt({ origin: 'discord', content }), String(content)).toBe('')
+      expect(messageExcerpt({ origin: 'site', content, source: null }), String(content)).toBe('')
+      expect(messageExcerpt({ origin: 'site', content: MAP_AND_TABLE, source: content }), String(content)).toBe(READ_ON_SITE)
+    }
+    expect(messageExcerpt({ origin: 'site', content: '', source: '' })).toBe('')
+  })
+
+  it('cuts to the length asked for, and refuses a length that is no whole number from 1, text or none', () => {
+    expect(messageExcerpt(fromSite(), 8)).toBe('picture…')
+    expect(messageExcerpt({ origin: 'discord', content: 'abcdefg' }, 6)).toBe('abcde…')
+    expect(messageExcerpt(fromSite({ source: 'a'.repeat(200) }))).toBe('a'.repeat(119) + '…')
+    for (const bad of [0, -1, 1.5, NaN, '5', null]) {
+      expect(() => messageExcerpt(fromSite(), bad), String(bad)).toThrow(RangeError)
+      expect(() => messageExcerpt({ content: null }, bad), String(bad)).toThrow(RangeError)
+    }
+  })
+
+  it('refuses what is no message', () => {
+    for (const bad of [null, undefined, 'text', 5, true]) expect(() => messageExcerpt(bad), String(bad)).toThrow(/messageExcerpt takes a message/)
+  })
+
+  it('is the excerpt of the text the post page reads, in the dialect it reads it in, for any message (property)', () => {
+    const text = fc.oneof(fc.string({ maxLength: 120 }), fc.constantFrom(MAP_AND_TABLE, '||ZQ||', null, undefined, 7))
+    fc.assert(
+      fc.property(fc.constantFrom('site', 'discord', 'Site', '', null, undefined), text, text, fc.integer({ min: 1, max: 130 }), (origin, content, source, max) => {
+        const site = origin === 'site'
+        const read = site && typeof source === 'string' ? source : content
+        const expected = typeof read === 'string' ? excerpt(read, max, { dialect: site ? 'extended' : 'discord' }) : ''
+        expect(messageExcerpt({ origin, content, source }, max)).toBe(expected)
+      }),
+      { numRuns: 300 },
+    )
   })
 })
 

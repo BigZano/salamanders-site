@@ -77,7 +77,9 @@ const UPSERT_KEEPING_REACTIONS = upsertMessageSql(false)
 /**
  * Every post, with what the topic list shows of it, in one statement: its latest message (the newest by id, the
  * opening message when there are no replies) and that message's first image, the last three distinct authors, the
- * reply count (every message but the opening one) and the member's unread count (0 without a read mark).
+ * reply count (every message but the opening one) and the member's unread count (0 without a read mark). The list
+ * shows a line of the latest message, so it reads the first 400 characters of its content and of its source (a reply of
+ * the site's source runs to three Discord messages; the line is read from it, in the site's dialect).
  */
 const LIST_POSTS = `select p.id, p.title, p.tag_ids, p.pinned, p.locked, p.archived, p.created_at,
     coalesce(lm.created_at, p.created_at) as last_activity_at,
@@ -86,6 +88,7 @@ const LIST_POSTS = `select p.id, p.title, p.tag_ids, p.pinned, p.locked, p.archi
          else (select count(*)::int from librarius_messages m where m.post_id = p.id and m.id > r.last_read) end as unread,
     lm.id as latest_id, lm.author_id as latest_author_id, lm.author_name as latest_author_name,
     lm.author_avatar as latest_author_avatar, left(lm.content, 400) as latest_content,
+    lm.origin as latest_origin, left(lm.source, 400) as latest_source,
     im.id as image_id, im.url as image_url, im.expires_at as image_expires_at,
     (select coalesce(array_agg(ps.author_id::text order by ps.newest desc), '{}')
        from (select m.author_id, max(m.id) as newest from librarius_messages m where m.post_id = p.id
@@ -366,8 +369,9 @@ export function createLibrariusStore(pool) {
     /**
      * The topic list for one member: pinned posts first, then the latest activity. → [{ id, title, tagIds, pinned,
      * locked, archived, createdAt, lastActivityAt, replies, unread, latest: { id, authorId, authorName, authorAvatar,
-     * content (first 400 characters), image: { id, url, expiresAt } | null } | null, posterIds (the last 3 distinct
-     * authors, newest first) }]. One statement.
+     * content (first 400 characters), origin, source (first 400 characters, or null), image: { id, url, expiresAt } |
+     * null } | null, posterIds (the last 3 distinct authors, newest first) }]. One statement. `origin` and `source` are
+     * as stored: what the site is told of them is the handler's rule.
      */
     async listPosts(memberId) {
       needId(memberId, 'memberId')
@@ -392,6 +396,8 @@ export function createLibrariusStore(pool) {
                 authorName: r.latest_author_name,
                 authorAvatar: r.latest_author_avatar,
                 content: r.latest_content,
+                origin: r.latest_origin,
+                source: r.latest_source,
                 image:
                   r.image_id === null ? null : { id: r.image_id, url: r.image_url, expiresAt: iso(r.image_expires_at) },
               },
@@ -521,8 +527,9 @@ export function createLibrariusStore(pool) {
 
     /**
      * The messages of a post that a reply can quote: those of `ids` that are stored in the post, each as { id, authorId,
-     * authorName, authorAvatar, content (the first 200 characters) }, in no order. An id that is not stored is left out.
-     * An empty list sends nothing.
+     * authorName, authorAvatar, content (the first 200 characters), origin, source (the first 200 characters, or null) },
+     * in no order: a quote shows the start of a message, and a reply of the site is read from its source. `origin` and
+     * `source` are as stored, as listPosts answers them. An id that is not stored is left out. An empty list sends nothing.
      */
     async quotedMessages(postId, ids) {
       needId(postId, 'postId')
@@ -530,10 +537,18 @@ export function createLibrariusStore(pool) {
       for (const id of ids) needId(id, 'messageId')
       if (ids.length === 0) return []
       const { rows } = await pool.query(
-        'select id, author_id, author_name, author_avatar, left(content, 200) as content from librarius_messages where post_id = $1 and id = any($2::bigint[])',
+        'select id, author_id, author_name, author_avatar, left(content, 200) as content, origin, left(source, 200) as source from librarius_messages where post_id = $1 and id = any($2::bigint[])',
         [postId, ids],
       )
-      return rows.map((r) => ({ id: r.id, authorId: r.author_id, authorName: r.author_name, authorAvatar: r.author_avatar, content: r.content }))
+      return rows.map((r) => ({
+        id: r.id,
+        authorId: r.author_id,
+        authorName: r.author_name,
+        authorAvatar: r.author_avatar,
+        content: r.content,
+        origin: r.origin,
+        source: r.source,
+      }))
     },
 
     /**
@@ -587,8 +602,11 @@ export function createLibrariusStore(pool) {
     /**
      * → [{ id, editedAt, parts }] for a post's newest `limit` messages, newest first: what the catch-up compares with Discord's. `parts`
      * is the Discord ids of a reply of the site after its first part (which is the message), in order: empty for a message of Discord,
-     * and for a reply that an edit or a delete is at work on ('sending'), since an edit removes the parts it no longer needs before it
-     * stores the change.
+     * and for a reply that an edit or a delete is at work on ('sending'). A delete removes the parts from Discord before it stores that,
+     * and an edit decides itself what a part deleted meanwhile means (siteDeleted notes it in the edit, and finishEdit leaves out one the
+     * edit drops anyway), so the catch-up does not judge them. An edit that makes a reply shorter edits the parts it keeps and leaves the
+     * others in Discord: finishEdit stores the new list and queues, in the same transaction, the delete of the parts dropped (keyed by
+     * the first of them), so they go only once the change is stored, and from then on the list names them no more.
      */
     async windowIds(postId, limit) {
       needId(postId, 'postId')
