@@ -47,6 +47,8 @@
  *   together and pair them with later ones;
  * - an italic or a strike that starts or ends with a space has the space written outside its marks (`*a* ` for an italic of `a `
  *   and a picture), since Discord takes neither so, and would pair its marks with later ones;
+ * - a line of a spoiler, but its first and its last, that shows nothing but spaces (a picture that is attached, a mark of spaces)
+ *   is left out, since a blank line would end the block, and the spoiler's bars would pair with no other;
  * - the text that starts a line is escaped (`\#`, `\-`, `1\.`) after a line break inside a spoiler too, and at the start of a part
  *   that starts inside a line, where its mark is followed by a space and not a line end: what was in the middle of a line is no
  *   heading, list item or quote.
@@ -305,7 +307,11 @@ function inline(nodes, ic, atStart = false) {
   // is not two italics but an italic with bold marks in it.
   let italic = false
   for (const node of nodes) {
-    const piece = INLINE[node.type](node, ic, start)
+    // A line of a spoiler after its first that shows nothing but spaces (a picture that is attached, a mark of spaces) is left out with
+    // its line break: a blank line ends a block, and the bars on either side of it would pair with no other, showing what they hold. (The
+    // first line holds the bars that open the spoiler.) Only the last line is read, so a spoiler of many lines takes the time of its length.
+    const end = out.lastIndexOf('\n')
+    const piece = node.type === 'br' && end !== -1 && out.slice(end + 1).trim() === '' ? '' : INLINE[node.type](node, ic, start)
     // An italic of nothing but spaces, or of a picture that is attached, is written as what it holds, with no mark, and so is one
     // inside an italic. One with a space at an edge has the space outside its marks, so it may start or end with no mark.
     const isItalic = node.type === 'em' && !ic.open.has('*') && piece.trim() !== ''

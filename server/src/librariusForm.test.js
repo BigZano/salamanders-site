@@ -1908,6 +1908,21 @@ describe('toDiscord: the start of a line after a line break inside a spoiler', (
   it('writes the same text in V2 as in plain', () => {
     expect(displays(v2('||first line\n\\# not a heading||').parts[0])).toEqual([`||first line\n\\# not a heading||\n${FOOTER}`])
   })
+
+  it('leaves no line of nothing but spaces in a spoiler, where a picture that is attached or a mark of spaces was all of a line', () => {
+    // A blank line ends a block, so the bars on either side of one would pair with no other, and show what they hold.
+    const images = [{ ref: 1, name: 'u1.png' }]
+    expect(plain('x ||ALPHA\n![p](upload:1)\nBRAVO|| y', { images }).parts[0].text).toBe(`x ||ALPHA\nBRAVO|| y\n${PLAIN_FOOTER}`)
+    expect(displays(v2('x ||ALPHA\n![p](upload:1)\nBRAVO|| y', { images }).parts[0])).toEqual(['x ||ALPHA\nBRAVO|| y', FOOTER])
+    expect(plain('||ALPHA\n__ __\n![](upload:2)\nBRAVO|| y').parts[0].text).toBe(`||ALPHA\n BRAVO|| y\n${PLAIN_FOOTER}`)
+    expect(plain('> ||ALPHA\n> *![p](upload:1)*\n> BRAVO||', { images }).parts[0].text).toBe(`> ||ALPHA\n> BRAVO||\n${PLAIN_FOOTER}`)
+    // The line after it starts a line all the same, and is escaped as one. The first line and the last hold the bars, and stay.
+    expect(plain('||ALPHA\n![p](upload:1)\n\\# BRAVO||', { images }).parts[0].text).toBe(`||ALPHA\n\\# BRAVO||\n${PLAIN_FOOTER}`)
+    expect(plain('||![p](upload:1)\n![p](upload:1)\nALPHA\n![p](upload:1)||', { images }).parts[0].text).toBe(`||\nALPHA\n||\n${PLAIN_FOOTER}`)
+    for (const src of ['x ||ALPHA\n![p](upload:1)\nBRAVO|| y', '||ALPHA\n__ __\n![](upload:2)\nBRAVO|| y', '> ||ALPHA\n> *![p](upload:1)*\n> BRAVO||']) {
+      for (const form of FORMS) expect(leaks(src, toDiscord(src, opts({ form, images })).parts)).toEqual([])
+    }
+  })
 })
 
 describe('toDiscord: a part that starts inside a line', () => {
@@ -2382,6 +2397,8 @@ describe('toDiscord: what Discord shows of the spoilers of a reply that is cut',
     // A bold in a bold, which `***` makes (a bold that holds an italic), and which the form writes as its text.
     { weight: 1, arbitrary: sw.map((a) => `***||**${a}**||***`) },
     { weight: 1, arbitrary: fc.tuple(lw, sw, lw).map(([a, b, c]) => `***${a} ||**${b}**|| ${c}***`) },
+    // A spoiler over lines, one of which is all a picture that is attached, or a mark of spaces: it shows nothing.
+    { weight: 1, arbitrary: fc.tuple(sw, sw, fc.constantFrom('![p](upload:1)', '__ __', '*![p](upload:1)*')).map(([a, b, line]) => `||${a}\n${line}\n${b}||`) },
   )
   // A paragraph of units, on one line or on a few: a spoiler that is cut can fall anywhere in it.
   const paragraph = (least, most) =>
