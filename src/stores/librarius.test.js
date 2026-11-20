@@ -1,3 +1,5 @@
+// @vitest-environment jsdom
+// (a 401 signs the reader out, and the sign-in is kept in localStorage)
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import fc from 'fast-check'
 import { setActivePinia, createPinia } from 'pinia'
@@ -27,7 +29,7 @@ const msg = (n, extra = {}) => ({ id: mid(n), authorId: SELF, authorName: 'Inven
 const ids = (messages) => messages.map((m) => m.id)
 const person = (name) => ({ name, avatar: null })
 
-const INITIAL = { status: 'idle', me: null, posts: [], people: {}, post: null, error: '' }
+const INITIAL = { status: 'idle', me: null, posts: [], people: {}, post: null, outbox: [], error: '' }
 const ME = { access: true, ready: true, tags: [{ id: mid(3), name: 'Invented tag' }], roles: [], guildId: mid(4), forumId: mid(5) }
 const info = () => ({ id: POST, ownerId: SELF, title: 'Invented post', tagIds: [], pinned: false, locked: false, archived: false, createdAt: '2026-11-01T00:00:00.000Z', replies: 3 })
 const found = (extra = {}) => ({ post: info(), lastRead: null, rev: '40', ...extra })
@@ -1630,7 +1632,8 @@ describe('librarius store: polling for changes', () => {
         await s.poll('tok')
         expect(s.post.rev, String(reset)).toBe('77')
       }
-      expect(getPost).not.toHaveBeenCalled()
+      // Nothing was opened again: opening reads the messages (the sixth poll reads the post's own facts, and only those).
+      expect(listMessages).not.toHaveBeenCalled()
     })
 
     it('keeps the post and says why when opening it again fails', async () => {
@@ -1705,17 +1708,21 @@ describe('librarius store: polling for changes', () => {
     it('then waits twice as long, then four times, and so on up to five minutes, asking nothing in between', async () => {
       await afterFirst()
       let now = 0
+      const opened = []
       for (const wait of WAITS) {
         getChanges.mockClear()
+        getPost.mockClear()
         at(now)
-        await s.poll('tok') // asks, and the start-over comes again: ignored
+        await s.poll('tok') // asks, and the start-over comes again: ignored while the wait is short of five minutes
         expect(getChanges, `at ${now}`).toHaveBeenCalledTimes(1)
+        opened.push(getPost.mock.calls.length)
         at(now + wait - 1)
         await s.poll('tok')
         expect(getChanges, `at ${now} + ${wait} - 1`).toHaveBeenCalledTimes(1)
         now += wait
       }
-      expect(getPost).not.toHaveBeenCalled()
+      // Once the wait is five minutes, each start-over opens the post again, once (librarius.writes.test.js has the rest).
+      expect(opened).toEqual([0, 0, 0, 0, 0, 1, 1])
     })
 
     it('lets go of the post that is gone when the wait is over and the server says so', async () => {

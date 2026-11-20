@@ -86,6 +86,8 @@ export default {
     'src/lib/librarius/render.js',
     'src/stores/asking.js',
     'src/lib/librarius/places.js',
+    'src/lib/librarius/composer.js',
+    'src/lib/librarius/requests.js',
     'src/stores/librarius.js',
     'scripts/csp.mjs',
     'scripts/check-csp.mjs',

@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import fc from 'fast-check'
 import { API_BASE, BuildsApiError } from '../buildsApi'
-import { getMe, listPosts, getPost, listMessages, getChanges, markRead, listEmoji } from './api'
+import { getMe, listPosts, getPost, listMessages, getChanges, markRead, listEmoji, getPending, postReply, editMessage, deleteMessage, uploadPicture, searchMembers } from './api'
 
 // Every id and token here is invented.
 const TOKEN = 'tok-invented-1'
@@ -189,6 +189,8 @@ describe('the post id', () => {
     () => listMessages(TOKEN, id),
     () => getChanges(TOKEN, id, '1'),
     () => markRead(TOKEN, id, MSG),
+    () => getPending(TOKEN, id),
+    () => postReply(TOKEN, id, { source: 'Hi' }),
   ]
 
   it('is on the path of every route that has one, as it is', async () => {
@@ -199,6 +201,8 @@ describe('the post id', () => {
       `${API_BASE}/librarius/posts/${POST}/messages`,
       `${API_BASE}/librarius/posts/${POST}/changes?since=1`,
       `${API_BASE}/librarius/posts/${POST}/read`,
+      `${API_BASE}/librarius/posts/${POST}/pending`,
+      `${API_BASE}/librarius/posts/${POST}/messages`,
     ])
   })
 
@@ -217,7 +221,7 @@ describe('the post id', () => {
     for (const id of ['10000000000000000', '18446744073709551615']) {
       for (const call of routes(id)) await call()
     }
-    expect(fetchMock).toHaveBeenCalledTimes(8)
+    expect(fetchMock).toHaveBeenCalledTimes(12)
     fetchMock.mockClear()
     for (const id of ['1000000000000000', '184467440737095516150']) {
       for (const call of routes(id)) await expect(call()).rejects.toBeInstanceOf(TypeError)
@@ -280,6 +284,12 @@ describe('failures', () => {
     ['listMessages', () => listMessages(TOKEN, POST, { around: MSG })],
     ['getChanges', () => getChanges(TOKEN, POST, '1')],
     ['markRead', () => markRead(TOKEN, POST, MSG)],
+    ['getPending', () => getPending(TOKEN, POST)],
+    ['postReply', () => postReply(TOKEN, POST, { source: 'Hi' })],
+    ['editMessage', () => editMessage(TOKEN, MSG, { source: 'Hi' })],
+    ['deleteMessage', () => deleteMessage(TOKEN, MSG)],
+    ['uploadPicture', () => uploadPicture(TOKEN, new Blob(['x']))],
+    ['searchMembers', () => searchMembers(TOKEN, 'Inv')],
   ]
 
   it.each(CALLS)("%s: throws the server's message with the status", async (_name, call) => {
@@ -298,5 +308,194 @@ describe('failures', () => {
     const down = new TypeError('Failed to fetch')
     fetchMock.mockRejectedValue(down)
     await expect(call()).rejects.toBe(down)
+  })
+})
+
+describe('the writes', () => {
+  const REPLY = { source: 'A reply <@200000000000000403>', replyTo: MSG, pingReply: true, mentions: ['200000000000000403'], uploads: ['7'] }
+
+  it('getPending asks for the caller\'s own entries of a post, never from the cache', async () => {
+    fetchMock.mockResolvedValue(json({ pending: [] }))
+    await expect(getPending(TOKEN, POST)).resolves.toEqual({ pending: [] })
+    const [url, init] = sent()
+    expect(url).toBe(`${API_BASE}/librarius/posts/${POST}/pending`)
+    expect(init.method).toBe('GET')
+    expect(init.cache).toBe('no-store')
+    expect(headersOf(init).Authorization).toBe(`Bearer ${TOKEN}`)
+  })
+
+  it('postReply POSTs the reply as JSON, with the token in a header, never from the cache, and answers what the server said', async () => {
+    fetchMock.mockResolvedValue(json({ pending: { key: 'k-1', state: 'sending' } }, 202))
+    await expect(postReply(TOKEN, POST, REPLY)).resolves.toEqual({ pending: { key: 'k-1', state: 'sending' } })
+    const [url, init] = sent()
+    expect(url).toBe(`${API_BASE}/librarius/posts/${POST}/messages`)
+    expect(init.method).toBe('POST')
+    expect(init.cache).toBe('no-store')
+    expect(headersOf(init)).toEqual({ Authorization: `Bearer ${TOKEN}`, 'Content-Type': 'application/json' })
+    expect(JSON.parse(init.body)).toEqual(REPLY)
+  })
+
+  it('editMessage PATCHes the message by its id, with the new text as JSON', async () => {
+    fetchMock.mockResolvedValue(json({ pending: { key: MSG, state: 'sending' } }, 202))
+    await expect(editMessage(TOKEN, MSG, { source: 'Changed', mentions: [] })).resolves.toEqual({ pending: { key: MSG, state: 'sending' } })
+    const [url, init] = sent()
+    expect(url).toBe(`${API_BASE}/librarius/messages/${MSG}`)
+    expect(init.method).toBe('PATCH')
+    expect(init.cache).toBe('no-store')
+    expect(headersOf(init)).toEqual({ Authorization: `Bearer ${TOKEN}`, 'Content-Type': 'application/json' })
+    expect(JSON.parse(init.body)).toEqual({ source: 'Changed', mentions: [] })
+  })
+
+  it('deleteMessage DELETEs the message by its id, with no body, and answers what the server said', async () => {
+    fetchMock.mockResolvedValue(json({ pending: { key: MSG, state: 'sending' } }, 202))
+    await expect(deleteMessage(TOKEN, MSG)).resolves.toEqual({ pending: { key: MSG, state: 'sending' } })
+    const [url, init] = sent()
+    expect(url).toBe(`${API_BASE}/librarius/messages/${MSG}`)
+    expect(init.method).toBe('DELETE')
+    expect(init.cache).toBe('no-store')
+    expect(init.body).toBeUndefined()
+    expect(headersOf(init)).toEqual({ Authorization: `Bearer ${TOKEN}` })
+  })
+
+  it('answers null for an empty reply', async () => {
+    fetchMock.mockResolvedValue(new Response(null, { status: 204 }))
+    await expect(deleteMessage(TOKEN, MSG)).resolves.toBeNull()
+  })
+
+  it('uploadPicture POSTs the file as the one part of a form, and leaves its type to the browser (it carries the boundary)', async () => {
+    fetchMock.mockResolvedValue(json({ id: '7' }, 201))
+    const file = new File([new Uint8Array([0x89, 0x50, 0x4e, 0x47])], 'invented.png', { type: 'image/png' })
+    await expect(uploadPicture(TOKEN, file)).resolves.toEqual({ id: '7' })
+    const [url, init] = sent()
+    expect(url).toBe(`${API_BASE}/librarius/uploads`)
+    expect(init.method).toBe('POST')
+    expect(init.cache).toBe('no-store')
+    expect(headersOf(init)).toEqual({ Authorization: `Bearer ${TOKEN}` })
+    expect(init.body).toBeInstanceOf(FormData)
+    const parts = [...init.body.values()]
+    expect(parts).toHaveLength(1)
+    expect(parts[0]).toBeInstanceOf(Blob)
+    expect(parts[0].size).toBe(4)
+  })
+
+  it('sends no Authorization header without a token: the server answers that with 401', async () => {
+    fetchMock.mockResolvedValue(json({ pending: { key: MSG, state: 'sending' } }, 202))
+    await deleteMessage(null, MSG)
+    expect(headersOf(sent()[1])).toEqual({})
+  })
+
+  it.each([
+    ['editMessage', (id) => editMessage(TOKEN, id, { source: 'Hi' })],
+    ['deleteMessage', (id) => deleteMessage(TOKEN, id)],
+  ])('%s refuses a message id that is no id, and sends nothing: a dot or two cannot climb out of the path', async (_name, call) => {
+    for (const id of [...NOT_IDS(), '.', '..', '../uploads', '200000000000000402/../../me']) {
+      await expect(call(id), String(id)).rejects.toThrow(new TypeError('The message id must be an id: a string of 17 to 20 digits.'))
+    }
+    expect(fetchMock).not.toHaveBeenCalled()
+  })
+
+  describe('a refusal', () => {
+    const refuse = (body, status) => fetchMock.mockImplementation(async () => json(body, status))
+
+    it("carries an AutoMod refusal's rule and match, with the status and the server's words (422)", async () => {
+      refuse({ error: 'Blocked by the server\'s AutoMod rule "Invented rule".', rule: 'Invented rule', match: { start: 2, end: 7 } }, 422)
+      const err = await postReply(TOKEN, POST, { source: 'a zorp b' }).catch((e) => e)
+      expect(err).toBeInstanceOf(BuildsApiError)
+      expect(err).toMatchObject({ status: 422, message: 'Blocked by the server\'s AutoMod rule "Invented rule".', rule: 'Invented rule', match: { start: 2, end: 7 } })
+    })
+
+    it('carries a match of null as the server said it, when the words are not in the source', async () => {
+      refuse({ error: 'Blocked.', rule: 'Invented rule', match: null }, 422)
+      const err = await editMessage(TOKEN, MSG, { source: 'x' }).catch((e) => e)
+      expect(err).toMatchObject({ status: 422, rule: 'Invented rule', match: null })
+    })
+
+    it.each([
+      [429, 'Slow down a little: try again in 20 seconds.'],
+      [403, "You can't reply in this post."],
+      [409, 'This message is already being changed. Try again in a moment.'],
+    ])('carries the status and the server\'s words (%i), and no rule or match it was not given', async (status, error) => {
+      refuse({ error }, status)
+      for (const call of [() => postReply(TOKEN, POST, { source: 'x' }), () => editMessage(TOKEN, MSG, { source: 'x' }), () => deleteMessage(TOKEN, MSG)]) {
+        const err = await call().catch((e) => e)
+        expect(err).toBeInstanceOf(BuildsApiError)
+        expect(err.status).toBe(status)
+        expect(err.message).toBe(error)
+        expect('rule' in err).toBe(false)
+        expect('match' in err).toBe(false)
+      }
+    })
+
+    it('names the status when the words are missing, empty or no text, and takes nothing from a body that is no object', async () => {
+      for (const body of [{}, { error: '' }, { error: 42 }, { error: { text: 'x' } }, [{ error: 'x', rule: 'r' }], 'Blocked', null, 7]) {
+        fetchMock.mockClear()
+        refuse(body, 400)
+        const err = await postReply(TOKEN, POST, { source: 'x' }).catch((e) => e)
+        expect(err.message, JSON.stringify(body)).toBe('Request failed (400)')
+        expect(err.status).toBe(400)
+        expect('rule' in err).toBe(false)
+      }
+    })
+
+    it('names the status when the body is no JSON', async () => {
+      fetchMock.mockResolvedValue(new Response('<html>bad gateway</html>', { status: 502 }))
+      await expect(uploadPicture(TOKEN, new Blob(['x']))).rejects.toMatchObject({ message: 'Request failed (502)', status: 502 })
+    })
+
+    it('carries any refusal body\'s words, rule and match through, whatever they are (property)', async () => {
+      await fc.assert(
+        fc.asyncProperty(fc.string({ minLength: 1 }), fc.string(), fc.record({ start: fc.integer(), end: fc.integer() }), fc.integer({ min: 400, max: 599 }), async (error, rule, match, status) => {
+          refuse({ error, rule, match }, status)
+          const err = await postReply(TOKEN, POST, { source: 'x' }).catch((e) => e)
+          expect(err).toMatchObject({ status, message: error, rule, match })
+        }),
+      )
+    })
+  })
+})
+
+describe('searchMembers', () => {
+  const MEMBERS = [{ id: '200000000000000403', name: 'Invented Member', avatar: null }]
+
+  it('asks for the members by name, never from the cache, and answers the list', async () => {
+    fetchMock.mockResolvedValue(json({ members: MEMBERS }))
+    await expect(searchMembers(TOKEN, 'Inv')).resolves.toEqual(MEMBERS)
+    const [url, init] = sent()
+    expect(url).toBe(`${API_BASE}/librarius/members?q=Inv`)
+    expect(init.cache).toBe('no-store')
+    expect(headersOf(init).Authorization).toBe(`Bearer ${TOKEN}`)
+  })
+
+  it('answers no one for an answer of any other shape', async () => {
+    for (const body of [{}, { members: null }, { members: 'x' }, { members: { 0: MEMBERS[0] } }, []]) {
+      fetchMock.mockResolvedValueOnce(json(body))
+      await expect(searchMembers(TOKEN, 'Inv'), JSON.stringify(body)).resolves.toEqual([])
+    }
+  })
+
+  it('refuses a search that is no text, and sends nothing', async () => {
+    for (const q of [undefined, null, 7, ['Inv'], { toString: () => 'Inv' }]) {
+      await expect(searchMembers(TOKEN, q)).rejects.toThrow(new TypeError('The search must be text.'))
+    }
+    expect(fetchMock).not.toHaveBeenCalled()
+  })
+
+  it('fails with a URIError for a lone surrogate, and sends nothing', async () => {
+    await expect(searchMembers(TOKEN, '\ud800')).rejects.toBeInstanceOf(URIError)
+    expect(fetchMock).not.toHaveBeenCalled()
+  })
+
+  it('puts any text in the query as one value, whatever it holds (property)', async () => {
+    fetchMock.mockImplementation(async () => json({ members: [] }))
+    await fc.assert(
+      fc.asyncProperty(fc.string(), async (q) => {
+        fetchMock.mockClear()
+        await searchMembers(TOKEN, q)
+        const url = new URL(fetchMock.mock.calls[0][0])
+        expect(url.pathname).toBe('/librarius/members')
+        expect(url.searchParams.getAll('q')).toEqual([q])
+        expect([...url.searchParams.keys()]).toEqual(['q'])
+      }),
+    )
   })
 })

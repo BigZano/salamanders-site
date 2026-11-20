@@ -23,14 +23,37 @@
 //     only when they are named differently. Messages that leave the page (a jump, a deletion) are no longer watched. The rail of
 //     months comes before the messages in the page, so a keyboard meets it first, and the focus moves to the first message
 //     that came when the button that loaded it goes.
+//
+// Writing (batch 2). The server's /me says what the reader may do (`can`), and the form replies are checked in (`form`, v2 when
+// it says none). The page does nothing the server would refuse, and the server judges every write again:
+//   - The composer is docked under the thread, apart from the messages (no .lb-msg in it, so the page never reads it as one), for
+//     a member who may reply; a locked post says "This post is locked." in its place, but to a member who manages threads, whom
+//     Discord lets reply. It is given the store's writes: a reply, an edit, a picture (held by place), whether a picture a draft
+//     shows is still held, the member search, and the server's own emoji.
+//   - Each message offers Reply (the composer replies to it), Quote (the words selected in it, else all of it, go in as a quote,
+//     and the composer replies to it), Edit (the reader's own replies written on the site: the composer opens with the source)
+//     and Delete (the reader's own messages, or any but the post's opening message for a member who manages messages; it asks
+//     first). None is offered in a locked post but to a member who manages threads, as the server refuses them there.
+//   - What the reader has on its way is the store's `outbox`, asked for when the post opens (what was sent before the page was
+//     loaded again shows too): a reply on its way stands under the thread, greyed, with "sending…", until it is in the post; an
+//     edit or a delete greys its message. One that the server's rules blocked can be edited or let go, and one that failed tried
+//     again or let go. A refusal of any of it is said by the message or the reply it is about.
 import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, shallowRef, watch } from 'vue'
 import { useRoute } from 'vue-router'
 import { useAuth } from '../../stores/auth'
 import { POLL_MS, useLibrarius } from '../../stores/librarius'
+import { listEmoji, searchMembers } from '../../lib/librarius/api'
+import { parse } from '../../lib/archive/markdown'
+import { asQuote } from '../../lib/librarius/composer'
 import { articleMemo, firstUnread, groupMessages, isRead, railMonths, samePeople } from '../../lib/librarius/layout'
 import { createRenderCtx } from '../../lib/librarius/render'
 import { placeKey } from '../../lib/librarius/places'
 import { snowflakeAt } from '../../lib/librarius/snowflake'
+import { initials } from '../../lib/rosterAvatar'
+import { DEFAULT_FORM, FORMS } from '../../../server/src/librariusForm.js'
+import ArchiveMarkdown from '../archive/ArchiveMarkdown'
+import Composer from './Composer.vue'
+import LibActions from './LibActions.vue'
 import LibMessage from './LibMessage.vue'
 import './librarius.css'
 
@@ -45,6 +68,11 @@ const MESSAGE_ANCHOR = /^#m-(\d{17,20})$/
 // The guild of a reader whose answer from /me names none the page can use: no address names this one, so no link is ours.
 const NO_GUILD = '0'.repeat(17)
 const COULD_NOT_REACH = 'The Librarius couldn\'t be reached.'
+const COPY = {
+  locked: 'This post is locked.',
+  confirmDelete: 'Delete this message? It goes from Discord too.',
+  failed: "Couldn't send. Try again.",
+}
 // Scrolls are instant: the site smooths them, and a jump to the reader's place should not be a ride.
 const TO_TOP = { block: 'start', behavior: 'instant' }
 const TO_END = { block: 'end', behavior: 'instant' }
@@ -145,6 +173,151 @@ const months = computed(() => {
     return []
   }
 })
+
+// --- writing ---
+
+const isObject = (value) => typeof value === 'object' && value !== null && !Array.isArray(value)
+const isWords = (value) => typeof value === 'string' && /\S/.test(value)
+// What the reader may do, as /me says it: nothing, from a server that says nothing of it.
+const can = computed(() => (isObject(store.me?.can) ? store.me.can : {}))
+const myId = computed(() => {
+  const id = auth.member?.id
+  return typeof id === 'string' && SNOWFLAKE.test(id) ? id : null
+})
+const nameOf = (id) => (Object.hasOwn(people.value, id) ? people.value[id]?.name : undefined)
+const myName = computed(() => nameOf(myId.value) || auth.member?.username || '')
+// A locked post takes no reply, no edit and no delete but from a member who manages threads.
+const lockedOut = computed(() => info.value?.locked === true && can.value.manageThreads !== true)
+const writing = computed(() => myId.value !== null && can.value.reply === true && !lockedOut.value)
+const form = computed(() => (FORMS.includes(store.me?.form) ? store.me.form : DEFAULT_FORM))
+const guildId = computed(() => (typeof store.me?.guildId === 'string' ? store.me.guildId : ''))
+
+const composer = ref(null)
+// The message the composer replies to, { id, authorId, authorName }, or null; and the reply it edits, or null.
+const replying = ref(null)
+const editing = ref(null)
+const customEmoji = ref([])
+// Why the last thing done to a message (`m:<id>`) or to a reply on its way (`send:<key>`) did not go.
+const failures = reactive(new Map())
+
+// The composer's ways to the store and the server, made once, so that it is never drawn again for a new one.
+const send = (p) => (p.edit === undefined ? store.reply(auth.token, p) : store.edit(auth.token, p.edit, { source: p.source, mentions: p.mentions }))
+const upload = (file, n) => store.upload(auth.token, file, n)
+const holds = (n) => store.holdsPicture(n)
+const search = (q) => searchMembers(auth.token, q)
+// A reply that is on its way leaves the message it replied to: the next one is to the post, as in Discord.
+function onSent() {
+  if (editing.value === null) replying.value = null
+}
+
+// The server's own emoji, asked for once, when the composer is first shown. Without them the standard ones are still there.
+let emojiAsked = false
+watch(
+  writing,
+  (yes) => {
+    if (!yes || emojiAsked) return
+    emojiAsked = true
+    listEmoji(auth.token)
+      .then((got) => (customEmoji.value = Array.isArray(got?.emoji) ? got.emoji : []))
+      .catch(() => {})
+  },
+  { immediate: true },
+)
+
+const onItsWay = (e) => e?.state === 'sending' || e?.state === 'sent'
+// What the reader has on its way for each message held (an edit or a delete, the delete first), and the replies on their way.
+const changing = computed(() => {
+  const byMessage = new Map()
+  for (const e of store.outbox) {
+    if (e.kind !== 'send' && (e.kind === 'delete' || !byMessage.has(e.key))) byMessage.set(e.key, e)
+  }
+  return byMessage
+})
+const outgoing = computed(() => store.outbox.filter((e) => e.kind === 'send'))
+const entryOf = (message) => changing.value.get(message.id) ?? null
+
+// The same list for the same actions, so that a message whose actions have not changed is not drawn again.
+const lists = new Map()
+function listOf(actions) {
+  const key = actions.join(' ')
+  if (!lists.has(key)) lists.set(key, Object.freeze(actions))
+  return lists.get(key)
+}
+/** → the actions the reader may take on a message: none while its edit or delete is going. */
+function actionsOf(message) {
+  if (onItsWay(entryOf(message))) return listOf([])
+  const own = myId.value !== null && message.authorId === myId.value
+  const actions = []
+  if (writing.value) actions.push('reply', 'quote')
+  if (writing.value && own && message.origin === 'site' && typeof message.source === 'string') actions.push('edit')
+  const deletes = (own && can.value.reply === true) || can.value.manageMessages === true
+  if (message.id !== props.postId && !lockedOut.value && deletes) actions.push('delete')
+  return listOf(actions)
+}
+
+/** → the words a refusal is said in: the server's, or the store's own when it refuses itself, else the page's. */
+const copyOf = (err) => ((Number.isInteger(err?.status) && isWords(err.message)) || err instanceof RangeError ? err.message : COPY.failed)
+/** Runs a write about `key`, saying why by it when it does not go. */
+async function attemptFor(key, write) {
+  failures.delete(key)
+  try {
+    await write()
+  } catch (err) {
+    failures.set(key, copyOf(err))
+  }
+}
+
+/** The composer replies to the message, leaving an edit. */
+async function answer(message) {
+  editing.value = null
+  replying.value = { id: message.id, authorId: message.authorId, authorName: nameOf(message.authorId) || message.authorName }
+  await nextTick()
+  composer.value?.focus()
+}
+/** → the words of the message the reader has selected, when the selection lies in its text, else null. */
+function selectedIn(id) {
+  const body = messageElement(id)?.querySelector('.lb-body')
+  const selection = document.getSelection()
+  if (!body || !selection || selection.isCollapsed || !body.contains(selection.anchorNode) || !body.contains(selection.focusNode)) return null
+  return selection.toString()
+}
+const wordsOf = (message) => (message.origin === 'site' && typeof message.source === 'string' ? message.source : message.content)
+async function quote(message) {
+  const words = selectedIn(message.id) ?? wordsOf(message)
+  await answer(message)
+  if (isWords(words)) await composer.value?.insert(asQuote(words))
+}
+/** The composer edits the reader's own reply, from `source`, measured with the message the reply answered. */
+async function edit(message, source) {
+  const to = message.replyTo
+  editing.value = { id: message.id, source, replyTo: to ? { id: to.id, authorId: to.authorId } : null }
+  await nextTick()
+  composer.value?.focus()
+}
+
+// What is pressed on a message: its own actions, and those of its edit or delete that ended.
+function onAct(name, message) {
+  const key = `m:${message.id}`
+  const entry = entryOf(message)
+  if (name === 'reply') return answer(message)
+  if (name === 'quote') return quote(message)
+  if (name === 'edit') return edit(message, message.source)
+  if (name === 'delete') return window.confirm(COPY.confirmDelete) ? attemptFor(key, () => store.remove(auth.token, message.id)) : undefined
+  if (name === 'retry') return attemptFor(key, () => store.retry(auth.token, entry))
+  store.dismiss(entry)
+  // A blocked edit opens again with its own words, else the reply's source.
+  if (name === 'revise') return edit(message, typeof entry.source === 'string' ? entry.source : message.source)
+}
+// What is pressed on a reply on its way.
+async function onEntry(name, entry) {
+  if (name === 'retry') return attemptFor(`send:${entry.key}`, () => store.retry(auth.token, entry))
+  store.dismiss(entry)
+  if (name !== 'revise') return
+  // A blocked reply goes back into the composer, after what it holds, to be changed.
+  editing.value = null
+  await nextTick()
+  if (isWords(entry.source)) await composer.value?.insert(entry.source)
+}
 
 // The element of a message on the page, or null (a page that has gone has none).
 const messageElement = (id) => root.value?.querySelector(`#m-${id}`) ?? null
@@ -325,6 +498,8 @@ async function enter() {
     return
   }
   if (!landed(mine)) return
+  // What the reader has on its way here, sent before the page was loaded again too, from a server that takes writes.
+  if (isObject(store.me?.can)) store.pending(auth.token).catch(() => {})
   snapshot.value = store.post.lastRead
   const named = back === null ? anchorId() : null
   if (named !== null && !isHeld(named)) {
@@ -344,6 +519,10 @@ watch(
   () => props.postId,
   (_now, before) => {
     if (phase.value === 'ready') rememberPlace(before)
+    // The reply and the edit were for the post before.
+    replying.value = null
+    editing.value = null
+    failures.clear()
     enter()
   },
 )
@@ -478,17 +657,75 @@ async function jump(month) {
         </nav>
 
         <div class="lb-thread">
-          <LibMessage v-if="opening" :message="opening" :grouped="false" article :people="people" :ctx="ctx" />
+          <LibMessage
+            v-if="opening"
+            :message="opening"
+            :grouped="false"
+            article
+            :people="people"
+            :ctx="ctx"
+            :actions="actionsOf(opening)"
+            :entry="entryOf(opening)"
+            :revisable="writing"
+            :action-error="failures.get(`m:${opening.id}`) ?? ''"
+            @act="(name) => onAct(name, opening)"
+          />
           <button v-if="post.hasOlder" type="button" class="btn-ghost btn-sm lb-more" :disabled="busy.older" @click="more('older', $event)">Load older</button>
 
           <template v-for="e in entries" :key="e.message.id">
             <div v-if="divider && divider.id === e.message.id" class="lb-divider"><span class="lb-divider-text">{{ divider.text }}</span></div>
-            <LibMessage :message="e.message" :grouped="e.grouped" :article="e.article" :people="people" :ctx="ctx" />
+            <LibMessage
+              :message="e.message"
+              :grouped="e.grouped"
+              :article="e.article"
+              :people="people"
+              :ctx="ctx"
+              :actions="actionsOf(e.message)"
+              :entry="entryOf(e.message)"
+              :revisable="writing"
+              :action-error="failures.get(`m:${e.message.id}`) ?? ''"
+              @act="(name) => onAct(name, e.message)"
+            />
           </template>
 
           <button v-if="post.hasNewer" type="button" class="btn-ghost btn-sm lb-more" :disabled="busy.newer" @click="more('newer', $event)">Load newer</button>
+
+          <article v-for="e in outgoing" :key="e.key" class="lb-outgoing" :class="{ 'lb-pending': onItsWay(e) }" aria-label="Your reply">
+            <div class="lb-gutter"><span class="lb-avatar lb-initials" aria-hidden="true">{{ initials(myName) }}</span></div>
+            <div class="lb-main">
+              <header class="lb-head">
+                <span class="lb-name">{{ myName }}</span>
+                <span class="lb-site-tag">site</span>
+              </header>
+              <div v-if="isWords(e.source)" class="lb-body lb-rendered"><ArchiveMarkdown :nodes="parse(e.source, { dialect: 'extended' })" :ctx="ctx" /></div>
+              <LibActions :entry="e" :revisable="writing" :error="failures.get(`send:${e.key}`) ?? ''" @act="(name) => onEntry(name, e)" />
+            </div>
+          </article>
           <p v-if="notice" class="lb-notice" role="alert">{{ notice }}</p>
         </div>
+      </div>
+
+      <div v-if="writing || lockedOut" class="lb-dock">
+        <Composer
+          v-if="writing"
+          ref="composer"
+          v-model:reply-to="replying"
+          v-model:editing="editing"
+          :post-id="postId"
+          :post-title="info.title"
+          :author-id="myId"
+          :author-name="myName"
+          :guild-id="guildId"
+          :ctx="ctx"
+          :form="form"
+          :on-send="send"
+          :search-members="search"
+          :custom-emoji="customEmoji"
+          :upload="upload"
+          :held="holds"
+          @sent="onSent"
+        />
+        <p v-else class="lb-locked" role="status">{{ COPY.locked }}</p>
       </div>
     </template>
   </section>

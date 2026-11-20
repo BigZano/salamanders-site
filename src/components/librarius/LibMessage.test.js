@@ -2,7 +2,10 @@
 import { describe, it, expect } from 'vitest'
 import { mount, flushPromises } from '@vue/test-utils'
 import { createRouter, createMemoryHistory } from 'vue-router'
+import fc from 'fast-check'
 import LibMessage from './LibMessage.vue'
+import ArchiveMarkdown from '../archive/ArchiveMarkdown'
+import { parse } from '../../lib/archive/markdown'
 import { createRenderCtx } from '../../lib/librarius/render'
 
 // Invented ids only (the 200000000000000400 range), and invented names.
@@ -810,5 +813,196 @@ describe('LibMessage: Discord content is untrusted (hostile battery)', () => {
       }),
     )
     for (const img of w.findAll('img')) expect(img.attributes('src') ?? '').not.toContain('evil.example')
+  })
+})
+
+describe('LibMessage: a reply written on the site', () => {
+  const site = (over = {}) => message({ origin: 'site', content: 'Written on the site', source: 'Written on the site', ...over })
+  const picture = (n, over = {}) => attachment(n, { filename: `picture-${n}.png`, url: `${CDN}/20000000000000046${n}/picture-${n}.png?ex=65f0&is=65e0&hm=ab12`, ...over })
+  const reference = (nodes, c = ctx) => mount(ArchiveMarkdown, { props: { nodes, ctx: c }, global: { plugins: [router()] } }).element.outerHTML
+
+  it('has the "site" tag by the name, and a message of Discord has none', () => {
+    const w = mountMsg(site())
+    expect(w.get('.lb-head .lb-site-tag').text()).toBe('site')
+    expect(mountMsg(message()).find('.lb-site-tag').exists()).toBe(false)
+    expect(mountMsg(message({ origin: undefined })).find('.lb-site-tag').exists()).toBe(false)
+  })
+
+  it('keeps the tag on a grouped message, which has no name to put it by', () => {
+    const w = mountMsg(site(), { grouped: true })
+    expect(w.find('.lb-head').exists()).toBe(false)
+    expect(w.get('.lb-site-tag').text()).toBe('site')
+  })
+
+  it('reads its text in the site\'s own markdown, as the composer previewed it, and a message of Discord in Discord\'s', () => {
+    const table = '| Road | Days |\n| --- | --- |\n| South | 3 |'
+    expect(mountMsg(site({ source: table, content: table })).find('.lb-body table').exists()).toBe(true)
+    expect(mountMsg(message({ content: table })).find('.lb-body table').exists()).toBe(false)
+  })
+
+  it('shows the whole of its source, which the content of a long reply is cut from', () => {
+    const source = `${'a'.repeat(4000)}\n\nThe end of a long reply`
+    const w = mountMsg(site({ source, content: source.slice(0, 4000) }))
+    expect(w.get('.lb-body').text()).toContain('The end of a long reply')
+  })
+
+  it('shows its content when there is no source to show', () => {
+    for (const source of [undefined, null, 42]) {
+      expect(mountMsg(site({ source, content: 'Only the **content**' })).get('.lb-body strong').text()).toBe('content')
+    }
+  })
+
+  it('renders as the reference renderer does, the composer\'s preview, whatever the source (property)', () => {
+    const PIECES = ['**b**', '_i_', '__u__', '~~s~~', '||spoiler||', '`code`', '\n', '\n\n', '> ', '# ', '-# ', '- ', '1. ', '---', '| a | b |\n| --- | --- |\n| 1 | 2 |', 'text', `<@${TOR}>`, `<#${POST}>`, '<:wolf:200000000000000430>', '[link](https://example.org)', '[x](javascript:alert(1))', '<b>raw</b>', '<img src=x onerror=alert(1)>', 'word[^1]', '\n\n[^1]: a note', '```\ncode block\n```', `https://discord.com/channels/${GUILD}/${POST}/${MSG}`, ' ', '😀', 'é']
+    fc.assert(
+      fc.property(fc.array(fc.constantFrom(...PIECES), { minLength: 1, maxLength: 12 }), (pieces) => {
+        const source = pieces.join('')
+        const w = mountMsg(site({ source, content: source }))
+        const nodes = parse(source, { dialect: 'extended' })
+        if (nodes.some((node) => node.type !== 'blank')) expect(w.get('.lb-body').element.innerHTML).toBe(reference(nodes))
+        else expect(w.find('.lb-body').exists()).toBe(false)
+        w.unmount()
+      }),
+      { numRuns: 60 },
+    )
+  })
+
+  it('shows each of its pictures where the text puts it, and not again under the text', () => {
+    const w = mountMsg(site({ source: 'Before ![The map](upload:1) between ![The ford](upload:2) after', attachments: [picture(1), picture(2)] }))
+    const inline = w.findAll('.lb-body img.lb-image')
+    expect(inline.map((img) => [img.attributes('src'), img.attributes('alt'), img.attributes('loading')])).toEqual([
+      [picture(1).url, 'The map', 'lazy'],
+      [picture(2).url, 'The ford', 'lazy'],
+    ])
+    expect(inline[0].attributes('width')).toBe('640')
+    expect(w.findAll('.lb-attachment')).toHaveLength(0)
+  })
+
+  it('leaves a picture the text does not show, and any other file, under the text', () => {
+    const w = mountMsg(site({ source: 'Only ![one](upload:1)', attachments: [picture(1), picture(2), attachment(3)] }))
+    expect(w.findAll('.lb-body img.lb-image')).toHaveLength(1)
+    expect(w.findAll('.lb-attachment img').map((img) => img.attributes('alt'))).toEqual(['picture-2.png', 'file3.png'])
+  })
+
+  it('shows the stand-in for a picture it does not have, one that is not on the CDN, and one that fails to load', async () => {
+    const w = mountMsg(site({ source: '![gone](upload:3) ![elsewhere](upload:1) ![broken](upload:2)', attachments: [picture(1, { url: 'https://evil.example/picture-1.png' }), picture(2)] }))
+    expect(w.findAll('.lb-body .md-image-missing').map((n) => n.text())).toEqual(['gone', 'elsewhere'])
+    await w.get('.lb-body img').trigger('error')
+    expect(w.findAll('.lb-body .md-image-missing').map((n) => n.text())).toEqual(['gone', 'elsewhere', 'broken'])
+    expect(w.find('.lb-body img').exists()).toBe(false)
+  })
+
+  it('takes only a file named as the site names its pictures for a place', () => {
+    const named = (filename) => mountMsg(site({ source: '![x](upload:1)', attachments: [picture(1, { filename })] })).findAll('.lb-body img').length
+    expect(named('picture-1.png')).toBe(1)
+    expect(named('picture-1.webp')).toBe(1)
+    for (const filename of ['picture-01.png', 'picture-1', 'xpicture-1.png', 'picture-1.png.exe', 'picture-10.png', 'Picture-1.png', null]) expect(named(filename), String(filename)).toBe(0)
+  })
+
+  it('never shows a message of Discord\'s files in its text', () => {
+    const w = mountMsg(message({ content: '![x](upload:1)', attachments: [picture(1)] }))
+    expect(w.find('.lb-body img').exists()).toBe(false)
+    expect(w.findAll('.lb-attachment img')).toHaveLength(1)
+  })
+})
+
+describe('LibMessage: what the page offers on it, and what is on its way', () => {
+  const tools = (w) => w.findAll('.lb-actions button')
+
+  it('offers the actions the page gives, in its order, each named for whose message it is', () => {
+    const w = mountMsg(message(), { actions: ['reply', 'quote', 'edit', 'delete'] })
+    expect(w.get('.lb-actions').attributes('role')).toBe('group')
+    expect(w.get('.lb-actions').attributes('aria-label')).toBe('Message actions')
+    expect(tools(w).map((b) => [b.text(), b.attributes('aria-label'), b.attributes('type')])).toEqual([
+      ['Reply', 'Reply to Tor Mardan', 'button'],
+      ['Quote', 'Quote Tor Mardan', 'button'],
+      ['Edit', 'Edit your reply', 'button'],
+      ['Delete', "Delete Tor Mardan's message", 'button'],
+    ])
+    expect(mountMsg(message(), { actions: ['delete', 'reply'] }).findAll('.lb-actions button').map((b) => b.text())).toEqual(['Delete', 'Reply'])
+  })
+
+  it('says which action was pressed, and nothing more', async () => {
+    const w = mountMsg(message(), { actions: ['reply', 'quote', 'edit', 'delete'] })
+    for (const b of tools(w)) await b.trigger('click')
+    expect(w.emitted('act')).toEqual([['reply'], ['quote'], ['edit'], ['delete']])
+  })
+
+  it('keeps the reader\'s selection when Quote is pressed, and only then', async () => {
+    const w = mountMsg(message(), { actions: ['reply', 'quote'] })
+    const down = (b) => {
+      const event = new MouseEvent('mousedown', { bubbles: true, cancelable: true })
+      b.element.dispatchEvent(event)
+      return event.defaultPrevented
+    }
+    expect(tools(w).map(down)).toEqual([false, true])
+  })
+
+  it('names the author "this member" when the page has no name for them', () => {
+    const w = mountMsg(message({ authorName: '' }), { actions: ['reply'], people: {} })
+    expect(tools(w)[0].attributes('aria-label')).toBe('Reply to this member')
+  })
+
+  it('has no actions, and no state, when the page gives none', () => {
+    const w = mountMsg(message())
+    expect(w.find('.lb-actions').exists()).toBe(false)
+    expect(w.find('.lb-state').exists()).toBe(false)
+    expect(w.find('.lb-action-error').exists()).toBe(false)
+  })
+
+  it('is greyed with "sending…" while its edit goes, and with "deleting…" while its delete goes, sent or not yet', () => {
+    for (const state of ['sending', 'sent']) {
+      const edited = mountMsg(message(), { entry: { kind: 'edit', state, error: null } })
+      expect(edited.classes()).toContain('lb-pending')
+      expect(edited.get('.lb-state').text()).toBe('sending…')
+      expect(edited.get('.lb-state').attributes('role')).toBe('status')
+      expect(edited.find('.lb-state-tools').exists()).toBe(false)
+      const deleted = mountMsg(message(), { entry: { kind: 'delete', state, error: null } })
+      expect(deleted.get('.lb-state').text()).toBe('deleting…')
+    }
+    expect(mountMsg(message()).classes()).not.toContain('lb-pending')
+  })
+
+  it('says a blocked edit was blocked by the server\'s rules, and offers to edit it, where it may be, or to let it go', async () => {
+    const w = mountMsg(message(), { entry: { kind: 'edit', state: 'blocked', error: 'Discord blocked this edit.' }, revisable: true })
+    expect(w.classes()).not.toContain('lb-pending')
+    expect(w.get('.lb-state').text()).toBe("Blocked by the server's rules. Edit it or delete it.")
+    expect(w.get('.lb-state').attributes('role')).toBe('alert')
+    const buttons = w.findAll('.lb-state-tools button')
+    expect(buttons.map((b) => [b.text(), b.attributes('aria-label')])).toEqual([
+      ['Edit', 'Edit the blocked edit'],
+      ['Delete', 'Delete the blocked edit'],
+    ])
+    for (const b of buttons) await b.trigger('click')
+    expect(w.emitted('act')).toEqual([['revise'], ['discard']])
+    const fixed = mountMsg(message(), { entry: { kind: 'edit', state: 'blocked', error: null } })
+    expect(fixed.findAll('.lb-state-tools button').map((b) => b.text())).toEqual(['Delete'])
+  })
+
+  it('says a failed one could not be sent, with the server\'s reason when it gave words, and offers Retry and Dismiss', async () => {
+    const w = mountMsg(message(), { entry: { kind: 'delete', state: 'failed', error: 'This post is gone from Discord.' } })
+    expect(w.get('.lb-state').text()).toBe("Couldn't send. Try again. This post is gone from Discord.")
+    const buttons = w.findAll('.lb-state-tools button')
+    expect(buttons.map((b) => [b.text(), b.attributes('aria-label')])).toEqual([
+      ['Retry', 'Try the delete again'],
+      ['Dismiss', 'Dismiss the failed delete'],
+    ])
+    for (const b of buttons) await b.trigger('click')
+    expect(w.emitted('act')).toEqual([['retry'], ['dismiss']])
+    for (const error of [null, '', '  ', 42]) {
+      expect(mountMsg(message(), { entry: { kind: 'edit', state: 'failed', error } }).get('.lb-state').text(), String(error)).toBe("Couldn't send. Try again.")
+    }
+  })
+
+  it('says why the last thing done to it did not go, as text', () => {
+    const w = mountMsg(message(), { actionError: '<b>No</b> such message.' })
+    expect(w.get('.lb-action-error').text()).toBe('<b>No</b> such message.')
+    expect(w.get('.lb-action-error').attributes('role')).toBe('alert')
+    expect(w.find('.lb-action-error b').exists()).toBe(false)
+  })
+
+  it('puts all of it at the end of the message', () => {
+    const w = mountMsg(message({ reactions: [{ key: 'r', name: '👍', count: 1 }] }), { actions: ['reply'] })
+    expect(w.get('.lb-main').element.lastElementChild.className).toBe('lb-actions')
   })
 })

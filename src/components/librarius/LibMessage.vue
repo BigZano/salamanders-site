@@ -1,14 +1,27 @@
+<script>
+const NONE = Object.freeze([])
+</script>
+
 <script setup>
 // One Discord message as the Librarius shows it: the avatar, name and time (a message that sits under the one before it
 // has none), a line for the message it replies to, the text through the Legion Archive's markdown renderer, then its
 // attachments, embeds, stickers and reactions. Everything arrives as data and goes on the page as text or as an element
 // made here, never as markup. An address is used only once render.js has passed it: attachments from Discord's CDN,
 // embed pictures from its media proxy, links as https. Videos and other files are links, not players. A picture whose
-// file is named SPOILER_ is blurred until it is clicked, or Enter or Space is pressed on it. Styles are in
-// librarius.css.
-import { computed, reactive } from 'vue'
+// file is named SPOILER_ is blurred until it is clicked, or Enter or Space is pressed on it.
+//
+// A reply written on the site (`origin: 'site'`) has the "site" tag, and its text is read in the site's own markdown (the
+// extended dialect), from its whole source where the message has it (its content is cut to what one Discord message holds), so
+// that it reads as the composer previewed it. Its pictures (`upload:N` in the text, the files the site named picture-N.<type>)
+// are shown where the text puts them, not again under it.
+//
+// At the end of the message are what the page offers on it (`actions`) and how what the reader has on its way for it stands
+// (`entry`, an edit or a delete: LibActions.vue), and the message is greyed while that is going; what is pressed is passed on
+// (`act`). Styles are in librarius.css.
+import { computed, h, reactive } from 'vue'
 import ArchiveMarkdown from '../archive/ArchiveMarkdown'
-import { parse } from '../../lib/archive/markdown'
+import LibActions from './LibActions.vue'
+import { parse, walk } from '../../lib/archive/markdown'
 import { excerpt, isImage, isSpoilerFile, sizeText } from '../../lib/librarius/layout'
 import { attachmentUrl, httpsUrl, proxyImageUrl } from '../../lib/librarius/render'
 import { initials, safeAvatar } from '../../lib/rosterAvatar'
@@ -24,7 +37,23 @@ const props = defineProps({
   people: { type: Object, default: () => ({}) },
   // What ArchiveMarkdown renders with: { link, emoji, mention } (see createRenderCtx).
   ctx: { type: Object, required: true },
+  // The actions the page offers on the message, in order (see LibActions.vue). The page gives the same list for the same actions, so
+  // that a message whose actions have not changed is not drawn again.
+  actions: { type: Array, default: () => NONE },
+  // The edit or the delete of the message the reader has on its way, as the store holds it, or null.
+  entry: { type: Object, default: null },
+  // Whether a blocked edit can be put back to be changed.
+  revisable: { type: Boolean, default: false },
+  // Why the last thing done to the message did not go, or ''.
+  actionError: { type: String, default: '' },
 })
+const emit = defineEmits(['act'])
+
+// While its edit or its delete is going, the message is greyed.
+const pending = computed(() => props.entry?.state === 'sending' || props.entry?.state === 'sent')
+
+// The name the site gives the file of a reply's picture at place N (librariusOutbox.js): picture-N.<type>, N from 1 to 10.
+const SITE_PICTURE = /^picture-(10|[1-9])\.[a-z]+$/
 
 // A functional component that puts a VNode the context made on the page.
 const Show = (p) => p.vnode
@@ -45,8 +74,46 @@ const stamp = computed(() =>
 )
 const stampLong = computed(() => new Date(props.message.createdAt).toLocaleString())
 
-const nodes = computed(() => parse(props.message.content))
+const fromSite = computed(() => props.message.origin === 'site')
+const nodes = computed(() => {
+  if (!fromSite.value) return parse(props.message.content)
+  const { source, content } = props.message
+  return parse(typeof source === 'string' ? source : content, { dialect: 'extended' })
+})
 const hasText = computed(() => nodes.value.some((node) => node.type !== 'blank'))
+
+// A site reply's pictures, by place: the attachments the site named for one, on the CDN.
+const placed = computed(() => {
+  const byPlace = new Map()
+  if (!fromSite.value) return byPlace
+  for (const a of props.message.attachments) {
+    const place = SITE_PICTURE.exec(a.filename ?? '')?.[1]
+    const href = attachmentUrl(a.url)
+    if (place !== undefined && href !== null) byPlace.set(Number(place), { id: a.id, href, width: a.width, height: a.height })
+  }
+  return byPlace
+})
+// The places the text shows a picture at.
+const shownPlaces = computed(() => {
+  const places = new Set()
+  walk(nodes.value, (node) => {
+    if (node.type === 'image') places.add(node.ref)
+  })
+  return places
+})
+// The page's context, with the site reply's pictures drawn where its text puts them (else the stand-in).
+const bodyCtx = computed(() => {
+  if (placed.value.size === 0) return props.ctx
+  return {
+    ...props.ctx,
+    image(ref, alt) {
+      const pic = placed.value.get(ref)
+      if (pic === undefined || failed.has(pic.href)) return null
+      return h('img', { class: 'lb-image', src: pic.href, alt, width: pic.width, height: pic.height, loading: 'lazy', onError: () => failed.add(pic.href) })
+    },
+  }
+})
+const inText = (a) => [...placed.value.entries()].some(([place, pic]) => pic.id === a.id && shownPlaces.value.has(place))
 
 const reply = computed(() => {
   const to = props.message.replyTo
@@ -60,7 +127,7 @@ const failed = reactive(new Set())
 const shown = reactive(new Set())
 
 const attachments = computed(() =>
-  props.message.attachments.map((a) => ({
+  props.message.attachments.filter((a) => !inText(a)).map((a) => ({
     id: a.id,
     image: isImage(a),
     spoiler: isSpoilerFile(a.filename) || isSpoilerFile(a.url),
@@ -87,7 +154,7 @@ const embeds = computed(() =>
 </script>
 
 <template>
-  <article :id="`m-${message.id}`" class="lb-msg" :class="{ 'lb-article': article, 'lb-grouped': grouped }">
+  <article :id="`m-${message.id}`" class="lb-msg" :class="{ 'lb-article': article, 'lb-grouped': grouped, 'lb-pending': pending }">
     <div class="lb-gutter">
       <template v-if="!grouped">
         <img v-if="author.avatar && !failed.has(author.avatar)" class="lb-avatar" :src="author.avatar" alt="" width="40" height="40" loading="lazy" @error="failed.add(author.avatar)" />
@@ -98,9 +165,11 @@ const embeds = computed(() =>
       <a v-if="reply" class="lb-reply" :href="`#m-${reply.id}`"><span class="lb-reply-text">↪ replying to <b class="lb-reply-name">{{ reply.name }}</b><template v-if="reply.quote">: <span class="lb-reply-quote">{{ reply.quote }}</span></template></span></a>
       <header v-if="!grouped" class="lb-head">
         <span class="lb-name">{{ author.name }}</span>
+        <span v-if="fromSite" class="lb-site-tag">site</span>
         <time class="lb-time" :datetime="message.createdAt" :title="stampLong">{{ stamp }}</time>
       </header>
-      <div v-if="hasText" class="lb-body"><ArchiveMarkdown :nodes="nodes" :ctx="ctx" /></div>
+      <span v-else-if="fromSite" class="lb-site-tag">site</span>
+      <div v-if="hasText" class="lb-body"><ArchiveMarkdown :nodes="nodes" :ctx="bodyCtx" /></div>
 
       <div v-for="a in attachments" :key="a.id" class="lb-attachment">
         <template v-if="a.image">
@@ -146,6 +215,7 @@ const embeds = computed(() =>
       <ul v-if="message.reactions.length" class="lb-reactions" aria-label="Reactions">
         <li v-for="r in message.reactions" :key="r.key" class="lb-reaction"><Show v-if="r.id" :vnode="ctx.emoji(r)" /><span v-else>{{ r.name }}</span> <span class="lb-count">{{ r.count }}</span></li>
       </ul>
+      <LibActions v-if="actions.length > 0 || entry !== null || actionError !== ''" :actions="actions" :name="author.name" :entry="entry" :revisable="revisable" :error="actionError" @act="(name) => emit('act', name)" />
     </div>
   </article>
 </template>
