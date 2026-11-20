@@ -1735,6 +1735,53 @@ describe('PUT /librarius/posts/:id/read', () => {
     expect(refused.log).toEqual([])
   })
 
+  /** A PUT whose body is `chunks` of `size` bytes each, pulled one at a time; `seen` says how many were pulled, and whether the stream was given up. */
+  function streamedPut(chunks, size, headers = {}) {
+    const seen = { pulled: 0, cancelled: false }
+    const body = new ReadableStream({
+      pull(controller) {
+        if (seen.pulled === chunks) return controller.close()
+        seen.pulled++
+        // Spaces: what comes is no matter, only how much of it.
+        controller.enqueue(new Uint8Array(size).fill(32))
+      },
+      cancel() {
+        seen.cancelled = true
+      },
+    }, { highWaterMark: 0 })
+    const request = new Request(`http://api.test${path}`, { method: 'PUT', headers: { 'Content-Type': 'application/json', ...headers }, body, duplex: 'half' })
+    return { request, seen }
+  }
+
+  it('refuses a body of 1 MB with 413 once it has read past 1 KB, and gives up the rest unread', async () => {
+    const made = setup()
+    const { request, seen } = streamedPut(16, 65_536)
+    const res = await made.handler(request, new URL(request.url))
+    expect(res.status).toBe(413)
+    expect(await body(res)).toEqual({ error: 'The request is too large (1 KB at most).' })
+    expect(seen).toStrictEqual({ pulled: 1, cancelled: true })
+    expect(made.calls('setRead')).toEqual([])
+  })
+
+  it('refuses a body of 1 MB in chunks of 100 bytes after the eleventh, the first past 1 KB', async () => {
+    const made = setup()
+    const { request, seen } = streamedPut(10_486, 100)
+    const res = await made.handler(request, new URL(request.url))
+    expect(res.status).toBe(413)
+    expect(seen).toStrictEqual({ pulled: 11, cancelled: true })
+    expect(made.calls('setRead')).toEqual([])
+  })
+
+  it('refuses a body that says it is 1 MB with 413 before reading any of it', async () => {
+    const made = setup()
+    const { request, seen } = streamedPut(16, 65_536, { 'Content-Length': String(1024 * 1024) })
+    const res = await made.handler(request, new URL(request.url))
+    expect(res.status).toBe(413)
+    expect(await body(res)).toEqual({ error: 'The request is too large (1 KB at most).' })
+    expect(seen.pulled).toBe(0)
+    expect(made.calls('setRead')).toEqual([])
+  })
+
   it('counts bytes, not characters, against the limit', async () => {
     // 600 two-byte characters are 1200 bytes, in 600 characters.
     const text = JSON.stringify({ messageId: M2, pad: 'é'.repeat(600) })

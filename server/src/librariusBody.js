@@ -17,7 +17,9 @@
  * what is worked on (which holds them several times over), and give each its own limit (librariusLimits.js hold and work):
  * receivePicture(request, { signal }) → { form: { bytes, type } } | { status, error }: the body of a multipart/form-data upload as
  *   it came, and its Content-Type, not read as a form yet. 415 for any other type (nothing is read), 413 for a body past
- *   MAX_PICTURE_BYTES and the form around it (FORM_SLACK), 408 for one that `signal` ends before it has all come (readBounded).
+ *   MAX_PICTURE_BYTES and the form around it (FORM_SLACK), 400 "That picture took too long to arrive." for one that `signal` ends
+ *   before it has all come (readBounded). It is 400 and not 408, though 408 is what the status means: a browser that is told 408 on a
+ *   connection it reuses may take it for an idle connection the server closed, and send the whole picture again on its own (rB11 M1).
  * pictureOf(form) → { bytes } | { status, error }: the one file of that form. 413 for a file past MAX_PICTURE_BYTES, 400 for a
  *   form that cannot be read, that is empty, that has anything but exactly one part, that is a text and not a file, or whose
  *   file is empty. The file's name and declared type are never looked at, or returned: the bytes alone are judged
@@ -88,7 +90,7 @@ export async function receivePicture(request, { signal } = {}) {
   if (mediaType(request) !== 'multipart/form-data') return { status: 415, error: COPY.type }
   const read = await readBounded(request, MAX_PICTURE_BYTES + FORM_SLACK, { signal })
   if (read.tooLarge) return { status: 413, error: COPY.large }
-  if (read.late) return { status: 408, error: COPY.late }
+  if (read.late) return { status: 400, error: COPY.late }
   return { form: { bytes: read.bytes, type: request.headers.get('Content-Type') } }
 }
 

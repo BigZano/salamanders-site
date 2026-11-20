@@ -1727,7 +1727,7 @@ describe('upload: the pictures in flight (2 for a member from the moment one sta
   })
 })
 
-describe('upload: a picture has 30 seconds to arrive', () => {
+describe('upload: a picture has 120 seconds to arrive', () => {
   afterEach(() => {
     vi.useRealTimers()
   })
@@ -1772,52 +1772,55 @@ describe('upload: a picture has 30 seconds to arrive', () => {
     return state
   }
 
-  it('is 408 "That picture took too long to arrive." 30 s after it started, however steadily it trickles, and gives the stream up', async () => {
+  it('is 400 "That picture took too long to arrive." 120 s after it started, however steadily it trickles, and gives the stream up', async () => {
+    // 400 and not 408, which a browser may send again on its own on a connection it reuses (rB11 M1).
     vi.useFakeTimers()
     const t = world()
     const { request, seen } = timed({ endless: { afterMs: 100, bytes: new Uint8Array(1024) } })
     const state = watch(t.writes.upload(request, verdictOf()))
-    await vi.advanceTimersByTimeAsync(29_999)
+    await vi.advanceTimersByTimeAsync(119_999)
     expect(state.answer).toBe(null)
     expect(seen.cancelled).toBe(false)
     await vi.advanceTimersByTimeAsync(1)
-    expect(await out(state.answer)).toMatchObject({ status: 408, body: { error: COPY_LATE } })
+    expect(await out(state.answer)).toMatchObject({ status: 400, body: { error: COPY_LATE } })
     expect(seen.cancelled).toBe(true)
     expect([t.limits.holding(), t.limits.working()]).toStrictEqual([0, 0])
     expect(t.uploads.size).toBe(0)
   })
 
-  it('is 408 for a picture that stalls and never comes, and the member may send two again', async () => {
+  it('is 400 for a picture that stalls and never comes, and the member may send two again', async () => {
     vi.useFakeTimers()
     const t = world()
     const stalls = [timed({ steps: [{ afterMs: 1, bytes: new Uint8Array(10) }, { afterMs: 3_600_000, bytes: new Uint8Array(10) }] }), timed({ steps: [{ afterMs: 3_600_000, bytes: new Uint8Array(10) }] })]
     const states = stalls.map((s) => watch(t.writes.upload(s.request, verdictOf())))
-    await vi.advanceTimersByTimeAsync(30_000)
-    expect(states.map((s) => s.answer.status)).toStrictEqual([408, 408])
+    await vi.advanceTimersByTimeAsync(119_999)
+    expect(states.map((s) => s.answer)).toStrictEqual([null, null])
+    await vi.advanceTimersByTimeAsync(1)
+    expect(states.map((s) => s.answer.status)).toStrictEqual([400, 400])
     expect(t.limits.holding()).toBe(0)
   })
 
-  it('takes a picture whose last byte comes at 29.999 s, and refuses one whose last byte would come at 30 s', async () => {
+  it('takes a picture whose last byte comes at 119.999 s, and refuses one whose last byte would come at 120 s', async () => {
     vi.useFakeTimers()
     const { type, first, second } = await halves()
     const t = world()
-    const inTime = timed({ type, steps: [{ afterMs: 1, bytes: first }, { afterMs: 29_998, bytes: second }] })
-    const late = timed({ type, steps: [{ afterMs: 1, bytes: first }, { afterMs: 29_999, bytes: second }] })
+    const inTime = timed({ type, steps: [{ afterMs: 1, bytes: first }, { afterMs: 119_998, bytes: second }] })
+    const late = timed({ type, steps: [{ afterMs: 1, bytes: first }, { afterMs: 119_999, bytes: second }] })
     const states = [watch(t.writes.upload(inTime.request, verdictOf())), watch(t.writes.upload(late.request, verdictOf()))]
-    await vi.advanceTimersByTimeAsync(30_000)
-    expect(states.map((s) => s.answer?.status)).toStrictEqual([201, 408])
+    await vi.advanceTimersByTimeAsync(120_000)
+    expect(states.map((s) => s.answer?.status)).toStrictEqual([201, 400])
     expect(t.uploads.size).toBe(1)
   })
 
-  it('counts the 30 s from when the request came, for each picture apart', async () => {
+  it('counts the 120 s from when the request came, for each picture apart', async () => {
     vi.useFakeTimers()
     const { type, first, second } = await halves()
     const t = world()
     const early = watch(t.writes.upload(timed({ endless: { afterMs: 1000, bytes: new Uint8Array(1) } }).request, verdictOf()))
     await vi.advanceTimersByTimeAsync(20_000)
-    const later = watch(t.writes.upload(timed({ type, steps: [{ afterMs: 1, bytes: first }, { afterMs: 29_000, bytes: second }] }).request, verdictOf()))
-    await vi.advanceTimersByTimeAsync(10_000)
-    expect([early.answer?.status, later.answer]).toStrictEqual([408, null])
+    const later = watch(t.writes.upload(timed({ type, steps: [{ afterMs: 1, bytes: first }, { afterMs: 119_000, bytes: second }] }).request, verdictOf()))
+    await vi.advanceTimersByTimeAsync(100_000)
+    expect([early.answer?.status, later.answer]).toStrictEqual([400, null])
     await vi.advanceTimersByTimeAsync(19_001)
     expect(later.answer?.status).toBe(201)
   })
@@ -1827,14 +1830,14 @@ describe('upload: a picture has 30 seconds to arrive', () => {
     const t = world()
     for (let i = 0; i < 10; i++) {
       const state = watch(t.writes.upload(timed({ steps: [{ afterMs: 3_600_000, bytes: new Uint8Array(1) }] }).request, verdictOf()))
-      await vi.advanceTimersByTimeAsync(30_000)
-      expect(state.answer.status).toBe(408)
+      await vi.advanceTimersByTimeAsync(120_000)
+      expect(state.answer.status).toBe(400)
       t.w.clock.t += 1_000
     }
     expect((await t.writes.upload(formOf([{ bytes: PNG_CLEAN }]), verdictOf())).status).toBe(429)
   })
 
-  it('gives the work after the picture has come no deadline: a store that takes a minute still holds it', async () => {
+  it('gives the work after the picture has come no deadline: a store that takes three minutes still holds it', async () => {
     vi.useFakeTimers()
     const { type, bytes } = await halves()
     const t = world()
@@ -1842,7 +1845,7 @@ describe('upload: a picture has 30 seconds to arrive', () => {
     t.w.stall = new Promise((resolve) => (open = resolve))
     // Bytes in memory, so that the picture has all come at once: a FormData body is read by the runtime in real time.
     const state = watch(t.writes.upload(new Request(URL_, { method: 'POST', body: bytes, headers: { 'Content-Type': type } }), verdictOf()))
-    await vi.advanceTimersByTimeAsync(60_000)
+    await vi.advanceTimersByTimeAsync(180_000)
     expect(state.answer).toBe(null)
     t.w.stall = null
     open()

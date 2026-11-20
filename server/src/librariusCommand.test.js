@@ -97,14 +97,14 @@ function rig(over = {}) {
     },
   }
   const logged = []
-  const command = createCommand({ discord, store, guildId: GUILD, repliesOn: true, timers: ft.timers, now: () => ft.now, log: (line) => logged.push(line), ...(w.options ?? {}) })
+  const command = createCommand({ discord, store, guildId: GUILD, repliesOn: () => true, timers: ft.timers, now: () => ft.now, log: (line) => logged.push(line), ...(w.options ?? {}) })
   return { command, calls, ft, w, logged, discord, store }
 }
 
 const content = (t, i = 0) => t.calls.callbacks[i].body.data.content
 
 describe('createCommand: what it needs', () => {
-  const parts = () => ({ discord: { applicationCommands() {}, createMessageCommand() {}, interactionCallback() {} }, store: { outboxMessage() {} }, guildId: GUILD, repliesOn: true })
+  const parts = () => ({ discord: { applicationCommands() {}, createMessageCommand() {}, interactionCallback() {} }, store: { outboxMessage() {} }, guildId: GUILD, repliesOn: () => true })
 
   it('takes a Discord client and a store that have what it calls', () => {
     expect(() => createCommand(parts())).not.toThrow()
@@ -148,11 +148,18 @@ describe('createCommand: what it needs', () => {
     for (const log of [null, 5, 'x']) expect(() => createCommand({ ...parts(), log }), String(log)).toThrow(new TypeError('log must be a function.'))
   })
 
-  it('needs to be told whether the replies are on, as true or false and nothing that only looks like it', () => {
-    for (const repliesOn of [undefined, null, 0, 1, '', 'true', 'false', [], {}, () => true]) {
-      expect(() => createCommand({ ...parts(), repliesOn }), String(repliesOn)).toThrow(new TypeError('repliesOn must be true or false.'))
+  it('needs a way to ask whether the replies are on, a function and nothing that only looks like one', () => {
+    for (const repliesOn of [undefined, null, 0, 1, '', 'true', true, false, [], {}]) {
+      expect(() => createCommand({ ...parts(), repliesOn }), String(repliesOn)).toThrow(new TypeError('repliesOn must be a function.'))
     }
-    expect(() => createCommand({ ...parts(), repliesOn: false })).not.toThrow()
+    expect(() => createCommand({ ...parts(), repliesOn: () => false })).not.toThrow()
+  })
+
+  it('asks it once at the start, and needs true or false of it then, nothing that only looks like it', () => {
+    for (const answer of [undefined, null, 0, 1, '', 'true', 'false', [], {}]) {
+      expect(() => createCommand({ ...parts(), repliesOn: () => answer }), String(answer)).toThrow(new TypeError('repliesOn must answer true or false.'))
+    }
+    expect(() => createCommand({ ...parts(), repliesOn: () => { throw new Error('no outbox to ask') } })).toThrow('no outbox to ask')
   })
 
   it('needs a clock that is a function, and takes the runtime\'s when it is given none', () => {
@@ -364,7 +371,7 @@ describe('INTERACTION_CREATE: the three answers', () => {
 })
 
 describe('with the replies off (Ruling B12): it is made nowhere, and still answers', () => {
-  const off = (over = {}) => rig({ ...over, options: { repliesOn: false, ...(over.options ?? {}) } })
+  const off = (over = {}) => rig({ ...over, options: { repliesOn: () => false, ...(over.options ?? {}) } })
 
   it('makes no command at READY and asks Discord nothing, even when the guild has none', async () => {
     const t = off()
@@ -451,6 +458,119 @@ describe('with the replies off (Ruling B12): it is made nowhere, and still answe
           expect(content(on)).toBe(!held ? COPY_OTHER : origin === 'discord' ? COPY_DISCORD : isSite && authorId === asker ? `${COPY_SITE} ${LINK}` : COPY_OTHER)
           expect(offNow.calls.callbacks[0].body.data.flags).toBe(64)
           expect(offNow.calls.callbacks[0].body.data.allowed_mentions).toStrictEqual({ parse: [] })
+        },
+      ),
+      { numRuns: 80 },
+    )
+  })
+})
+
+describe('whether the replies are on is read when the answer is made, not only at the start (rB11 M2)', () => {
+  /** A command that is told `flag.on`, which is `start` when it is made and whatever the test sets after that. */
+  const live = (over = {}, start = true) => {
+    const flag = { on: start }
+    const t = rig({ ...over, options: { repliesOn: () => flag.on, ...(over.options ?? {}) } })
+    return { ...t, flag }
+  }
+
+  it('tells the author of a reply of the site that deleting from the site is off once Discord has refused the webhook, though it was on at the start', async () => {
+    const t = live()
+    await t.command.dispatch('INTERACTION_CREATE', interaction())
+    t.flag.on = false
+    await t.command.dispatch('INTERACTION_CREATE', interaction())
+    expect([content(t, 0), content(t, 1)]).toStrictEqual([`${COPY_SITE} ${LINK}`, COPY_OFF])
+    expect(t.calls.callbacks[1].body).toStrictEqual({ type: 4, data: { content: COPY_OFF, flags: 64, allowed_mentions: { parse: [] } } })
+  })
+
+  it('answers a message of Discord\'s, one it does not hold and one of no known origin as before once they have gone off, and anyone\'s reply of the site as off', async () => {
+    const cases = [
+      [stored({ origin: 'discord' }), COPY_DISCORD],
+      [null, COPY_OTHER],
+      [stored({ origin: 'webhook' }), COPY_OTHER],
+      [stored({ authorId: OTHER }), COPY_OFF],
+    ]
+    for (const [held, expected] of cases) {
+      const t = live({ messages: held === null ? new Map() : new Map([[MSG, held]]) })
+      t.flag.on = false
+      await t.command.dispatch('INTERACTION_CREATE', interaction())
+      expect(content(t), JSON.stringify(held)).toBe(expected)
+    }
+  })
+
+  it('reads it after the store has answered: replies that go off while the message is looked up are off in the answer', async () => {
+    let answer
+    const t = live({ storeGate: new Promise((resolve) => (answer = resolve)) })
+    const done = t.command.dispatch('INTERACTION_CREATE', interaction())
+    await flush()
+    t.flag.on = false
+    answer(stored())
+    await done
+    expect(content(t)).toBe(COPY_OFF)
+  })
+
+  it('reads it at every answer, and sends the author to the site again when they are back on', async () => {
+    const t = live()
+    for (const on of [false, true, false, true]) {
+      t.flag.on = on
+      await t.command.dispatch('INTERACTION_CREATE', interaction())
+    }
+    expect(t.calls.callbacks.map((c) => c.body.data.content)).toStrictEqual([COPY_OFF, `${COPY_SITE} ${LINK}`, COPY_OFF, `${COPY_SITE} ${LINK}`])
+    const offAtStart = live({}, false)
+    offAtStart.flag.on = true
+    await offAtStart.command.dispatch('INTERACTION_CREATE', interaction())
+    expect(content(offAtStart)).toBe(`${COPY_SITE} ${LINK}`)
+  })
+
+  it('takes anything but true when the answer is made, and a reading that throws, as off, and still answers', async () => {
+    for (const later of [false, undefined, null, 1, 'true', {}, () => true]) {
+      const t = live()
+      t.flag.on = later
+      await expect(t.command.dispatch('INTERACTION_CREATE', interaction())).resolves.toBeUndefined()
+      expect(content(t), String(later)).toBe(COPY_OFF)
+    }
+    const reading = { on: true }
+    const throwing = rig({
+      options: {
+        repliesOn: () => {
+          if (reading.on) return true
+          throw new Error('the outbox cannot be asked')
+        },
+      },
+    })
+    reading.on = false
+    await expect(throwing.command.dispatch('INTERACTION_CREATE', interaction())).resolves.toBeUndefined()
+    expect(throwing.calls.callbacks.map((c) => c.body.data.content)).toStrictEqual([COPY_OFF])
+  })
+
+  it('makes the command at READY by what it was told at the start, whatever it is told later', async () => {
+    const wasOn = live()
+    wasOn.flag.on = false
+    await wasOn.command.dispatch('READY', { application: { id: APP } })
+    expect(wasOn.calls.list).toStrictEqual([APP])
+    expect(wasOn.calls.create).toStrictEqual([[APP, 'Delete on site']])
+    const wasOff = live({}, false)
+    wasOff.flag.on = true
+    await wasOff.command.dispatch('READY', { application: { id: APP } })
+    expect(wasOff.calls.list).toStrictEqual([])
+    expect(wasOff.calls.create).toStrictEqual([])
+  })
+
+  it('answers with them off at the start just as with them refused later (property)', async () => {
+    await fc.assert(
+      fc.asyncProperty(
+        fc.constantFrom('site', 'discord', 'webhook', undefined),
+        fc.constantFrom(ME, OTHER, undefined),
+        fc.constantFrom(ME, OTHER),
+        fc.boolean(),
+        async (origin, authorId, asker, held) => {
+          const world = () => ({ messages: held ? new Map([[MSG, stored({ origin, authorId })]]) : new Map() })
+          const offAtStart = rig({ ...world(), options: { repliesOn: () => false } })
+          const refused = live(world())
+          refused.flag.on = false
+          const ask = interaction({ member: { user: { id: asker } } })
+          await offAtStart.command.dispatch('INTERACTION_CREATE', ask)
+          await refused.command.dispatch('INTERACTION_CREATE', ask)
+          expect(refused.calls.callbacks).toStrictEqual(offAtStart.calls.callbacks)
         },
       ),
       { numRuns: 80 },
@@ -591,7 +711,7 @@ describe('INTERACTION_CREATE: the three seconds', () => {
 
   it('answers the fallback at once, with a link to the site, for a store that throws before it answers', async () => {
     const t = rig()
-    const own = createCommand({ discord: t.discord, store: { outboxMessage: () => { throw new Error('sync failure') } }, guildId: GUILD, repliesOn: true, timers: t.ft.timers, now: () => t.ft.now, log: () => {} })
+    const own = createCommand({ discord: t.discord, store: { outboxMessage: () => { throw new Error('sync failure') } }, guildId: GUILD, repliesOn: () => true, timers: t.ft.timers, now: () => t.ft.now, log: () => {} })
     await own.dispatch('INTERACTION_CREATE', interaction())
     expect(t.calls.callbacks.map((c) => c.body.data.content)).toStrictEqual([`${COPY_FALLBACK} ${LINK}`])
   })
@@ -691,7 +811,7 @@ describe('INTERACTION_CREATE: the callback has what is left of the three seconds
     const gates = []
     const t = rig({ storeGate: undefined })
     t.store.outboxMessage = () => new Promise((resolve) => gates.push(resolve))
-    const own = createCommand({ discord: t.discord, store: t.store, guildId: GUILD, repliesOn: true, timers: t.ft.timers, now: () => t.ft.now, deadlineMs: 1900, log: () => {} })
+    const own = createCommand({ discord: t.discord, store: t.store, guildId: GUILD, repliesOn: () => true, timers: t.ft.timers, now: () => t.ft.now, deadlineMs: 1900, log: () => {} })
     const first = own.dispatch('INTERACTION_CREATE', interaction())
     await flush()
     await t.ft.advance(1_000)
@@ -742,7 +862,7 @@ describe('INTERACTION_CREATE: when the answer cannot be given', () => {
     await expect(t.command.dispatch('INTERACTION_CREATE', interaction())).resolves.toBeUndefined()
     const odd = rig()
     odd.discord.interactionCallback = () => Promise.reject(null)
-    const own = createCommand({ discord: odd.discord, store: odd.store, guildId: GUILD, repliesOn: true, timers: odd.ft.timers, now: () => odd.ft.now, log: () => {} })
+    const own = createCommand({ discord: odd.discord, store: odd.store, guildId: GUILD, repliesOn: () => true, timers: odd.ft.timers, now: () => odd.ft.now, log: () => {} })
     await expect(own.dispatch('INTERACTION_CREATE', interaction())).resolves.toBeUndefined()
   })
 
@@ -752,7 +872,7 @@ describe('INTERACTION_CREATE: when the answer cannot be given', () => {
       throw new Error(`https://discord.com/api/v10/interactions/${INTERACTION}/${TOKEN}/callback failed with ${TOKEN}`)
     }
     const logged = []
-    const own = createCommand({ discord: t.discord, store: t.store, guildId: GUILD, repliesOn: true, timers: t.ft.timers, now: () => t.ft.now, log: (line) => logged.push(line) })
+    const own = createCommand({ discord: t.discord, store: t.store, guildId: GUILD, repliesOn: () => true, timers: t.ft.timers, now: () => t.ft.now, log: (line) => logged.push(line) })
     await own.dispatch('INTERACTION_CREATE', interaction())
     expect(logged.length).toBeGreaterThan(0)
     for (const line of logged) expect(line).not.toContain(TOKEN)

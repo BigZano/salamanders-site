@@ -222,14 +222,21 @@ describe('receivePicture', () => {
     expect(seen.pulled).toBe(0)
   })
 
-  it('is 408 "That picture took too long to arrive." when its signal is aborted before all of it has come, and cancels the stream', async () => {
+  it('is 400 "That picture took too long to arrive." when its signal is aborted before all of it has come, and cancels the stream', async () => {
+    // Not 408: a browser may send a request again on its own after a 408 on a connection it reuses, and this one is too slow, not idle.
     const { request, seen } = stalled([new Uint8Array(1000)], { 'Content-Type': TYPE })
     const control = new AbortController()
     const receiving = receivePicture(request, { signal: control.signal })
     await turns()
     control.abort()
-    expect(await receiving).toStrictEqual({ status: 408, error: 'That picture took too long to arrive.' })
+    expect(await receiving).toStrictEqual({ status: 400, error: 'That picture took too long to arrive.' })
     expect(seen.cancelled).toBe(true)
+  })
+
+  it('is 400 for a signal aborted before anything was read, and never answers 408', async () => {
+    const { request } = stalled([new Uint8Array(10)], { 'Content-Type': TYPE })
+    const got = await receivePicture(request, { signal: AbortSignal.abort() })
+    expect(got).toStrictEqual({ status: 400, error: 'That picture took too long to arrive.' })
   })
 
   it('is 413 for a body past the limit and the form around it, before it is late', async () => {
