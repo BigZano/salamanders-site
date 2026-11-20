@@ -332,8 +332,9 @@ if (librariusConfigured) {
     // Three things that the replies need are not steps of their own. The outbox takes the advisory lock (one process sends) as it
     // starts, never rejects, and asks for the lock again every 30 seconds when another API holds it. The upload sweeper prunes the
     // outbox on its own timer (at its first sweep, then hourly), and a prune that fails is logged and tried at the next sweep. The
-    // worker thread that runs the AutoMod patterns starts the first time a reply is checked against a rule that has one, and a
-    // worker that cannot run is logged once and makes that reply be refused, never sent unchecked (librariusSend.js).
+    // child process that runs the AutoMod patterns (librariusRegexWorker.js) starts the first time a reply is checked against a rule
+    // that has one; one that runs over its time is killed and the next reply gets a new one, and one that cannot run is logged once
+    // and makes that reply be refused, never sent unchecked (librariusSend.js).
     startLibrarius = async () => {
       // What an image that did not know the replies, or a webhook that was replaced, let the import write over them is put right before
       // anything reads or writes the forum, and once is enough (it does nothing when there is nothing to put right). It runs with the

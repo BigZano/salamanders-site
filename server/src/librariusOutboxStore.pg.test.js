@@ -3,6 +3,7 @@ import { spawnSync } from 'node:child_process'
 import { randomBytes } from 'node:crypto'
 import { readFileSync } from 'node:fs'
 import { createLibrariusStore } from './librariusStore.js'
+import { createLibrariusHandler } from './librariusHandler.js'
 import { createImport } from './librariusImport.js'
 import { createOutbox } from './librariusOutbox.js'
 import { parseMessage } from './librariusParse.js'
@@ -1092,6 +1093,60 @@ describe.skipIf(!runnable)('the outbox store on a real Postgres 16, as the data-
       expect(await message(B)).toBeUndefined()
       expect(await partsOf(A)).toHaveLength(3)
       expect(await rows("select 1 from librarius_outbox where kind = 'delete'")).toEqual([])
+    })
+  })
+
+  // ---- what the post page is given of a reply of the site (P1: the store reads origin and source, the handler passes them on)
+
+  describe('a reply of the site on the post page', () => {
+    it("reads back as one message with its whole source, its pictures and its mentions, and a message of Discord as Discord's", async () => {
+      const MENTIONED = '200000000000000423'
+      const D = snow(T0 + 7000, 1)
+      const PICTURE = snow(T0 + 1000, 40)
+      // Three parts' worth: the content is cut to what one Discord message holds, and the mention is past the cut.
+      const long = `![a map](upload:1)\n\n${'word '.repeat(1500)}<@${MENTIONED}>`
+      const picture = { id: PICTURE, position: 0, filename: 'picture-1.png', contentType: 'image/png', size: 2048, width: 640, height: 480, url: `https://cdn.discordapp.com/attachments/${POST}/${PICTURE}/picture-1.png`, proxyUrl: null, expiresAt: null }
+      await sentReply([A, B, C], { source: long, over: { content: long.slice(0, 4000), attachments: [picture] } })
+      const discordRow = parseMessage({ id: D, channel_id: POST, type: 0, content: 'Written in Discord.', author: { id: OTHER, username: 'Invented Other', avatar: null }, timestamp: new Date(T0 + 7000).toISOString(), attachments: [] })
+      await store.upsertMessages([{ ...discordRow, postId: POST }])
+      // The source column of a message of Discord is null; one that held text anyway is never sent (the handler's rule).
+      await sql('update librarius_messages set source = $2 where id = $1', [D, 'stray'])
+
+      const pairs = (list) => list.map((m) => [m.id, m.origin, m.source])
+      expect(pairs((await store.listMessages(POST)).rows)).toEqual([
+        [A, 'site', long],
+        [D, 'discord', 'stray'],
+      ])
+      expect(pairs((await store.changes(POST, '0', { limit: 10, slack: 10 })).rows)).toEqual([
+        [A, 'site', long],
+        [D, 'discord', 'stray'],
+      ])
+
+      const verdict = { user: { id: MEMBER }, read: true, reply: true, attach: true, manageMessages: false, manageThreads: false }
+      const handle = createLibrariusHandler({
+        access: { resolve: async () => verdict },
+        store,
+        guild: { facts: async () => ({ tags: [], roles: [] }), emoji: async () => [], automodRules: async () => [] },
+        links: { refresh: async () => new Map() },
+        importer: { status: async () => ({ importDone: true }) },
+        roster: { members: async () => [{ id: MENTIONED, name: 'Invented Mentioned', avatar: null }] },
+        guildId: GUILD,
+        forumId: FORUM,
+        configured: true,
+      })
+      for (const path of [`/librarius/posts/${POST}/messages`, `/librarius/posts/${POST}/changes?since=0`]) {
+        const res = await handle(new Request(`http://api.test${path}`), new URL(`http://api.test${path}`))
+        expect(res.status).toBe(200)
+        const { messages, people } = await res.json()
+        expect(messages.map((m) => m.id)).toEqual([A, D])
+        const [site, discord] = messages
+        expect(site).toMatchObject({ origin: 'site', source: long, content: long.slice(0, 4000), authorId: MEMBER })
+        // The page draws upload:1 from the attachment named picture-1.<type> (LibMessage.vue).
+        expect(site.attachments.map((a) => a.filename)).toEqual(['picture-1.png'])
+        expect(discord.origin).toBe('discord')
+        expect(Object.hasOwn(discord, 'source')).toBe(false)
+        expect(people[MENTIONED]).toEqual({ name: 'Invented Mentioned', avatar: null })
+      }
     })
   })
 })

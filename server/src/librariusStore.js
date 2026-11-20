@@ -32,8 +32,10 @@ const MAX_LIMIT = 100
 // setSync accepts exactly these keys; they are the only column names that ever reach its statement.
 const SYNC_COLUMNS = ['import_done', 'last_run_at', 'last_ok_at', 'last_error']
 
+// `origin` and `source` say who made a message (batch 2): 'discord' and null for one written in Discord, 'site' and the reply's whole
+// extended source for one the outbox stored. They are what the post page reads a reply of the site by (its tag, its Edit, its dialect).
 const MESSAGE_COLUMNS =
-  'id, post_id, author_id, author_name, author_avatar, webhook_id, kind, content, embeds, stickers, reactions, reply_to, created_at, edited_at, rev'
+  'id, post_id, author_id, author_name, author_avatar, webhook_id, kind, content, embeds, stickers, reactions, reply_to, created_at, edited_at, rev, origin, source'
 const ATTACHMENT_COLUMNS = 'id, message_id, position, filename, content_type, size, width, height, url, proxy_url, expires_at'
 // One post's messages: the pages and the changes add their own where and order.
 const POST_MESSAGES = `select ${MESSAGE_COLUMNS} from librarius_messages where post_id = $1`
@@ -157,7 +159,10 @@ const attachmentOut = (a) => ({
   position: a.position,
 })
 
-/** → a message row in the shape librariusParse.js makes, plus its rev and the attachments it was given. */
+/**
+ * → a message row in the shape librariusParse.js makes, plus its rev, who made it (`origin`, and `source`: the whole extended source of a
+ * reply of the site, which its `content` is cut from, as the row holds them) and the attachments it was given.
+ */
 const messageOut = (m, attachments) => ({
   id: m.id,
   postId: m.post_id,
@@ -174,6 +179,8 @@ const messageOut = (m, attachments) => ({
   createdAt: iso(m.created_at),
   editedAt: iso(m.edited_at),
   rev: m.rev,
+  origin: m.origin,
+  source: m.source,
   attachments,
 })
 

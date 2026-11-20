@@ -87,6 +87,15 @@ const mentionsIn = (text) => Array.from(text.matchAll(MENTION), (m) => m[1])
 /** The first 200 characters of a message, counted as characters so that no pair is cut in two. */
 const quote = (text) => Array.from(text).slice(0, QUOTE_LENGTH).join('')
 
+/** Whether a stored message is a reply written on the site: its origin is exactly 'site'. Anything else is Discord's (fail closed). */
+const fromSite = (m) => m.origin === 'site'
+
+/**
+ * → the text the site reads a message by: a reply of the site's whole extended source (its content is cut to what one Discord message
+ * holds), else its content, as the post page does (LibMessage.vue).
+ */
+const textOf = (m) => (fromSite(m) && typeof m.source === 'string' ? m.source : m.content)
+
 /** → the 1 KB JSON request of a PUT: { body, blank } or { status, error }. It is counted as it arrives, and a body past 1 KB is
  * given up there (librariusBody.js readJsonWithin), so a member who sends a megabyte is not held for it. */
 const readJson = (request) => readJsonWithin(request, { maxBytes: JSON_MAX_BYTES, tooLarge: 'The request is too large (1 KB at most).' })
@@ -163,7 +172,11 @@ export function createLibrariusHandler({
     return renewed
   }
 
-  /** → { messages, people } for message rows of a post: each as the site shows it, and everyone they name. */
+  /**
+   * → { messages, people } for message rows of a post: each as the site shows it, and everyone they name. A message says who made it,
+   * `origin` 'site' or 'discord', and a reply of the site also its `source` (as the store holds it: text, or null for none); the people
+   * a reply of the site names are those its source mentions.
+   */
   async function present(postId, rows) {
     const renewed = await renewedLinks(rows.flatMap((m) => m.attachments))
     const directory = createDirectory(await members())
@@ -180,7 +193,7 @@ export function createLibrariusHandler({
         // The quote shows only its first 200 characters, and so only the mentions in those.
         for (const id of mentionsIn(quote(target.content))) directory.want(id)
       }
-      for (const id of mentionsIn(m.content)) directory.want(id)
+      for (const id of mentionsIn(textOf(m))) directory.want(id)
     }
 
     const messages = rows.map((m) => {
@@ -215,7 +228,8 @@ export function createLibrariusHandler({
         embeds: m.embeds,
         stickers: m.stickers,
         reactions: m.reactions,
-        origin: 'discord',
+        // A reply of the site carries its source, which the page reads in the extended dialect and edits; a message of Discord never does.
+        ...(fromSite(m) ? { origin: 'site', source: m.source } : { origin: 'discord' }),
       }
     })
     return { messages, people: directory.people() }
