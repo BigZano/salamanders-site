@@ -278,11 +278,12 @@ function answer(method, pathname) {
 
 // --- The browser, with nothing outside it ---
 
-// What a page may do across origins: the site asks with an Authorization header, so it is preflighted.
+// What a page may do across origins: the site asks with an Authorization header, so it is preflighted. The methods are the api's
+// own (server/src/cors.js): an edit of a reply in the Librarius is a PATCH.
 const CORS = {
   'access-control-allow-origin': new URL(PROD).origin,
   'access-control-allow-headers': 'authorization, content-type, if-none-match',
-  'access-control-allow-methods': 'GET, POST, PUT, DELETE, OPTIONS',
+  'access-control-allow-methods': 'GET, POST, PUT, PATCH, DELETE, OPTIONS',
   'access-control-expose-headers': 'ETag',
 }
 

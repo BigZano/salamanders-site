@@ -69,6 +69,10 @@ services:
       # forum, its REST routes and its gateway (DISCORD_API_BASE above names it, so the api opens the gateway over ws://).
       # An invented id, the same as in discord-mock/server.js.
       LIBRARIUS_CHANNEL_ID: '200000000000000400'
+      # Replying from the site (tests/librarius-write.spec.js, tests/librarius-compose.spec.js): the Librarius's webhook, which
+      # discord-mock stands in for. The id and token are invented, a throwaway for the mock only, like the archive key above; the
+      # real address is a secret and lives only in server/.env. LIBRARIUS_FORM is left unset: replies go out as Components V2.
+      LIBRARIUS_WEBHOOK_URL: http://discord-mock:4400/api/webhooks/200000000000000460/e2e-throwaway-webhook-token
     healthcheck:
       test: ['CMD', 'bun', '-e', "fetch('http://localhost:8787/health').then((r)=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
       interval: 2s

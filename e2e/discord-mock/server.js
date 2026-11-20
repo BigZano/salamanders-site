@@ -19,6 +19,12 @@
  * (its permission overwrites and tags), its posts and their messages, the guild's emoji, the attachment refresh, and a live
  * gateway WebSocket at /gateway that the api's connection reads. Test hooks under /__test/librarius change the forum the way
  * Discord would, and tell the gateway's listeners.
+ *
+ * For the replies from the site (batch 2) it is also the Librarius's webhook (make, list, execute in JSON or multipart with Components
+ * V2, edit and delete), the bot's calls that go with it (a post archived or opened again, a message deleted), the server's AutoMod
+ * rules, the guild's commands and the "Delete on site" interaction, sent down the gateway with its answer kept. What reached the
+ * webhook and the answers are read back through /__test/librarius hooks, and so is every IDENTIFY's intents: the gateway refuses one
+ * without Message Content (close 4014), as Discord refuses an intent the bot was not given.
  */
 const PORT = Number(process.env.PORT || 4400)
 // How the api and the browser reach this mock: the address an attachment's CDN link names.
@@ -59,6 +65,12 @@ const USERS = {
   // reader role and no Legion role; the shut-out one holds it too, but a member overwrite on the forum denies them View.
   'test-librarian-token': { id: '200000000000000402', username: 'librarian-tester' },
   'test-shut-out-token': { id: '200000000000000403', username: 'shut-out-tester' },
+  // The Librarius's writers (e2e/tests/librarius-write.spec.js, e2e/tests/librarius-compose.spec.js): readers too, each with a spec's
+  // replies of their own, since a member may send 3 replies a minute and the specs run side by side.
+  'test-scrivener-token': { id: '200000000000000404', username: 'scrivener-tester' },
+  'test-rubricator-token': { id: '200000000000000405', username: 'rubricator-tester' },
+  'test-copyist-token': { id: '200000000000000406', username: 'copyist-tester' },
+  'test-illuminator-token': { id: '200000000000000407', username: 'illuminator-tester' },
   // The site bar (e2e/tests/layout.spec.js): a Techmarine nothing revokes, here and in LAYOUT_MEMBERS. perks.spec.js ends by
   // revoking test-techmarine-token, and a spec that signed in as him would pass or fail by when the two happen to run.
   'test-layout-token': { id: '200000000000000510', username: 'layout-tester' },
@@ -112,6 +124,10 @@ const READER_ROLE = '200000000000000401'
 const LIBRARIUS_MEMBERS = {
   '200000000000000402': { roles: [READER_ROLE] },
   '200000000000000403': { roles: [READER_ROLE] },
+  '200000000000000404': { roles: [READER_ROLE] },
+  '200000000000000405': { roles: [READER_ROLE] },
+  '200000000000000406': { roles: [READER_ROLE] },
+  '200000000000000407': { roles: [READER_ROLE] },
 }
 // Guild membership as Discord's bot endpoint would report it.
 const MEMBERS = {
@@ -274,18 +290,27 @@ const FORUM = '200000000000000400'
 const SHUT_OUT_ID = '200000000000000403'
 const ACTIVE_POST = '200000000000000410'
 const ARCHIVED_POST = '200000000000000411'
+// The posts the replies of the site go into (batch 2): one for the api spec, one for the browser's, and one that the specs lock.
+// librarius-api.spec.js and librarius.spec.js never read them, so the replies change nothing those two count.
+const WRITE_POST = '200000000000000412'
+const COMPOSE_POST = '200000000000000413'
+const LOCKED_POST = '200000000000000414'
 const FORUM_TAG = '200000000000000420'
 const CUSTOM_EMOJI = '200000000000000430'
 // Two authors who are not in the guild's member list, so a page names them by the name their messages carry.
 const SCRIBE_ID = '200000000000000440'
 const ARCHIVIST_ID = '200000000000000441'
-// The user the gateway's READY names: the bot the api connects as.
+// The user the gateway's READY names: the bot the api connects as. Its application has the same id, as a bot's does in Discord.
 const BOT_ID = '200000000000000499'
+const BOT_USER = { id: BOT_ID, username: 'e2e-librarius-bot', bot: true }
+// The token e2e/docker-compose.yml gives the api (DISCORD_BOT_TOKEN): the bot's own routes below ask for it.
+const BOT_AUTHORIZATION = 'Bot unused-in-e2e'
 const READER_COLOR = 0x3a5246
 // What @everyone holds in the guild: View Channel, Send Messages, Read Message History, Send Messages in Threads and
-// Add Reactions. The forum's overwrites then take View away from everyone but the reader role.
+// Add Reactions. The forum's overwrites then take View away from everyone but the reader role, which they also let attach files.
 const EVERYONE_PERMISSIONS = '274877975616'
 const VIEW_CHANNEL = String(1n << 10n)
+const VIEW_AND_ATTACH = String((1n << 10n) | (1n << 15n))
 // The Librarius's two seeded posts: how many messages the active one holds (its first is the post itself, as in Discord,
 // where a forum post's id is the id of its opening message), and the numbered replies that are not plain text.
 const ACTIVE_MESSAGES = 230
@@ -437,10 +462,21 @@ function storeForumMessage(postId, { id = snowflake(), authorId, content, replyT
       at: new Date(archivedAt.getTime() - (3 - n) * MINUTE),
     })
   }
+  // The three posts the site replies in, an hour old, each with its opening message; the api spec's has a reply written in Discord too.
+  const hourAgo = new Date(Date.now() - 60 * MINUTE)
+  for (const [id, title] of [
+    [WRITE_POST, 'E2E Write Post'],
+    [COMPOSE_POST, 'E2E Compose Post'],
+    [LOCKED_POST, 'E2E Locked Post'],
+  ]) {
+    addPost({ id, title, archived: false, tags: [], createdAt: hourAgo, archivedAt: hourAgo })
+    storeForumMessage(id, { id, authorId: SCRIBE_ID, content: `${title}: the opening message`, at: hourAgo })
+  }
+  storeForumMessage(WRITE_POST, { authorId: ARCHIVIST_ID, content: 'E2E Write Post: a reply written in Discord', at: new Date(hourAgo.getTime() + MINUTE) })
 }
 
-// The forum as Discord describes it to the bot: View Channel is denied to @everyone, given back to the reader role, and
-// denied to the shut-out member again, whatever their role says.
+// The forum as Discord describes it to the bot: View Channel is denied to @everyone, given back to the reader role (with Attach
+// Files, so the writers may send pictures), and denied to the shut-out member again, whatever their role says.
 const FORUM_OBJECT = {
   id: FORUM,
   guild_id: GUILD_ID,
@@ -448,7 +484,7 @@ const FORUM_OBJECT = {
   name: 'e2e-librarius',
   permission_overwrites: [
     { id: GUILD_ID, type: 0, allow: '0', deny: VIEW_CHANNEL },
-    { id: READER_ROLE, type: 0, allow: VIEW_CHANNEL, deny: '0' },
+    { id: READER_ROLE, type: 0, allow: VIEW_AND_ATTACH, deny: '0' },
     { id: SHUT_OUT_ID, type: 1, allow: '0', deny: VIEW_CHANNEL },
   ],
   available_tags: [{ id: FORUM_TAG, name: 'E2E Tag', moderated: false, emoji_id: null, emoji_name: null }],
@@ -493,6 +529,301 @@ function findForumMessage(id) {
   return null
 }
 
+// --- The Librarius's replies from the site (batch 2): its webhook, the server's AutoMod rules and the "Delete on site" command ---
+
+// The forum's webhooks, by id, as the bot that made them sees them (with their tokens). The one e2e/docker-compose.yml gives the api
+// (LIBRARIUS_WEBHOOK_URL) is there from the start, as if the owner had run the setup (server/src/librariusWebhookSetupRun.js), which
+// lists and makes them through the two routes below. An invented id and a throwaway token, for this mock only.
+const WEBHOOK_ID = '200000000000000460'
+const WEBHOOK_TOKEN = 'e2e-throwaway-webhook-token'
+const webhooks = new Map()
+function makeWebhook(id, token, name = 'Librarius') {
+  const hook = { id, type: 1, guild_id: GUILD_ID, channel_id: FORUM, name, avatar: null, application_id: BOT_ID, token, user: BOT_USER }
+  webhooks.set(id, hook)
+  return hook
+}
+makeWebhook(WEBHOOK_ID, WEBHOOK_TOKEN)
+
+// The server's AutoMod rules (GET /guilds/<id>/auto-moderation/rules): one keyword rule with an invented word, and one with a regular
+// expression against links to an invented host. A webhook execute that holds the word is refused as Discord's AutoMod refuses a
+// message, with code 200000; the site must refuse it first, so that the refusal is never reached.
+const AUTOMOD_WORD = 'grimbleflax'
+const AUTOMOD_RULES = [
+  {
+    id: '200000000000000470',
+    guild_id: GUILD_ID,
+    name: 'E2E Banned Word',
+    creator_id: SCRIBE_ID,
+    event_type: 1,
+    trigger_type: 1,
+    trigger_metadata: { keyword_filter: [AUTOMOD_WORD], regex_patterns: [], allow_list: [] },
+    actions: [{ type: 1, metadata: {} }],
+    enabled: true,
+    exempt_roles: [],
+    exempt_channels: [],
+  },
+  {
+    id: '200000000000000471',
+    guild_id: GUILD_ID,
+    name: 'E2E Shady Links',
+    creator_id: SCRIBE_ID,
+    event_type: 1,
+    trigger_type: 1,
+    trigger_metadata: { keyword_filter: [], regex_patterns: [String.raw`https?://\S*e2e-shady\.invalid`], allow_list: [] },
+    actions: [{ type: 1, metadata: {} }],
+    enabled: true,
+    exempt_roles: [],
+    exempt_channels: [],
+  },
+]
+
+// What reached the webhook, oldest first, for the specs to read (GET /__test/librarius/webhook): every message made (`executes`),
+// every one refused (`refused`), every edit and every delete. Each says when it came (`at`, in ms) and the thread it was for.
+const webhookLog = { executes: [], refused: [], edits: [], deletes: [] }
+// What the bot did to the forum through its own token: the posts it archived or opened again, and the messages it deleted.
+const botLog = { threadChanges: [], deletes: [] }
+
+// The guild's application commands, by the application that made them (the bot's), and how many times one was made.
+const commands = []
+let commandsMade = 0
+// The answers the api gave to interactions (POST /interactions/<id>/<token>/callback), oldest first.
+const interactionAnswers = []
+let interactions = 0
+
+/** → whether the request carries the bot's token, as the bot's own routes need. */
+const asBot = (request) => request.headers.get('Authorization') === BOT_AUTHORIZATION
+
+/** The texts a message shows: its content, and the Text Displays of its components, at any depth. */
+function textsOf(body) {
+  const texts = typeof body?.content === 'string' ? [body.content] : []
+  const walk = (list) => {
+    for (const c of Array.isArray(list) ? list : []) {
+      if (c?.type === 10 && typeof c.content === 'string') texts.push(c.content)
+      walk(c?.components)
+    }
+  }
+  walk(body?.components)
+  return texts
+}
+
+const discordError = (status, code, message) => withCors(Response.json({ message, code }, { status }))
+
+/**
+ * The webhook a request names, by the id and token in its path: → the webhook, or the Response Discord gives for one it does not know
+ * (404, Unknown Webhook) or a token that is not its (401, Invalid Webhook Token).
+ */
+function webhookOf(id, token) {
+  const hook = webhooks.get(id)
+  if (hook === undefined) return discordError(404, 10015, 'Unknown Webhook')
+  if (hook.token !== token) return discordError(401, 50027, 'Invalid Webhook Token')
+  return hook
+}
+
+/** → { body, files } of an execute, JSON or multipart (`payload_json` and `files[n]`), or null for a body that is neither. */
+async function executeBody(request) {
+  const type = request.headers.get('Content-Type') || ''
+  if (type.startsWith('application/json')) return { body: await request.json().catch(() => null), files: [], multipart: false }
+  if (!type.startsWith('multipart/form-data')) return null
+  const form = await request.formData().catch(() => null)
+  const payload = form?.get('payload_json')
+  if (typeof payload !== 'string') return null
+  const files = []
+  for (const [field, value] of form.entries()) {
+    if (!/^files\[\d+\]$/.test(field) || typeof value === 'string') continue
+    files.push({ field, name: value.name, type: value.type, bytes: new Uint8Array(await value.arrayBuffer()) })
+  }
+  let body = null
+  try {
+    body = JSON.parse(payload)
+  } catch {
+    // no body: refused below
+  }
+  return { body, files, multipart: true }
+}
+
+/** An attachment of a message the webhook made: on Discord's CDN, as Discord would have it, with a link that lapses in a day. */
+function webhookAttachment(threadId, file) {
+  const id = snowflake()
+  const ex = Math.floor((Date.now() + 86_400_000) / 1000).toString(16)
+  return {
+    id,
+    filename: file.name,
+    size: file.bytes.length,
+    content_type: file.type,
+    url: `https://cdn.discordapp.com/attachments/${threadId}/${id}/${file.name}?ex=${ex}&is=e2e&hm=e2e`,
+    proxy_url: `https://media.discordapp.net/attachments/${threadId}/${id}/${file.name}?ex=${ex}&is=e2e&hm=e2e`,
+  }
+}
+
+/** The thread a webhook call names in `thread_id`: → the post, or the Response Discord gives for it. */
+function threadOf(url) {
+  const threadId = url.searchParams.get('thread_id')
+  const post = threadId === null ? undefined : forumPosts.get(threadId)
+  if (post === undefined) return discordError(404, 10003, 'Unknown Channel')
+  return post
+}
+
+/** POST /webhooks/<id>/<token>?wait=true&thread_id=&with_components=true: a message in a post, made as Discord makes one. */
+async function executeWebhook(request, url, hook) {
+  const post = threadOf(url)
+  if (post instanceof Response) return post
+  const read = await executeBody(request)
+  const body = read?.body
+  if (body === null || body === undefined || typeof body !== 'object') return discordError(400, 50109, 'The request body contains invalid JSON.')
+  const at = Date.now()
+  const refuse = (status, code, message) => {
+    webhookLog.refused.push({ at, threadId: post.id, status, code, body })
+    return discordError(status, code, message)
+  }
+  // A webhook that is not the application's own may send components only when it is asked to (with_components), and a post that is
+  // archived or locked takes no message from it.
+  if (Array.isArray(body.components) && url.searchParams.get('with_components') !== 'true') return refuse(400, 50035, 'Invalid Form Body')
+  if (post.thread_metadata.locked) return refuse(403, 50001, 'Missing Access')
+  if (post.thread_metadata.archived) return refuse(400, 50083, 'Thread is archived')
+  if (textsOf(body).some((text) => text.toLowerCase().includes(AUTOMOD_WORD))) return refuse(400, 200000, 'Message was blocked by automatic moderation')
+
+  const message = {
+    id: snowflake(),
+    channel_id: post.id,
+    type: 0,
+    content: typeof body.content === 'string' ? body.content : '',
+    components: Array.isArray(body.components) ? body.components : [],
+    flags: Number.isInteger(body.flags) ? body.flags : 0,
+    timestamp: new Date(at).toISOString(),
+    edited_timestamp: null,
+    author: { id: hook.id, username: body.username ?? hook.name, avatar: null, global_name: null, bot: true },
+    webhook_id: hook.id,
+    application_id: hook.application_id,
+    attachments: read.files.map((file) => webhookAttachment(post.id, file)),
+    embeds: [],
+    reactions: [],
+    mentions: [],
+  }
+  forumMessages.get(post.id).push(message)
+  webhookLog.executes.push({
+    at,
+    threadId: post.id,
+    messageId: message.id,
+    webhookId: hook.id,
+    query: Object.fromEntries(url.searchParams),
+    multipart: read.multipart,
+    body,
+    files: read.files.map(({ field, name, type, bytes }) => ({ field, name, type, base64: Buffer.from(bytes).toString('base64') })),
+  })
+  broadcast('MESSAGE_CREATE', { ...message, guild_id: GUILD_ID })
+  if (url.searchParams.get('wait') !== 'true') return withCors(new Response(null, { status: 204 }))
+  return withCors(Response.json(message))
+}
+
+/** PATCH and DELETE /webhooks/<id>/<token>/messages/<message>?thread_id=: an edit or a delete of a message this webhook made. */
+async function webhookMessage(request, url, hook, messageId) {
+  const post = threadOf(url)
+  if (post instanceof Response) return post
+  const list = forumMessages.get(post.id)
+  const message = list.find((m) => m.id === messageId && m.webhook_id === hook.id)
+  const at = Date.now()
+  if (request.method === 'DELETE') {
+    webhookLog.deletes.push({ at, threadId: post.id, messageId, found: message !== undefined })
+    if (message === undefined) return discordError(404, 10008, 'Unknown Message')
+    list.splice(list.indexOf(message), 1)
+    broadcast('MESSAGE_DELETE', { id: messageId, channel_id: post.id, guild_id: GUILD_ID })
+    return withCors(new Response(null, { status: 204 }))
+  }
+  const body = await request.json().catch(() => null)
+  if (body === null || typeof body !== 'object') return discordError(400, 50109, 'The request body contains invalid JSON.')
+  if (message === undefined) return discordError(404, 10008, 'Unknown Message')
+  if (Array.isArray(body.components) && url.searchParams.get('with_components') !== 'true') return discordError(400, 50035, 'Invalid Form Body')
+  webhookLog.edits.push({ at, threadId: post.id, messageId, body })
+  if (typeof body.content === 'string') message.content = body.content
+  if (Array.isArray(body.components)) message.components = body.components
+  message.edited_timestamp = new Date(at).toISOString()
+  broadcast('MESSAGE_UPDATE', { ...message, guild_id: GUILD_ID })
+  return withCors(Response.json(message))
+}
+
+/** The webhook routes: → a Response, or null for a path that is none of them. */
+async function webhookRoute(request, url) {
+  const found = url.pathname.match(/^\/v10\/webhooks\/(\d+)\/([^/]+)(?:\/messages\/(\d+))?$/)
+  if (found === null) return null
+  const hook = webhookOf(found[1], found[2])
+  if (hook instanceof Response) return hook
+  if (found[3] === undefined && request.method === 'POST') return executeWebhook(request, url, hook)
+  if (found[3] !== undefined && (request.method === 'PATCH' || request.method === 'DELETE')) return webhookMessage(request, url, hook, found[3])
+  return discordError(405, 0, '405: Method Not Allowed')
+}
+
+/**
+ * The bot's own calls for the replies, each with the bot's token (else 401): the forum's webhooks (list and make), a post archived or
+ * opened again (PATCH /channels/<post>), a message deleted (DELETE /channels/<post>/messages/<id>), the server's AutoMod rules, and the
+ * guild's commands (list and make). → a Response, or null for a path that is none of them.
+ */
+async function botRoute(request, url) {
+  const { pathname } = url
+  const method = request.method
+  const hooksPath = pathname === `/v10/channels/${FORUM}/webhooks`
+  const thread = pathname.match(/^\/v10\/channels\/(\d+)$/)
+  const message = pathname.match(/^\/v10\/channels\/(\d+)\/messages\/(\d+)$/)
+  const commandsPath = pathname === `/v10/applications/${BOT_ID}/guilds/${GUILD_ID}/commands`
+  const ours =
+    pathname === '/v10/users/@me' ||
+    (hooksPath && (method === 'GET' || method === 'POST')) ||
+    (thread && method === 'PATCH') ||
+    (message && method === 'DELETE') ||
+    (pathname === `/v10/guilds/${GUILD_ID}/auto-moderation/rules` && method === 'GET') ||
+    (commandsPath && (method === 'GET' || method === 'POST'))
+  if (!ours) return null
+  if (!asBot(request)) return discordError(401, 0, '401: Unauthorized')
+
+  if (pathname === '/v10/users/@me') return withCors(Response.json(BOT_USER))
+  if (hooksPath && method === 'GET') return withCors(Response.json([...webhooks.values()]))
+  if (hooksPath) {
+    const body = await request.json().catch(() => null)
+    if (typeof body?.name !== 'string' || body.name.length < 1 || body.name.length > 80) return discordError(400, 50035, 'Invalid Form Body')
+    return withCors(Response.json(makeWebhook(snowflake(), `e2e-made-${crypto.randomUUID()}`, body.name)))
+  }
+  if (pathname.endsWith('/auto-moderation/rules')) return withCors(Response.json(AUTOMOD_RULES))
+  if (commandsPath && method === 'GET') return withCors(Response.json(commands))
+  if (commandsPath) {
+    const body = await request.json().catch(() => null)
+    if (typeof body?.name !== 'string' || body.type !== 3) return discordError(400, 50035, 'Invalid Form Body')
+    commandsMade += 1
+    const made = { id: snowflake(), application_id: BOT_ID, guild_id: GUILD_ID, name: body.name, type: body.type, version: snowflake() }
+    commands.push(made)
+    return withCors(Response.json(made, { status: 201 }))
+  }
+  if (thread) {
+    const post = forumPosts.get(thread[1])
+    if (post === undefined) return discordError(404, 10003, 'Unknown Channel')
+    const body = await request.json().catch(() => null)
+    if (typeof body?.archived !== 'boolean') return discordError(400, 50035, 'Invalid Form Body')
+    botLog.threadChanges.push({ at: Date.now(), threadId: post.id, archived: body.archived })
+    post.thread_metadata.archived = body.archived
+    post.thread_metadata.archive_timestamp = new Date().toISOString()
+    broadcast('THREAD_UPDATE', { ...post, guild_id: GUILD_ID })
+    return withCors(Response.json(post))
+  }
+  // A message deleted by the bot, in a post.
+  const list = forumMessages.get(message[1])
+  if (list === undefined) return discordError(404, 10003, 'Unknown Channel')
+  const at = list.findIndex((m) => m.id === message[2])
+  botLog.deletes.push({ at: Date.now(), threadId: message[1], messageId: message[2], found: at !== -1 })
+  if (at === -1) return discordError(404, 10008, 'Unknown Message')
+  list.splice(at, 1)
+  broadcast('MESSAGE_DELETE', { id: message[2], channel_id: message[1], guild_id: GUILD_ID })
+  return withCors(new Response(null, { status: 204 }))
+}
+
+/** POST /interactions/<id>/<token>/callback: the api's answer to an interaction, kept for the specs to read. */
+async function interactionCallback(request, url) {
+  const found = url.pathname.match(/^\/v10\/interactions\/(\d+)\/([^/]+)\/callback$/)
+  if (found === null || request.method !== 'POST') return null
+  const body = await request.json().catch(() => null)
+  if (body === null || typeof body !== 'object') return discordError(400, 50109, 'The request body contains invalid JSON.')
+  // The interaction's token is its credential: an answer needs no Authorization, and the spec checks that the bot's was not sent.
+  interactionAnswers.push({ at: Date.now(), id: found[1], token: found[2], authorized: request.headers.has('Authorization'), body })
+  return withCors(new Response(null, { status: 204 }))
+}
+
 // --- The gateway: every connection of the api, and what is sent down them ---
 
 // Until this time the gateway refuses a connection (the drop hook).
@@ -500,6 +831,9 @@ let gatewayDownUntil = 0
 // How many times the gateway has been dropped (the drop hook): a spec that waits for a message to come down it can tell that a
 // drop in the meantime was the reason the message did not.
 let gatewayDrops = 0
+// The intents of every IDENTIFY, in the order they came, and the one bit without which the gateway refuses it.
+const identified = []
+const MESSAGE_CONTENT_INTENT = 1 << 15
 const sockets = new Set()
 const send = (socket, frame) => socket.send(JSON.stringify(frame))
 // Each socket numbers its own dispatches, from 1, as Discord's sequence does for a session.
@@ -528,13 +862,25 @@ const gateway = {
     if (frame?.op === 1) {
       send(socket, { op: 11 })
     } else if (frame?.op === 2 || frame?.op === 6) {
-      // A resume is answered with READY too, not Discord's RESUMED, so that the api catches up on what it missed.
+      // An IDENTIFY without the Message Content intent is refused as Discord refuses an intent the bot has not been given, with 4014:
+      // without it every message would come with no text. The intents of each IDENTIFY are kept for the specs.
+      if (frame.op === 2) {
+        const intents = frame.d?.intents
+        identified.push(intents)
+        if (!Number.isSafeInteger(intents) || (intents & MESSAGE_CONTENT_INTENT) === 0) {
+          socket.close(4014, 'Disallowed intent(s).')
+          return
+        }
+      }
+      // A resume is answered with READY too, not Discord's RESUMED, so that the api catches up on what it missed. READY names the
+      // application, which the api makes its "Delete on site" command for.
       socket.data.ready = true
       dispatchTo(socket, 'READY', {
         v: 10,
         session_id: crypto.randomUUID(),
         resume_gateway_url: `${SELF.replace(/^http/, 'ws')}/gateway`,
-        user: { id: BOT_ID, username: 'e2e-librarius-bot', bot: true },
+        user: BOT_USER,
+        application: { id: BOT_ID, flags: 0 },
         guilds: [],
       })
     }
@@ -568,14 +914,60 @@ async function librariusHook(request, url) {
   if (!pathname.startsWith('/__test/librarius/')) return null
 
   if (pathname === '/__test/librarius/gateway' && request.method === 'GET') {
-    return withCors(Response.json({ ready: readySockets(), drops: gatewayDrops }))
+    return withCors(Response.json({ ready: readySockets(), drops: gatewayDrops, identified }))
   }
   // Every link the api has asked to have signed again, in the order asked.
   if (pathname === '/__test/librarius/refreshes' && request.method === 'GET') {
     return withCors(Response.json({ asked: refreshesAsked }))
   }
+  // What reached the webhook, and what the bot did to the forum (see webhookLog and botLog).
+  if (pathname === '/__test/librarius/webhook' && request.method === 'GET') return withCors(Response.json({ ...webhookLog, bot: botLog }))
+  // The guild's commands, and how many times the api made one.
+  if (pathname === '/__test/librarius/commands' && request.method === 'GET') return withCors(Response.json({ commands, made: commandsMade }))
+  // The answers the api gave to interactions.
+  if (pathname === '/__test/librarius/interactions' && request.method === 'GET') return withCors(Response.json({ answers: interactionAnswers }))
   if (request.method !== 'POST') return null
   const body = await request.json().catch(() => null)
+
+  // A member picks "Delete on site" in the Apps menu of a message: INTERACTION_CREATE is sent down the gateway, as Discord sends a message
+  // command of a bot whose application has no Interactions Endpoint URL. Body { targetId, userId }; → { id, token, heard }, `heard`
+  // being how many of the api's connections it went to (none while the gateway is down: it is then lost, as it would be).
+  if (pathname === '/__test/librarius/interaction') {
+    const target = typeof body?.targetId === 'string' ? findForumMessage(body.targetId) : null
+    if (typeof body?.targetId !== 'string' || typeof body.userId !== 'string' || !SNOWFLAKE.test(body.userId)) return bad('Need a targetId and a userId.')
+    interactions += 1
+    const command = commands.find((c) => c.name === 'Delete on site')
+    const d = {
+      id: snowflake(),
+      application_id: BOT_ID,
+      type: 2,
+      token: `e2e-interaction-token-${interactions}`,
+      version: 1,
+      guild_id: GUILD_ID,
+      channel_id: target?.postId ?? FORUM,
+      member: { user: authorOf(body.userId), roles: LIBRARIUS_MEMBERS[body.userId]?.roles ?? [] },
+      data: {
+        id: command?.id ?? snowflake(),
+        name: 'Delete on site',
+        type: 3,
+        target_id: body.targetId,
+        resolved: target === null ? {} : { messages: { [body.targetId]: target.message } },
+      },
+    }
+    const heard = readySockets()
+    broadcast('INTERACTION_CREATE', d)
+    return withCors(Response.json({ id: d.id, token: d.token, heard }))
+  }
+
+  // A post is locked in Discord (or opened again, with { locked: false }): stored, and THREAD_UPDATE sent.
+  const lock = pathname.match(/^\/__test\/librarius\/lock\/(\d+)$/)
+  if (lock) {
+    const post = forumPosts.get(lock[1])
+    if (post === undefined) return withCors(Response.json({ error: 'No such post.' }, { status: 404 }))
+    post.thread_metadata.locked = body?.locked !== false
+    broadcast('THREAD_UPDATE', { ...post, guild_id: GUILD_ID })
+    return withCors(Response.json({ locked: post.thread_metadata.locked }))
+  }
 
   // A message is posted in a post: stored, and MESSAGE_CREATE sent. `quiet-message` stores it and sends nothing: what a
   // gateway that was down never heard.
@@ -770,6 +1162,12 @@ Bun.serve({
     // The Librarius, as the bot reads it: the forum itself, its threads and the guild's emoji.
     if (request.method === 'GET') {
       if (url.pathname === `/v10/channels/${FORUM}`) return withCors(Response.json(FORUM_OBJECT))
+      // A post, read on its own: the thread as the lists give it, or Unknown Channel.
+      const threadMatch = url.pathname.match(/^\/v10\/channels\/(\d+)$/)
+      if (threadMatch) {
+        const post = forumPosts.get(threadMatch[1])
+        return post ? withCors(Response.json(post)) : discordError(404, 10003, 'Unknown Channel')
+      }
       if (url.pathname === `/v10/guilds/${GUILD_ID}/threads/active`) {
         return withCors(Response.json({ threads: threadsWhere(false), members: [] }))
       }
@@ -833,6 +1231,10 @@ Bun.serve({
       if (at !== -1) channel.splice(at, 1)
       return withCors(Response.json({ deleted: at !== -1 }))
     }
+
+    // The replies from the site: the webhook, the bot's calls for them, and the answers to interactions.
+    const replied = (await webhookRoute(request, url)) ?? (await botRoute(request, url)) ?? (await interactionCallback(request, url))
+    if (replied) return replied
 
     const hooked = await librariusHook(request, url)
     if (hooked) return hooked
