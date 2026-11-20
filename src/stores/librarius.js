@@ -1,4 +1,5 @@
 import { defineStore } from 'pinia'
+import { toRaw } from 'vue'
 import * as api from '../lib/librarius/api'
 import { STALE, attempt, statusOf, unlessStale } from './asking'
 import { useAuth } from './auth'
@@ -52,19 +53,31 @@ const COPY = {
   editUnknown: "This edit can't be sent again from here: edit the message again.",
 }
 
+// What the store keeps beside its state, by store. An action's `this` is not one object for a store: in a dev build Pinia's devtools
+// plugin calls every action with a new Proxy of the store, one for each call, and in production `this` is the reactive store. So each
+// is keyed by the plain object under all of them (toRaw), which is the same whichever way an action was called.
+function byStore() {
+  const held = new WeakMap()
+  return {
+    get: (store) => held.get(toRaw(store)),
+    set: (store, value) => held.set(toRaw(store), value),
+    delete: (store) => held.delete(toRaw(store)),
+  }
+}
+
 // By store: the post a start-over was last answered for, the rev it was opened again at, how long the next poll waits if the
 // server answers a start-over for that rev again, and until when polls are let go by. Only a start-over that comes with the
 // rev the last one opened the post at is ignored: a rev that has changed is news, and begins afresh.
-const quiet = new WeakMap()
+const quiet = byStore()
 // By store: how many polls of the open post have asked, { id, n }, so that every INFO_EVERY-th reads the post again.
-const beats = new WeakMap()
+const beats = byStore()
 // By store: the pictures sent for the replies of each post, by post id, as a list of their ids by place: `ids[N - 1]` is the one
 // `upload:N` names in the source. The composer gives each picture its place, and gives a place that its text no longer uses to the
 // next picture, which takes the place of the one before. A reply that is queued with pictures takes them all, and the places are
 // empty again. They are kept through a new load() (the reader's drafts are), not a reset().
-const pictures = new WeakMap()
+const pictures = byStore()
 // By store: the following of the open post's queue (see follow()).
-const follows = new WeakMap()
+const follows = byStore()
 
 const restart = (store) => {
   // Stryker disable next-line UpdateOperator: only restart() moves the session counter, so counting down tells an older answer from a current one as well as counting up

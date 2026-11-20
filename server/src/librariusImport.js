@@ -4,12 +4,14 @@
  *
  * createImport({ discord, store, forumId, windowSize = 100, log = console.error, now = Date.now,
  *   timers = { setTimeout, clearTimeout }, everyMs = 21_600_000, retryMs = [300_000, 600_000, 1_200_000, 1_800_000],
- *   onPostsListed = () => {}, webhookId = null })
+ *   onPostsListed = () => {}, webhookId = null, kickOutbox = () => {} })
  *   → { run() → Promise<void>, start(), stop(), status() → what store.syncStatus() says }
  *
  * `webhookId` is the id of the Librarius's own webhook (batch 2), or null: a message of it is not stored by a run (see write()), nor is
  * one of a webhook that sent a part that is stored (store.ownWebhookIds, read at the start of each run: the webhook may have been
- * replaced, or the address unset), nor one whose id is a stored part (store.knownPartIds).
+ * replaced, or the address unset), nor one whose id is a stored part (store.knownPartIds). `kickOutbox` is the outbox's kick
+ * (librariusOutbox.js): it tells the outbox that the store may have queued work for it (see step 3). With the replies off there is no
+ * outbox, and it does nothing.
  *
  * run() never rejects, and what it logs can never fail it: a log that throws is ignored. Everything a run writes is an upsert, a delete of what Discord no longer holds, or a cursor that
  * only moves forward, so one that repeats or is cut short does no harm. Only one run goes at a time: a run asked for while
@@ -55,7 +57,11 @@
  *    page (or made less than 5 s before the page was read), Discord is asked for it. Those questions are capped, at 10 for a
  *    post's page and 50 for a run (a part is newer than the page only when its reply was stored after the page was read, or
  *    when it was the newest message of the post and was deleted): a part past the caps is kept, and a later run judges it. A
- *    part that is gone takes the whole reply with it, as a first part does (store.siteDeleted). The parts of a reply that an
+ *    part that is gone takes the whole reply with it, as a first part does (store.siteDeleted). Once the store has answered,
+ *    and before the messages of Discord that are gone are deleted, the outbox is told (kickOutbox) when any of what was judged
+ *    gone was a part, which is the only time the store queues anything: an outbox with nothing to do sleeps until it is told,
+ *    and the rest of the reply would stay in Discord until the next write from the site. (When the store queued nothing after
+ *    all, the outbox looks, finds nothing new, and sleeps again.) The parts of a reply that an
  *    edit or a delete is at work on are not judged at all (windowIds names none): an edit decides itself what a deletion of
  *    one of them means. A question Discord cannot answer, about a message or a part, ends the run with nothing of that post
  *    deleted.
@@ -145,6 +151,7 @@ export function createImport({
   retryMs = [300_000, 600_000, 1_200_000, 1_800_000],
   onPostsListed = () => {},
   webhookId = null,
+  kickOutbox = () => {},
 }) {
   for (const name of DISCORD_METHODS) if (typeof discord?.[name] !== 'function') throw new TypeError(`discord.${name} must be a function.`)
   for (const name of STORE_METHODS) if (typeof store?.[name] !== 'function') throw new TypeError(`store.${name} must be a function.`)
@@ -159,6 +166,7 @@ export function createImport({
   }
   if (typeof onPostsListed !== 'function') throw new TypeError('onPostsListed must be a function.')
   if (webhookId !== null && !isId(webhookId)) throw new TypeError('webhookId must be a Discord id or null.')
+  if (typeof kickOutbox !== 'function') throw new TypeError('kickOutbox must be a function.')
 
   const stamp = () => new Date(now()).toISOString()
   // What the log does can never fail the run: a log that throws (a closed stderr, say) must not skip what follows it, the
@@ -326,8 +334,11 @@ export function createImport({
     // A later part is judged as a message is, but a question about one is asked only within the caps: one past them is kept, for a
     // later run to judge, and only an answer of null (Discord no longer has it) is gone.
     for (const part of later) if (!fetched.has(part) && (await lookUp(part, spare)) === null) gone.push(part)
-    // A reply of the site whose part, any of them, is gone from Discord goes with all its parts: the others are queued for deletion.
+    // A reply of the site whose part, any of them, is gone from Discord goes with all its parts: the others are queued for deletion. `plain`
+    // is the ids that are no part of one: when it is shorter, the store took a reply, its transaction is over, and the outbox, told now, finds
+    // the entry.
     const { plain } = await store.siteDeleted(gone, postId)
+    if (plain.length < gone.length) kickOutbox()
     await store.deleteMessages(plain)
     await write(edited)
   }

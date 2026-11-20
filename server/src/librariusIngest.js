@@ -3,7 +3,7 @@
  * the store, or a note to the guild and access caches that something they hold has changed. Like the import, it only
  * reads Discord and writes the store: it never writes to Discord (the outbox does, and it has its own store methods).
  *
- * createIngest({ store, guild, access, forumId, fetchMessage, onReady, webhookId = null, log = console.error })
+ * createIngest({ store, guild, access, forumId, fetchMessage, onReady, webhookId = null, kickOutbox = () => {}, log = console.error })
  *   → { load() → Promise<void>, dispatch(type, data) → Promise<void>, botUserId() → string | null }
  *
  * `fetchMessage` is discord.message, and `onReady` starts the catch-up (the importer's run). `webhookId` is the id of the
@@ -12,6 +12,8 @@
  * stored from an event. A message is the site's own when its webhook is the current one (the echo of a reply that comes before
  * the outbox has stored it), or one that sent a stored part before (store.ownWebhookIds, read by load(): the webhook may have been
  * replaced, or the address unset, and the old replies are still there), or when its id is a stored part (store.knownPartIds).
+ * `kickOutbox` is the outbox's kick (librariusOutbox.js): it tells the outbox that the store may have queued work for it. With
+ * the replies off there is no outbox, and it does nothing.
  * The gateway calls
  * dispatch(t, d) for one event at a time and gives up on one that has not settled after 15 seconds, so every handler
  * writes with upserts and deletes that do no harm when they repeat or overlap with the next event's, and none waits for
@@ -38,6 +40,10 @@
  *   is stored with the reactions it came with.
  * - MESSAGE_DELETE, MESSAGE_DELETE_BULK: delete the messages. A part of a reply of the site takes the whole reply with it
  *   (store.siteDeleted): the reply goes from the store, and the deletion of the parts that are left is queued for the outbox.
+ *   The outbox is told (kickOutbox) once the store has answered, and before the plain messages are deleted: one with nothing to do
+ *   sleeps until it is told, and the rest of the reply would stay in Discord until the next write from the site. It is told whenever
+ *   one of the ids was a part, which is the only time the store queues anything; when it queued nothing after all (every part went at
+ *   once, or the reply was left to its edit), the outbox looks, finds nothing new, and sleeps again.
  *   A reply that an edit is on its way for is left to the edit, which is told: the edit may drop the part that was deleted,
  *   and a part it keeps that is gone makes it take the whole reply. The parts an edit drops are removed once it is stored, by a
  *   delete it queues, so each of those removals comes in here as the deletion of a message that is no part of a reply any more.
@@ -87,7 +93,7 @@ const STORE_METHODS = [
 
 const isObj = (v) => typeof v === 'object' && v !== null && !Array.isArray(v)
 
-export function createIngest({ store, guild, access, forumId, fetchMessage, onReady, webhookId = null, log = console.error }) {
+export function createIngest({ store, guild, access, forumId, fetchMessage, onReady, webhookId = null, kickOutbox = () => {}, log = console.error }) {
   for (const name of STORE_METHODS) if (typeof store?.[name] !== 'function') throw new TypeError(`store.${name} must be a function.`)
   for (const name of ['invalidate', 'setEmoji']) if (typeof guild?.[name] !== 'function') throw new TypeError(`guild.${name} must be a function.`)
   if (typeof access?.forget !== 'function') throw new TypeError('access.forget must be a function.')
@@ -95,6 +101,7 @@ export function createIngest({ store, guild, access, forumId, fetchMessage, onRe
   if (typeof onReady !== 'function') throw new TypeError('onReady must be a function.')
   if (!isId(forumId)) throw new TypeError('forumId must be a Discord id.')
   if (webhookId !== null && !isId(webhookId)) throw new TypeError('webhookId must be a Discord id or null.')
+  if (typeof kickOutbox !== 'function') throw new TypeError('kickOutbox must be a function.')
 
   // The ids of the forum's threads.
   const known = new Set()
@@ -158,9 +165,14 @@ export function createIngest({ store, guild, access, forumId, fetchMessage, onRe
     return isStoreId(id) && (await store.knownPartIds([id])).has(id)
   }
 
-  /** Delete messages: the ones that are parts of a reply of the site take the whole reply, and the others go as they are. */
+  /**
+   * Delete messages: the ones that are parts of a reply of the site take the whole reply, and the others go as they are. `plain` is the ids
+   * that are no part of one: when it is shorter than `ids`, the store took a reply, and may have queued the deletion of what is left of it.
+   * Its transaction is over by then, so the outbox, told now, finds the entry.
+   */
   async function forget(ids, postId) {
     const { plain } = await store.siteDeleted(ids, postId)
+    if (plain.length < ids.length) kickOutbox()
     await store.deleteMessages(plain)
   }
 

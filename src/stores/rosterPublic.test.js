@@ -8,6 +8,7 @@ vi.mock('../lib/rosterFixture', () => ({ loadFixture: vi.fn() }))
 import * as api from '../lib/rosterApi'
 import { loadFixture } from '../lib/rosterFixture'
 import { useRosterPublic } from './rosterPublic'
+import { devtoolsPinia } from '../test-utils/devtoolsPinia'
 
 const SNAP = {
   fetchedAt: 'x',
@@ -82,6 +83,23 @@ describe('rosterPublic store', () => {
     d.resolve(SNAP)
     await Promise.all([a, b])
     expect(api.getPublicRoster).toHaveBeenCalledTimes(1)
+    api.getPublicRoster.mockResolvedValue({ ...SNAP, fetchedAt: 'y' })
+    await s.load()
+    expect(api.getPublicRoster).toHaveBeenCalledTimes(2)
+    expect(s.snapshot.fetchedAt).toBe('y')
+  })
+
+  it('makes one request for concurrent loads in a dev build too, where each call of an action gets a new proxy of the store', async () => {
+    devtoolsPinia()
+    const d = deferred()
+    api.getPublicRoster.mockReturnValue(d.promise)
+    const s = useRosterPublic()
+    const a = s.load()
+    const b = s.load()
+    d.resolve(SNAP)
+    await Promise.all([a, b])
+    expect(api.getPublicRoster).toHaveBeenCalledTimes(1)
+    expect(s.status).toBe('ready')
     api.getPublicRoster.mockResolvedValue({ ...SNAP, fetchedAt: 'y' })
     await s.load()
     expect(api.getPublicRoster).toHaveBeenCalledTimes(2)
