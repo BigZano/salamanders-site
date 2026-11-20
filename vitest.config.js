@@ -100,6 +100,9 @@ export default defineConfig({
     // Node 25+ ships its own localStorage global, which shadows jsdom's (see the setup file).
     setupFiles: ['./vitest.setup.js'],
     include: ['src/**/*.test.js', 'scripts/**/*.test.mjs', 'server/**/*.test.js'],
+    // Under Stryker every statement asks which mutant is on, and the property batteries take several times longer than the 5 s a
+    // test has otherwise. A mutant that hangs is still a kill: Stryker has its own timeout, measured from the initial test run.
+    testTimeout: process.env.STRYKER_MUTATOR_WORKER ? 60_000 : 5_000,
     coverage: {
       provider: 'v8',
       include: GATED,
