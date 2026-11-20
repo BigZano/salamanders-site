@@ -490,6 +490,19 @@ out in the form that it was checked in, which its entry keeps, so a change of `L
 queued after it. After any failure of the database, the outbox reads again the entries it had left `sending`, so one whose
 claim went through but whose answer was lost is taken up without a restart.
 
+**An edit that makes a reply shorter** removes the parts it no longer needs last, once the edit is stored: by a delete queued
+with it, in the member's name, as an entry of its own (kind `delete`, keyed by the first part it drops, so its `delete` row in
+`librarius_events` names that part, not the reply). Until that delete has run, Discord shows the edited reply and, after it,
+the old parts, which still say `k/N` of the old count and link back to part 1: 1.5 seconds a part, and longer when the delete
+has to wait (behind other entries, for its retries, or through the pause that two blocks bring). If the delete ends for good
+(the post is locked, or Discord refuses it through every retry), the edit stays done, and the old parts stay in Discord. The
+site shows that delete on no reply, so the API logs one line, once, and that line is all there is (nothing is said in
+Discord): `Librarius outbox: the delete <entry id> ended for good (<why>), so these parts of the reply <reply id> in post
+<post id> may still be in Discord, for a moderator to remove: <part ids>.` The same line, without `of the reply <reply id>`,
+is logged when the delete of what a reply or an edit that ended for good had left in Discord ends for good as well, and when
+the delete of what was left of a reply after a part of it was deleted in Discord does. A moderator deletes those parts in
+Discord, and nothing else is needed; the commands that find them are after the live checks.
+
 There is one way for a part to stay in Discord without the site knowing of it. Discord took the part, but its answer was lost
 (a timeout, say), or the API stopped or lost the outbox's lock before the database had noted the part; and then every look for
 it in the post failed, up to the last try. The reply ends failed, and that part stays in the post: a moderator deletes it in
@@ -497,7 +510,7 @@ Discord.
 
 | Variable | Value |
 |---|---|
-| `LIBRARIUS_WEBHOOK_URL` | the address of the Librarius's webhook, printed by the setup command below. **A secret**: whoever has it can post as the Librarius. `server/.env` only, never git, never a chat |
+| `LIBRARIUS_WEBHOOK_URL` | the address of the Librarius's webhook, printed by the setup command below. **A secret**: whoever has it can post as the Librarius. `server/.env` only, never git, never a chat. The e2e stack gives it an invented address on its Discord mock (`http://discord-mock:4400/api/webhooks/<id>/<token>`), which the API takes only because `DISCORD_API_BASE` is the mock's `http://` address there; `LIBRARIUS_FORM` is unset there, so its replies go out as `v2` |
 | `LIBRARIUS_FORM` | `v2` (Components V2, the default) or `plain` (a message of text). Empty is `v2`; anything else is a startup warning and also `v2`. A queued reply keeps the form it was checked in |
 | `DISCORD_GUILD_ID`, `DISCORD_BOT_TOKEN`, `LIBRARIUS_CHANNEL_ID` | as for the Librarius above, all required |
 
@@ -523,7 +536,10 @@ logged as `Librarius: ...` (the step's name and what failed, with no token and n
    blocks it was left, and takes up what a stop left half-done. The lock is held by one connection to the database, and the
    outbox makes sure it still holds it before every call to Discord and before each entry. If that connection has died, it
    sends nothing more: it leaves the entry for whoever holds the lock, takes the lock again (at once if it is free, and every
-   30 seconds if not, as at the start), and reads again what the database keeps.
+   30 seconds if not, as at the start), and reads again what the database keeps. Before it reads, it writes what it had
+   decided and could not write while the database was failing (a block, a step of the retries, the note of a part that
+   landed), as it was decided, and a start after a stop does the same: a part that Discord blocked is never sent again, and
+   its block counts towards the pause that two blocks bring.
 4. With the webhook only: the upload sweeper. It deletes the pictures held for replies that were never sent, and those of a
    reply that failed or was blocked, once they are an hour old or the reply has ended (never a picture a queued reply names).
    On the same timer, at its first sweep and then once an hour, it prunes the `librarius_outbox` entries that are `sent` and
@@ -562,15 +578,18 @@ stored as messages removed.`, when it did something. It cannot bring back what t
 "Rolling back the replies".
 
 **Deletions in Discord.** A part of a reply that is deleted in Discord takes the whole reply with it: the reply leaves the site,
-and the deletion of its other parts from Discord is queued. While a reply has an edit pending or under way, a deletion of one of
-its parts waits for the edit. If the edit made the reply shorter and removed that part itself, the reply stays, with its new
-parts. If the edit keeps that part (a moderator deleted it), the whole reply leaves the site, and its other parts are removed
-from Discord when the edit ends. A deletion made while the API or the gateway was down is found by the next catch-up (every 6
-hours, and after every gateway READY), for every part of a reply that is in reach of it: among the newest 100 messages of its
-post, or newer than those. Discord is asked about the newer ones, at most 10 questions a post and 50 a run, and a part past those
-is judged at a later run. A reply older than the newest 100 messages is not checked, nor one with an edit or a delete on its way
-until that settles, and a Discord error on any question ends the run with nothing of that post deleted, for the next run to try
-again.
+and the deletion of its other parts from Discord is queued. The live feed, or the catch-up for a deletion it finds, wakes the
+outbox for it at once, so the other parts go from Discord within seconds. While a reply has an edit pending or under way, a
+deletion of one of its parts waits for the edit. If the edit makes the reply shorter and drops that part, the reply stays, with
+its new parts, and the delete that the edit queues for the parts it dropped finds that one gone already. If the edit keeps that
+part (a moderator deleted it), the whole reply leaves the site, and its other parts are removed from Discord when the edit
+ends. A deletion made while the API or the gateway was down is found by the next catch-up (every 6 hours, and after every
+gateway READY), for every part of a reply that is in reach of it: among the newest 100 messages of its post, or newer than
+those. Discord is asked about the newer ones, and about any made less than 5 seconds before the catch-up read the post (Discord
+may not show a message that new yet, so it is not judged gone for missing from the page), at most 10 questions a post and 50 a
+run, and a part past those is judged at a later run. A reply older than the newest 100 messages is not checked, nor one with an
+edit or a delete on its way until that settles, and a Discord error on any question ends the run with nothing of that post
+deleted, for the next run to try again.
 
 ### Bot permissions the replies need, beyond the Librarius's
 
@@ -631,10 +650,21 @@ the post again too.
   only alerts counts too; a rule that is switched off, or that exempts the member's role or the forum or the post, does not;
   and Administrators and members with Manage Server are exempt, as in Discord. A regular expression that takes more than 250 ms
   for all of a reply, or a text over 10,000 characters when a rule has a pattern, refuses the reply ("This reply couldn't be
-  checked against the server's rules. Try a shorter one."). If Discord blocks a message all the same (code 200000, 200001 or
-  240000, the harmful-links filter), the reply is marked blocked and is never sent again: the member is told to edit or delete
-  it. Two blocks within an hour stop all sending for an hour; replies wait, and a restart does not clear it (it is kept in
-  `librarius_outbox_state`, and built again from `librarius_events`).
+  checked against the server's rules. Try a shorter one."). The regular expressions read the messages that are sent, each
+  on its own, as Discord reads them: a phrase that a cut splits between two messages (`free` at the end of one, `nitro` at the
+  start of the next) is not found by a pattern like `free\s+nitro`, as Discord would not find it in two messages, while the
+  keywords, which read what was written too, still find it. Each message is also read as the member typed it: with the
+  escapes that the site writes taken out (`z\*rp` is read as `z*rp`), its links out of their angle brackets, and every
+  zero-width space removed, the member's own as well; and once more with each italic as `_`, which the site sends as `*`
+  (`_free_` goes out as `*free*`). So a pattern refuses a little more than Discord would: a rule against `free[\s_.-]*nitro`
+  refuses `*free* nitro` too. What the site's form rewrites in a way that cannot be undone is read only as it is sent: a
+  bold round an italic (`**_x_**` is sent as `***x***`), two italics that touch (`_free__nitro_` is sent as `*freenitro*`),
+  an italic inside an italic, a mark that holds only spaces, and the links in the cells of a table or with no text (sent
+  without their `](`). Only a pattern written against the marks themselves can miss those; one against what stands between
+  words does not. If Discord blocks a message all the same (code 200000, 200001 or 240000, the harmful-links filter), the
+  reply is marked blocked and is never sent again: the member is told to edit or delete it. Two blocks within an hour stop
+  all sending for an hour; replies wait, and a restart does not clear it (it is kept in `librarius_outbox_state`, and built
+  again from `librarius_events`).
 - **Size:** at most 3 Discord messages a reply. A message holds about 4000 characters of text in the `v2` form (the probe
   measured exactly 4000 of everything Discord counts, the button's label included) and 2000 in `plain`, so a reply is about
   12,000 characters. A code block, a spoiler, bold, italic, underline, strike or inline code that a cut falls in is closed
@@ -671,6 +701,22 @@ merge of the site's half; the start-up, command and log checks can run as soon a
    cd <main checkout>/server && ../node_modules/.bin/bun <worktree>/server/src/librariusWebhookSetupRun.js --dry-run
    ```
 
+   To see a run that calls something, without Discord, it can be tried against the e2e stack's Discord mock (optional). The
+   mock holds a Librarius webhook already, so this tries `--print-existing`. Run it from an empty folder, so that no `.env` is
+   read, with the guild and forum ids that `e2e/docker-compose.yml` gives the api (`DISCORD_GUILD_ID`,
+   `LIBRARIUS_CHANNEL_ID`) in place of `<e2e guild id>` and `<e2e forum id>`; the bot token is the mock's own, not a secret:
+
+   ```sh
+   cd "$(mktemp -d)"
+   <main checkout>/node_modules/.bin/bun <worktree>/e2e/discord-mock/server.js &
+   sleep 2
+   DISCORD_API_BASE=http://localhost:4400 DISCORD_BOT_TOKEN=unused-in-e2e DISCORD_GUILD_ID=<e2e guild id> LIBRARIUS_CHANNEL_ID=<e2e forum id> <main checkout>/node_modules/.bin/bun <worktree>/server/src/librariusWebhookSetupRun.js --print-existing
+   kill %1
+   ```
+
+   Pass: one line `LIBRARIUS_WEBHOOK_URL=http://localhost:4400/api/webhooks/` and the mock's invented id and token, and on
+   the screen that a webhook named "Librarius" that this bot made is already there, so none was made.
+
    Then the real run. What it prints on its standard output is one line, `LIBRARIUS_WEBHOOK_URL=` and the address, and
    everything else it says goes to the screen, so these commands put that line straight into `.env`, and the address never
    shows. The first command after the `cd` removes the empty `LIBRARIUS_WEBHOOK_URL=` line that `.env.example` has; the second
@@ -685,8 +731,8 @@ merge of the site's half; the start-up, command and log checks can run as soon a
    grep -c '^LIBRARIUS_WEBHOOK_URL=' .env
    ```
 
-   Pass: it says "The webhook is made." (its "the line above" is the line now in `.env`), and the count is `1`. When a key is
-   in `.env` twice, Bun and docker compose both take the last one, but one line keeps the switches below simple.
+   Pass: it says "The webhook is made.", and the count is `1`. When a key is in `.env` twice, Bun and docker compose both
+   take the last one, but one line keeps the switches below simple.
 
    It makes a webhook called "Librarius" on the forum as the bot, and only when there is none. When a webhook called
    "Librarius" that this bot made is there already, it makes none beside it: it says "A Librarius webhook is there (id N).
@@ -722,11 +768,13 @@ merge of the site's half; the start-up, command and log checks can run as soon a
 
    The first keeps the image before the replies under a tag; read "Rolling back the replies" before you ever use it. The
    second builds the new image. The third runs the smoke check of the AutoMod patterns (above) in a throwaway container of the
-   new image, with no network and nothing of `.env`, and removes the container after. Pass: its last line is
-   `smoke check passed`. If a line starts with `FAIL` instead, stop there: `docker tag server-api:pre-librarius-replies server-api:latest`
-   puts the tag back on the image that is running, and nothing has changed. The fourth starts the new image. The API reads
-   `.env` when its container is made, so an edit of `.env` needs `docker compose up -d api`, not `docker compose restart api`.
-   That makes the container again, and its log goes with it: see live check 19.
+   new image, with no network and nothing of `.env`, and removes the container after. Do not skip it: the pre-push hook runs
+   the smoke check on the repository's Bun, and only this runs it on the Bun and the Alpine of the image itself, which is
+   what the API runs on. Pass: its last line is `smoke check passed`. If a line starts with `FAIL` instead, stop there:
+   `docker tag server-api:pre-librarius-replies server-api:latest` puts the tag back on the image that is running, and
+   nothing has changed. The fourth starts the new image. The API reads `.env` when its container is made, so an edit of
+   `.env` needs `docker compose up -d api`, not `docker compose restart api`. That makes the container again, and its log
+   goes with it: see live check 19.
 7. **The live checks**, below, run once.
 
 ### The live checks
@@ -810,7 +858,18 @@ the site follows. Use a second account of your own for the mention and the reply
    `||`; then another that is `**`, the same words, `**`. Each is two messages (three in the `plain` form). Pass: in Discord
    every message of the spoiler reply is wholly hidden behind a bar, and no `||` shows as text; every message of the bold
    reply is bold from its first word to its last, and no `**` shows as text. The first message of each ends right after a
-   word, with the mark closed there (no space before it).
+   word, with the mark closed there (no space before it). Then a third reply, of a shape that only hostile text has: a
+   backtick, 5,000 spaces, `w` and a backtick, which this prints:
+
+   ```sh
+   printf '`%5000sw`\n' ''
+   ```
+
+   Pass: two messages (three in `plain`); each but the last shows nothing after its mark but a tiny empty code pill, and the
+   last shows `w` as code. A run of spaces that long leaves a cut no better place than right after the backtick, so the site
+   gives the code a zero-width space to hold (and a spoiler a space, which shows as the small empty bar of step 9). That
+   looks odd and is harmless, and only text like this brings it. If the reply arrives as one message, the copy lost the
+   spaces: skip this one.
 8. **Marks that touch.** Send this reply, as it is:
 
    ```
@@ -818,9 +877,18 @@ the site follows. Use a second account of your own for the mention and the reply
    ```
 
    Pass: in Discord "so" is in italics and "very" in bold right after it, with nothing to be seen between them (the site puts
-   a zero-width space there: no gap, no box), and "the captain dies" is hidden behind one bar until it is clicked.
+   a zero-width space there: no gap, no box), and "the captain dies" is hidden behind one bar until it is clicked. Then two
+   more, each a spoiler right after other marks. The first, as it is:
+
+   ```
+   ***||**A**||***
+   ```
+
+   For the second, type `*a ` (a star, `a` and a space), attach a picture so that it goes in at that place, and type
+   `*||*SECRET*||` right after it, so that the text reads `*a ![…](upload:1)*||*SECRET*||`. Pass: `A` and `SECRET` are each
+   hidden behind a bar until clicked, and no `||` shows as text.
 9. **How Discord pairs bars, by hand.** In the probe's private forum (not the Librarius: these are typed in Discord, and the
-   site has no part in them), post these two messages, each exactly as it is:
+   site has no part in them), post these three messages, each exactly as it is:
 
    ```
    **2/3** |||| a || b ||
@@ -830,9 +898,21 @@ the site follows. Use a second account of your own for the mention and the reply
    **3/3** || || then ||SECRET|| and ||OTHER|| end
    ```
 
+   ```
+   ||ALPHA
+
+   BRAVO||
+   ```
+
    Pass: in the first, `a` is hidden and `b` can be read, with the last `||` shown as text; in the second, an empty spoiler
-   shows, and `SECRET` and `OTHER` are hidden. Anything else (in the first, everything hidden, or `||||` shown as text with
-   `a` and `b` both hidden) means Discord pairs the bars otherwise than the site expects when it cuts a reply: stop, and say so.
+   shows, and `SECRET` and `OTHER` are hidden. Anything else in those two (in the first, everything hidden, or `||||` shown
+   as text with `a` and `b` both hidden) means Discord pairs the bars otherwise than the site expects when it cuts a reply:
+   stop, and say so. The third settles what was never checked in Discord, whether a blank line ends a spoiler; either answer
+   is safe for what the site sends, which never has a blank line inside a spoiler, but say which it was. Both words shown,
+   with the bars as text: Discord ends a spoiler at a blank line, as the site does. Both hidden: Discord does not, and the
+   site differs there. It reads such a text with its bars as text, so a reply written so on the site shows unhidden in the
+   preview and goes out unhidden, and a message written so in Discord, which Discord hides, is shown unhidden on the site:
+   that is the one to say.
 10. **An edit.** Edit the first reply's text. In Discord the same message changes and is marked edited, and the site shows the
     new text. Then send a reply with a picture and edit its text: **the picture stays**, in the same place, and the text is
     the new one. (Discord keeping a picture through a `v2` edit was never probed: this is where it is found out. If the
@@ -1028,6 +1108,19 @@ docker compose exec -T db psql -U salamanders salamanders_builds -c "select at, 
 
 `blocked` and `failed` entries are final; the member is shown why and can edit or delete the reply. A `last_error` for an entry
 that is still `pending` is the last attempt's technical text.
+
+A delete that the site queued itself (of the parts an edit dropped, of what a reply or an edit that ended for good left, or of
+what was left of a reply after a part of it was deleted in Discord) is shown on no reply. One that ended for good is told once
+in the API's log (see "An edit that makes a reply shorter", above), and that log goes when the container is made again; its
+entry stays in `librarius_outbox`. These find them, from `server/`:
+
+```sh
+docker compose logs api | grep 'Librarius outbox: the delete'
+docker compose exec -T db psql -U salamanders salamanders_builds -c "select id, state, last_error, payload->>'postId' as post_id, payload->>'replyId' as reply_id, payload->'partIds' as part_ids from librarius_outbox where kind = 'delete' and payload ? 'partIds' and state in ('failed', 'blocked') order by id desc limit 10;"
+```
+
+Each of `part_ids` that is still in the post `post_id` is a message for a moderator to delete in Discord; `reply_id` is empty
+for a delete that names no reply.
 
 ### Rolling back the replies
 
