@@ -55,7 +55,8 @@
  *      the time of a pattern with several `.*` grows with the 4th power of its text), each as it is sent and, when that is not the same
  *      text, as the member typed it (typed(): its links let out of the angle brackets that the form writes them in, `](<url>)` being
  *      `](url)` and `<url>` being `url`, its marks out of the escapes, `z\*rp` being `z*rp`, and without the zero-width spaces that it puts
- *      between marks), for a rule against `z[o*]rp` or the shape of a link was written for that; in the one budget of REGEX_BUDGET_MS. A
+ *      between marks), and again with each italic as `_`, which the form writes with `*` (`_free_` is sent as `*free*`), for a rule against
+ *      `z[o*]rp`, the shape of a link or `free[\s_.-]*nitro` was written for that; in the one budget of REGEX_BUDGET_MS. A
  *      pattern that matches is the same refusal, with `match: null`. A reply that could not be checked is 422 with the error "This reply
  *      couldn't be checked against the server's rules. Try a shorter one." and no `rule`: a pattern was not done in the budget (or the
  *      child it runs in did not answer, or was too busy to be asked), or a text folds to more than it may, which is to more than 4 times
@@ -129,9 +130,10 @@
  * translatePattern(source) → the JavaScript source for a pattern of Rust's, or null; scanPatterns(job) is the job of the child
  *   process, run by answerJob(job) (for the worker file) and handed to it by scanInWorker(job), which createRegexRunner(spawnChild)
  *   makes for the child that spawnRegexWorker() starts. shownBy(parts, { reply, footer }) → the texts that the messages of a reply
- *   show of the reply itself (see validateReply); unmasked(text) → the text with its masked links put by their texts; typed(text) →
- *   the text as the member typed it, with what the form wrote for its links and its marks undone; Unfoldable is what the matcher throws
- *   for a text that folds to more than it may. All of them are exported for the worker file and for the tests.
+ *   show of the reply itself (see validateReply); unmasked(text) → the text with its masked links put by their texts; typed(text, italic) →
+ *   the text as the member typed it, with what the form wrote for its links and its marks undone, and its italics written with `*` or `_`;
+ *   Unfoldable is what the matcher throws for a text that folds to more than it may. All of them are exported for the worker file and for
+ *   the tests.
  *
  * cleanName(name) → the name a reply is sent under: at most 80 characters, at least 1. Only the first 400 UTF-16 units of the
  *   name are read (the names of Discord have at most 32). Controls, format characters (zero-width ones, direction marks, the joiner
@@ -333,6 +335,9 @@ const gapEnd = (folded, a) => Math.min(a + MAX_GAP, (folded.spaces ??= spacesOf(
 
 /** → an empty set of places of a text of `n` places, a bit for each, with room for the two places after its end too (which are in no set). */
 const noPlaces = (n) => new Uint32Array(((n + 1) >>> 5) + 1)
+// The set of a piece that no place of the text is kept for, whatever the text: one for all of them, so that a piece that is not there, or that
+// nothing can follow, costs no memory. It has no room for a place, and is never looked in (see reach and retryAfter).
+const NONE = new Uint32Array(0)
 
 /** → the first place of the set from `a` to `b`, both included, or -1 (`a` is at most one place after the end of the text): 32 places a look. */
 function firstOf(set, a, b) {
@@ -366,7 +371,9 @@ function placesOf(folded, piece, memo) {
  * piece is told whether the rest of the keyword can follow it, and where, by a look in a set for each piece, whatever the length of the word it
  * is in and however many times the pieces are found in it. A set is kept in `memo` for what it depends on (`tails`), so that the keywords of a
  * list that end with the same pieces (`*n*gg*r*` and `*n*g*gg*r*`) share it, and the sets of a keyword for the keyword. The sets are bits: the
- * size of the text over 8 in bytes, and only while one rule is looked for in one text.
+ * size of the text over 8 in bytes, and only while one rule is looked for in one text. A set that would hold no place is NONE, and so is every
+ * set before it, which is then not worked out: 1,000 keywords of 30 pieces over a text that their chains end early in held a set for each piece
+ * (0.9 s and 120 MB a reply on Bun, and 5.4 s and 610 MB for 6 such rules), where only the few sets that something can follow are made now.
  */
 function chainsOf(folded, keyword, memo) {
   let sets = memo.keywords.get(keyword)
@@ -378,11 +385,16 @@ function chainsOf(folded, keyword, memo) {
       let set = memo.tails.get(tails[k])
       if (set === undefined) {
         const after = sets[0]
-        set = noPlaces(folded.s.length)
-        for (const p of placesOf(folded, rest[k], memo)) {
-          const a = p + rest[k].length
-          const kept = after === undefined ? keyword.endFree || !inWord(start, a) : firstOf(after, a, gapEnd(folded, a)) !== -1
-          if (kept) set[p >>> 5] |= 1 << (p & 31)
+        set = NONE
+        // Nothing can follow a piece that the next one cannot follow, so its places are not looked for, nor those of the pieces before it.
+        if (after !== NONE) {
+          for (const p of placesOf(folded, rest[k], memo)) {
+            const a = p + rest[k].length
+            const kept = after === undefined ? keyword.endFree || !inWord(start, a) : firstOf(after, a, gapEnd(folded, a)) !== -1
+            if (!kept) continue
+            if (set === NONE) set = noPlaces(folded.s.length)
+            set[p >>> 5] |= 1 << (p & 31)
+          }
         }
         memo.tails.set(tails[k], set)
       }
@@ -405,6 +417,8 @@ function reach(folded, keyword, pos, memo) {
   const { rest } = keyword
   if (rest.length === 0) return !keyword.endFree && inWord(wordsIn(folded).start, pos) ? -1 : pos
   const sets = chainsOf(folded, keyword, memo)
+  // A first set of NONE has no place that the rest can follow from; any other has none of NONE after it (see chainsOf).
+  if (sets[0] === NONE) return -1
   let a = pos
   for (let k = 0; k < rest.length; k++) {
     const p = firstOf(sets[k], a, gapEnd(folded, a))
@@ -424,7 +438,8 @@ function reach(folded, keyword, pos, memo) {
  */
 function retryAfter(folded, keyword, i, memo) {
   if (keyword.rest.length === 0) return i + 1
-  const next = firstOf(chainsOf(folded, keyword, memo)[0], i + 1 + keyword.head.length, folded.s.length)
+  const [first] = chainsOf(folded, keyword, memo)
+  const next = first === NONE ? -1 : firstOf(first, i + 1 + keyword.head.length, folded.s.length)
   return next === -1 ? folded.s.length : Math.max(i + 1, next - keyword.head.length - MAX_GAP)
 }
 
@@ -508,19 +523,20 @@ const covers = (reach, a, b) => reach[a] >= b
 const GROUP = 8
 
 /**
- * → the keywords and a tree of their first pieces, which earliestIn() walks from each place of a text, so that the text is read once for all the
- * keywords of a rule, and not once for each. The root is a map from the first unit of a first piece to the node of the keywords that start with
- * it. A node is { path, ends, few, next } for the keywords whose first pieces start with the units on the way to it: the unit it is reached by
- * and then its `path`, which is all that they have in common after it (often nothing); `ends` the places (in the order of the keywords) of
- * those whose first piece is those units and no more, and of the others either `few`, when there are GROUP of them at most, whose first pieces
- * are compared with the text, or `next`, a map from the unit after those to the node of the keywords that go on with it. A place of the text
- * then costs a look at each node down the way that the text goes, and GROUP comparisons at most at the end of it, and not one for each keyword
- * that starts as the text does there: a list of 1,000 addresses that start with `di`, or of words of Hangul that start with the same syllable,
- * costs at a place that holds those units about what a list of a few does, and 200 keywords that start with the same 60 letters one node. A
- * node is made only for a group of more than GROUP, so the tree is small, about a node for every GROUP keywords, where a node for every unit of
- * every keyword was 100 MB for 6 rules of 1,000, made again for each reply.
+ * → the keywords, a tree of their first pieces and how many nodes it has, which earliestIn() walks from each place of a text, so that the text is
+ * read once for all the keywords of a rule, and not once for each. The root is a map from the first unit of a first piece to the node of the
+ * keywords that start with it. A node is { id, path, ends, few, next } for the keywords whose first pieces start with the units on the way to it:
+ * `id` its place in the order the nodes are made, the unit it is reached by and then its `path`, which is all that they have in common after it
+ * (often nothing); `ends` the places (in the order of the keywords) of those whose first piece is those units and no more, and of the others
+ * either `few`, when there are GROUP of them at most, whose first pieces are compared with the text, or `next`, a map from the unit after those
+ * to the node of the keywords that go on with it. A place of the text then costs a look at each node down the way that the text goes, and GROUP
+ * comparisons at most at the end of it, and not one for each keyword that starts as the text does there: a list of 1,000 addresses that start
+ * with `di`, or of words of Hangul that start with the same syllable, costs at a place that holds those units about what a list of a few does,
+ * and 200 keywords that start with the same 60 letters one node. A node is made only for a group of more than GROUP, so the tree is small, about
+ * a node for every GROUP keywords, where a node for every unit of every keyword was 100 MB for 6 rules of 1,000, made again for each reply.
  */
 function indexed(keywords) {
+  let nodes = 0
   // → the map from the unit at `depth` of the first pieces of the keywords of `list` (each is longer than that) to the node of those that have it.
   const childrenOf = (list, depth) => {
     const groups = new Map()
@@ -536,14 +552,15 @@ function indexed(keywords) {
     const heads = list.map((j) => keywords[j].head)
     let to = depth
     while (heads.every((head) => to < head.length && head.charCodeAt(to) === heads[0].charCodeAt(to))) to++
-    const node = { path: heads[0].slice(depth, to), ends: [], few: [], next: null }
+    const node = { id: nodes++, path: heads[0].slice(depth, to), ends: [], few: [], next: null }
     const longer = []
     for (const j of list) (keywords[j].head.length === to ? node.ends : longer).push(j)
     if (longer.length <= GROUP) node.few = longer
     else node.next = childrenOf(longer, to)
     return node
   }
-  return { keywords, root: childrenOf(keywords.map((_, j) => j), 0) }
+  const root = childrenOf(keywords.map((_, j) => j), 0)
+  return { keywords, root, nodes }
 }
 
 /**
@@ -552,15 +569,20 @@ function indexed(keywords) {
  * first. That is the first span of each keyword that the allow list does not hold, compared by where they start, as the keywords were one by
  * one: a span starts at its place or at the start of the word that its place is in, which is no earlier at a later place. It is one pass over
  * the text for all the keywords: from each place the tree of their first pieces is walked as far as the text goes with it, and only the keywords
- * whose whole first piece is there are tried, at a place that their last try does not skip (see nextPlace and retryAfter). `allowOf()` is the
- * allow list, made when the first match is found and not before. Every place of the text is looked at, a text with a match as much as one
- * without: the work is that of a text the length of the reply, whatever is found.
+ * whose whole first piece is there are tried, at a place that their last try does not skip (see nextPlace and retryAfter); the keywords whose
+ * first pieces end at one node are passed over together while none of them is due. `allowOf()` is the allow list, made when the first match is
+ * found and not before. Every place of the text is looked at, a text with a match as much as one without: the work is that of a text the length
+ * of the reply, whatever is found.
  */
-function earliestIn(folded, { keywords, root }, allowOf) {
+function earliestIn(folded, { keywords, root, nodes }, allowOf) {
   const { s, from } = folded
   const memo = memoOf()
   // For each keyword, the first place that it is compared with the text at again (see nextPlace and retryAfter).
   const skip = new Int32Array(keywords.length)
+  // For each node, the least of the skips of its `ends` when they were last looked at: no place before it has one of them to try. A skip
+  // only grows, and only when its keyword is tried, at its node, so 1,000 keywords with the same first piece that are done with are looked
+  // at again at none of its places, where each was looked at, at each (172 ms a rule over 11,000 `n` for 1,000 `n*XYZ` on Bun).
+  const due = new Int32Array(nodes)
   let best = null
   const consider = (j, i) => {
     const span = spanAt(folded, keywords[j], i, memo)
@@ -586,7 +608,14 @@ function earliestIn(folded, { keywords, root }, allowOf) {
       if (node === undefined || (node.path !== '' && !s.startsWith(node.path, d + 1))) break
       d += 1 + node.path.length
       const { ends, few } = node
-      for (let k = 0; k !== ends.length; k++) if (i >= skip[ends[k]]) consider(ends[k], i)
+      if (i >= due[node.id]) {
+        let least = s.length
+        for (let k = 0; k !== ends.length; k++) {
+          if (i >= skip[ends[k]]) consider(ends[k], i)
+          least = Math.min(least, skip[ends[k]])
+        }
+        due[node.id] = least
+      }
       // Each of the few goes on past the node: its unit there is looked at first, and the whole of it only when that is the text's.
       for (let k = 0; k !== few.length; k++) {
         const j = few[k]
@@ -1065,8 +1094,10 @@ const MASKED_LINK = /\[([^\][\n]*)\]\((?:[^()\][\n]|\([^()\][\n]*\))*\)/g
 //   a list or a quote at the start of a line (`#`, `-`, `>`, and the full stop after the number of an ordered list);
 // - a zero-width space: between two marks of one character that touch (`*a*` then `**b**`, `__`, code, and after an escaped mark), in a run
 //   of three backticks in a block of code or a table, and in a mark that a cut leaves with nothing to hold. Every one is taken out, the
-//   member's too: the text that is sent is read as well, so that only ever finds more.
-const FORM_SPELLING = /<(https?:\/\/[^\s<>]*)>|\\([\\*_~|`<>[\]#.-])|\u200b/g
+//   member's too: the text that is sent is read as well, so that only ever finds more;
+// - an italic: every one is written with `*`, the member's `_x_` as `*x*`, so one copy reads each star that stands alone as `_` (see typed). A run
+//   of two or more is a bold, or a bold and an italic that touch, and is kept as it is.
+const FORM_SPELLING = /<(https?:\/\/[^\s<>]*)>|\\([\\*_~|`<>[\]#.-])|(\*\*+)|\*|\u200b/g
 const ANGLE_LINK = /<([a-z][a-z0-9+.-]*):[^\s<>]*>/gi
 const HTTP_ADDRESS = /^https?:\/\//
 // What Discord writes in angle brackets with a colon in it, and is no link: a timestamp, a slash command, an emoji, and the
@@ -1116,20 +1147,30 @@ const refused = (status, error, more = {}) => ({ ok: false, status, error, ...mo
 export const unmasked = (text) => text.replace(MASKED_LINK, '$1')
 
 /**
- * → the text as the member typed it, as near as the text that is sent can say: what the form wrote for it undone (FORM_SPELLING). Each link is
- * let out of its angle brackets (`[text](<address>)` is `[text](address)` and `<address>` is `address`, for the addresses of http and https),
- * each escape is the character it escapes (`z\*rp` is `z*rp`, `free\_nitro` is `free_nitro`, `\\` is a backslash, `1\.` is `1.`), and the
- * zero-width spaces that the form puts between marks are taken out. The form writes every link and every mark so, whatever the member typed,
- * and the patterns of the server were written for what members type (`z[o*]rp` for `z*rp`, `\]\(https?://` for a link), so the patterns read
- * this copy as well as the text that is sent. It cannot tell what the form wrote from what the member did: an address that the member wrote in
- * angle brackets is let out too, and so is a backslash of the member's before one of those characters, which is what Discord would have shown a
- * rule had it been typed there, and every zero-width space goes, the member's as well; and the text that is sent is read as well, so this only
- * ever finds more. Not undone, as they are no letters of the member's: the marks of a cut, which close what is open at the end of a part and open
- * it again in the next, the space that a spoiler left empty by a cut is given (`|| ||`), the space before code that starts with a backtick, an
- * italic of `_` that the form writes with `*`, a heading that it writes in bold, and the cells of a table, which are sent as a block of code.
- * The copy is never longer than the text.
+ * → the text as the member typed it, as near as the text that is sent can say: what the form wrote for it undone (FORM_SPELLING), each italic
+ * written with `italic`, which is `*` (as the form writes them, and the default) or `_` (a RangeError for anything else). Each link is let out of
+ * its angle brackets (`[text](<address>)` is `[text](address)` and `<address>` is `address`, for the addresses of http and https), each escape is
+ * the character it escapes (`z\*rp` is `z*rp`, `free\_nitro` is `free_nitro`, `\\` is a backslash, `1\.` is `1.`), and the zero-width spaces that
+ * the form puts between marks are taken out. The form writes every link and every mark so, whatever the member typed, and the patterns of the
+ * server were written for what members type (`z[o*]rp` for `z*rp`, `\]\(https?://` for a link, `free[\s_.-]*nitro` for `free_nitro`, which reads
+ * the `_` of `_free_ nitro` and not the `*` that the form sends it with), so the patterns read this copy, with each italic, as well as the text
+ * that is sent. It cannot tell what the form wrote from what the member did: an address that the member wrote in angle brackets is let out too,
+ * and so is a backslash of the member's before one of those characters, which is what Discord would have shown a rule had it been typed there;
+ * every zero-width space goes, the member's as well; and with `_`, every star that stands alone is read as one, in code too, and for an italic that
+ * the member wrote with `*` (so `*free* nitro` is refused by a rule that Discord would let it by with). The text that is sent is read as well, so
+ * this only ever finds more. A run of stars is kept as it is: it is a bold, or a bold and an italic that touch, and the form writes `**_free_**` as
+ * `***free***`, whose `_` is then not read. Not undone either, and the marks of the member's are lost in two of them: two italics that touch,
+ * which the form writes as one (`_free__nitro_` is `*freenitro*`), and an italic in an italic, which it writes as its text. Nor are the marks of a
+ * cut, which close what is open at the end of a part and open it again in the next, the space that a spoiler left empty by a cut is given (`|| ||`),
+ * the space before code that starts with a backtick, a heading that the form writes in bold, the cells of a table, which are sent as a block of
+ * code with a link as its text and its address after it (`x (https://e.com)`), and a link with no text, which is sent as its address: neither
+ * link has the `](` left for a rule against that shape, and neither is a masked link where Discord shows it. The copy is never longer than the
+ * text, and the copies with the two italics are as long as each other.
  */
-export const typed = (text) => text.replace(FORM_SPELLING, (whole, link, escaped) => link ?? escaped ?? '')
+export function typed(text, italic = '*') {
+  if (italic !== '*' && italic !== '_') throw new RangeError('the italic must be * or _')
+  return text.replace(FORM_SPELLING, (whole, link, escaped, run) => link ?? escaped ?? run ?? (whole === '*' ? italic : ''))
+}
 
 // The kind of a component that is a Text Display, in the messages of the form.
 const TEXT_DISPLAY = 10
@@ -1253,16 +1294,12 @@ export async function validateReply(input, options) {
   }
 
   // The patterns read what is sent only (see scanInWorker): the source holds what is not sent, and is up to 16,000 characters, where
-  // the time of a pattern with several `.*` grows with the 4th power of the text. Each text is read as it is sent and, when that is not the
+  // the time of a pattern with several `.*` grows with the 4th power of the text. Each text is read as it is sent and, when they are not the
   // same text, as the member typed it (typed()): with its links out of the angle brackets and its marks out of the escapes that the form
-  // wrote them in. A rule against `z*rp` or against the shape of a link would see neither otherwise.
+  // wrote them in, and then with its italics as `_` as well, which the form writes with `*`. A rule against `z*rp`, against the shape of a
+  // link or against `free_nitro` would not see `z*rp`, the link, or the `_` of `_free_ nitro` otherwise.
   if (typeof automod.regex === 'function') {
-    const found = await automod.regex(
-      shown.flatMap((part) => {
-        const copy = typed(part)
-        return copy === part ? [part] : [part, copy]
-      }),
-    )
+    const found = await automod.regex(shown.flatMap((part) => [...new Set([part, typed(part), typed(part, '_')])]))
     if (found !== null && found.unchecked === true) return refused(422, COPY.unchecked)
     if (found !== null) return blocked(found, null)
   }
