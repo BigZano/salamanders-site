@@ -112,11 +112,15 @@ describe('runSetup: the run', () => {
     expect(r.all).not.toContain(BOT_TOKEN)
   })
 
-  it('tells the owner on standard error to paste it into server/.env, that it is secret, and how to get it back if it is lost', async () => {
+  it('tells the owner on standard error where the line is, that it is secret, and how to get it back if it is lost', async () => {
     const r = await run()
     const said = r.err.join('\n')
-    expect(said).toContain('Paste the line above into server/.env')
-    expect(said).toContain('rebuild the API')
+    // Run as the README says (`>> .env`), the line is in server/.env already and shows nowhere: nothing is "above" to paste.
+    expect(said).toContain('Its address is the one line on standard output, LIBRARIUS_WEBHOOK_URL=…')
+    expect(said).toContain("with >> .env (the README's way) that line is now the last of server/.env, so check that grep -c '^LIBRARIUS_WEBHOOK_URL=' .env says 1")
+    expect(said).toContain('without >> .env, the line is above: put it into server/.env on the host that runs the API')
+    expect(said).not.toContain('Paste the line above')
+    expect(said).toContain('Then rebuild the API.')
     expect(said).toContain('secret')
     // Lost: run it again, or copy it from Discord. Never delete the webhook for it: that strands every reply it sent.
     expect(said).toContain('run this again with --print-existing (it prints the address of the webhook that is there)')
@@ -398,7 +402,11 @@ describe('runSetup: a webhook of the same name, with --print-existing', () => {
     expect(r.err).toHaveLength(1)
     expect(r.err[0]).toContain(`(id ${OLD_HOOK})`)
     expect(r.err[0].startsWith('A webhook named "Librarius" that this bot made is already on the Librarius forum')).toBe(true)
-    expect(r.err[0]).toContain('so none was made: the line above is its address, the address of the webhook this command made on an earlier run.')
+    expect(r.err[0]).toContain('so none was made. Its address, the address of the webhook this command made on an earlier run, is the one line on standard output, LIBRARIUS_WEBHOOK_URL=…')
+    // With `--print-existing` before the `>> .env`, as the README says when .env does not have it, the line is in server/.env already.
+    expect(r.err[0]).toContain("with >> .env (the README's way) that line is now the last of server/.env, so check that grep -c '^LIBRARIUS_WEBHOOK_URL=' .env says 1")
+    expect(r.err[0]).toContain('without >> .env, the line is above: put it into server/.env if it is not there.')
+    expect(r.err[0]).not.toContain('the line above is')
     expect(r.err[0]).not.toContain('the one the site uses')
   })
 

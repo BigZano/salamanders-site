@@ -81,6 +81,8 @@ const row = (id, over = {}) => ({
   createdAt: '2026-11-02T18:30:00.000Z',
   editedAt: null,
   rev: '120',
+  origin: 'discord',
+  source: null,
   attachments: [],
   ...over,
 })
@@ -1113,6 +1115,85 @@ describe('GET /librarius/posts/:id/messages: the answer', () => {
           expect(Object.fromEntries(Object.entries(out.people).map(([id, p]) => [id, p.name]))).toEqual(Object.fromEntries([...new Set(authors)].map((id) => [id, named(id)])))
         },
       ),
+    )
+  })
+})
+
+describe('who made a message: origin, and the source of a reply of the site', () => {
+  const SOURCE = 'Hello **there**, with ![a map](upload:1) and <@200000000000000432>.'
+  // A reply of the site and a message of Discord, as the store answers them: the store reads both columns as they are.
+  const siteRow = (id, over = {}) => row(id, { origin: 'site', source: SOURCE, content: SOURCE, webhookId: '200000000000000495', ...over })
+  const page = (rows) => ({ listMessages: () => ({ rows, hasOlder: false, hasNewer: false }) })
+  const changed = (rows) => ({ changes: () => ({ rows, deleted: [], rev: 'unused', full: false }) })
+  // The two routes that answer messages, both through present().
+  // A title for a value of any type, undefined included (which JSON cannot print).
+  const labelled = (list) => list.map((v) => [JSON.stringify(v) ?? String(v), v])
+  const ROUTES = [
+    ['a page', page, messagesPath()],
+    ['the changes', changed, changesPath('?since=100')],
+  ]
+
+  it.each(ROUTES)("%s: a reply of the site says origin 'site' with its source, a message of Discord says 'discord' with none, whatever its row holds", async (_, store, path) => {
+    const rows = [siteRow(M1), row(M2, { source: 'A source in a row of Discord, which is no reply of the site.' })]
+    const out = await body(await setup({ store: store(rows) }).get(path))
+    expect(out.messages).toEqual([view(M1, { origin: 'site', source: SOURCE, content: SOURCE }), view(M2)])
+    expect(Object.hasOwn(out.messages[1], 'source')).toBe(false)
+  })
+
+  it.each(labelled(['Site', 'SITE', ' site', 'site ', 'site\n', '', 'discord', 'webhook', null, undefined, 1, true, ['site'], { site: true }]))(
+    'fails closed: an origin of %s is not the site, so it says discord and sends no source',
+    async (_, origin) => {
+      const rows = [row(M1, { origin, source: 'stray' }), siteRow(M2)]
+      const out = await body(await setup({ store: page(rows) }).get(messagesPath()))
+      expect(out.messages[0].origin).toBe('discord')
+      expect(Object.hasOwn(out.messages[0], 'source')).toBe(false)
+      expect([out.messages[1].origin, out.messages[1].source]).toEqual(['site', SOURCE])
+    },
+  )
+
+  it("sends a reply of the site's source as the store holds it, null included (the page then reads its content)", async () => {
+    const long = `${'word '.repeat(2000)}end`
+    const rows = [siteRow(M1, { source: long, content: long.slice(0, 4000) }), siteRow(M2, { source: null })]
+    const out = await body(await setup({ store: page(rows) }).get(messagesPath()))
+    expect(out.messages.map((m) => [m.origin, m.source, m.content])).toEqual([
+      ['site', long, long.slice(0, 4000)],
+      ['site', null, SOURCE],
+    ])
+  })
+
+  it('names those a reply of the site mentions anywhere in its source, past what its content holds, and reads no source of Discord', async () => {
+    const long = `${'word '.repeat(900)}<@${CARA}>`
+    const rows = [siteRow(M1, { source: long, content: long.slice(0, 4000) }), row(M2, { content: `<@${BOB}>`, source: `<@${DAN}>` })]
+    const { get } = setup({ roster: () => [member(BOB, 'Bob Now'), member(CARA, 'Cara Now'), member(DAN, 'Dan Now')], store: page(rows) })
+    const out = await body(await get(messagesPath()))
+    expect(Object.keys(out.people).sort()).toEqual([ALICE, BOB, CARA].sort())
+  })
+
+  it('reads a reply of the site with no source by its content, for the mentions too', async () => {
+    const rows = [siteRow(M1, { source: null, content: `<@${CARA}>` }), siteRow(M2)]
+    const out = await body(await setup({ roster: () => [member(CARA, 'Cara Now')], store: page(rows) }).get(messagesPath()))
+    expect(Object.keys(out.people).sort()).toEqual([ALICE, CARA].sort())
+    expect(out.messages.map((m) => m.source)).toEqual([null, SOURCE])
+  })
+
+  it('answers origin and source by the one rule, for any origin and source a row holds (property)', async () => {
+    await fc.assert(
+      fc.asyncProperty(
+        fc.array(fc.record({ origin: fc.constantFrom('site', 'discord', 'Site', '', null, undefined), source: fc.option(fc.string({ maxLength: 40 }), { nil: null }) }), { minLength: 1, maxLength: 6 }),
+        fc.boolean(),
+        async (made, viaChanges) => {
+          const rows = made.map(({ origin, source }, i) => row(String(BigInt(M1) + BigInt(i)), { origin, source }))
+          const out = await body(await setup({ store: viaChanges ? changed(rows) : page(rows) }).get(viaChanges ? changesPath('?since=100') : messagesPath()))
+          expect(out.messages).toHaveLength(made.length)
+          out.messages.forEach((m, i) => {
+            const site = made[i].origin === 'site'
+            expect(m.origin).toBe(site ? 'site' : 'discord')
+            expect(Object.hasOwn(m, 'source')).toBe(site)
+            if (site) expect(m.source).toBe(made[i].source)
+          })
+        },
+      ),
+      { numRuns: 150, examples: [[[{ origin: 'site', source: 'x' }], false]] },
     )
   })
 })

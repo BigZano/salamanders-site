@@ -22,8 +22,8 @@
  * get its address back.
  *
  * Standard output carries one line at most, `LIBRARIUS_WEBHOOK_URL=` and the address, and only when the run exits 0, so
- * it can go straight into a file. Everything else goes to standard error: what to do with the line (paste it into
- * `server/.env` and rebuild the API), the dry run, every refusal. The address is a secret (whoever has it can post as the
+ * it can go straight into a file, as the README has it (`>> .env`). Everything else goes to standard error: where the line is (in
+ * `server/.env` when it went there, else above) and that the API is rebuilt after, the dry run, every refusal. The address is a secret (whoever has it can post as the
  * Librarius), so it is printed nowhere else, and neither is the bot's token. What Discord says in a failure is cut of
  * every link and of the tokens before it is printed, and a failure to reach Discord names the kind of error and nothing it
  * carried. A webhook that may have been made though no answer came is found by running this again with --print-existing.
@@ -43,6 +43,10 @@ const PRINT_EXISTING = '--print-existing'
 const USAGE = `Unknown argument. usage: bun src/librariusWebhookSetupRun.js [${DRY_RUN}] [${PRINT_EXISTING}]`
 const WEBHOOKS_PAGE = `Edit Channel → Integrations → Webhooks → ${NAME}`
 const KEEP_IT = 'Do not delete the webhook once the site has sent replies: a new webhook cannot edit or delete what this one sent.'
+// Where the line with the address is. The README runs this with standard output added to server/.env (`>> .env`), so the line is in the
+// file and never on the screen: "the line above" would point at nothing.
+const THE_LINE = 'is the one line on standard output, LIBRARIUS_WEBHOOK_URL=…'
+const IN_ENV = "with >> .env (the README's way) that line is now the last of server/.env, so check that grep -c '^LIBRARIUS_WEBHOOK_URL=' .env says 1"
 
 /** The setup will not run with what it was given. The message names a setting or an argument, never a value. */
 export class SetupRefused extends Error {
@@ -202,8 +206,8 @@ export async function runSetup({ argv = [], env = process.env, fetchImpl = fetch
     }
     log(`LIBRARIUS_WEBHOOK_URL=${found}`)
     warn(
-      `A webhook named "${NAME}" that this bot made is already on the Librarius forum (id ${id}), so none was made: the line above is its address, the address of the webhook this command made on an earlier run. ` +
-        `Paste it into server/.env if it is not there. It is a secret: whoever has it can post as the Librarius, so do not paste it anywhere else. ${KEEP_IT}`,
+      `A webhook named "${NAME}" that this bot made is already on the Librarius forum (id ${id}), so none was made. Its address, the address of the webhook this command made on an earlier run, ${THE_LINE}: ` +
+        `${IN_ENV}; without >> .env, the line is above: put it into server/.env if it is not there. It is a secret: whoever has it can post as the Librarius, so do not paste it anywhere else. ${KEEP_IT}`,
     )
     return 0
   }
@@ -227,7 +231,7 @@ export async function runSetup({ argv = [], env = process.env, fetchImpl = fetch
 
   log(`LIBRARIUS_WEBHOOK_URL=${address}`)
   warn(
-    'The webhook is made. Paste the line above into server/.env on the host that runs the API, then rebuild the API. ' +
+    `The webhook is made. Its address ${THE_LINE}: ${IN_ENV}; without >> .env, the line is above: put it into server/.env on the host that runs the API. Then rebuild the API. ` +
       'It is a secret: whoever has it can post as the Librarius, so do not paste it anywhere else. ' +
       `If it is lost, run this again with ${PRINT_EXISTING} (it prints the address of the webhook that is there) or copy it from ${WEBHOOKS_PAGE} → Copy Webhook URL. ${KEEP_IT}`,
   )

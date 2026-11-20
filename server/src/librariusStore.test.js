@@ -113,6 +113,8 @@ const dbMessage = (id, over = {}) => ({
   created_at: new Date('2026-11-02T18:30:00.123Z'),
   edited_at: null,
   rev: '120',
+  origin: 'discord',
+  source: null,
   ...over,
 })
 const viewMessage = (id, attachments = [], over = {}) => ({
@@ -131,6 +133,8 @@ const viewMessage = (id, attachments = [], over = {}) => ({
   createdAt: '2026-11-02T18:30:00.123Z',
   editedAt: null,
   rev: '120',
+  origin: 'discord',
+  source: null,
   attachments,
   ...over,
 })
@@ -149,7 +153,8 @@ const dbAttachment = (id, messageId, over = {}) => ({
   ...over,
 })
 
-const COLUMNS = 'id, post_id, author_id, author_name, author_avatar, webhook_id, kind, content, embeds, stickers, reactions, reply_to, created_at, edited_at, rev'
+const COLUMNS =
+  'id, post_id, author_id, author_name, author_avatar, webhook_id, kind, content, embeds, stickers, reactions, reply_to, created_at, edited_at, rev, origin, source'
 const ATTACHMENT_COLUMNS = 'id, message_id, position, filename, content_type, size, width, height, url, proxy_url, expires_at'
 
 // A post's messages as Postgres would answer the store's page statements, honouring the where, order and limit the
@@ -1632,6 +1637,69 @@ describe('changes', () => {
     const { pool, log } = fakePool()
     await ask(store(pool), '12345', { limit: 77, slack: 33 })
     for (const { sql } of log) expect(sql).not.toMatch(/12345|77|33/)
+  })
+})
+
+describe('who made a message: its origin and its source', () => {
+  // A reply written on the site and a message written in Discord, as Postgres answers them (finishSend stores the first).
+  const SITE = MSG
+  const DISCORD = MSG_2
+  const SOURCE = 'A reply of the **site**, with ![a map](upload:1) and <@200000000000000416>.'
+  const siteRow = (over = {}) => dbMessage(SITE, { origin: 'site', source: SOURCE, webhook_id: HOOK, ...over })
+  const discordRow = (over = {}) => dbMessage(DISCORD, over)
+
+  // Every read that feeds the post page: the newest page, the three cursors, and changes() with both of its reads.
+  const READS = [
+    ['the newest page', (s) => s.listMessages(POST, { limit: 5 })],
+    ['a page before an id', (s) => s.listMessages(POST, { before: MSG_3, limit: 5 })],
+    ['a page after an id', (s) => s.listMessages(POST, { after: '200000000000000429', limit: 5 })],
+    ['a page around an id', (s) => s.listMessages(POST, { around: SITE, limit: 6 })],
+    ['the changes', (s) => s.changes(POST, '5', { limit: 10, slack: 10 })],
+  ]
+  /** A pool whose every statement over a post's messages answers `rows` (its edges answer none past them). */
+  const answering = (rows) => fakePool([[') as found', [{ found: false }]], ['from librarius_messages where post_id = $1', () => rows.map((r) => ({ ...r }))]])
+  const shown = (out) => out.rows.map((m) => [m.id, m.origin, m.source])
+
+  it.each(READS)('%s selects both columns and answers them on each message, as they are stored', async (_, read) => {
+    const { pool, log } = answering([siteRow(), discordRow()])
+    const out = await read(store(pool))
+    const reads = log.filter((l) => l.sql.includes('from librarius_messages where post_id = $1') && !l.sql.includes(') as found'))
+    expect(reads.length).toBeGreaterThan(0)
+    for (const { sql } of reads) expect(sql.startsWith(`select ${COLUMNS} from librarius_messages`)).toBe(true)
+    const pairs = shown(out)
+    expect(pairs).toContainEqual([SITE, 'site', SOURCE])
+    expect(pairs).toContainEqual([DISCORD, 'discord', null])
+    expect(new Set(pairs.map(([id, origin, source]) => `${id} ${origin} ${source}`)).size).toBe(2)
+  })
+
+  it("answers a reply of the site's whole source, past what its content holds", async () => {
+    // The content is cut to what one Discord message holds (the outbox's contentOf); the source is the reply's, up to three of them.
+    const long = `${'word '.repeat(2000)}<@200000000000000416>`
+    const { pool } = answering([siteRow({ content: long.slice(0, 4000), source: long })])
+    const [message] = (await store(pool).listMessages(POST, { limit: 5 })).rows
+    expect(message.source).toBe(long)
+    expect(message.content).toBe(long.slice(0, 4000))
+  })
+
+  it.each(
+    labelled(['', ' ', '\u0000', '\uD800', 'null', '__proto__', '<b>bold</b>', '![x](upload:10)', `${'\u{1F600}'.repeat(3000)}`, 'line\r\nline', null]),
+  )('passes a source of %s through untouched: the store neither cuts it nor reads it', async (_, source) => {
+    const { pool } = answering([siteRow({ source })])
+    const [message] = (await store(pool).changes(POST, '5', { limit: 10, slack: 10 })).rows
+    expect(message.source).toBe(source)
+    expect(message.origin).toBe('site')
+  })
+
+  it('answers whatever pair a row holds, on a page and in the changes (property)', async () => {
+    await fc.assert(
+      fc.asyncProperty(fc.constantFrom('site', 'discord'), fc.option(fc.string({ maxLength: 60 }), { nil: null }), fc.integer({ min: 0, max: READS.length - 1 }), async (origin, source, which) => {
+        const { pool } = answering([dbMessage(SITE, { origin, source })])
+        const out = await READS[which][1](store(pool))
+        expect(out.rows.length).toBeGreaterThan(0)
+        for (const m of out.rows) expect([m.origin, m.source]).toEqual([origin, source])
+      }),
+      { numRuns: 200 },
+    )
   })
 })
 
