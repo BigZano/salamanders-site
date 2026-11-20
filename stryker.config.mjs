@@ -102,4 +102,6 @@ export default {
   concurrency: 2,
   reporters: ['clear-text', 'progress'],
   ignoreStatic: true,
+  // Stryker copies the whole project into its sandbox and does not read .gitignore: leave the nested worktrees out.
+  ignorePatterns: ['/.worktrees'],
 }

@@ -75,3 +75,6 @@ roles_list.txt
 
 # Subagent-driven-development scratch (ledgers, briefs, review packages)
 .superpowers/
+
+# Git worktrees (feature lanes) live inside the repo
+.worktrees/
