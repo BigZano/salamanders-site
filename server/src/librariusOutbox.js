@@ -673,6 +673,7 @@ export function createOutbox({ store, webhook, discord, form = DEFAULT_FORM, gui
     // took) is shown on no reply of the site, which lists a member's entries under their message: if it ends for good, its parts are told (endFor).
     // That is known before the note is written: a try that ends at the note, the last one, has removed none of them.
     entry.strays = message === null ? progress.partIds : []
+    // Stryker disable next-line ConditionalExpression: a note that is already written, written again, is the same progress in the store
     if (unnoted) await save(entry)
     // The parts of another webhook (one that was replaced) are removed through the bot: this webhook may not delete them.
     const sentBy = p.webhookId ?? message?.webhookId ?? null

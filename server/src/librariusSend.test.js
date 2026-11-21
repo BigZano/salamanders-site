@@ -2562,6 +2562,9 @@ describe('typed: the text as the member typed it, with what the form wrote for i
     expect(typed('***free***\u200b***nitro***', '_')).toBe('**_free_****_nitro_**')
     expect(typed('\\_***free***\\_', '_')).toBe('_**_free_**_')
     expect(typed('**a**\u200b***b***.', '_')).toBe('**a****_b_**.')
+    // An italic open on its own, or a bold on its own, is enough for it to close.
+    expect(typed('*free***nitro*', '_')).toBe('_free_**nitro_')
+    expect(typed('**free***nitro**', '_')).toBe('**free_**nitro**')
     // A run of three with a space or the end of the text on both sides holds nothing, and is kept; so are escaped stars, and runs of two and of
     // four or more. With `*`, a run of three is what it was.
     for (const text of ['a *** b', '***', ' *** ', '**free** ****', '*****a*****', '****a****']) expect(typed(text, '_'), text).toBe(text)
