@@ -290,8 +290,8 @@ describe('automodMatcher: the wildcards', () => {
     expect(find(['a*b*c'], `ab${'x'.repeat(28)} b${'x'.repeat(49)}c`)).toBeNull()
     // The last part where its edge holds, after a decoy of the middle one: `c` at 80 is inside a word, the one at 82 ends it.
     expect(find(['a*b*c'], `ab${'x'.repeat(28)}b${'x'.repeat(49)}cxc`)).toEqual(hit(0, 83))
-    // An allow entry is read the same way, and holds the match of a keyword that the decoy kept it from holding.
-    expect(find(['*x*'], text, { allow_list: ['a*b*c'] })).toBeNull()
+    // An allow entry is not: each of its middle parts is taken at its first place only, and a decoy there lets nothing by (see the allow list).
+    expect(find(['*x*'], text, { allow_list: ['a*b*c'] })).toEqual(hit(0, 81))
     expect(find(['*x*'], text, { allow_list: ['a*b*cc'] })).toEqual(hit(0, 81))
   })
 
@@ -392,6 +392,31 @@ describe('automodMatcher: the allow list', () => {
     expect(find(['zorp'], 'ZORP farm', { allow_list: ['zörp  FARM'] })).toBeNull()
     expect(find(['zorp'], 'zo**r**p farm', { allow_list: ['zorp farm'] })).toBeNull()
     expect(find(['zorp'], 'zo\u200brp farm', { allow_list: ['zorp farm'] })).toBeNull()
+  })
+
+  it('reads a middle part of an allow entry at its first place only, which Discord does not document: an early decoy there lets nothing by', () => {
+    // `a*b*c` over `ab`, 28 `x`, `b`, 49 `x`, `c`: the `b` at 1 is 79 from the `c`, too far, and the `b` at 30 is in reach of both. A keyword
+    // reads its way through the second `b`; an allow entry stops at the first, and so holds nothing, and the match of `*x*` is refused.
+    const text = `ab${'x'.repeat(28)}b${'x'.repeat(49)}c`
+    for (const entry of ['a*b*c', '*a*b*c*', 'a*b*c*', '*a*b*c']) {
+      expect(find(['*x*'], text, { allow_list: [entry] }), entry).toEqual(hit(0, 81))
+      // With no decoy, the first `b` is the one in reach, and the entry holds the word.
+      expect(find(['*x*'], text.replace('ab', 'ax'), { allow_list: [entry] }), entry).toBeNull()
+    }
+    // A decoy for each of two middle parts: the keyword finds its way, the allow entry does not. A decoy of the second middle part only (the `c`
+    // at 43, 72 from the `d`) is one too; with the first place of each middle part in reach of the next, the entry holds the word.
+    const two = `ab${'x'.repeat(40)}bc${'x'.repeat(20)}c${'x'.repeat(50)}d`
+    expect(find(['a*b*c*d'], two)).toEqual(hit(0, 116))
+    expect(find(['*x*'], two, { allow_list: ['a*b*c*d'] })).toEqual(hit(0, 116))
+    expect(find(['*x*'], `a${'x'.repeat(41)}bc${'x'.repeat(20)}c${'x'.repeat(50)}d`, { allow_list: ['a*b*c*d'] })).toEqual(hit(0, 116))
+    expect(find(['*x*'], `a${'x'.repeat(41)}b${'x'.repeat(21)}c${'x'.repeat(50)}d`, { allow_list: ['a*b*c*d'] })).toBeNull()
+    // The last part is still taken where its edge holds, as before: `c` at 80 is inside a word, the one at 82 ends it.
+    expect(find(['*x*'], `ax${'x'.repeat(28)}b${'x'.repeat(49)}cxc`, { allow_list: ['a*b*c'] })).toBeNull()
+    // An entry of two parts has no middle one, and is read as it was: its last part where its edge holds (the `b` at 52, not the one at 21).
+    expect(find(['*x*'], `a${'x'.repeat(20)}b${'x'.repeat(30)}b`, { allow_list: ['a*b'] })).toBeNull()
+    // The keywords keep their reading: the same text is a match of `a*b*c` itself, and only a keyword that the allow list holds goes by.
+    expect(find(['a*b*c'], text)).toEqual(hit(0, 81))
+    expect(find(['a*b*c'], text, { allow_list: ['*x*'] })).toBeNull()
   })
 
   it('has nothing to exempt in a list of no text', () => {
@@ -1904,7 +1929,8 @@ describe('automodMatcher: keywords of several pieces and joiners that are no let
   // none is skipped, every place of each later piece within its reach is tried in turn until the rest follows (the first way through, by
   // the places of the pieces in order), and the allow list is every one of its spans (a span lies inside the allow list when any one of
   // them holds it). The text is made of the letters a to c and x, `-` and `1` (which end a word and are no space), and single spaces.
-  // `firstOnly` is the reading that took the first place of a middle piece and no other, which an early decoy of the piece led astray.
+  // `firstOnly` is the reading that took the first place of a middle piece and no other, which an early decoy of the piece led astray: the
+  // reading of the keywords before rB8's M1, and the reading of the allow list now (`allowFirstOnly`, which is `firstOnly` unless it is given).
   const letter = (c) => c !== undefined && ((c >= 'a' && c <= 'c') || c === 'x')
   const MAX_GAP = 60
   const reachOf = (t, pos, pieces, k, needEdge, firstOnly) => {
@@ -1933,8 +1959,8 @@ describe('automodMatcher: keywords of several pieces and joiners that are no let
     }
     return out
   }
-  const modelOf = (t, keywords, allow, firstOnly = false) => {
-    const held = allow.flatMap((k) => spansOf(t, k, firstOnly))
+  const modelOf = (t, keywords, allow, firstOnly = false, allowFirstOnly = firstOnly) => {
+    const held = allow.flatMap((k) => spansOf(t, k, allowFirstOnly))
     let best = null
     for (const k of keywords) {
       const found = spansOf(t, k, firstOnly).find(([a, b]) => !held.some(([c, d]) => c <= a && b <= d))
@@ -2022,7 +2048,8 @@ describe('automodMatcher: keywords of several pieces and joiners that are no let
       fc.property(built, fc.array(keyword, { maxLength: 2 }), fc.array(keyword, { maxLength: 2 }), ([k, t], others, allow) => {
         const keywords = [k, ...others]
         const m = matcher([keywordRule(keywords.map(written), { allow_list: allow.map(written) })])
-        const expected = modelOf(t, keywords, allow)
+        // The keywords through any place of their middle pieces, the allow list at the first place of each.
+        const expected = modelOf(t, keywords, allow, false, true)
         if (expected !== null) found++
         if (JSON.stringify(expected) !== JSON.stringify(modelOf(t, keywords, allow, true))) decoys++
         expect(m(t), JSON.stringify({ t, keywords: keywords.map(written), allow: allow.map(written) })).toEqual(expected)
@@ -2032,6 +2059,69 @@ describe('automodMatcher: keywords of several pieces and joiners that are no let
     // Not a property that holds for want of matches, nor of the texts where the first place of a middle piece is not the one to take.
     expect(found).toBeGreaterThan(800)
     expect(decoys).toBeGreaterThan(25)
+  })
+
+  // Texts built round an allow entry of 3 or 4 pieces, the way `built` is round a keyword, with keywords that match the words of the text
+  // (`*x*`, `*a*`, ...) or are made of the same pieces: where the entry holds a match through a later place of a middle piece and not through its
+  // first, the reading of the allow list before (through any place, as the keywords are read) let the match by.
+  const around = (entry) =>
+    entry.chain((k) =>
+      fc.tuple(
+        fc.constant(k),
+        fc.array(fc.tuple(fc.constantFrom(0, 1, 1), fc.integer({ min: 0, max: 58 }), fc.integer({ min: 0, max: 58 }), fc.constantFrom('', '', '', '', '-', ' ', 'a', 'c')), { minLength: k.pieces.length, maxLength: k.pieces.length }).map((steps) =>
+          k.pieces
+            .map((p, i) => {
+              const [twice, before, after, odd] = steps[i]
+              return `${twice ? `${p}${'x'.repeat(before)}` : ''}${p}${'x'.repeat(after)}${odd}`
+            })
+            .join('')
+            .replace(/ {2,}/g, ' ')
+            .trim(),
+        ),
+      ),
+    )
+  const piecesOf = (min, max) => fc.record({ pieces: fc.array(fc.constantFrom('a', 'b', 'c', 'ab', 'bc', 'a-', '1'), { minLength: min, maxLength: max }), lead: fc.boolean(), trail: fc.boolean() })
+  const wordKeyword = fc.constantFrom('x', 'a', 'b', 'xx', 'c').map((piece) => ({ pieces: [piece], lead: true, trail: true }))
+
+  it('never lets by what the reading of an allow entry at the first place of each middle piece refuses, and differs from the reading through any place only by refusing more (the property)', () => {
+    let flips = 0
+    let held = 0
+    fc.assert(
+      fc.property(around(piecesOf(3, 4)), fc.array(fc.oneof(wordKeyword, piecesOf(1, 3)), { minLength: 1, maxLength: 3 }), fc.array(piecesOf(3, 4), { maxLength: 1 }), ([entry, t], keywords, more) => {
+        const allow = [entry, ...more]
+        const label = JSON.stringify({ t, keywords: keywords.map(written), allow: allow.map(written) })
+        const found = matcher([keywordRule(keywords.map(written), { allow_list: allow.map(written) })])(t)
+        const firstPlace = modelOf(t, keywords, allow, false, true)
+        const anyPlace = modelOf(t, keywords, allow)
+        expect(found, label).toEqual(firstPlace)
+        // Where the two readings differ, the one that is read now refuses, and no later than the other would have.
+        if (anyPlace !== null) {
+          expect(found, label).not.toBeNull()
+          expect(found.start, label).toBeLessThanOrEqual(anyPlace.start)
+        }
+        if (anyPlace === null && found !== null) flips++
+        if (JSON.stringify(firstPlace) !== JSON.stringify(modelOf(t, keywords, []))) held++
+      }),
+      { numRuns: 3_000 },
+    )
+    // Not a property that holds for want of the cases it is about: replies the allow list held before and refuses now, and replies it holds.
+    expect(flips).toBeGreaterThan(30)
+    expect(held).toBeGreaterThan(300)
+  })
+
+  it('answers as it did for an allow list whose entries have no `*` inside, or one, which have no middle piece (the property)', () => {
+    let held = 0
+    fc.assert(
+      fc.property(around(piecesOf(1, 2)), fc.array(fc.oneof(wordKeyword, piecesOf(1, 4)), { minLength: 1, maxLength: 3 }), fc.array(piecesOf(1, 2), { maxLength: 2 }), ([entry, t], keywords, more) => {
+        const allow = [entry, ...more]
+        const found = matcher([keywordRule(keywords.map(written), { allow_list: allow.map(written) })])(t)
+        const before = modelOf(t, keywords, allow)
+        expect(found, JSON.stringify({ t, keywords: keywords.map(written), allow: allow.map(written) })).toEqual(before)
+        if (JSON.stringify(before) !== JSON.stringify(modelOf(t, keywords, []))) held++
+      }),
+      { numRuns: 3_000 },
+    )
+    expect(held).toBeGreaterThan(300)
   })
 })
 
@@ -2436,14 +2526,14 @@ describe('typed: the text as the member typed it, with what the form wrote for i
     for (const text of ['|| ||', 'z\u200corp', 'z\u200dorp', 'z\u2060orp', 'z\ufeffo', 'z\u00adorp']) expect(typed(text), JSON.stringify(text)).toBe(text)
   })
 
-  it('reads each italic that the form writes with `*` as one of `_` when it is asked to, as the member may have typed it, and keeps every run of two stars or more', () => {
+  it('reads each italic that the form writes with `*` as one of `_` when it is asked to, as the member may have typed it, and keeps every run of two stars, or of four or more', () => {
     // The form writes every italic with `*`, `_free_` as `*free*`, so a pattern that takes `_` and not `*` saw no `_` where Discord sees the member's.
     expect(typed('claim your *free* nitro now', '_')).toBe('claim your _free_ nitro now')
     expect(typed('claim your free *nitro* now', '_')).toBe('claim your free _nitro_ now')
     expect(typed('claim your free\\_*nitro* now', '_')).toBe('claim your free__nitro_ now')
-    // A bold, an italic in a bold and the marks of a cut are runs of stars, and are kept as they are.
-    expect(typed('**a** ***b*** ****', '_')).toBe('**a** ***b*** ****')
-    expect(typed('**free *nitro***', '_')).toBe('**free _nitro***')
+    // A bold and the marks of a cut are runs of stars, and are kept as they are; a run of three is a bold round an italic (see below).
+    expect(typed('**a** ***b*** ****', '_')).toBe('**a** **_b_** ****')
+    expect(typed('**free *nitro***', '_')).toBe('**free _nitro_**')
     // Two marks that touch, which the form sets apart with a zero-width space, are two marks.
     expect(typed('*a*\u200b**b**', '_')).toBe('_a_**b**')
     expect(typed('**a**\u200b*b*', '_')).toBe('**a**_b_')
@@ -2454,15 +2544,40 @@ describe('typed: the text as the member typed it, with what the form wrote for i
     expect(typed('[*a*](<https://e.com/*>)', '_')).toBe('[_a_](https://e.com/*)')
   })
 
+  it('reads a run of exactly three stars, which the form writes for a bold round an italic, as `**_` where it opens and `_**` where it closes', () => {
+    // The form writes `**_free nitro_**` as `***free nitro***`, so a pattern that reads a `_` at the edge of an italic (`_free`, `nitro_`) saw none.
+    expect(typed('***free nitro***', '_')).toBe('**_free nitro_**')
+    expect(typed('claim ***free nitro*** now', '_')).toBe('claim **_free nitro_** now')
+    expect(typed('***free*** ***nitro***', '_')).toBe('**_free_** **_nitro_**')
+    // A bold that starts or ends with an italic, and an italic that starts or ends with a bold, which is read with the bold outside as well.
+    expect(typed('***free* nitro**', '_')).toBe('**_free_ nitro**')
+    expect(typed('**free *nitro***', '_')).toBe('**free _nitro_**')
+    expect(typed('*free **nitro***', '_')).toBe('_free **nitro_**')
+    expect(typed('***free** nitro*', '_')).toBe('**_free** nitro_')
+    // With no space on either side, it opens when no mark of stars is open, and closes when one is.
+    expect(typed('(***free nitro***).', '_')).toBe('(**_free nitro_**).')
+    expect(typed('x***free***y', '_')).toBe('x**_free_**y')
+    expect(typed('**free *nitro***.', '_')).toBe('**free _nitro_**.')
+    expect(typed('*free **nitro***!', '_')).toBe('_free **nitro_**!')
+    expect(typed('***free***\u200b***nitro***', '_')).toBe('**_free_****_nitro_**')
+    expect(typed('\\_***free***\\_', '_')).toBe('_**_free_**_')
+    expect(typed('**a**\u200b***b***.', '_')).toBe('**a****_b_**.')
+    // A run of three with a space or the end of the text on both sides holds nothing, and is kept; so are escaped stars, and runs of two and of
+    // four or more. With `*`, a run of three is what it was.
+    for (const text of ['a *** b', '***', ' *** ', '**free** ****', '*****a*****', '****a****']) expect(typed(text, '_'), text).toBe(text)
+    expect(typed('\\*\\*\\*free\\*\\*\\*', '_')).toBe('***free***')
+    for (const text of ['***free nitro***', '(***free nitro***).', '**free *nitro***']) expect(typed(text, '*'), text).toBe(text)
+  })
+
   it('reads an italic as the form writes it, with `*`, when it is not asked to, and is told no other mark', () => {
-    for (const text of ['*free* nitro', '**a** *b*', '*a*\u200b**b**']) {
+    for (const text of ['*free* nitro', '**a** *b*', '*a*\u200b**b**', '***free***']) {
       expect(typed(text, '*'), text).toBe(typed(text))
       expect(typed(text), text).toBe(text.replaceAll('\u200b', ''))
     }
     for (const italic of ['', '**', '__', '~', 'x', null, 1]) throwsAs(() => typed('*a*', italic), RangeError, 'the italic must be * or _')
   })
 
-  it('changes nothing but each star that stands alone, to `_`, when it reads the italic as `_` (the property)', () => {
+  it('changes nothing but stars, to `_`, when it reads the italic as `_`: each that stands alone, and one of each run of three (the property)', () => {
     const unit = fc.constantFrom('\\', '*', '**', '***', '_', '<', '>', 'https://', 'a', ' ', '\u200b', '`', '[', ']', '(', ')')
     fc.assert(
       fc.property(fc.oneof(fc.array(unit, { maxLength: 30 }).map((list) => list.join('')), fc.string({ unit: 'binary', maxLength: 30 })), (text) => {
@@ -2473,14 +2588,32 @@ describe('typed: the text as the member typed it, with what the form wrote for i
       }),
       { numRuns: 2_000 },
     )
-    // Of a text of letters, spaces and stars, which holds no escape, no address and no zero-width space, it is each star of its own as `_`.
+    // Of a text of letters, spaces and stars, which holds no escape, no address and no zero-width space, it is each star of its own as `_`, each
+    // run of two or of four or more as it is, and a run of three as `**_` with a space or nothing before it and a character after it that is no
+    // space, as `_**` the other way round, as it is with a space or nothing on both sides, and as one of the two between two characters.
+    let between = 0
     fc.assert(
-      fc.property(fc.array(fc.constantFrom('*', 'a', ' ', 'b'), { maxLength: 30 }), (list) => {
+      fc.property(fc.array(fc.constantFrom('*', '*', '***', 'a', ' ', 'b', '.'), { maxLength: 30 }), (list) => {
         const text = list.join('')
-        expect(typed(text, '_')).toBe(text.replace(/\*+/g, (run) => (run.length === 1 ? '_' : run)))
+        const under = typed(text, '_')
+        expect(under.length, text).toBe(text.length)
+        const blank = (c) => c === undefined || c === ' '
+        for (const { 0: run, index } of text.matchAll(/\*+/g)) {
+          const read = under.slice(index, index + run.length)
+          const [before, after] = [blank(text[index - 1]), blank(text[index + run.length])]
+          if (run.length === 1) expect(read, text).toBe('_')
+          else if (run.length !== 3 || (before && after)) expect(read, text).toBe(run)
+          else if (before) expect(read, text).toBe('**_')
+          else if (after) expect(read, text).toBe('_**')
+          else {
+            between++
+            expect(['**_', '_**'], text).toContain(read)
+          }
+        }
       }),
-      { numRuns: 1_000 },
+      { numRuns: 2_000 },
     )
+    expect(between).toBeGreaterThan(100)
   })
 
   it('leaves what the form does not put there as it is: mentions, timestamps, emoji, channels, and what is no whole address', () => {
@@ -2502,7 +2635,7 @@ describe('typed: the text as the member typed it, with what the form wrote for i
   })
 
   it('takes four times as long for four times the text, whatever the shape of the text that is no link, or half of one, or escapes', () => {
-    for (const unit of ['<https://', '<h', '<', '<https://a', '<https://a>', '<https://a <', '[a](<https://a>) ', '\\', '\\*', '\\\\*', '*\u200b', '\u200b', '\\<https://a>', '<https://a\\', '*', '*a', '**', '*a**']) {
+    for (const unit of ['<https://', '<h', '<', '<https://a', '<https://a>', '<https://a <', '[a](<https://a>) ', '\\', '\\*', '\\\\*', '*\u200b', '\u200b', '\\<https://a>', '<https://a\\', '*', '*a', '**', '*a**', '***', '***a', 'a***', ' ***', '(***a***).', '*a ***b** ']) {
       for (const italic of ['*', '_']) {
         expectLinear(`${JSON.stringify(unit)} ${italic}`, (n) => {
           const text = unit.repeat(Math.ceil(n / unit.length))
@@ -3808,9 +3941,39 @@ describe('validateReply: the regular expressions of the server\'s rules', () => 
       }
       // An italic written with `*` is read the same way, which refuses a little more than Discord would: fail closed.
       expect(await by([withRegex([pattern], { name: 'No Nitro' })], 'claim your *free* nitro now', { options: { form } }), form).toEqual(BLOCKED)
-      // A bold, a bold italic and a star that the member escaped are kept as they are: Discord reads `free**`, `free***` and `free\*` there.
+      // A bold and a star that the member escaped are kept as they are: Discord reads `free**` and `free\*` there. A bold italic is read as
+      // `**_free_**` too, and `free_**` is not what the pattern takes either.
       for (const source of ['claim your **free** nitro now', 'claim your ***free*** nitro now', 'claim your \\*free\\* nitro now', 'claim your nitro for free']) {
         expect((await by([withRegex([pattern])], source, { options: { form } })).ok, `${form} ${source}`).toBe(true)
+      }
+    }
+  })
+
+  it('reads a bold round an italic, which the form sends as a run of three stars, with the `_` inside the bold: `_free` and `nitro_` refuse `**_free nitro_**`, in both forms', async () => {
+    // The form writes `**_free nitro_**` as `***free nitro***`, and the copy with the italics as `_` kept the run as it was, so a pattern that reads
+    // a `_` at the edge of the italic missed it, where Discord, which reads what the member typed, blocks it.
+    const BLOCKED = { ok: false, status: 422, error: 'Blocked by the server\'s AutoMod rule "No Nitro".', rule: 'No Nitro', match: null }
+    const cases = [
+      ['_free', 'claim **_free nitro_** now'],
+      ['nitro_', 'claim **_free nitro_** now'],
+      ['_nitro_', '**_free_** **_nitro_**'],
+      ['_free', '(**_free nitro_**).'],
+      ['nitro_', '(**_free nitro_**).'],
+      ['_free', '**_free_ nitro**'],
+      ['nitro_', '**free _nitro_**.'],
+      ['_nitro_', 'x**_nitro_**y'],
+    ]
+    for (const form of ['v2', 'plain']) {
+      for (const [pattern, source] of cases) {
+        expect(new RegExp(translatePattern(pattern), 'giu').test(source), source).toBe(true)
+        expect(await by([withRegex([pattern], { name: 'No Nitro' })], source, { options: { form } }), `${form} ${pattern} ${source}`).toEqual(BLOCKED)
+      }
+      // What the run is read as when the member typed it so, which Discord reads as stars: refused too, which fails closed (`***free***` is sent
+      // as `**_free_**` is, and the site cannot tell the two apart).
+      expect(await by([withRegex(['_free'], { name: 'No Nitro' })], 'claim your ***free*** nitro now', { options: { form } }), form).toEqual(BLOCKED)
+      // A bold, a run of four, escaped stars and a run of three that holds nothing are not italics, and a pattern against `_free` lets them be.
+      for (const source of ['claim your **free** nitro now', 'claim your ****free nitro', 'claim your \\*\\*\\*free\\*\\*\\* nitro', 'a *** free nitro']) {
+        expect((await by([withRegex(['_free'])], source, { options: { form } })).ok, `${form} ${source}`).toBe(true)
       }
     }
   })
@@ -3822,7 +3985,9 @@ describe('validateReply: the regular expressions of the server\'s rules', () => 
     await send(reply('_free_ z*rp'), { automod, form: 'plain' })
     await send(reply('a **b** c'), { automod, form: 'plain' })
     await send(reply('z*rp'), { automod, form: 'plain' })
-    expect(asked).toEqual([['*free* nitro', '_free_ nitro'], ['*free* z\\*rp', '*free* z*rp', '_free_ z*rp'], ['a **b** c'], ['z\\*rp', 'z*rp']])
+    // A bold round an italic, whose run of three stars is the italic as well (the sent text and the typed one are the same here).
+    await send(reply('**_free_** nitro'), { automod, form: 'plain' })
+    expect(asked).toEqual([['*free* nitro', '_free_ nitro'], ['*free* z\\*rp', '*free* z*rp', '_free_ z*rp'], ['a **b** c'], ['z\\*rp', 'z*rp'], ['***free*** nitro', '**_free_** nitro']])
     // A long reply of italics, in each part of it: every copy is as long as its text at most, and no text is longer than a message.
     asked.length = 0
     await send(reply('_zo_ z~rp '.repeat(900)), { automod, form: 'v2' })
@@ -3934,17 +4099,32 @@ describe('validateReply: the regular expressions of the server\'s rules', () => 
     // Two italics side by side, which the form writes as one (`_free__nitro_` is sent as `*freenitro*`), an italic in an italic, which it writes
     // as its text (`_a *free* b_` is sent as `*a free b*`), and a mark that holds only a space, which it writes as the space (`nitro__ __free` is
     // sent as `nitro free`), so that nothing is left of the member's marks there for a copy of the text to read again: what the form does, and
-    // not what this file can undo. A source with one of them is left out. Nor is a bold round an italic made here (`**_free_**`): it is sent as
-    // `***free***`, a run of stars, which is kept as it is (see typed), so its `_` is not read.
+    // not what this file can undo. A source with one of them is left out. A bold round an italic, and an italic round a bold, whole or at one
+    // edge, are made: the form sends them with a run of three stars there (`**_free_**` and `_**free**_` as `***free***`), which the copy with
+    // the italics as `_` reads with the `_` inside the bold, as `**_free_**` (see typed). So a refusal is told by the source written either
+    // way round as well: each bold and italic that touch, `_**` or `**_`, the other way.
     const lost = (nodes, italic = false) =>
       nodes.some(
         (node, k) =>
           node.type !== 'text' &&
           ((node.type === 'em' && (italic || nodes[k + 1]?.type === 'em')) || written(node.children, '*').trim() === '' || lost(node.children, italic || node.type === 'em')),
       )
+    const marks = [
+      ...['', '', '_', '*', '**', '***', '__', '___', '~~', '||', '\\_', '\\*'].map((mark) => [mark, mark]),
+      ['**_', '_**'],
+      ['**_', '_**'],
+      ['_**', '**_'],
+      ['**_', '_ zorp**'],
+      ['**zorp _', '_**'],
+      ['_**', '** zorp_'],
+      ['_zorp **', '**_'],
+      ['~~_', '_~~'],
+      ['||_', '_||'],
+    ]
     const item = fc
-      .tuple(fc.constantFrom('', '', '_', '*', '**', '***', '__', '___', '~~', '||', '\\_', '\\*'), fc.constantFrom('free', 'nitro', 'free nitro', 'free_nitro', 'zorp', 'claim'))
-      .map(([mark, words]) => `${mark}${words}${mark}`)
+      .tuple(fc.constantFrom(...marks), fc.constantFrom('free', 'nitro', 'free nitro', 'free_nitro', 'zorp', 'claim'))
+      .map(([[open, close], words]) => `${open}${words}${close}`)
+    const turned = (text) => text.replace(/_\*\*|\*\*_/g, (pair) => (pair === '_**' ? '**_' : '_**'))
     const gap = fc.constantFrom(' ', ' ', '  ', '_', '__', '.', '-', ' _', '_ ', '', ' - ')
     const source = fc.tuple(item, fc.array(fc.tuple(gap, item), { maxLength: 4 })).map(([first, rest]) => first + rest.map(([g, i]) => g + i).join(''))
     const patterns = ['free[\\s_.-]*nitro', 'free[ _.-]+nitro', 'free_+nitro', 'free.nitro', 'free\\s+nitro', 'free[^a-z]nitro', '_free', 'nitro_', '_nitro_', '\\*free', 'e~~']
@@ -3952,6 +4132,7 @@ describe('validateReply: the regular expressions of the server\'s rules', () => 
     it('refuses the reply when a pattern matches the source as it was typed, and refuses it only for what the source, read with either italic, or the sent text holds', async () => {
       let lines = 0
       let refused = 0
+      let runs = 0
       await fc.assert(
         fc.asyncProperty(source, fc.constantFrom(...patterns), fc.constantFrom('v2', 'plain'), async (text, pattern, form) => {
           const tree = parse(text, { dialect: 'extended' })
@@ -3961,18 +4142,21 @@ describe('validateReply: the regular expressions of the server\'s rules', () => 
           const holds = (t) => new RegExp(translatePattern(pattern), 'giu').test(t)
           const r = await by([withRegex([pattern], { name: 'No Nitro' })], text, { options: { form } })
           const label = `${form} ${pattern} ${JSON.stringify(text)}`
+          const sent = toDiscord(text, { form, authorId: U1, siteUrl: SITE, replyTo: null, images: [] }).parts[0].text.split('\n')[0]
+          if (/(?<!\*)\*\*\*(?!\*)/.test(sent)) runs++
           if (holds(text)) expect(r, label).toEqual({ ok: false, status: 422, error: 'Blocked by the server\'s AutoMod rule "No Nitro".', rule: 'No Nitro', match: null })
           if (!r.ok) {
             refused++
-            const sent = toDiscord(text, { form, authorId: U1, siteUrl: SITE, replyTo: null, images: [] }).parts[0].text.split('\n')[0]
-            expect(holds(text) || holds(written(tree[0].children, '*')) || holds(written(tree[0].children, '_')) || holds(sent), label).toBe(true)
+            const under = written(tree[0].children, '_')
+            expect(holds(text) || holds(written(tree[0].children, '*')) || holds(under) || holds(turned(under)) || holds(sent), label).toBe(true)
           }
         }),
         { numRuns: 1_000 },
       )
-      // Not a property that holds for want of sources, or of refusals.
+      // Not a property that holds for want of sources, of refusals, or of bolds round italics.
       expect(lines).toBeGreaterThan(600)
       expect(refused).toBeGreaterThan(150)
+      expect(runs).toBeGreaterThan(300)
     })
   })
 

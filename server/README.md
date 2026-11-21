@@ -673,24 +673,28 @@ the post again too.
   2026-11-18). So a reply from the site with a word on a preset list is posted, and the moderators get no alert of it, and
   the spam filter never sees a reply from the site. A word that must never reach the forum from the site belongs in a keyword
   rule. The site matches what is sent as well as what was written, so a picture put inside a word does not split a keyword
-  past the check. A rule that only alerts counts too; a rule that is switched off, or that exempts the member's role or the
-  forum or the post, does not; and Administrators and members with Manage Server are exempt, as in Discord. A regular
-  expression that takes more than 250 ms for all of a reply, or a text over 10,000 characters when a rule has a pattern,
-  refuses the reply ("This reply couldn't be checked against the server's rules. Try a shorter one."). The regular
-  expressions read the messages that are sent, each on its own, as Discord reads them: a phrase that a cut splits between two
-  messages (`free` at the end of one, `nitro` at the start of the next) is not found by a pattern like `free\s+nitro`, as
-  Discord would not find it in two messages, while the keywords, which read what was written too, still find it. Each message
-  is also read as the member typed it: with the escapes that the site writes taken out (`z\*rp` is read as `z*rp`), its links
-  out of their angle brackets, and every zero-width space removed, the member's own as well; and once more with each italic
-  as `_`, which the site sends as `*` (`_free_` goes out as `*free*`). So a pattern refuses a little more than Discord would:
-  a rule against `free[\s_.-]*nitro` refuses `*free* nitro` too. What the site's form rewrites in a way that cannot be undone
-  is read only as it is sent: a bold round an italic (`**_x_**` is sent as `***x***`), two italics that touch
-  (`_free__nitro_` is sent as `*freenitro*`), an italic inside an italic, a mark that holds only spaces, and the links in the
-  cells of a table or with no text (sent without their `](`). Only a pattern written against the marks themselves can miss
-  those; one against what stands between words does not. If Discord blocks a message all the same (code 200000, 200001 or
-  240000, the harmful-links filter), the reply is marked blocked and is never sent again: the member is told to edit or
-  delete it. Two blocks within an hour stop all sending for an hour; replies wait, and a restart does not clear it (it is
-  kept in `librarius_outbox_state`, and built again from `librarius_events`).
+  past the check. An allow-list entry with a `*` inside it, not only at its ends, is read more strictly than a keyword, so the
+  site may refuse a little more than Discord would. A rule that only alerts counts too; a rule that is switched off, or that
+  exempts the member's role or the forum or the post, does not; and Administrators and members with Manage Server are exempt,
+  as in Discord. A regular expression that takes more than 250 ms for all of a reply, or a text over 10,000 characters when
+  a rule has a pattern, refuses the reply ("This reply couldn't be checked against the server's rules. Try a shorter one.").
+  The regular expressions read the messages that are sent, each on its own, as Discord reads them: a phrase that a cut splits
+  between two messages (`free` at the end of one, `nitro` at the start of the next) is not found by a pattern like
+  `free\s+nitro`, as Discord would not find it in two messages, while the keywords, which read what was written too, still
+  find it. Each message is also read as the member typed it: with the escapes that the site writes taken out (`z\*rp` is read
+  as `z*rp`), its links out of their angle brackets, and every zero-width space removed, the member's own as well; and once
+  more with each italic as `_`, which the site sends as `*` (`_free_` goes out as `*free*`). So a pattern refuses a little
+  more than Discord would: a rule against `free[\s_.-]*nitro` refuses `*free* nitro` too. A bold round an italic, which the
+  site sends as three stars (`**_x_**` goes out as `***x***`), is read both ways: as it is sent, and with the italic as `_`
+  inside the bold (`**_x_**`). An italic round a bold (`_**x**_`) and three stars that the member typed are sent the same, so
+  they are read as `**_x_**` too, which refuses a little more than Discord would. What the site's form rewrites in a way that
+  cannot be undone is read only as it is sent: two italics that touch (`_free__nitro_` is sent as `*freenitro*`), an italic
+  inside an italic, a mark that holds only spaces, and the links in the cells of a table or with no text (sent without their
+  `](`; a link with no text is read as its bare address). Only a pattern written against the marks themselves can miss those,
+  or the order of a bold and an italic; one against what stands between words does not. If Discord blocks a message all the
+  same (code 200000, 200001 or 240000, the harmful-links filter), the reply is marked blocked and is never sent again: the
+  member is told to edit or delete it. Two blocks within an hour stop all sending for an hour; replies wait, and a restart
+  does not clear it (it is kept in `librarius_outbox_state`, and built again from `librarius_events`).
 - **Size:** at most 3 Discord messages a reply. A message holds about 4000 characters of text in the `v2` form (the probe
   measured exactly 4000 of everything Discord counts, the button's label included) and 2000 in `plain`, so a reply is about
   12,000 characters. A code block, a spoiler, bold, italic, underline, strike or inline code that a cut falls in is closed

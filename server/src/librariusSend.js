@@ -55,7 +55,8 @@
  *      the time of a pattern with several `.*` grows with the 4th power of its text), each as it is sent and, when that is not the same
  *      text, as the member typed it (typed(): its links let out of the angle brackets that the form writes them in, `](<url>)` being
  *      `](url)` and `<url>` being `url`, its marks out of the escapes, `z\*rp` being `z*rp`, and without the zero-width spaces that it puts
- *      between marks), and again with each italic as `_`, which the form writes with `*` (`_free_` is sent as `*free*`), for a rule against
+ *      between marks), and again with each italic as `_`, which the form writes with `*` (`_free_` is sent as `*free*`, and `**_free_**` as
+ *      `***free***`, read as `**_free_**`), for a rule against
  *      `z[o*]rp`, the shape of a link or `free[\s_.-]*nitro` was written for that; in the one budget of REGEX_BUDGET_MS. A
  *      pattern that matches is the same refusal, with `match: null`. A reply that could not be checked is 422 with the error "This reply
  *      couldn't be checked against the server's rules. Try a shorter one." and no `rule`: a pattern was not done in the budget (or the
@@ -91,7 +92,8 @@
  *     `*` at its start or its end gives the mode: `cat*` a prefix (the word starts with it), `*cat` a suffix, `*cat*`
  *     anywhere, and `cat` a whole word (a phrase is one, and a run of whitespace in it matches any run of whitespace). The
  *     match is the keyword with the whole word that a `*` reaches into, so that `*cat*` in "location" is the 8 characters.
- *     The entries of `allow_list` are read the same way, and a match that lies inside a match of the allow list is let through.
+ *     The entries of `allow_list` are read the same way, but for a `*` in the middle (see below), and a match that lies inside a match of the
+ *     allow list is let through.
  *     Where the documentation says nothing, the choice is the one that blocks:
  *     - a word is what is made of letters: any other character (a digit, an underscore, a punctuation or a symbol, an emoji)
  *       ends it, as does a letter of a script that is written without spaces (Han, Hiragana, Katakana, Thai, Lao, Khmer,
@@ -103,7 +105,10 @@
  *       are upper and lower case (lower, upper and lower again, so that U+1E9E and `ß` and `ss` are one), before the two are
  *       compared; a keyword is read the same way;
  *     - a `*` in the middle of a keyword stands for up to 60 characters that are not whitespace, and every way that the pieces between
- *       the stars can follow one another counts (of those that start at one place, the one whose pieces come earliest is the match);
+ *       the stars can follow one another counts (of those that start at one place, the one whose pieces come earliest is the match); in an
+ *       entry of the allow list, each piece between two stars is taken at its first place in reach and no other, so that an entry of three
+ *       pieces or more holds less than the same keyword would find, and lets less go (`a*b*c` holds nothing of `ab…b…c` when the `c` is
+ *       more than 60 characters from the first `b`);
  *     - space round a keyword is not part of it (the documentation does not say that it is trimmed, and a suffix finds more than
  *       the whole word does): ` *cat` is `*cat`, so it finds "bobcat";
  *     - a keyword with something in it that folds to nothing (`||`, `~~`, a fence of backticks, a zero-width character), which
@@ -367,7 +372,8 @@ function placesOf(folded, piece, memo) {
 /**
  * → for each later piece of a keyword (the pieces after its first), the set of the places of the folded text that hold it and from which all the
  * pieces after it can follow: the last piece where its edge holds (with no `*` at the end of the keyword, it must end a word), and any other where
- * the set of the next piece has a place within its reach (gapEnd). Worked out from the last piece to the first, so that a place of the first
+ * the set of the next piece has a place within its reach (gapEnd), or at every place for an entry of an allow list, which takes its first
+ * (see memoOf). Worked out from the last piece to the first, so that a place of the first
  * piece is told whether the rest of the keyword can follow it, and where, by a look in a set for each piece, whatever the length of the word it
  * is in and however many times the pieces are found in it. A set is kept in `memo` for what it depends on (`tails`), so that the keywords of a
  * list that end with the same pieces (`*n*gg*r*` and `*n*g*gg*r*`) share it, and the sets of a keyword for the keyword. The sets are bits: the
@@ -390,7 +396,8 @@ function chainsOf(folded, keyword, memo) {
         if (after !== NONE) {
           for (const p of placesOf(folded, rest[k], memo)) {
             const a = p + rest[k].length
-            const kept = after === undefined ? keyword.endFree || !inWord(start, a) : firstOf(after, a, gapEnd(folded, a)) !== -1
+            // A middle piece of an allow entry keeps every place of it (see memoOf): reach() then takes its first place, whatever follows.
+            const kept = after === undefined ? keyword.endFree || !inWord(start, a) : memo.firstPlace || firstOf(after, a, gapEnd(folded, a)) !== -1
             if (!kept) continue
             if (set === NONE) set = noPlaces(folded.s.length)
             set[p >>> 5] |= 1 << (p & 31)
@@ -411,7 +418,8 @@ function chainsOf(folded, keyword, memo) {
  * no `*` at its end. Where they can follow in more than one way, the way whose pieces come earliest is the one taken: the first place of each
  * piece from which the rest can still follow (chainsOf). So a place of a middle piece that leads nowhere (the `b` of `ab` in `abxb…c` for
  * `a*b*c`, where the `c` is more than MAX_GAP from it) is no reason to miss the way through a later one, which is what the site's model of
- * an inner `*` says is a match; and of the ways that start at one place, the match is the one that ends first.
+ * an inner `*` says is a match; and of the ways that start at one place, the match is the one that ends first. An entry of an allow list is
+ * read more strictly (see memoOf): each of its middle pieces at its first place in reach, and the way ends where that one leads nowhere.
  */
 function reach(folded, keyword, pos, memo) {
   const { rest } = keyword
@@ -422,7 +430,8 @@ function reach(folded, keyword, pos, memo) {
   let a = pos
   for (let k = 0; k < rest.length; k++) {
     const p = firstOf(sets[k], a, gapEnd(folded, a))
-    // Past the first piece this always holds: every place in a set has a place of the next set within its reach.
+    // Past the first piece of a keyword this always holds: every place in a set has a place of the next set within its reach. The first place of
+    // a middle piece of an allow entry need not have one (see memoOf), and then the entry has no match from `pos`.
     if (p === -1) return -1
     a = p + rest[k].length
   }
@@ -433,8 +442,10 @@ function reach(folded, keyword, pos, memo) {
  * → the first place after `i` at which a keyword that has no match at `i` could have one: the next place for a keyword of one piece, and for
  * one of several, the first place whose reach (MAX_GAP characters past its first piece) takes in the next place of the set of its second piece
  * (see chainsOf), or the end of the text when there is none. No place before that has a match: its reach ends before that place, and no place
- * of the second piece before it can be followed by the rest. A long word that holds the first piece at every place and the rest of the keyword
- * nowhere (`*n*gger*` over a word of one letter) is then looked at once, and not at every place, for each keyword of that shape.
+ * of the second piece before it can be followed by the rest (for an allow entry, whose set of a middle piece holds every place of it, there is
+ * no place of the second piece before it at all, so the skip holds for its stricter reading too). A long word that holds the first piece at
+ * every place and the rest of the keyword nowhere (`*n*gger*` over a word of one letter) is then looked at once, and not at every place, for
+ * each keyword of that shape.
  */
 function retryAfter(folded, keyword, i, memo) {
   if (keyword.rest.length === 0) return i + 1
@@ -489,8 +500,15 @@ function eachSpan(folded, keyword, visit, memo) {
   }
 }
 
-/** → what the places of the pieces and the sets of chainsOf() are kept in while one rule is looked for in one text, and no longer. */
-const memoOf = () => ({ places: new Map(), tails: new Map(), keywords: new Map() })
+/**
+ * → what the places of the pieces and the sets of chainsOf() are kept in while one rule is looked for in one text, and no longer. With
+ * `firstPlace`, for the entries of an allow list, the set of a middle piece holds every place of it, and not only those that the rest can follow
+ * from, so that reach() takes the first place of each middle piece in reach and no later one, as the site read every keyword before rB8's M1:
+ * Discord documents a `*` only at the ends of a keyword, and an allow entry that is read more strictly than a keyword lets less go. `a*b*c`
+ * then holds nothing of `abxb…c` when the `c` is more than MAX_GAP from the first `b`, where the keyword `a*b*c` is found there. The sets of the
+ * two readings are never shared: each memo is for one of them.
+ */
+const memoOf = (firstPlace = false) => ({ places: new Map(), tails: new Map(), keywords: new Map(), firstPlace })
 
 /**
  * → for each place of the folded text, how far the spans of an allow list reach that start at or before it (0 for none), so that whether a
@@ -499,7 +517,7 @@ const memoOf = () => ({ places: new Map(), tails: new Map(), keywords: new Map()
  */
 function allowedIn(norm, allow) {
   const reach = new Int32Array(norm.s.length + 1)
-  const memo = memoOf()
+  const memo = memoOf(true)
   for (const keyword of allow) {
     eachSpan(
       norm,
@@ -1096,7 +1114,8 @@ const MASKED_LINK = /\[([^\][\n]*)\]\((?:[^()\][\n]|\([^()\][\n]*\))*\)/g
 //   of three backticks in a block of code or a table, and in a mark that a cut leaves with nothing to hold. Every one is taken out, the
 //   member's too: the text that is sent is read as well, so that only ever finds more;
 // - an italic: every one is written with `*`, the member's `_x_` as `*x*`, so one copy reads each star that stands alone as `_` (see typed). A run
-//   of two or more is a bold, or a bold and an italic that touch, and is kept as it is.
+//   of exactly three is a bold and an italic that open or close together (`**_x_**` is `***x***`), and that copy reads it as `**_` where it opens
+//   and `_**` where it closes. A run of two is a bold, and one of four or more is kept as it is too.
 const FORM_SPELLING = /<(https?:\/\/[^\s<>]*)>|\\([\\*_~|`<>[\]#.-])|(\*\*+)|\*|\u200b/g
 const ANGLE_LINK = /<([a-z][a-z0-9+.-]*):[^\s<>]*>/gi
 const HTTP_ADDRESS = /^https?:\/\//
@@ -1158,18 +1177,44 @@ export const unmasked = (text) => text.replace(MASKED_LINK, '$1')
  * and so is a backslash of the member's before one of those characters, which is what Discord would have shown a rule had it been typed there;
  * every zero-width space goes, the member's as well; and with `_`, every star that stands alone is read as one, in code too, and for an italic that
  * the member wrote with `*` (so `*free* nitro` is refused by a rule that Discord would let it by with). The text that is sent is read as well, so
- * this only ever finds more. A run of stars is kept as it is: it is a bold, or a bold and an italic that touch, and the form writes `**_free_**` as
- * `***free***`, whose `_` is then not read. Not undone either, and the marks of the member's are lost in two of them: two italics that touch,
- * which the form writes as one (`_free__nitro_` is `*freenitro*`), and an italic in an italic, which it writes as its text. Nor are the marks of a
- * cut, which close what is open at the end of a part and open it again in the next, the space that a spoiler left empty by a cut is given (`|| ||`),
- * the space before code that starts with a backtick, a heading that the form writes in bold, the cells of a table, which are sent as a block of
- * code with a link as its text and its address after it (`x (https://e.com)`), and a link with no text, which is sent as its address: neither
- * link has the `](` left for a rule against that shape, and neither is a masked link where Discord shows it. The copy is never longer than the
- * text, and the copies with the two italics are as long as each other.
+ * this only ever finds more. A run of exactly three stars is a bold and an italic that open or close together, which the form writes for a bold
+ * round an italic and for an italic round a bold alike (`**_free_**` and `_**free**_` are both `***free***`): with `_` it is read with the
+ * italic inside the bold, `**_` where it opens and `_**` where it closes, so that a rule against `_free` or `nitro_` refuses `**_free nitro_**`
+ * (and the two others that are sent the same, `***free nitro***` and `_**free nitro**_`, which Discord would let by: fail closed). It opens when a
+ * space or the start of the text is before it, closes when one is after it, and between two characters that are no spaces (`(***free***).`)
+ * opens when no italic or bold of stars is open and closes when one is; with a space on both sides it holds nothing, and is kept. A run of two
+ * is a bold, and one of four or more is kept as it is too, and so is every star with `*`. Not undone either, and the marks of the member's are
+ * lost in two of them: two italics that touch, which the form writes as one (`_free__nitro_` is `*freenitro*`), and an italic in an italic, which
+ * it writes as its text. Nor are the marks of a cut, which close what is open at the end of a part and open it again in the next, the space that
+ * a spoiler left empty by a cut is given (`|| ||`), the space before code that starts with a backtick, or a heading that the form writes in bold.
+ * Two links are read as the form sends them, which is left so: a link in the cell of a table is sent in a block of code as its text with its
+ * address after it (`x (https://e.com)`), and a link whose text is blank is sent as its address in angle brackets, which this reads as a bare
+ * address (`[ ](https://e.com)` is `https://e.com`); neither has the `](` left for a rule against that shape, and Discord shows neither as a
+ * masked link. The copy is never longer than the text, and the copies with the two italics are as long as each other.
  */
 export function typed(text, italic = '*') {
   if (italic !== '*' && italic !== '_') throw new RangeError('the italic must be * or _')
-  return text.replace(FORM_SPELLING, (whole, link, escaped, run) => link ?? escaped ?? run ?? (whole === '*' ? italic : ''))
+  // Whether an italic and a bold of stars are open, as the marks so far say: what a run of three between two characters that are no spaces is.
+  let italics = false
+  let bolds = false
+  const blank = (at) => at < 0 || at >= text.length || SPACE.test(text[at])
+  return text.replace(FORM_SPELLING, (whole, link, escaped, run, at) => {
+    if (link !== undefined || escaped !== undefined) return link ?? escaped
+    if (whole === '\u200b') return ''
+    if (run === undefined) {
+      italics = !italics
+      return italic
+    }
+    if (run.length === 2) bolds = !bolds
+    if (run.length !== 3) return run
+    const [before, after] = [blank(at - 1), blank(at + 3)]
+    if (before && after) return run
+    // A run of three that opens: with a space or nothing before it, or with no mark of stars open; one that closes, the other way.
+    const opens = before || (!after && !italics && !bolds)
+    italics = opens
+    bolds = opens
+    return opens ? `**${italic}` : `${italic}**`
+  })
 }
 
 // The kind of a component that is a Text Display, in the messages of the form.
@@ -1296,8 +1341,8 @@ export async function validateReply(input, options) {
   // The patterns read what is sent only (see scanInWorker): the source holds what is not sent, and is up to 16,000 characters, where
   // the time of a pattern with several `.*` grows with the 4th power of the text. Each text is read as it is sent and, when they are not the
   // same text, as the member typed it (typed()): with its links out of the angle brackets and its marks out of the escapes that the form
-  // wrote them in, and then with its italics as `_` as well, which the form writes with `*`. A rule against `z*rp`, against the shape of a
-  // link or against `free_nitro` would not see `z*rp`, the link, or the `_` of `_free_ nitro` otherwise.
+  // wrote them in, and then with its italics as `_` as well, which the form writes with `*` (a bold round one with a run of three). A rule
+  // against `z*rp`, against the shape of a link or against `free_nitro` would not see `z*rp`, the link, or the `_` of `_free_ nitro` otherwise.
   if (typeof automod.regex === 'function') {
     const found = await automod.regex(shown.flatMap((part) => [...new Set([part, typed(part), typed(part, '_')])]))
     if (found !== null && found.unchecked === true) return refused(422, COPY.unchecked)
