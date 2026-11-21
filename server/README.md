@@ -786,12 +786,14 @@ merge of the site's half; the start-up, command and log checks can run as soon a
 6. **Rebuild the API, keeping the rollback tag, and check the new image before it starts.** From `server/`:
 
    ```sh
-   docker tag server-api:latest server-api:pre-librarius-replies
-   docker compose build api
-   docker run --rm --network none server-api:latest bun src/librariusRegexSmoke.js
-   docker compose up -d api
+   docker tag server-api:latest server-api:pre-librarius-replies &&
+     docker compose build api &&
+     docker run --rm --network none server-api:latest bun src/librariusRegexSmoke.js &&
+     docker compose up -d api
    ```
 
+   The four commands are joined with `&&`, so each runs only when the one before it passed: pasted whole, a build or a smoke
+   check that fails stops there, and the new image never starts.
    The first keeps the image before the replies under a tag; read "Rolling back the replies" before you ever use it. The
    second builds the new image. The third runs the smoke check of the AutoMod patterns (above) in a throwaway container of the
    new image, with no network and nothing of `.env`, and removes the container after. Do not skip it: the pre-push hook runs
@@ -800,8 +802,8 @@ merge of the site's half; the start-up, command and log checks can run as soon a
    when its container is made, so an edit of `.env` needs `docker compose up -d api`, not `docker compose restart api`. That
    makes the container again, and its log goes with it: see live check 19.
 
-   If a line of the smoke check starts with `FAIL` instead, stop there, before the fourth command. This puts the tag back on
-   the image that is running, and nothing has changed:
+   If a line of the smoke check starts with `FAIL` instead, the check exits 1 and the fourth command does not run. This puts the tag
+   back on the image that is running, and nothing has changed:
 
    ```sh
    docker tag server-api:pre-librarius-replies server-api:latest
