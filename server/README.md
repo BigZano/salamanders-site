@@ -312,10 +312,21 @@ Rollout:
 1. Apply `schema.sql` (idempotent, command in the reports section above) **before** starting the new image: the tables
    are `librarius_*`.
 2. Set `LIBRARIUS_CHANNEL_ID` in `server/.env`.
-3. Rebuild the API, keeping the rollback tag: `docker tag server-api:latest server-api:pre-librarius` first, then
-   `docker compose up -d --build api`. To go back: `docker tag server-api:pre-librarius server-api:latest && docker
-   compose up -d --no-build --force-recreate api`. Once the site has been merged, going back is not so simple: see
-   "Rolling back" below.
+3. Rebuild the API, keeping the rollback tag:
+
+   ```sh
+   docker tag server-api:latest server-api:pre-librarius
+   docker compose up -d --build api
+   ```
+
+   To go back:
+
+   ```sh
+   docker tag server-api:pre-librarius server-api:latest
+   docker compose up -d --no-build --force-recreate api
+   ```
+
+   Once the site has been merged, going back is not so simple: see "Rolling back" below.
 4. Check, **before the merge**. The site has no Librarius yet, so these go to the API and the database directly. A call
    that needs a reader takes the Discord token of someone who may read the forum: sign in to the site as that person, and
    in the browser console run `JSON.parse(localStorage.getItem('salamanders-discord-member')).accessToken`. Put it in
@@ -785,11 +796,16 @@ merge of the site's half; the start-up, command and log checks can run as soon a
    second builds the new image. The third runs the smoke check of the AutoMod patterns (above) in a throwaway container of the
    new image, with no network and nothing of `.env`, and removes the container after. Do not skip it: the pre-push hook runs
    the smoke check on the repository's Bun, and only this runs it on the Bun and the Alpine of the image itself, which is
-   what the API runs on. Pass: its last line is `smoke check passed`. If a line starts with `FAIL` instead, stop there:
-   `docker tag server-api:pre-librarius-replies server-api:latest` puts the tag back on the image that is running, and
-   nothing has changed. The fourth starts the new image. The API reads `.env` when its container is made, so an edit of
-   `.env` needs `docker compose up -d api`, not `docker compose restart api`. That makes the container again, and its log
-   goes with it: see live check 19.
+   what the API runs on. Pass: its last line is `smoke check passed`. The fourth starts the new image. The API reads `.env`
+   when its container is made, so an edit of `.env` needs `docker compose up -d api`, not `docker compose restart api`. That
+   makes the container again, and its log goes with it: see live check 19.
+
+   If a line of the smoke check starts with `FAIL` instead, stop there, before the fourth command. This puts the tag back on
+   the image that is running, and nothing has changed:
+
+   ```sh
+   docker tag server-api:pre-librarius-replies server-api:latest
+   ```
 7. **The live checks**, below, run once.
 
 ### The live checks
@@ -1182,8 +1198,13 @@ Commands start from `server/`, in the checkout that holds `.env`.
      docker compose up -d --no-build --force-recreate api
      ```
 
-     Pass: `curl -s -o /dev/null -w '%{http_code}' localhost:8787/librarius/me` answers 503. To come forward again, to the
-     image with the replies:
+     Pass: this answers 503:
+
+     ```sh
+     curl -s -o /dev/null -w '%{http_code}' localhost:8787/librarius/me
+     ```
+
+     To come forward again, to the image with the replies:
 
      ```sh
      sed -i 's/^# LIBRARIUS_CHANNEL_ID=/LIBRARIUS_CHANNEL_ID=/' .env
@@ -1191,8 +1212,14 @@ Commands start from `server/`, in the checkout that holds `.env`.
      docker compose up -d --no-build --force-recreate api
      ```
 
-     Pass: `grep -c '^LIBRARIUS_CHANNEL_ID=' .env` prints `1`, the same `curl` answers 401, and live check 1 passes. The
-     catch-up then takes up what happened in Discord while the Librarius was off, as after any time the API was down.
+     Pass: the first of these prints `1`, the second answers 401, and live check 1 passes:
+
+     ```sh
+     grep -c '^LIBRARIUS_CHANNEL_ID=' .env
+     curl -s -o /dev/null -w '%{http_code}' localhost:8787/librarius/me
+     ```
+
+     The catch-up then takes up what happened in Discord while the Librarius was off, as after any time the API was down.
   2. **Back with the Librarius on**, when it must stay readable: the same commands, back and forward, without their `sed`
      lines. Then, at its first catch-up (when it starts, after every gateway READY, and every 6 hours), the old image reads
      the forum again and writes over what the database holds of each reply of the site: part 1's row gets the webhook as its

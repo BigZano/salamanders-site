@@ -30,10 +30,12 @@
  *     an edit cannot change who wrote the message.
  *   remove(threadId, messageId) → undefined. Idempotent: a message that is already gone (404, code 10008) is done.
  *   recent(threadId, limit = 20) → the newest messages of the thread that this webhook posted, newest first, through
- *     `newest` (a TypeError when the client was made without it). It is how the outbox finds out whether a send that
- *     answered `unknown` did land. The thread is checked like any other (a TypeError), and the limit is a whole number from 1 to
- *     100 (a TypeError, or a RangeError). A page that is no list is a WebhookError with no status, and an entry of it that is no
- *     message is left out.
+ *     `newest` (a TypeError when the client was made without it). Nothing of the site calls it now, and index.js makes the
+ *     client without `newest`: the outbox learns whether a send that answered `unknown` did land by reading the thread from
+ *     just before the send began, through the bot (messagesAfter, see lookup in librariusOutbox.js), since the newest few
+ *     messages of a busy thread may no longer hold it. The thread is checked like any other (a TypeError), and the limit is a
+ *     whole number from 1 to 100 (a TypeError, or a RangeError). A page that is no list is a WebhookError with no status, and an
+ *     entry of it that is no message is left out.
  *
  * Failures are a WebhookError { status, code, fatal, blocked, unknown, threadGone, messageGone, retryAfterMs, global }.
  * `status` is the HTTP status (null when Discord did not answer), `code` Discord's JSON error code when it gave a whole
@@ -42,8 +44,8 @@
  *   else 1000, at most an hour; `global` when the body or X-RateLimit-Global says so. A 429 was not accepted, so a resend
  *   is safe: it is never `unknown`.
  * - `unknown`, on send only: the message may have landed. A timeout, any error the fetch throws (reset, refused, DNS, a
- *   redirect), a 5xx, any status that is neither 2xx nor 4xx, and a 2xx that carries no message. The outbox looks at
- *   recent() before it resends; saying `unknown` too often costs a look, saying it too seldom would post twice. On edit
+ *   redirect), a 5xx, any status that is neither 2xx nor 4xx, and a 2xx that carries no message. The outbox looks in the
+ *   thread before it resends; saying `unknown` too often costs a look, saying it too seldom would post twice. On edit
  *   and remove the same failures are plain failures, status null for no answer: repeating them does no harm.
  * - `blocked`: Discord refused the message by its code: 200000 (message blocked by automatic moderation), 200001 (title blocked by
  *   automatic moderation) or 240000 (message blocked by the harmful links filter). Never retried.
