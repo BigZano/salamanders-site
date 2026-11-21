@@ -684,15 +684,17 @@ the post again too.
   find it. Each message is also read as the member typed it: with the escapes that the site writes taken out (`z\*rp` is read
   as `z*rp`), its links out of their angle brackets, and every zero-width space removed, the member's own as well; and once
   more with each italic as `_`, which the site sends as `*` (`_free_` goes out as `*free*`). So a pattern refuses a little
-  more than Discord would:
-  a rule against `free[\s_.-]*nitro` refuses `*free* nitro` too. What the site's form rewrites in a way that cannot be undone
-  is read only as it is sent: a bold round an italic (`**_x_**` is sent as `***x***`), two italics that touch
-  (`_free__nitro_` is sent as `*freenitro*`), an italic inside an italic, a mark that holds only spaces, and the links in the
-  cells of a table or with no text (sent without their `](`). Only a pattern written against the marks themselves can miss
-  those; one against what stands between words does not. If Discord blocks a message all the same (code 200000, 200001 or
-  240000, the harmful-links filter), the reply is marked blocked and is never sent again: the member is told to edit or
-  delete it. Two blocks within an hour stop all sending for an hour; replies wait, and a restart does not clear it (it is
-  kept in `librarius_outbox_state`, and built again from `librarius_events`).
+  more than Discord would: a rule against `free[\s_.-]*nitro` refuses `*free* nitro` too. A bold round an italic, which the
+  site sends as three stars (`**_x_**` goes out as `***x***`), is read both ways: as it is sent, and with the italic as `_`
+  inside the bold (`**_x_**`). An italic round a bold (`_**x**_`) and three stars that the member typed are sent the same, so
+  they are read as `**_x_**` too, which refuses a little more than Discord would. What the site's form rewrites in a way that
+  cannot be undone is read only as it is sent: two italics that touch (`_free__nitro_` is sent as `*freenitro*`), an italic
+  inside an italic, a mark that holds only spaces, and the links in the cells of a table or with no text (sent without their
+  `](`; a link with no text is read as its bare address). Only a pattern written against the marks themselves can miss those,
+  or the order of a bold and an italic; one against what stands between words does not. If Discord blocks a message all the
+  same (code 200000, 200001 or 240000, the harmful-links filter), the reply is marked blocked and is never sent again: the
+  member is told to edit or delete it. Two blocks within an hour stop all sending for an hour; replies wait, and a restart
+  does not clear it (it is kept in `librarius_outbox_state`, and built again from `librarius_events`).
 - **Size:** at most 3 Discord messages a reply. A message holds about 4000 characters of text in the `v2` form (the probe
   measured exactly 4000 of everything Discord counts, the button's label included) and 2000 in `plain`, so a reply is about
   12,000 characters. A code block, a spoiler, bold, italic, underline, strike or inline code that a cut falls in is closed

@@ -55,7 +55,8 @@
  *      the time of a pattern with several `.*` grows with the 4th power of its text), each as it is sent and, when that is not the same
  *      text, as the member typed it (typed(): its links let out of the angle brackets that the form writes them in, `](<url>)` being
  *      `](url)` and `<url>` being `url`, its marks out of the escapes, `z\*rp` being `z*rp`, and without the zero-width spaces that it puts
- *      between marks), and again with each italic as `_`, which the form writes with `*` (`_free_` is sent as `*free*`), for a rule against
+ *      between marks), and again with each italic as `_`, which the form writes with `*` (`_free_` is sent as `*free*`, and `**_free_**` as
+ *      `***free***`, read as `**_free_**`), for a rule against
  *      `z[o*]rp`, the shape of a link or `free[\s_.-]*nitro` was written for that; in the one budget of REGEX_BUDGET_MS. A
  *      pattern that matches is the same refusal, with `match: null`. A reply that could not be checked is 422 with the error "This reply
  *      couldn't be checked against the server's rules. Try a shorter one." and no `rule`: a pattern was not done in the budget (or the
@@ -1113,7 +1114,8 @@ const MASKED_LINK = /\[([^\][\n]*)\]\((?:[^()\][\n]|\([^()\][\n]*\))*\)/g
 //   of three backticks in a block of code or a table, and in a mark that a cut leaves with nothing to hold. Every one is taken out, the
 //   member's too: the text that is sent is read as well, so that only ever finds more;
 // - an italic: every one is written with `*`, the member's `_x_` as `*x*`, so one copy reads each star that stands alone as `_` (see typed). A run
-//   of two or more is a bold, or a bold and an italic that touch, and is kept as it is.
+//   of exactly three is a bold and an italic that open or close together (`**_x_**` is `***x***`), and that copy reads it as `**_` where it opens
+//   and `_**` where it closes. A run of two is a bold, and one of four or more is kept as it is too.
 const FORM_SPELLING = /<(https?:\/\/[^\s<>]*)>|\\([\\*_~|`<>[\]#.-])|(\*\*+)|\*|\u200b/g
 const ANGLE_LINK = /<([a-z][a-z0-9+.-]*):[^\s<>]*>/gi
 const HTTP_ADDRESS = /^https?:\/\//
@@ -1175,18 +1177,44 @@ export const unmasked = (text) => text.replace(MASKED_LINK, '$1')
  * and so is a backslash of the member's before one of those characters, which is what Discord would have shown a rule had it been typed there;
  * every zero-width space goes, the member's as well; and with `_`, every star that stands alone is read as one, in code too, and for an italic that
  * the member wrote with `*` (so `*free* nitro` is refused by a rule that Discord would let it by with). The text that is sent is read as well, so
- * this only ever finds more. A run of stars is kept as it is: it is a bold, or a bold and an italic that touch, and the form writes `**_free_**` as
- * `***free***`, whose `_` is then not read. Not undone either, and the marks of the member's are lost in two of them: two italics that touch,
- * which the form writes as one (`_free__nitro_` is `*freenitro*`), and an italic in an italic, which it writes as its text. Nor are the marks of a
- * cut, which close what is open at the end of a part and open it again in the next, the space that a spoiler left empty by a cut is given (`|| ||`),
- * the space before code that starts with a backtick, a heading that the form writes in bold, the cells of a table, which are sent as a block of
- * code with a link as its text and its address after it (`x (https://e.com)`), and a link with no text, which is sent as its address: neither
- * link has the `](` left for a rule against that shape, and neither is a masked link where Discord shows it. The copy is never longer than the
- * text, and the copies with the two italics are as long as each other.
+ * this only ever finds more. A run of exactly three stars is a bold and an italic that open or close together, which the form writes for a bold
+ * round an italic and for an italic round a bold alike (`**_free_**` and `_**free**_` are both `***free***`): with `_` it is read with the
+ * italic inside the bold, `**_` where it opens and `_**` where it closes, so that a rule against `_free` or `nitro_` refuses `**_free nitro_**`
+ * (and the two others that are sent the same, `***free nitro***` and `_**free nitro**_`, which Discord would let by: fail closed). It opens when a
+ * space or the start of the text is before it, closes when one is after it, and between two characters that are no spaces (`(***free***).`)
+ * opens when no italic or bold of stars is open and closes when one is; with a space on both sides it holds nothing, and is kept. A run of two
+ * is a bold, and one of four or more is kept as it is too, and so is every star with `*`. Not undone either, and the marks of the member's are
+ * lost in two of them: two italics that touch, which the form writes as one (`_free__nitro_` is `*freenitro*`), and an italic in an italic, which
+ * it writes as its text. Nor are the marks of a cut, which close what is open at the end of a part and open it again in the next, the space that
+ * a spoiler left empty by a cut is given (`|| ||`), the space before code that starts with a backtick, or a heading that the form writes in bold.
+ * Two links are read as the form sends them, which is left so: a link in the cell of a table is sent in a block of code as its text with its
+ * address after it (`x (https://e.com)`), and a link whose text is blank is sent as its address in angle brackets, which this reads as a bare
+ * address (`[ ](https://e.com)` is `https://e.com`); neither has the `](` left for a rule against that shape, and Discord shows neither as a
+ * masked link. The copy is never longer than the text, and the copies with the two italics are as long as each other.
  */
 export function typed(text, italic = '*') {
   if (italic !== '*' && italic !== '_') throw new RangeError('the italic must be * or _')
-  return text.replace(FORM_SPELLING, (whole, link, escaped, run) => link ?? escaped ?? run ?? (whole === '*' ? italic : ''))
+  // Whether an italic and a bold of stars are open, as the marks so far say: what a run of three between two characters that are no spaces is.
+  let italics = false
+  let bolds = false
+  const blank = (at) => at < 0 || at >= text.length || SPACE.test(text[at])
+  return text.replace(FORM_SPELLING, (whole, link, escaped, run, at) => {
+    if (link !== undefined || escaped !== undefined) return link ?? escaped
+    if (whole === '\u200b') return ''
+    if (run === undefined) {
+      italics = !italics
+      return italic
+    }
+    if (run.length === 2) bolds = !bolds
+    if (run.length !== 3) return run
+    const [before, after] = [blank(at - 1), blank(at + 3)]
+    if (before && after) return run
+    // A run of three that opens: with a space or nothing before it, or with no mark of stars open; one that closes, the other way.
+    const opens = before || (!after && !italics && !bolds)
+    italics = opens
+    bolds = opens
+    return opens ? `**${italic}` : `${italic}**`
+  })
 }
 
 // The kind of a component that is a Text Display, in the messages of the form.
@@ -1313,8 +1341,8 @@ export async function validateReply(input, options) {
   // The patterns read what is sent only (see scanInWorker): the source holds what is not sent, and is up to 16,000 characters, where
   // the time of a pattern with several `.*` grows with the 4th power of the text. Each text is read as it is sent and, when they are not the
   // same text, as the member typed it (typed()): with its links out of the angle brackets and its marks out of the escapes that the form
-  // wrote them in, and then with its italics as `_` as well, which the form writes with `*`. A rule against `z*rp`, against the shape of a
-  // link or against `free_nitro` would not see `z*rp`, the link, or the `_` of `_free_ nitro` otherwise.
+  // wrote them in, and then with its italics as `_` as well, which the form writes with `*` (a bold round one with a run of three). A rule
+  // against `z*rp`, against the shape of a link or against `free_nitro` would not see `z*rp`, the link, or the `_` of `_free_ nitro` otherwise.
   if (typeof automod.regex === 'function') {
     const found = await automod.regex(shown.flatMap((part) => [...new Set([part, typed(part), typed(part, '_')])]))
     if (found !== null && found.unchecked === true) return refused(422, COPY.unchecked)
