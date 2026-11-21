@@ -496,12 +496,20 @@ with it, in the member's name, as an entry of its own (kind `delete`, keyed by t
 the old parts, which still say `k/N` of the old count and link back to part 1: 1.5 seconds a part, and longer when the delete
 has to wait (behind other entries, for its retries, or through the pause that two blocks bring). If the delete ends for good
 (the post is locked, or Discord refuses it through every retry), the edit stays done, and the old parts stay in Discord. The
-site shows that delete on no reply, so the API logs one line, once, and that line is all there is (nothing is said in
-Discord): `Librarius outbox: the delete <entry id> ended for good (<why>), so these parts of the reply <reply id> in post
-<post id> may still be in Discord, for a moderator to remove: <part ids>.` The same line, without `of the reply <reply id>`,
-is logged when the delete of what a reply or an edit that ended for good had left in Discord ends for good as well, and when
-the delete of what was left of a reply after a part of it was deleted in Discord does. A moderator deletes those parts in
-Discord, and nothing else is needed; the commands that find them are after the live checks.
+site shows that delete on no reply, so it is told once, in two places. The API logs one line: `Librarius outbox: the delete
+<entry id> ended for good (<why>), so these parts of the reply <reply id> in post <post id> may still be in Discord, for a
+moderator to remove: <part ids>.` And the moderators are told in the channel of the reports webhook (`REPORTS_WEBHOOK_URL`,
+leadership's), when it is set: `Librarius: the site could not remove 2 messages of a reply from Discord, because the post is
+locked in Discord. They may still be in https://discord.com/channels/<guild id>/<post id>, for a moderator to delete: <part
+ids>.` That message names the post as a link and the parts by their ids, and says why in a few words (the post is locked,
+Discord blocked the delete, Discord did not take it at any of its tries, or the site could not finish it); it carries no word
+or name of a member's. The parts in both are the ones the delete had not removed yet: one that removed them all, and failed
+only after, tells nothing. The same is told, without `of the reply <reply id>` in the line, when the delete of what a reply
+or an edit that ended for good had left in Discord ends for good as well, and when the delete of what was left of a reply
+after a part of it was deleted in Discord does. A moderator deletes those parts in Discord, and nothing else is needed; the
+commands that find them are after the live checks. If the message to the moderators cannot be posted, the API logs one line
+that starts `Librarius outbox: the moderators could not be told` (with no link in it), the message is not posted again, and
+the line above is in the log all the same.
 
 There is one way for a part to stay in Discord without the site knowing of it. Discord took the part, but its answer was lost
 (a timeout, say), or the API stopped or lost the outbox's lock before the database had noted the part; and then every look for
@@ -513,6 +521,7 @@ Discord.
 | `LIBRARIUS_WEBHOOK_URL` | the address of the Librarius's webhook, printed by the setup command below. **A secret**: whoever has it can post as the Librarius. `server/.env` only, never git, never a chat. The e2e stack gives it an invented address on its Discord mock (`http://discord-mock:4400/api/webhooks/<id>/<token>`), which the API takes only because `DISCORD_API_BASE` is the mock's `http://` address there; `LIBRARIUS_FORM` is unset there, so its replies go out as `v2` |
 | `LIBRARIUS_FORM` | `v2` (Components V2, the default) or `plain` (a message of text). Empty is `v2`; anything else is a startup warning and also `v2`. A queued reply keeps the form it was checked in |
 | `DISCORD_GUILD_ID`, `DISCORD_BOT_TOKEN`, `LIBRARIUS_CHANNEL_ID` | as for the Librarius above, all required |
+| `REPORTS_WEBHOOK_URL` | optional here: the reports webhook of "Member reports" above. When it is set, the moderators are told in its channel of the parts of a reply that a delete of the site's could not remove from Discord ("An edit that makes a reply shorter", above); unset, only the API's log has them |
 
 **When replies are off.** `LIBRARIUS_WEBHOOK_URL` unset, or not an address the client takes
 (`https://discord.com/api/webhooks/<id>/<token>`): the read side is as it was. Every write route answers 503 "Replying from
@@ -1111,8 +1120,9 @@ that is still `pending` is the last attempt's technical text.
 
 A delete that the site queued itself (of the parts an edit dropped, of what a reply or an edit that ended for good left, or of
 what was left of a reply after a part of it was deleted in Discord) is shown on no reply. One that ended for good is told once
-in the API's log (see "An edit that makes a reply shorter", above), and that log goes when the container is made again; its
-entry stays in `librarius_outbox`. These find them, from `server/`:
+in the API's log, and to the moderators in the reports channel when `REPORTS_WEBHOOK_URL` is set (see "An edit that makes a
+reply shorter", above). The log goes when the container is made again; the entry stays in `librarius_outbox`. These find them,
+from `server/`:
 
 ```sh
 docker compose logs api | grep 'Librarius outbox: the delete'

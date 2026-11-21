@@ -258,7 +258,16 @@ if (librariusConfigured) {
     if (replies.webhookUrl !== null) {
       try {
         webhook = createWebhookClient({ url: replies.webhookUrl, apiBase: DISCORD_API_BASE })
-        outbox = createOutbox({ store, webhook, discord, form: replies.form, guildId: GUILD_ID })
+        // The moderators hear of what a delete that ended for good left in Discord (librariusOutbox.js), in the channel of the reports
+        // webhook (leadership's), through a notifier of its own: the history one's suffix links the history page, which has nothing to do
+        // with this. With no address nobody is told, and the API's log has the line all the same. A post that fails is logged with no link
+        // in it: the address is a secret.
+        const reportsUrl = process.env.REPORTS_WEBHOOK_URL || null
+        const moderators =
+          reportsUrl === null
+            ? undefined
+            : createNotifier({ url: reportsUrl, log: (err) => console.error(`Librarius outbox: the moderators could not be told: ${describeForLog(err)}`) })
+        outbox = createOutbox({ store, webhook, discord, form: replies.form, guildId: GUILD_ID, notify: moderators })
         sweeper = createUploadSweeper({ store })
       } catch (err) {
         outbox = sweeper = null

@@ -4,13 +4,15 @@
  * librariusOutboxStore.js) before anything is sent, so a restart finds it, and the worker writes down what it has done to
  * Discord as it does it (payload.progress), so that a restart picks up where it stopped.
  *
- * createOutbox({ store, webhook, discord, form = 'v2', guildId, now = Date.now, timers = { setTimeout, clearTimeout }, log })
+ * createOutbox({ store, webhook, discord, form = 'v2', guildId, now = Date.now, timers = { setTimeout, clearTimeout }, log, notify })
  *   → { start(), stop() → Promise, kick(), sendingPausedUntil(), webhookRefused(), webhookId }
  *   `store` is the Librarius store (the outbox methods of librariusOutboxStore.js), `webhook` the client of librariusWebhook.js
  *   and `discord` the bot client of librariusDiscord.js (setArchived, deleteMessage, messagesAfter). A reply is sent in the form
  *   the route checked it in, which its entry says (payload.form, 'v2' or 'plain'); `form` is the form of a reply whose entry does
  *   not say (one queued before the route said it), and a reply keeps the one it began with. `guildId` makes the links
- *   between the parts of a reply. `now` is the clock, in milliseconds, and `timers` its timers: tests give it their own.
+ *   between the parts of a reply. `now` is the clock, in milliseconds, and `timers` its timers: tests give it their own. `log` takes
+ *   the lines for the owner (console.error, the API's log). `notify`, a function or absent for none, takes the text for the moderators of
+ *   what a delete that ended for good left in Discord (see the delete below); what becomes of a call of it changes nothing.
  *   start() begins the work, and takes up the entries a stop or a crash left half-done. kick() tells it that an entry was
  *   queued. stop() ends it at the next safe point, which is between two steps and never inside one, and answers when it has.
  *   sendingPausedUntil() is the time (ms) sending is paused until, by the breaker, or null. webhookRefused() is null, or
@@ -53,8 +55,10 @@
  *   from the store. A delete keyed by no stored message names the parts it removes (partIds): the worker queues one for the parts an edit
  *   dropped (keyed by the first of them, and naming the reply), and for what an entry that ended for good left; the store, for what is left
  *   of a reply that Discord deleted a part of. The site lists a member's entries under the message they are for, so it shows such a delete
- *   on no reply: one that ends for good is told in the log, once, with its post, its parts and the reply it names, for a moderator to
- *   remove what may still be in Discord.
+ *   on no reply: one that ends for good is told once, when its end is written, with the parts it had not removed yet (none: nothing is told),
+ *   for a moderator to remove what may still be in Discord. The log is told its post, those parts and the reply it names; the moderators
+ *   (notify) are told the post as a link of Discord's, the ids of those parts and why, as the moderators need it, and no word, name or id of a
+ *   member's. A notify that throws or rejects is logged once, and is never waited for or called again.
  * The parts the worker has sent are in payload.progress: { form, parts: [{ id, at, attachments }], inflight, images, linked,
  * done }. `parts` are the parts this entry made (for an edit, only the ones it added), `inflight` the index of a part it was
  * sending when it stopped, or null: it is written BEFORE a part is sent and cleared once the part's id is written, so a restart
@@ -206,7 +210,15 @@ const contentOf = (source) => Array.from(source).slice(0, CONTENT_MAX).join('')
 /** → the snowflake of a time (ms), as text: what messagesAfter reads from. A time before Discord's epoch is the start. */
 const snowflakeAt = (ms) => String(BigInt(Math.max(ms - DISCORD_EPOCH_MS, 0)) << 22n)
 
-export function createOutbox({ store, webhook, discord, form = DEFAULT_FORM, guildId, now = Date.now, timers, log = console.error }) {
+/** → why a delete ended for good, as the moderators are told it: the member's words for it say what the member can do, which is nothing here. */
+function whyLeft(state, error) {
+  if (state === 'blocked') return 'Discord blocked the delete'
+  if (error === COPY.locked) return 'the post is locked in Discord'
+  if (error === COPY.unsendable) return 'the site could not finish the delete'
+  return 'Discord did not take the delete at any of its tries'
+}
+
+export function createOutbox({ store, webhook, discord, form = DEFAULT_FORM, guildId, now = Date.now, timers, log = console.error, notify }) {
   for (const name of STORE_METHODS) if (typeof store?.[name] !== 'function') throw new TypeError(`store.${name} must be a function.`)
   for (const name of ['send', 'edit', 'remove']) if (typeof webhook?.[name] !== 'function') throw new TypeError(`webhook.${name} must be a function.`)
   if (!isId(webhook.id)) throw new TypeError('webhook.id must be a Discord id.')
@@ -215,12 +227,27 @@ export function createOutbox({ store, webhook, discord, form = DEFAULT_FORM, gui
   if (!isId(guildId)) throw new TypeError('guildId must be a Discord id.')
   if (typeof now !== 'function') throw new TypeError('now must be a function.')
   if (typeof log !== 'function') throw new TypeError('log must be a function.')
+  if (notify !== undefined && typeof notify !== 'function') throw new TypeError('notify must be a function.')
   // Looked up when it is used, so that a test's fake timers, installed after this is made, still count.
   const clock = timers ?? { setTimeout: (...args) => globalThis.setTimeout(...args), clearTimeout: (...args) => globalThis.clearTimeout(...args) }
   for (const name of ['setTimeout', 'clearTimeout']) if (typeof clock[name] !== 'function') throw new TypeError(`timers.${name} must be a function.`)
 
   // Stryker disable next-line ArrowFunction,StringLiteral: what is logged is for the owner to read, and no test asserts it
   const report = (text) => log(`Librarius outbox: ${text}`)
+
+  /**
+   * Tells the moderators (notify) of the delete `entryId`, when there is someone to tell. What becomes of it changes nothing: the entry has
+   * ended and the log has its line. It is not waited for, and a notify that throws or rejects is logged once.
+   */
+  function tellModerators(entryId, text) {
+    if (notify === undefined) return
+    const unheard = (err) => report(`the moderators could not be told of the delete ${entryId}: ${describe(err)}`)
+    try {
+      Promise.resolve(notify(text)).catch(unheard)
+    } catch (err) {
+      unheard(err)
+    }
+  }
 
   let started = false
   // Whether this worker has said that another one holds the lock: it says it once.
@@ -639,14 +666,14 @@ export function createOutbox({ store, webhook, discord, form = DEFAULT_FORM, gui
       await once(entry, 'bot', () => botDelete(ctx, message.id))
       return purge(entry, ctx, message.id, [], null)
     }
-    if (progress.partIds === undefined) {
-      // What to remove is written down first: the store's parts go with the message, and a restart must not lose them.
-      progress.partIds = p.partIds ?? (message === null ? [] : message.parts)
-      await save(entry)
-    }
+    const unnoted = progress.partIds === undefined
+    // What to remove is written down first: the store's parts go with the message, and a restart must not lose them.
+    if (unnoted) progress.partIds = p.partIds ?? (message === null ? [] : message.parts)
     // A delete keyed by no stored message (what an edit dropped, what an entry that ended for good left, what the gateway left of a reply it
     // took) is shown on no reply of the site, which lists a member's entries under their message: if it ends for good, its parts are told (endFor).
+    // That is known before the note is written: a try that ends at the note, the last one, has removed none of them.
     entry.strays = message === null ? progress.partIds : []
+    if (unnoted) await save(entry)
     // The parts of another webhook (one that was replaced) are removed through the bot: this webhook may not delete them.
     const sentBy = p.webhookId ?? message?.webhookId ?? null
     return purge(entry, ctx, entry.messageKey, progress.partIds, null, sentBy !== null && sentBy !== webhook.id)
@@ -674,17 +701,25 @@ export function createOutbox({ store, webhook, discord, form = DEFAULT_FORM, gui
 
   /**
    * → what to write for an entry that ended for good in `state` ('failed' or 'blocked'): the member's words, and what puts Discord right. A
-   * delete whose parts no reply of the site shows (strays, see runDelete) is told once, when its end is written: what it was to remove may
-   * still be in Discord, and only a moderator can take it now.
+   * delete whose parts no reply of the site shows (strays, see runDelete) is told once, when its end is written, to the log and to the
+   * moderators: what it was to remove and had not removed yet (its notes say what it did, progress.done) may still be in Discord, and only a
+   * moderator can take it now.
    */
   function endFor(entry, state, error, event, hold) {
     const queue = leftovers(entry)
     const messageState = state === 'blocked' ? 'blocked' : null
     return async () => {
       await store.outboxSet(entry.id, { state, error, messageState, queue, hold, event: { ...event, postId: entry.payload.postId, messageId: entry.kind === 'send' ? null : entry.messageKey } })
-      if (entry.strays?.length > 0) {
+      const removed = new Set(entry.payload.progress?.done)
+      const left = (entry.strays ?? []).filter((id) => !removed.has(`remove:${id}`))
+      if (left.length > 0) {
         const { postId, replyId } = entry.payload
-        report(`the delete ${entry.id} ended for good (${error}), so these parts${replyId === undefined ? '' : ` of the reply ${replyId}`} in post ${postId} may still be in Discord, for a moderator to remove: ${entry.strays.join(', ')}.`)
+        report(`the delete ${entry.id} ended for good (${error}), so these parts${replyId === undefined ? '' : ` of the reply ${replyId}`} in post ${postId} may still be in Discord, for a moderator to remove: ${left.join(', ')}.`)
+        const one = left.length === 1
+        tellModerators(
+          entry.id,
+          `Librarius: the site could not remove ${one ? 'a message' : `${left.length} messages`} of a reply from Discord, because ${whyLeft(state, error)}. ${one ? 'It' : 'They'} may still be in ${urlBase(postId)}, for a moderator to delete: ${left.join(', ')}.`,
+        )
       }
     }
   }
