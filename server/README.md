@@ -673,8 +673,8 @@ the post again too.
   2026-11-18). So a reply from the site with a word on a preset list is posted, and the moderators get no alert of it, and
   the spam filter never sees a reply from the site. A word that must never reach the forum from the site belongs in a keyword
   rule. The site matches what is sent as well as what was written, so a picture put inside a word does not split a keyword
-  past the check. An allow-list entry with a `*` inside it, not only at its ends, is read more strictly than a keyword, so the
-  site may refuse a little more than Discord would. A rule that only alerts counts too; a rule that is switched off, or that
+  past the check. An allow-list entry with two or more `*` inside it, not only at its ends, is read more strictly than a
+  keyword, so the site may refuse a little more than Discord would. A rule that only alerts counts too; a rule that is switched off, or that
   exempts the member's role or the forum or the post, does not; and Administrators and members with Manage Server are exempt,
   as in Discord. A regular expression that takes more than 250 ms for all of a reply, or a text over 10,000 characters when
   a rule has a pattern, refuses the reply ("This reply couldn't be checked against the server's rules. Try a shorter one.").

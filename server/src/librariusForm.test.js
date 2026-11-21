@@ -606,13 +606,28 @@ describe('split: properties', () => {
     )
   })
 
-  it('leaves every part but the last at least half the limit, except where a fence ends or begins one', () => {
+  it('ends a part early rather than cut a line of code that a fence closes after, or start a part with a fence', () => {
+    // The boundary that would fill the second part is right before the fence that closes the code, and the line of code before
+    // it can only be cut at the space before its ```, which would start the next part with a fence that the text does not have.
+    const text = `> \`\`\`\n\`\`\`\n\`\`\`js\n${'x'.repeat(40)}> \`\`\`\n${'x'.repeat(40)}> \`\`\`\n> \`\`\`\n`
+    expect(split(text, 62)).toEqual([
+      `**1/3**\n> \`\`\`\n\`\`\`\n\`\`\`js\n${'x'.repeat(38)}`,
+      m(2, 3, `xx> \`\`\`\n`),
+      m(3, 3, `${'x'.repeat(40)}> \`\`\`\n> \`\`\`\n`),
+    ])
+  })
+
+  it('leaves every part but the last at least half the limit, except next to a fence', () => {
     const FENCED = fc.array(fc.constantFrom('a', ' ', '\n', '. ', '```\n', '```js\n', '> ```\n', 'x'.repeat(40), '- '), { maxLength: 400 }).map((a) => a.join(''))
     fc.assert(
       fc.property(FENCED, LIMIT, (text, limit) => {
         const parts = split(text, limit).map(unmark)
-        parts.slice(0, -1).forEach((part, i) => {
-          const edge = /(^|\n)[ \t>]*```[^\n]*\n?$/.test(part) || /^[ \t>]*```/.test(parts[i + 1])
+        let end = 0
+        parts.slice(0, -1).forEach((part) => {
+          end += part.length
+          // Next to a fence: the part ends with a fence line, or the text after it starts with one, or the boundary at the end of
+          // the line after it, which would have filled the part, is right before a fence (see split's cut rules).
+          const edge = /(^|\n)[ \t>]*```[^\n]*\n?$/.test(part) || /^([^\n]*\n)?[ \t>]*```/.test(text.slice(end))
           if (!edge) expect(part.length + 8).toBeGreaterThanOrEqual(limit / 2)
         })
       }),
