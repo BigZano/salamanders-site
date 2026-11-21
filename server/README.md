@@ -654,26 +654,32 @@ the post again too.
   hand never pings: a typed `<@id>` is refused on the site with "Pick people to mention from the list (N at most).", N being
   that cap. A reply to a message pings its author only when they may read the forum.
 - **AutoMod:** the site matches a reply against the guild's AutoMod keyword rules (the keywords, the allow list and the
-  regular expressions) and its mention limit before it is queued, and refuses a match with the rule's name. It matches what
-  is sent as well as what was written, so a picture put inside a word does not split a keyword past the check. A rule that
-  only alerts counts too; a rule that is switched off, or that exempts the member's role or the forum or the post, does not;
-  and Administrators and members with Manage Server are exempt, as in Discord. A regular expression that takes more than 250 ms
-  for all of a reply, or a text over 10,000 characters when a rule has a pattern, refuses the reply ("This reply couldn't be
-  checked against the server's rules. Try a shorter one."). The regular expressions read the messages that are sent, each
-  on its own, as Discord reads them: a phrase that a cut splits between two messages (`free` at the end of one, `nitro` at the
-  start of the next) is not found by a pattern like `free\s+nitro`, as Discord would not find it in two messages, while the
-  keywords, which read what was written too, still find it. Each message is also read as the member typed it: with the
-  escapes that the site writes taken out (`z\*rp` is read as `z*rp`), its links out of their angle brackets, and every
-  zero-width space removed, the member's own as well; and once more with each italic as `_`, which the site sends as `*`
-  (`_free_` goes out as `*free*`). So a pattern refuses a little more than Discord would: a rule against `free[\s_.-]*nitro`
-  refuses `*free* nitro` too. What the site's form rewrites in a way that cannot be undone is read only as it is sent: a
-  bold round an italic (`**_x_**` is sent as `***x***`), two italics that touch (`_free__nitro_` is sent as `*freenitro*`),
-  an italic inside an italic, a mark that holds only spaces, and the links in the cells of a table or with no text (sent
-  without their `](`). Only a pattern written against the marks themselves can miss those; one against what stands between
-  words does not. If Discord blocks a message all the same (code 200000, 200001 or 240000, the harmful-links filter), the
-  reply is marked blocked and is never sent again: the member is told to edit or delete it. Two blocks within an hour stop
-  all sending for an hour; replies wait, and a restart does not clear it (it is kept in `librarius_outbox_state`, and built
-  again from `librarius_events`).
+  regular expressions) and its mention limit before it is queued, and refuses a match with the rule's name. Those are all it
+  can check. A server can also have **preset** rules (Discord's Commonly Flagged Words lists, which are often set to alert
+  only) and the **spam-content** rule, and Discord publishes neither the preset word lists nor how its spam filter decides,
+  so the site cannot check a reply against them: they never refuse a reply, and `automodUnchecked` never names them. Discord
+  does not apply them to a reply from the site either: its AutoMod skips what a webhook posts altogether (the probe,
+  2026-11-18). So a reply from the site with a word on a preset list is posted, and the moderators get no alert of it, and
+  the spam filter never sees a reply from the site. A word that must never reach the forum from the site belongs in a keyword
+  rule. The site matches what is sent as well as what was written, so a picture put inside a word does not split a keyword
+  past the check. A rule that only alerts counts too; a rule that is switched off, or that exempts the member's role or the
+  forum or the post, does not; and Administrators and members with Manage Server are exempt, as in Discord. A regular
+  expression that takes more than 250 ms for all of a reply, or a text over 10,000 characters when a rule has a pattern,
+  refuses the reply ("This reply couldn't be checked against the server's rules. Try a shorter one."). The regular
+  expressions read the messages that are sent, each on its own, as Discord reads them: a phrase that a cut splits between two
+  messages (`free` at the end of one, `nitro` at the start of the next) is not found by a pattern like `free\s+nitro`, as
+  Discord would not find it in two messages, while the keywords, which read what was written too, still find it. Each message
+  is also read as the member typed it: with the escapes that the site writes taken out (`z\*rp` is read as `z*rp`), its links
+  out of their angle brackets, and every zero-width space removed, the member's own as well; and once more with each italic
+  as `_`, which the site sends as `*` (`_free_` goes out as `*free*`). So a pattern refuses a little more than Discord would:
+  a rule against `free[\s_.-]*nitro` refuses `*free* nitro` too. What the site's form rewrites in a way that cannot be undone
+  is read only as it is sent: a bold round an italic (`**_x_**` is sent as `***x***`), two italics that touch
+  (`_free__nitro_` is sent as `*freenitro*`), an italic inside an italic, a mark that holds only spaces, and the links in the
+  cells of a table or with no text (sent without their `](`). Only a pattern written against the marks themselves can miss
+  those; one against what stands between words does not. If Discord blocks a message all the same (code 200000, 200001 or
+  240000, the harmful-links filter), the reply is marked blocked and is never sent again: the member is told to edit or
+  delete it. Two blocks within an hour stop all sending for an hour; replies wait, and a restart does not clear it (it is
+  kept in `librarius_outbox_state`, and built again from `librarius_events`).
 - **Size:** at most 3 Discord messages a reply. A message holds about 4000 characters of text in the `v2` form (the probe
   measured exactly 4000 of everything Discord counts, the button's label included) and 2000 in `plain`, so a reply is about
   12,000 characters. A code block, a spoiler, bold, italic, underline, strike or inline code that a cut falls in is closed
@@ -964,6 +970,10 @@ the site follows. Use a second account of your own for the mention and the reply
     Pass: it has `"automodUnchecked":[...]`. `[]` means the site checks every rule; names mean the patterns of those rules
     cannot be checked on the site (see "Librarius replies" above), so look at those rules; `null` means the rules could not be
     read just now, so try again, and look at the API's logs if it stays. Someone who cannot manage messages gets no such field.
+    The list names keyword rules only. Then, in Discord (Server Settings → AutoMod), note which preset rules (Commonly Flagged
+    Words) and whether the spam-content rule are switched on: the site checks none of them, and Discord does not check a
+    webhook's posts, so a reply from the site goes past each of them with no alert (the AutoMod bullet above). Pass: the
+    moderators know that, and any word that matters to them is in a keyword rule too, which the site does check.
 18. **An archived post: a reply, then an edit.** Close the test post in Discord (its menu → Close Post), then:
     - (a) send a reply from the site. Pass: the reply lands, and the post is open again. This needs no permission of the bot's:
       Discord says a send with the post's id "will automatically be unarchived".
