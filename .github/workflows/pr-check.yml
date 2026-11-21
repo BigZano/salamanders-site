@@ -5,7 +5,8 @@ name: PR check
 #
 # Keep it free of secrets and write permissions: this workflow runs code from forks. A fork's pull
 # request gets no secrets anyway, and scripts/pr-check-workflow.test.mjs pins the rest. The slow
-# coverage and mutation gate is the maintainer's pre-push hook, not part of this check.
+# coverage gate is the maintainer's pre-push hook, and mutation testing a maintainer's run on the
+# lines a piece of work changed (scripts/mutation-changed.mjs); neither is part of this check.
 
 on:
   pull_request:

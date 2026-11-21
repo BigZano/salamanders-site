@@ -76,6 +76,7 @@ const GATED = [
   'src/stores/librarius.js',
   'scripts/csp.mjs',
   'scripts/check-csp.mjs',
+  'scripts/lib/changed-lines.mjs',
 ]
 
 export default defineConfig({

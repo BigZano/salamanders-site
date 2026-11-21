@@ -120,10 +120,12 @@ request is squashed (see Review and merge), so get it right. Small branches are 
 - **On `git commit`** the hook checks that no archive files, raw Discord exports, Deathwatch tracker backups or copies
   of the guild's member list are staged, and runs the tests. It is quick. Do not skip it: it is the only local check that stops them being
   committed.
-- **On `git push`** the hook also runs coverage and mutation testing, which the maintainers call the full gate. That
-  can take several minutes. Passing it is **not** required to merge, and CI does not run it. If it is too slow, fails
-  on code you did not touch, or you are pushing work in progress, push with `git push --no-verify` and say so in the
-  pull request.
+- **On `git push`** the hook also builds the site, checks its Content-Security-Policy and runs coverage, which the
+  maintainers call the full gate. That can take several minutes. Passing it is **not** required to merge, and CI does
+  not run it. If it is too slow, fails on code you did not touch, or you are pushing work in progress, push with
+  `git push --no-verify` and say so in the pull request.
+- **Mutation testing** is in neither hook. The maintainers run it once, when a piece of work is finished, on the lines
+  that work changed: `bun run test:mutation:changed main` (or the branch the work started from).
 
 ## Opening a pull request
 
@@ -149,7 +151,8 @@ contribute, GitHub holds your first check until a maintainer lets it run, which 
 | No archive files, raw Discord exports, Deathwatch tracker backups or copies of the member list committed | The commit hook and **PR check** |
 | The tests pass | The commit hook and **PR check** |
 | The production build works | **PR check** |
-| 100% coverage and mutation testing on the gated units | The push hook on your machine, and nowhere else. Optional: not part of CI, not required to merge, skippable with `--no-verify` |
+| 100% coverage on the gated units | The push hook on your machine, and nowhere else. Optional: not part of CI, not required to merge, skippable with `--no-verify` |
+| Mutation testing on the lines a piece of work changed | The maintainers, once, when the work is finished (`bun run test:mutation:changed`). Not part of CI or of either hook |
 | `main` cannot be deleted or force-pushed, except by an admin | A repository rule |
 | Only the maintainers merge | You have no write access to the original repo |
 | No real names, handles or ids | **Review only**: a maintainer reads the diff |

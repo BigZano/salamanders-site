@@ -1,11 +1,11 @@
 # Legion Archive merge gate: the build and its Content-Security-Policy first (they are quick, and the one dist they make is
-# what the archive scan reads below), then the whole suite, then 100% coverage + mutation on the gated units, then (locally,
-# where the plaintext exists) a build scan against real-content sentinels.
+# what the archive scan reads below), then the whole suite, then 100% coverage on the gated units, then (locally, where the
+# plaintext exists) a build scan against real-content sentinels. Mutation testing is not part of it: it runs once, when a
+# piece of work is finished, on the lines that work changed (bun run test:mutation:changed <base-ref>).
 export PATH="$PWD/node_modules/.bin:$PATH"
 bun run build >/dev/null && node scripts/check-csp.mjs dist || exit 1
 bun run test || exit 1
 bun run test:coverage || exit 1
-bun run test:mutation || exit 1
 if [ -d archive-export ]; then
   node scripts/scan-dist.mjs dist --sentinels-from archive-export || exit 1
 fi
