@@ -290,8 +290,8 @@ describe('automodMatcher: the wildcards', () => {
     expect(find(['a*b*c'], `ab${'x'.repeat(28)} b${'x'.repeat(49)}c`)).toBeNull()
     // The last part where its edge holds, after a decoy of the middle one: `c` at 80 is inside a word, the one at 82 ends it.
     expect(find(['a*b*c'], `ab${'x'.repeat(28)}b${'x'.repeat(49)}cxc`)).toEqual(hit(0, 83))
-    // An allow entry is read the same way, and holds the match of a keyword that the decoy kept it from holding.
-    expect(find(['*x*'], text, { allow_list: ['a*b*c'] })).toBeNull()
+    // An allow entry is not: each of its middle parts is taken at its first place only, and a decoy there lets nothing by (see the allow list).
+    expect(find(['*x*'], text, { allow_list: ['a*b*c'] })).toEqual(hit(0, 81))
     expect(find(['*x*'], text, { allow_list: ['a*b*cc'] })).toEqual(hit(0, 81))
   })
 
@@ -392,6 +392,31 @@ describe('automodMatcher: the allow list', () => {
     expect(find(['zorp'], 'ZORP farm', { allow_list: ['zörp  FARM'] })).toBeNull()
     expect(find(['zorp'], 'zo**r**p farm', { allow_list: ['zorp farm'] })).toBeNull()
     expect(find(['zorp'], 'zo\u200brp farm', { allow_list: ['zorp farm'] })).toBeNull()
+  })
+
+  it('reads a middle part of an allow entry at its first place only, which Discord does not document: an early decoy there lets nothing by', () => {
+    // `a*b*c` over `ab`, 28 `x`, `b`, 49 `x`, `c`: the `b` at 1 is 79 from the `c`, too far, and the `b` at 30 is in reach of both. A keyword
+    // reads its way through the second `b`; an allow entry stops at the first, and so holds nothing, and the match of `*x*` is refused.
+    const text = `ab${'x'.repeat(28)}b${'x'.repeat(49)}c`
+    for (const entry of ['a*b*c', '*a*b*c*', 'a*b*c*', '*a*b*c']) {
+      expect(find(['*x*'], text, { allow_list: [entry] }), entry).toEqual(hit(0, 81))
+      // With no decoy, the first `b` is the one in reach, and the entry holds the word.
+      expect(find(['*x*'], text.replace('ab', 'ax'), { allow_list: [entry] }), entry).toBeNull()
+    }
+    // A decoy for each of two middle parts: the keyword finds its way, the allow entry does not. A decoy of the second middle part only (the `c`
+    // at 43, 72 from the `d`) is one too; with the first place of each middle part in reach of the next, the entry holds the word.
+    const two = `ab${'x'.repeat(40)}bc${'x'.repeat(20)}c${'x'.repeat(50)}d`
+    expect(find(['a*b*c*d'], two)).toEqual(hit(0, 116))
+    expect(find(['*x*'], two, { allow_list: ['a*b*c*d'] })).toEqual(hit(0, 116))
+    expect(find(['*x*'], `a${'x'.repeat(41)}bc${'x'.repeat(20)}c${'x'.repeat(50)}d`, { allow_list: ['a*b*c*d'] })).toEqual(hit(0, 116))
+    expect(find(['*x*'], `a${'x'.repeat(41)}b${'x'.repeat(21)}c${'x'.repeat(50)}d`, { allow_list: ['a*b*c*d'] })).toBeNull()
+    // The last part is still taken where its edge holds, as before: `c` at 80 is inside a word, the one at 82 ends it.
+    expect(find(['*x*'], `ax${'x'.repeat(28)}b${'x'.repeat(49)}cxc`, { allow_list: ['a*b*c'] })).toBeNull()
+    // An entry of two parts has no middle one, and is read as it was: its last part where its edge holds (the `b` at 52, not the one at 21).
+    expect(find(['*x*'], `a${'x'.repeat(20)}b${'x'.repeat(30)}b`, { allow_list: ['a*b'] })).toBeNull()
+    // The keywords keep their reading: the same text is a match of `a*b*c` itself, and only a keyword that the allow list holds goes by.
+    expect(find(['a*b*c'], text)).toEqual(hit(0, 81))
+    expect(find(['a*b*c'], text, { allow_list: ['*x*'] })).toBeNull()
   })
 
   it('has nothing to exempt in a list of no text', () => {
@@ -1904,7 +1929,8 @@ describe('automodMatcher: keywords of several pieces and joiners that are no let
   // none is skipped, every place of each later piece within its reach is tried in turn until the rest follows (the first way through, by
   // the places of the pieces in order), and the allow list is every one of its spans (a span lies inside the allow list when any one of
   // them holds it). The text is made of the letters a to c and x, `-` and `1` (which end a word and are no space), and single spaces.
-  // `firstOnly` is the reading that took the first place of a middle piece and no other, which an early decoy of the piece led astray.
+  // `firstOnly` is the reading that took the first place of a middle piece and no other, which an early decoy of the piece led astray: the
+  // reading of the keywords before rB8's M1, and the reading of the allow list now (`allowFirstOnly`, which is `firstOnly` unless it is given).
   const letter = (c) => c !== undefined && ((c >= 'a' && c <= 'c') || c === 'x')
   const MAX_GAP = 60
   const reachOf = (t, pos, pieces, k, needEdge, firstOnly) => {
@@ -1933,8 +1959,8 @@ describe('automodMatcher: keywords of several pieces and joiners that are no let
     }
     return out
   }
-  const modelOf = (t, keywords, allow, firstOnly = false) => {
-    const held = allow.flatMap((k) => spansOf(t, k, firstOnly))
+  const modelOf = (t, keywords, allow, firstOnly = false, allowFirstOnly = firstOnly) => {
+    const held = allow.flatMap((k) => spansOf(t, k, allowFirstOnly))
     let best = null
     for (const k of keywords) {
       const found = spansOf(t, k, firstOnly).find(([a, b]) => !held.some(([c, d]) => c <= a && b <= d))
@@ -2022,7 +2048,8 @@ describe('automodMatcher: keywords of several pieces and joiners that are no let
       fc.property(built, fc.array(keyword, { maxLength: 2 }), fc.array(keyword, { maxLength: 2 }), ([k, t], others, allow) => {
         const keywords = [k, ...others]
         const m = matcher([keywordRule(keywords.map(written), { allow_list: allow.map(written) })])
-        const expected = modelOf(t, keywords, allow)
+        // The keywords through any place of their middle pieces, the allow list at the first place of each.
+        const expected = modelOf(t, keywords, allow, false, true)
         if (expected !== null) found++
         if (JSON.stringify(expected) !== JSON.stringify(modelOf(t, keywords, allow, true))) decoys++
         expect(m(t), JSON.stringify({ t, keywords: keywords.map(written), allow: allow.map(written) })).toEqual(expected)
@@ -2032,6 +2059,69 @@ describe('automodMatcher: keywords of several pieces and joiners that are no let
     // Not a property that holds for want of matches, nor of the texts where the first place of a middle piece is not the one to take.
     expect(found).toBeGreaterThan(800)
     expect(decoys).toBeGreaterThan(25)
+  })
+
+  // Texts built round an allow entry of 3 or 4 pieces, the way `built` is round a keyword, with keywords that match the words of the text
+  // (`*x*`, `*a*`, ...) or are made of the same pieces: where the entry holds a match through a later place of a middle piece and not through its
+  // first, the reading of the allow list before (through any place, as the keywords are read) let the match by.
+  const around = (entry) =>
+    entry.chain((k) =>
+      fc.tuple(
+        fc.constant(k),
+        fc.array(fc.tuple(fc.constantFrom(0, 1, 1), fc.integer({ min: 0, max: 58 }), fc.integer({ min: 0, max: 58 }), fc.constantFrom('', '', '', '', '-', ' ', 'a', 'c')), { minLength: k.pieces.length, maxLength: k.pieces.length }).map((steps) =>
+          k.pieces
+            .map((p, i) => {
+              const [twice, before, after, odd] = steps[i]
+              return `${twice ? `${p}${'x'.repeat(before)}` : ''}${p}${'x'.repeat(after)}${odd}`
+            })
+            .join('')
+            .replace(/ {2,}/g, ' ')
+            .trim(),
+        ),
+      ),
+    )
+  const piecesOf = (min, max) => fc.record({ pieces: fc.array(fc.constantFrom('a', 'b', 'c', 'ab', 'bc', 'a-', '1'), { minLength: min, maxLength: max }), lead: fc.boolean(), trail: fc.boolean() })
+  const wordKeyword = fc.constantFrom('x', 'a', 'b', 'xx', 'c').map((piece) => ({ pieces: [piece], lead: true, trail: true }))
+
+  it('never lets by what the reading of an allow entry at the first place of each middle piece refuses, and differs from the reading through any place only by refusing more (the property)', () => {
+    let flips = 0
+    let held = 0
+    fc.assert(
+      fc.property(around(piecesOf(3, 4)), fc.array(fc.oneof(wordKeyword, piecesOf(1, 3)), { minLength: 1, maxLength: 3 }), fc.array(piecesOf(3, 4), { maxLength: 1 }), ([entry, t], keywords, more) => {
+        const allow = [entry, ...more]
+        const label = JSON.stringify({ t, keywords: keywords.map(written), allow: allow.map(written) })
+        const found = matcher([keywordRule(keywords.map(written), { allow_list: allow.map(written) })])(t)
+        const firstPlace = modelOf(t, keywords, allow, false, true)
+        const anyPlace = modelOf(t, keywords, allow)
+        expect(found, label).toEqual(firstPlace)
+        // Where the two readings differ, the one that is read now refuses, and no later than the other would have.
+        if (anyPlace !== null) {
+          expect(found, label).not.toBeNull()
+          expect(found.start, label).toBeLessThanOrEqual(anyPlace.start)
+        }
+        if (anyPlace === null && found !== null) flips++
+        if (JSON.stringify(firstPlace) !== JSON.stringify(modelOf(t, keywords, []))) held++
+      }),
+      { numRuns: 3_000 },
+    )
+    // Not a property that holds for want of the cases it is about: replies the allow list held before and refuses now, and replies it holds.
+    expect(flips).toBeGreaterThan(30)
+    expect(held).toBeGreaterThan(300)
+  })
+
+  it('answers as it did for an allow list whose entries have no `*` inside, or one, which have no middle piece (the property)', () => {
+    let held = 0
+    fc.assert(
+      fc.property(around(piecesOf(1, 2)), fc.array(fc.oneof(wordKeyword, piecesOf(1, 4)), { minLength: 1, maxLength: 3 }), fc.array(piecesOf(1, 2), { maxLength: 2 }), ([entry, t], keywords, more) => {
+        const allow = [entry, ...more]
+        const found = matcher([keywordRule(keywords.map(written), { allow_list: allow.map(written) })])(t)
+        const before = modelOf(t, keywords, allow)
+        expect(found, JSON.stringify({ t, keywords: keywords.map(written), allow: allow.map(written) })).toEqual(before)
+        if (JSON.stringify(before) !== JSON.stringify(modelOf(t, keywords, []))) held++
+      }),
+      { numRuns: 3_000 },
+    )
+    expect(held).toBeGreaterThan(300)
   })
 })
 

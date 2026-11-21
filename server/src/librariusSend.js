@@ -91,7 +91,8 @@
  *     `*` at its start or its end gives the mode: `cat*` a prefix (the word starts with it), `*cat` a suffix, `*cat*`
  *     anywhere, and `cat` a whole word (a phrase is one, and a run of whitespace in it matches any run of whitespace). The
  *     match is the keyword with the whole word that a `*` reaches into, so that `*cat*` in "location" is the 8 characters.
- *     The entries of `allow_list` are read the same way, and a match that lies inside a match of the allow list is let through.
+ *     The entries of `allow_list` are read the same way, but for a `*` in the middle (see below), and a match that lies inside a match of the
+ *     allow list is let through.
  *     Where the documentation says nothing, the choice is the one that blocks:
  *     - a word is what is made of letters: any other character (a digit, an underscore, a punctuation or a symbol, an emoji)
  *       ends it, as does a letter of a script that is written without spaces (Han, Hiragana, Katakana, Thai, Lao, Khmer,
@@ -103,7 +104,10 @@
  *       are upper and lower case (lower, upper and lower again, so that U+1E9E and `ß` and `ss` are one), before the two are
  *       compared; a keyword is read the same way;
  *     - a `*` in the middle of a keyword stands for up to 60 characters that are not whitespace, and every way that the pieces between
- *       the stars can follow one another counts (of those that start at one place, the one whose pieces come earliest is the match);
+ *       the stars can follow one another counts (of those that start at one place, the one whose pieces come earliest is the match); in an
+ *       entry of the allow list, each piece between two stars is taken at its first place in reach and no other, so that an entry of three
+ *       pieces or more holds less than the same keyword would find, and lets less go (`a*b*c` holds nothing of `ab…b…c` when the `c` is
+ *       more than 60 characters from the first `b`);
  *     - space round a keyword is not part of it (the documentation does not say that it is trimmed, and a suffix finds more than
  *       the whole word does): ` *cat` is `*cat`, so it finds "bobcat";
  *     - a keyword with something in it that folds to nothing (`||`, `~~`, a fence of backticks, a zero-width character), which
@@ -367,7 +371,8 @@ function placesOf(folded, piece, memo) {
 /**
  * → for each later piece of a keyword (the pieces after its first), the set of the places of the folded text that hold it and from which all the
  * pieces after it can follow: the last piece where its edge holds (with no `*` at the end of the keyword, it must end a word), and any other where
- * the set of the next piece has a place within its reach (gapEnd). Worked out from the last piece to the first, so that a place of the first
+ * the set of the next piece has a place within its reach (gapEnd), or at every place for an entry of an allow list, which takes its first
+ * (see memoOf). Worked out from the last piece to the first, so that a place of the first
  * piece is told whether the rest of the keyword can follow it, and where, by a look in a set for each piece, whatever the length of the word it
  * is in and however many times the pieces are found in it. A set is kept in `memo` for what it depends on (`tails`), so that the keywords of a
  * list that end with the same pieces (`*n*gg*r*` and `*n*g*gg*r*`) share it, and the sets of a keyword for the keyword. The sets are bits: the
@@ -390,7 +395,8 @@ function chainsOf(folded, keyword, memo) {
         if (after !== NONE) {
           for (const p of placesOf(folded, rest[k], memo)) {
             const a = p + rest[k].length
-            const kept = after === undefined ? keyword.endFree || !inWord(start, a) : firstOf(after, a, gapEnd(folded, a)) !== -1
+            // A middle piece of an allow entry keeps every place of it (see memoOf): reach() then takes its first place, whatever follows.
+            const kept = after === undefined ? keyword.endFree || !inWord(start, a) : memo.firstPlace || firstOf(after, a, gapEnd(folded, a)) !== -1
             if (!kept) continue
             if (set === NONE) set = noPlaces(folded.s.length)
             set[p >>> 5] |= 1 << (p & 31)
@@ -411,7 +417,8 @@ function chainsOf(folded, keyword, memo) {
  * no `*` at its end. Where they can follow in more than one way, the way whose pieces come earliest is the one taken: the first place of each
  * piece from which the rest can still follow (chainsOf). So a place of a middle piece that leads nowhere (the `b` of `ab` in `abxb…c` for
  * `a*b*c`, where the `c` is more than MAX_GAP from it) is no reason to miss the way through a later one, which is what the site's model of
- * an inner `*` says is a match; and of the ways that start at one place, the match is the one that ends first.
+ * an inner `*` says is a match; and of the ways that start at one place, the match is the one that ends first. An entry of an allow list is
+ * read more strictly (see memoOf): each of its middle pieces at its first place in reach, and the way ends where that one leads nowhere.
  */
 function reach(folded, keyword, pos, memo) {
   const { rest } = keyword
@@ -422,7 +429,8 @@ function reach(folded, keyword, pos, memo) {
   let a = pos
   for (let k = 0; k < rest.length; k++) {
     const p = firstOf(sets[k], a, gapEnd(folded, a))
-    // Past the first piece this always holds: every place in a set has a place of the next set within its reach.
+    // Past the first piece of a keyword this always holds: every place in a set has a place of the next set within its reach. The first place of
+    // a middle piece of an allow entry need not have one (see memoOf), and then the entry has no match from `pos`.
     if (p === -1) return -1
     a = p + rest[k].length
   }
@@ -433,8 +441,10 @@ function reach(folded, keyword, pos, memo) {
  * → the first place after `i` at which a keyword that has no match at `i` could have one: the next place for a keyword of one piece, and for
  * one of several, the first place whose reach (MAX_GAP characters past its first piece) takes in the next place of the set of its second piece
  * (see chainsOf), or the end of the text when there is none. No place before that has a match: its reach ends before that place, and no place
- * of the second piece before it can be followed by the rest. A long word that holds the first piece at every place and the rest of the keyword
- * nowhere (`*n*gger*` over a word of one letter) is then looked at once, and not at every place, for each keyword of that shape.
+ * of the second piece before it can be followed by the rest (for an allow entry, whose set of a middle piece holds every place of it, there is
+ * no place of the second piece before it at all, so the skip holds for its stricter reading too). A long word that holds the first piece at
+ * every place and the rest of the keyword nowhere (`*n*gger*` over a word of one letter) is then looked at once, and not at every place, for
+ * each keyword of that shape.
  */
 function retryAfter(folded, keyword, i, memo) {
   if (keyword.rest.length === 0) return i + 1
@@ -489,8 +499,15 @@ function eachSpan(folded, keyword, visit, memo) {
   }
 }
 
-/** → what the places of the pieces and the sets of chainsOf() are kept in while one rule is looked for in one text, and no longer. */
-const memoOf = () => ({ places: new Map(), tails: new Map(), keywords: new Map() })
+/**
+ * → what the places of the pieces and the sets of chainsOf() are kept in while one rule is looked for in one text, and no longer. With
+ * `firstPlace`, for the entries of an allow list, the set of a middle piece holds every place of it, and not only those that the rest can follow
+ * from, so that reach() takes the first place of each middle piece in reach and no later one, as the site read every keyword before rB8's M1:
+ * Discord documents a `*` only at the ends of a keyword, and an allow entry that is read more strictly than a keyword lets less go. `a*b*c`
+ * then holds nothing of `abxb…c` when the `c` is more than MAX_GAP from the first `b`, where the keyword `a*b*c` is found there. The sets of the
+ * two readings are never shared: each memo is for one of them.
+ */
+const memoOf = (firstPlace = false) => ({ places: new Map(), tails: new Map(), keywords: new Map(), firstPlace })
 
 /**
  * → for each place of the folded text, how far the spans of an allow list reach that start at or before it (0 for none), so that whether a
@@ -499,7 +516,7 @@ const memoOf = () => ({ places: new Map(), tails: new Map(), keywords: new Map()
  */
 function allowedIn(norm, allow) {
   const reach = new Int32Array(norm.s.length + 1)
-  const memo = memoOf()
+  const memo = memoOf(true)
   for (const keyword of allow) {
     eachSpan(
       norm,
