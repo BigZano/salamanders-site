@@ -24,7 +24,7 @@ const ARCHIVED_AT = '2026-11-02T18:30:00.123000+00:00'
 
 const thread = (id) => ({ id, type: 11, parent_id: FORUM, name: 'invented thread' })
 const message = (id) => ({ id, content: 'invented', author: { id: '200000000000000412', username: 'invented' }, attachments: [] })
-const GATEWAY = { url: 'wss://gateway.test', shards: 1, session_start_limit: { total: 1000, remaining: 998, reset_after: 14_400_000, max_concurrency: 1 } }
+const GATEWAY = { url: 'wss://gateway.discord.gg', shards: 1, session_start_limit: { total: 1000, remaining: 998, reset_after: 14_400_000, max_concurrency: 1 } }
 
 const ok = (body, headers) => ({ status: 200, body, headers })
 const bucket = (name, remaining, resetAfter) => ({
@@ -96,7 +96,7 @@ const ROWS = [
     method: 'GET',
     path: '/v10/gateway/bot',
     reply: GATEWAY,
-    result: { url: 'wss://gateway.test', remaining: 998, resetAfterMs: 14_400_000 },
+    result: { url: 'wss://gateway.discord.gg', remaining: 998, resetAfterMs: 14_400_000 },
     bad: [
       ...OBJECT_BAD,
       {},
@@ -107,9 +107,9 @@ const ROWS = [
       { ...GATEWAY, url: undefined },
       { ...GATEWAY, url: 7 },
       { ...GATEWAY, url: '' },
-      { ...GATEWAY, url: 'https://gateway.test' },
-      { ...GATEWAY, url: 'xwss://gateway.test' },
-      { ...GATEWAY, url: ['wss://gateway.test'] },
+      { ...GATEWAY, url: 'https://gateway.discord.gg' },
+      { ...GATEWAY, url: 'xwss://gateway.discord.gg' },
+      { ...GATEWAY, url: ['wss://gateway.discord.gg'] },
       { ...GATEWAY, session_start_limit: { ...GATEWAY.session_start_limit, remaining: undefined } },
       { ...GATEWAY, session_start_limit: { ...GATEWAY.session_start_limit, remaining: null } },
       { ...GATEWAY, session_start_limit: { ...GATEWAY.session_start_limit, remaining: '5' } },
@@ -121,7 +121,8 @@ const ROWS = [
       { ...GATEWAY, session_start_limit: { ...GATEWAY.session_start_limit, reset_after: '5' } },
       { ...GATEWAY, session_start_limit: { ...GATEWAY.session_start_limit, reset_after: -1 } },
       { ...GATEWAY, session_start_limit: { ...GATEWAY.session_start_limit, reset_after: 86_400_001 } },
-      { ...GATEWAY, url: 'ws://gateway.test' },
+      { ...GATEWAY, url: 'ws://gateway.discord.gg' },
+      { ...GATEWAY, url: 'wss://gateway.test' },
     ],
   },
   {
@@ -303,57 +304,118 @@ describe('gatewayBot', () => {
   const unexpected = 'Discord answered 200 for the gateway, but not with what the Librarius expected.'
 
   it('passes the session start limit through as it is', async () => {
-    const r = rig([reply('ws://localhost:9', { remaining: 0, reset_after: 0 })], { apiBase: MOCK })
-    expect(await r.discord.gatewayBot()).toEqual({ url: 'ws://localhost:9', remaining: 0, resetAfterMs: 0 })
+    const r = rig([reply('ws://mock.test:9', { remaining: 0, reset_after: 0 })], { apiBase: MOCK })
+    expect(await r.discord.gatewayBot()).toEqual({ url: 'ws://mock.test:9', remaining: 0, resetAfterMs: 0 })
   })
 
   it('takes a reset time that is not a whole number of milliseconds', async () => {
-    const r = rig([reply('wss://g.test', { remaining: 3, reset_after: 1234.5 })])
+    const r = rig([reply('wss://gateway.discord.gg', { remaining: 3, reset_after: 1234.5 })])
     expect((await r.discord.gatewayBot()).resetAfterMs).toBe(1234.5)
   })
 
   // The window the limit resets in is a day, so a reset further off than that is not Discord talking.
   it('takes a reset of exactly a day', async () => {
-    const r = rig([reply('wss://g.test', { remaining: 0, reset_after: 86_400_000 })])
-    expect(await r.discord.gatewayBot()).toEqual({ url: 'wss://g.test', remaining: 0, resetAfterMs: 86_400_000 })
+    const r = rig([reply('wss://gateway.discord.gg', { remaining: 0, reset_after: 86_400_000 })])
+    expect(await r.discord.gatewayBot()).toEqual({ url: 'wss://gateway.discord.gg', remaining: 0, resetAfterMs: 86_400_000 })
   })
 
   it.each([86_400_001, 86_400_000.5, 604_800_000, 1e12, 1e300, Number.MAX_VALUE])('throws Upstream for a reset of %s ms, which is more than a day', async (resetAfter) => {
-    const r = rig([reply('wss://g.test', { remaining: 3, reset_after: resetAfter })])
+    const r = rig([reply('wss://gateway.discord.gg', { remaining: 3, reset_after: resetAfter })])
     const err = await r.discord.gatewayBot().catch((e) => e)
     expect(err).toBeInstanceOf(Upstream)
     expect(err.message).toBe(unexpected)
   })
 
   describe('the address', () => {
-    it.each(['https://discord.com/api', 'https://d.test/api', 'https://d.test', 'http', 'ftp://d.test/api'])('is wss:// only, for an apiBase of %s', async (apiBase) => {
-      const r = rig([reply('wss://gateway.test'), reply('ws://gateway.test'), reply('ws://localhost:9')], { apiBase })
-      expect((await r.discord.gatewayBot()).url).toBe('wss://gateway.test')
-      for (let i = 0; i < 2; i++) {
+    it.each(['https://discord.com/api', 'https://d.test/api', 'https://d.test', 'http', 'ftp://d.test/api'])(
+      "is wss:// on Discord's own hosts only, for an apiBase of %s",
+      async (apiBase) => {
+        const host = apiBase.startsWith('https://') ? new URL(apiBase).host : 'd.test'
+        const r = rig([reply('wss://gateway.discord.gg'), reply('ws://gateway.discord.gg'), reply('ws://localhost:9'), reply(`wss://${host}`), reply(`ws://${host}`)], { apiBase })
+        expect((await r.discord.gatewayBot()).url).toBe('wss://gateway.discord.gg')
+        for (let i = 0; i < 4; i++) {
+          const err = await r.discord.gatewayBot().catch((e) => e)
+          expect(err).toBeInstanceOf(Upstream)
+          expect(err.message).toBe(unexpected)
+        }
+      },
+    )
+
+    // The mock serves its gateway itself, on the host the api asks it for everything else.
+    it.each([
+      ['http://mock.test/api', 'mock.test'],
+      ['http://localhost:3000', 'localhost'],
+      ['http://d.test', 'd.test'],
+      ['http://discord-mock:4400', 'discord-mock'],
+      ['http://[::1]:4400', '[::1]'],
+    ])("is ws:// or wss:// on the mock's own host, or wss:// on Discord's, for an apiBase of %s, which is the e2e mock", async (apiBase, host) => {
+      const good = [`ws://${host}:9`, `wss://${host}/gateway`, `ws://${host}:4400/gateway`, 'wss://gateway.discord.gg']
+      const bad = ['ws://elsewhere.test:9', 'wss://gateway.test', `ws://${host}.evil.test`, `ws://evil.test/${host}`, 'ws://gateway.discord.gg']
+      const r = rig([...good, ...bad].map((url) => reply(url)), { apiBase })
+      for (const url of good) expect((await r.discord.gatewayBot()).url).toBe(url)
+      for (let i = 0; i < bad.length; i++) {
         const err = await r.discord.gatewayBot().catch((e) => e)
         expect(err).toBeInstanceOf(Upstream)
         expect(err.message).toBe(unexpected)
       }
     })
 
-    it.each(['http://mock.test/api', 'http://localhost:3000', 'http://d.test'])('is ws:// or wss://, for an apiBase of %s, which is the e2e mock', async (apiBase) => {
-      const r = rig([reply('ws://localhost:9'), reply('wss://gateway.test')], { apiBase })
-      expect((await r.discord.gatewayBot()).url).toBe('ws://localhost:9')
-      expect((await r.discord.gatewayBot()).url).toBe('wss://gateway.test')
+    it.each([
+      'wss://discord.gg',
+      'wss://gateway.discord.gg',
+      'wss://gateway-us-east1-b.discord.gg',
+      'wss://gateway-us-east1-b.discord.gg/',
+      'wss://a.b-c.discord.gg',
+      'wss://gateway.discord.gg:443',
+      'wss://GATEWAY.Discord.GG',
+    ])('takes %s, which is discord.gg or a subdomain of it', async (url) => {
+      for (const apiBase of ['https://d.test/api', MOCK]) {
+        const r = rig([reply(url)], { apiBase })
+        expect((await r.discord.gatewayBot()).url, apiBase).toBe(url)
+      }
     })
 
     it.each([
-      ['an https address', 'https://gateway.test'],
-      ['an http address', 'http://gateway.test'],
-      ['a ws address with one slash', 'ws:/gateway.test'],
-      ['a wss address with one slash', 'wss:/gateway.test'],
-      ['a wss in capitals', 'WSS://gateway.test'],
-      ['a scheme that only ends in wss', 'xwss://gateway.test'],
-      ['a scheme that only ends in ws', 'xws://gateway.test'],
-      ['a leading space', ' wss://gateway.test'],
-      ['no scheme', 'gateway.test'],
+      ['another host', 'wss://evil.test'],
+      ['a host that only starts with discord.gg', 'wss://discord.gg.evil.test'],
+      ['a host that only ends in discord.gg', 'wss://evildiscord.gg'],
+      ['a host that ends in -discord.gg', 'wss://evil-discord.gg'],
+      ["Discord's api host, which runs no gateway", 'wss://discord.com'],
+      ["Discord's host as the user part", 'wss://gateway.discord.gg@evil.test'],
+      ["Discord's host and port as the user part", 'wss://discord.gg:443@evil.test'],
+      ["Discord's host in the path", 'wss://evil.test/gateway.discord.gg'],
+      ["Discord's host in the query", 'wss://evil.test?.discord.gg'],
+      ["Discord's host in the fragment", 'wss://evil.test#.discord.gg'],
+      ["Discord's host after a backslash", 'wss://evil.test\\.discord.gg'],
+      ["Discord's host after an encoded dot", 'wss://gateway.discord.gg%2eevil.test'],
+      ['a trailing dot', 'wss://gateway.discord.gg.'],
+      ['an empty label', 'wss://.discord.gg'],
+      ['an underscore in a label', 'wss://a_b.discord.gg'],
+      ['an IPv4 address', 'wss://127.0.0.1'],
+      ['an IPv6 address', 'wss://[::1]'],
+      ['no host', 'wss://'],
+      ['a host it cannot parse', 'wss://gate way.discord.gg'],
+    ])('refuses %s, whichever the apiBase is', async (_, url) => {
+      for (const apiBase of ['https://d.test/api', MOCK]) {
+        const r = rig([reply(url)], { apiBase })
+        const err = await r.discord.gatewayBot().catch((e) => e)
+        expect(err, apiBase).toBeInstanceOf(Upstream)
+        expect(err.message, apiBase).toBe(unexpected)
+      }
+    })
+
+    it.each([
+      ['an https address', 'https://gateway.discord.gg'],
+      ['an http address', 'http://gateway.discord.gg'],
+      ['a ws address with one slash', 'ws:/gateway.discord.gg'],
+      ['a wss address with one slash', 'wss:/gateway.discord.gg'],
+      ['a wss in capitals', 'WSS://gateway.discord.gg'],
+      ['a scheme that only ends in wss', 'xwss://gateway.discord.gg'],
+      ['a scheme that only ends in ws', 'xws://gateway.discord.gg'],
+      ['a leading space', ' wss://gateway.discord.gg'],
+      ['no scheme', 'gateway.discord.gg'],
       ['nothing', ''],
-      ['a list holding a good address', ['wss://gateway.test']],
+      ['a list holding a good address', ['wss://gateway.discord.gg']],
       ['a number', 7],
     ])('is neither, for %s, whichever the apiBase is', async (_, url) => {
       for (const apiBase of ['https://d.test/api', MOCK]) {
@@ -363,6 +425,82 @@ describe('gatewayBot', () => {
         expect(err.message, apiBase).toBe(unexpected)
       }
     })
+  })
+})
+
+describe('isGatewayUrl', () => {
+  // The rule gatewayBot() holds Discord's answer to, which the gateway client holds READY's resume address to as well.
+  const label = fc.stringMatching(/^[a-z0-9-]{1,12}$/).filter((l) => !l.startsWith('xn--'))
+
+  it('holds an address to the rule gatewayBot holds the answer to, and asks Discord nothing', () => {
+    const live = rig()
+    expect(live.discord.isGatewayUrl('wss://gateway-us-east1-b.discord.gg')).toBe(true)
+    expect(live.discord.isGatewayUrl('ws://gateway.discord.gg')).toBe(false)
+    expect(live.discord.isGatewayUrl('wss://evil.test')).toBe(false)
+    const mock = rig([], { apiBase: 'http://discord-mock:4400' })
+    expect(mock.discord.isGatewayUrl('ws://discord-mock:4400/gateway')).toBe(true)
+    expect(mock.discord.isGatewayUrl('wss://gateway.discord.gg')).toBe(true)
+    expect(mock.discord.isGatewayUrl('ws://elsewhere:4400/gateway')).toBe(false)
+    expect(live.seen).toEqual([])
+    expect(mock.seen).toEqual([])
+  })
+
+  it('is the same on the client withMaxWait gives', () => {
+    const mock = rig([], { apiBase: 'http://discord-mock:4400' }).discord.withMaxWait(60_000)
+    expect(mock.isGatewayUrl('ws://discord-mock:4400/gateway')).toBe(true)
+    expect(mock.isGatewayUrl('ws://elsewhere:4400/gateway')).toBe(false)
+  })
+
+  it.each([
+    ['nothing', undefined],
+    ['null', null],
+    ['a number', 7],
+    ['a list holding a good address', ['wss://gateway.discord.gg']],
+    ['an object with a good href', { href: 'wss://gateway.discord.gg', toString: () => 'wss://gateway.discord.gg' }],
+  ])('refuses %s, which is not text', (_, url) => {
+    expect(rig().discord.isGatewayUrl(url)).toBe(false)
+    expect(rig([], { apiBase: 'http://mock.test' }).discord.isGatewayUrl(url)).toBe(false)
+  })
+
+  it.each([
+    ['no apiBase', undefined],
+    ['an empty apiBase', ''],
+    ['an apiBase that is not text', 7],
+    ['an apiBase of http:// with no host', 'http://'],
+  ])("holds a client with %s to Discord's own hosts over wss://", (_, apiBase) => {
+    const discord = createLibrariusDiscord({ fetchImpl: async () => new Response(null), apiBase, botToken: TOKEN, guildId: GUILD })
+    expect(discord.isGatewayUrl('wss://gateway.discord.gg')).toBe(true)
+    for (const url of ['ws://gateway.discord.gg', 'ws://localhost:9', 'wss://localhost', 'ws://']) expect(discord.isGatewayUrl(url), url).toBe(false)
+  })
+
+  it('takes every wss:// address on discord.gg or a subdomain of it', () => {
+    const { discord } = rig()
+    fc.assert(
+      fc.property(fc.array(label, { maxLength: 4 }), fc.option(fc.integer({ min: 1, max: 65_535 })), fc.constantFrom('', '/', '/gateway'), (labels, port, path) => {
+        const url = `wss://${[...labels, 'discord', 'gg'].join('.')}${port === null ? '' : `:${port}`}${path}`
+        expect(discord.isGatewayUrl(url)).toBe(true)
+      }),
+    )
+  })
+
+  it('takes no address that a WebSocket would open on another host, or over anything but wss://', () => {
+    const { discord } = rig()
+    const scheme = fc.constantFrom('wss://', 'ws://', 'wss:/', 'wss:', 'WSS://', ' wss://', 'https://', 'xwss://', '')
+    const before = fc.constantFrom('', 'gateway.', 'a.b.', 'evil.test@', 'discord.gg@', 'discord.gg:443@', '.')
+    const host = fc.constantFrom('discord.gg', 'discord.gg.evil.test', 'evil.test', 'xdiscord.gg', 'discord.gg.', 'discord.g', 'discord.com', '127.0.0.1', '[::1]')
+    const after = fc.constantFrom('', '/', ':443', '?.discord.gg', '#.discord.gg', '\\.discord.gg', '%2eevil.test', '/../evil.test', '@evil.test', '\t.discord.gg')
+    const built = fc.tuple(scheme, before, host, after).map((parts) => parts.join(''))
+    const webUrl = fc.tuple(fc.constantFrom('ws', 'wss'), fc.webUrl({ withQueryParameters: true, withFragments: true })).map(([s, u]) => u.replace(/^https?/, s))
+    fc.assert(
+      fc.property(fc.oneof(built, webUrl, fc.string()), (url) => {
+        if (!discord.isGatewayUrl(url)) return
+        // What it took, as the WebSocket constructor reads it.
+        const parsed = new URL(url)
+        expect(parsed.protocol).toBe('wss:')
+        expect(parsed.hostname === 'discord.gg' || parsed.hostname.endsWith('.discord.gg')).toBe(true)
+      }),
+      { numRuns: 2000 },
+    )
   })
 })
 

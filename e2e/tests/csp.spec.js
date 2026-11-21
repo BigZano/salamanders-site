@@ -54,6 +54,9 @@ const NOW = new Date().toISOString()
 const CDN = 'https://cdn.discordapp.com'
 const PROXY = 'https://media.discordapp.net'
 const R2 = 'https://e2e-csp.r2.cloudflarestorage.com'
+// An address as a pattern that matches it and nothing else: its dots, and every other character a RegExp gives a meaning
+// to, escaped. A bare dot would match any character, so `cdn.discordapp.com` would also take `cdnXdiscordapp.com`.
+const literally = (text) => text.replace(/[\\^$.*+?()[\]{}|/]/g, '\\$&')
 
 // --- What the api answers, by route ---
 
@@ -371,7 +374,7 @@ const PAGES = [
     path: '/reliquarium/clips',
     ready: async (page) => {
       const video = page.locator('video.rq-video')
-      await expect(video).toHaveAttribute('src', new RegExp(`^${R2}/e2e-bucket/clips/`))
+      await expect(video).toHaveAttribute('src', new RegExp(`^${literally(R2)}/e2e-bucket/clips/`))
       // It loads: the bucket is one the policy lets a clip be played from.
       await expect.poll(() => video.evaluate((v) => v.readyState)).toBeGreaterThanOrEqual(1)
       // A link to a player site stays a card until it is played, and then a frame of that site is made.
@@ -393,11 +396,11 @@ const PAGES = [
     path: '/reliquarium/art',
     ready: async (page) => {
       const picture = page.locator('img.rq-img')
-      await expect(picture).toHaveAttribute('src', new RegExp(`^${R2}/e2e-bucket/art/`))
+      await expect(picture).toHaveAttribute('src', new RegExp(`^${literally(R2)}/e2e-bucket/art/`))
       await expect.poll(() => picture.evaluate((img) => img.naturalWidth)).toBeGreaterThan(0)
       await page.locator('.rq-open').click()
       const full = page.locator('img.rq-lightbox-img')
-      await expect(full).toHaveAttribute('src', new RegExp(`^${R2}/e2e-bucket/art/`))
+      await expect(full).toHaveAttribute('src', new RegExp(`^${literally(R2)}/e2e-bucket/art/`))
       await expect.poll(() => full.evaluate((img) => img.naturalWidth)).toBeGreaterThan(0)
     },
     reaches: [`image ${new URL(R2).hostname}`],
@@ -413,12 +416,12 @@ const PAGES = [
     path: `/reliquarium/librarius/${POST}`,
     ready: async (page) => {
       await expect(page.locator('.lb-msg')).toHaveCount(2)
-      await expect(page.locator('img.lb-image')).toHaveAttribute('src', new RegExp(`^${CDN}/attachments/`))
+      await expect(page.locator('img.lb-image')).toHaveAttribute('src', new RegExp(`^${literally(CDN)}/attachments/`))
       // In the text, and on the reaction.
       const emoji = page.locator('img.lb-emoji')
       await expect(emoji).toHaveCount(2)
-      for (const src of await emoji.evaluateAll((nodes) => nodes.map((node) => node.src))) expect(src).toMatch(new RegExp(`^${CDN}/emojis/${EMOJI}\\.webp`))
-      await expect(page.locator('img.lb-embed-thumb')).toHaveAttribute('src', new RegExp(`^${PROXY}/external/`))
+      for (const src of await emoji.evaluateAll((nodes) => nodes.map((node) => node.src))) expect(src).toMatch(new RegExp(`^${literally(CDN)}/emojis/${EMOJI}\\.webp`))
+      await expect(page.locator('img.lb-embed-thumb')).toHaveAttribute('src', new RegExp(`^${literally(PROXY)}/external/`))
     },
     reaches: ['image cdn.discordapp.com', 'image media.discordapp.net'],
   },
