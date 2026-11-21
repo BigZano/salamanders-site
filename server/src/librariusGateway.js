@@ -6,7 +6,10 @@
  *   readyTimeoutMs, dispatchTimeoutMs, identifyFloor })
  *   → { start(), stop(), status() → { state, lastReadyAt, lastError } }
  *
- * discord.gatewayBot() says where to connect and how many new sessions are left. onDispatch(t, d) is called, and
+ * discord.gatewayBot() says where to connect and how many new sessions are left, and discord.isGatewayUrl(url) whether
+ * an address is one the gateway may connect to (Discord's own gateways, wss:// on discord.gg: see librariusDiscord). Every
+ * address is held to it before a socket is opened on it, the one gatewayBot() gives and the resume address READY gives
+ * alike, so the token is sent nowhere else. onDispatch(t, d) is called, and
  * awaited, for every dispatch (READY and RESUMED included), one at a time and in the order Discord sent them, with one
  * exception: INTERACTION_CREATE (the "Delete on site" command, which has to be answered within 3 seconds of the event) is
  * handed over the moment it comes, outside that line, since waiting behind the events before it (each may take up to
@@ -37,6 +40,9 @@
  * or null; it stays until the next thing goes wrong. It never holds the token, a link or more than 200 characters.
  *
  * What it does with the gateway:
+ * - An address that isGatewayUrl does not take is never connected to. One from gatewayBot() is a failure to connect, tried
+ *   again after the backoff; a resume address from READY is not kept, so the next connection identifies afresh, through
+ *   gatewayBot().
  * - A new session is asked for with gatewayBot(), and every IDENTIFY follows one such ask. When no more than
  *   identifyFloor (50) new sessions are left, it waits until the window resets, so that a loop of dropped connections
  *   cannot spend the whole day's budget. A session it holds is resumed on the address READY gave, without asking, and
@@ -93,7 +99,6 @@ const CLOSE_INVALID_SEQUENCE = 4007
 const CLOSE_SESSION_TIMED_OUT = 4009
 
 const QUERY = '/?v=10&encoding=json'
-const WS_URL = /^wss?:\/\//
 const BACKOFF_START_MS = 1000
 const BACKOFF_MAX_MS = 60_000
 const REIDENTIFY_MIN_MS = 1000
@@ -131,6 +136,7 @@ export function createGateway({
   identifyFloor = 50,
 }) {
   if (typeof discord?.gatewayBot !== 'function') throw new TypeError('discord must have a gatewayBot function.')
+  if (typeof discord.isGatewayUrl !== 'function') throw new TypeError('discord must have an isGatewayUrl function.')
   if (typeof botToken !== 'string' || botToken === '') throw new TypeError('botToken must be a non-empty string.')
   if (typeof onDispatch !== 'function') throw new TypeError('onDispatch must be a function.')
   if (typeof WebSocketImpl !== 'function') throw new TypeError('WebSocketImpl must be a WebSocket constructor.')
@@ -227,6 +233,7 @@ export function createGateway({
       const info = await discord.gatewayBot()
       if (state === 'stopped') return
       const url = info.url
+      if (!discord.isGatewayUrl(url)) throw new Error("Discord named a gateway that is not one of Discord's own.")
       if (info.remaining <= identifyFloor) {
         state = 'waiting'
         waitTimer = timers.setTimeout(() => open(url), info.resetAfterMs)
@@ -377,7 +384,7 @@ export function createGateway({
     if (t === 'READY') {
       // A READY that cannot be resumed from still serves events; a later drop identifies afresh.
       // An empty session id is no session: every use of it asks only whether there is one.
-      const resumable = typeof d?.session_id === 'string' && typeof d.resume_gateway_url === 'string' && WS_URL.test(d.resume_gateway_url)
+      const resumable = typeof d?.session_id === 'string' && typeof d.resume_gateway_url === 'string' && discord.isGatewayUrl(d.resume_gateway_url)
       sessionId = resumable ? d.session_id : null
       resumeUrl = resumable ? d.resume_gateway_url : null
       becameReady()

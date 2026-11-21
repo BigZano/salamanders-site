@@ -19,6 +19,7 @@
     "perks:snapshot": "node scripts/snapshot-perk-corrections.mjs",
     "test:coverage": "vitest run --coverage",
     "test:mutation": "stryker run",
+    "test:mutation:changed": "node scripts/mutation-changed.mjs",
     "archive": "bun scripts/seal-archive.mjs",
     "archive:dev": "bun scripts/archive-dev-server.mjs",
     "archive:dev:fixture": "bun scripts/archive-dev-fixture.mjs",

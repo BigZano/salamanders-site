@@ -60,6 +60,13 @@ class FakeSocket {
   }
 }
 
+// A stand-in for the client's isGatewayUrl that takes any ws:// or wss:// address: most tests here are about something other
+// than where the gateway may connect, and use invented hosts. Where that is the point, the real rule is used (realRule).
+const ANY_WS = (url) => /^wss?:\/\//.test(url)
+// The client's own rule, for the Discord api or for the e2e mock at `apiBase`. It is not asked to reach Discord.
+const realRule = (apiBase = 'https://discord.com/api') =>
+  createLibrariusDiscord({ apiBase, botToken: TOKEN, guildId: '200000000000000400', fetchImpl: async () => new Response(null, { status: 599 }) }).isGatewayUrl
+
 const tick = (ms) => vi.advanceTimersByTimeAsync(ms)
 const heartbeats = (sock) => sock.sent.filter((m) => m.op === 1)
 const identifies = (sock) => sock.sent.filter((m) => m.op === 2)
@@ -68,9 +75,10 @@ const resumes = (sock) => sock.sent.filter((m) => m.op === 6)
 /**
  * A gateway on fake timers, with fake sockets and a fake `discord`. `plan` queues what gatewayBot() does next: an Error
  * is thrown, a function is called (for a promise the test settles itself), anything else is returned. With nothing
- * queued it answers GATEWAY with sessions left. `failures` queues what the next socket constructors throw.
+ * queued it answers GATEWAY with sessions left. `failures` queues what the next socket constructors throw. The fake's
+ * isGatewayUrl is ANY_WS, or `over.isGatewayUrl`.
  */
-function rig(over = {}) {
+function rig({ isGatewayUrl = ANY_WS, ...over } = {}) {
   const sockets = []
   const failures = []
   const plan = []
@@ -92,6 +100,7 @@ function rig(over = {}) {
       if (typeof next === 'function') return next()
       return next
     },
+    isGatewayUrl,
   }
   const gateway = createGateway({
     discord,
@@ -166,12 +175,14 @@ describe('the constants', () => {
 })
 
 describe('createGateway: the boundary', () => {
-  const good = () => ({ discord: { gatewayBot: async () => ({}) }, botToken: TOKEN, onDispatch: () => {}, WebSocketImpl: FakeSocket })
+  const good = () => ({ discord: { gatewayBot: async () => ({}), isGatewayUrl: ANY_WS }, botToken: TOKEN, onDispatch: () => {}, WebSocketImpl: FakeSocket })
 
   it.each([
     ['no discord', { discord: undefined }, TypeError, 'discord must have a gatewayBot function.'],
-    ['a discord without gatewayBot', { discord: {} }, TypeError, 'discord must have a gatewayBot function.'],
-    ['a gatewayBot that is not a function', { discord: { gatewayBot: 'gatewayBot' } }, TypeError, 'discord must have a gatewayBot function.'],
+    ['a discord without gatewayBot', { discord: { isGatewayUrl: ANY_WS } }, TypeError, 'discord must have a gatewayBot function.'],
+    ['a gatewayBot that is not a function', { discord: { gatewayBot: 'gatewayBot', isGatewayUrl: ANY_WS } }, TypeError, 'discord must have a gatewayBot function.'],
+    ['a discord without isGatewayUrl', { discord: { gatewayBot: async () => ({}) } }, TypeError, 'discord must have an isGatewayUrl function.'],
+    ['an isGatewayUrl that is not a function', { discord: { gatewayBot: async () => ({}), isGatewayUrl: true } }, TypeError, 'discord must have an isGatewayUrl function.'],
     ['no token', { botToken: undefined }, TypeError, 'botToken must be a non-empty string.'],
     ['an empty token', { botToken: '' }, TypeError, 'botToken must be a non-empty string.'],
     ['a token that is not a string', { botToken: 12345 }, TypeError, 'botToken must be a non-empty string.'],
@@ -442,6 +453,7 @@ describe('gatewayBot and the socket constructor failing', () => {
           gatewayBot: async () => {
             throw thrown
           },
+          isGatewayUrl: ANY_WS,
         },
       })
       await q.gateway.start()
@@ -690,6 +702,124 @@ describe('HELLO and the heartbeat', () => {
   })
 })
 
+describe("the addresses it connects to: Discord's own gateways only", () => {
+  const LIVE = 'wss://gateway.discord.gg'
+  const RESUME_LIVE = 'wss://gateway-us-east1-b.discord.gg'
+  // Addresses on another host, every one of which a WebSocket would open somewhere other than Discord.
+  const ELSEWHERE = [
+    'wss://evil.test',
+    'wss://discord.gg.evil.test',
+    'wss://evildiscord.gg',
+    'wss://gateway.discord.gg@evil.test',
+    'wss://evil.test/gateway.discord.gg',
+    'wss://evil.test?.discord.gg',
+    'wss://evil.test#.discord.gg',
+    'wss://evil.test\\.discord.gg',
+    'wss://127.0.0.1',
+    'ws://gateway.discord.gg',
+  ]
+  const tokenTo = (sockets) => sockets.filter((s) => s.raw.some((text) => text.includes(TOKEN))).map((s) => s.url)
+
+  it('identifies on the address gatewayBot gave, and resumes on the one READY gave, when they are on discord.gg', async () => {
+    const r = rig({ isGatewayUrl: realRule() })
+    r.plan.push({ url: LIVE, remaining: 1000, resetAfterMs: 0 })
+    const sock = await ready(r, { url: RESUME_LIVE })
+    expect(identifies(sock)).toHaveLength(1)
+    sock.drop(1006)
+    await tick(1000)
+    const next = r.sockets[1]
+    next.open()
+    hello(next)
+    expect(r.sockets.map((s) => s.url)).toEqual([`${LIVE}${QUERY}`, `${RESUME_LIVE}${QUERY}`])
+    expect(resumes(next)).toEqual([{ op: 6, d: { token: TOKEN, session_id: SESSION, seq: 1 } }])
+  })
+
+  it.each(ELSEWHERE)('keeps no session to resume on %s, which READY gave, and identifies afresh through gatewayBot', async (url) => {
+    const r = rig({ isGatewayUrl: realRule() })
+    r.plan.push({ url: LIVE, remaining: 1000, resetAfterMs: 0 }, { url: LIVE, remaining: 1000, resetAfterMs: 0 })
+    const sock = await ready(r, { url })
+    expect(r.gateway.status().state).toBe('ready')
+    sock.drop(1006)
+    await tick(1000)
+    expect(r.calls()).toBe(2)
+    const next = r.sockets[1]
+    next.open()
+    hello(next)
+    expect(r.sockets.map((s) => s.url)).toEqual([`${LIVE}${QUERY}`, `${LIVE}${QUERY}`])
+    expect(resumes(next)).toEqual([])
+    expect(identifies(next)).toHaveLength(1)
+    expect(tokenTo(r.sockets)).toEqual([`${LIVE}${QUERY}`, `${LIVE}${QUERY}`])
+  })
+
+  it.each(ELSEWHERE)('opens no socket to %s, which gatewayBot gave, and asks again after the backoff', async (url) => {
+    const r = rig({ isGatewayUrl: realRule() })
+    r.plan.push({ url, remaining: 1000, resetAfterMs: 0 }, { url, remaining: 1000, resetAfterMs: 0 }, { url: LIVE, remaining: 1000, resetAfterMs: 0 })
+    await r.gateway.start()
+    expect(r.sockets).toEqual([])
+    expect(r.gateway.status().state).toBe('waiting')
+    expect(r.gateway.status().lastError).toBe("The Librarius gateway could not connect: Error: Discord named a gateway that is not one of Discord's own.")
+    await tick(1000)
+    expect(r.calls()).toBe(2)
+    expect(r.sockets).toEqual([])
+    await tick(2000)
+    expect(r.calls()).toBe(3)
+    expect(r.sockets.map((s) => s.url)).toEqual([`${LIVE}${QUERY}`])
+  })
+
+  it('does not wait out the session window for an address it would not open', async () => {
+    const r = rig({ isGatewayUrl: realRule() })
+    r.plan.push({ url: 'wss://evil.test', remaining: 0, resetAfterMs: 5000 })
+    await r.gateway.start()
+    await tick(5000)
+    expect(r.sockets).toEqual([])
+    expect(r.gateway.status().lastError).toMatch(/not one of Discord's own/)
+  })
+
+  it("connects to and resumes on the e2e mock's own host over ws://, by the rule for a mock apiBase", async () => {
+    const r = rig({ isGatewayUrl: realRule('http://discord-mock:4400') })
+    r.plan.push({ url: 'ws://discord-mock:4400/gateway', remaining: 1000, resetAfterMs: 0 })
+    const sock = await ready(r, { url: 'ws://discord-mock:4400/gateway' })
+    sock.drop(1006)
+    await tick(1000)
+    expect(r.sockets.map((s) => s.url)).toEqual([`ws://discord-mock:4400/gateway${QUERY}`, `ws://discord-mock:4400/gateway${QUERY}`])
+    const next = r.sockets[1]
+    next.open()
+    hello(next)
+    expect(resumes(next)).toHaveLength(1)
+  })
+
+  it("keeps no session to resume on another host than the e2e mock's", async () => {
+    const r = rig({ isGatewayUrl: realRule('http://discord-mock:4400') })
+    r.plan.push({ url: 'ws://discord-mock:4400/gateway', remaining: 1000, resetAfterMs: 0 }, { url: 'ws://discord-mock:4400/gateway', remaining: 1000, resetAfterMs: 0 })
+    const sock = await ready(r, { url: 'ws://elsewhere:4400/gateway' })
+    sock.drop(1006)
+    await tick(1000)
+    expect(r.sockets.map((s) => s.url)).toEqual([`ws://discord-mock:4400/gateway${QUERY}`, `ws://discord-mock:4400/gateway${QUERY}`])
+    const next = r.sockets[1]
+    next.open()
+    hello(next)
+    expect(identifies(next)).toHaveLength(1)
+  })
+
+  it("holds every address it opens to the client's rule, whatever the rule is", async () => {
+    // A rule that takes only the second address: the first, from gatewayBot, is never opened, and the one READY gives
+    // is never resumed on.
+    const r = rig({ isGatewayUrl: (url) => url === 'wss://two.test' })
+    r.plan.push({ url: 'wss://one.test', remaining: 1000, resetAfterMs: 0 }, { url: 'wss://two.test', remaining: 1000, resetAfterMs: 0 })
+    r.plan.push({ url: 'wss://two.test', remaining: 1000, resetAfterMs: 0 })
+    await r.gateway.start()
+    expect(r.sockets).toEqual([])
+    await tick(1000)
+    const sock = r.sockets[0]
+    sock.open()
+    hello(sock)
+    sock.receive({ op: 0, t: 'READY', s: 1, d: { session_id: SESSION, resume_gateway_url: 'wss://one.test' } })
+    sock.drop(1006)
+    await tick(2000)
+    expect(r.sockets.map((s) => s.url)).toEqual([`wss://two.test${QUERY}`, `wss://two.test${QUERY}`])
+  })
+})
+
 describe('identifying and resuming', () => {
   it('identifies at HELLO with the token, the intents and the client properties', async () => {
     const r = rig()
@@ -780,7 +910,7 @@ describe('identifying and resuming', () => {
     expect(identifies(next)).toHaveLength(1)
   })
 
-  it('takes a ws:// resume address as well as a wss:// one', async () => {
+  it("takes a ws:// resume address as well as a wss:// one, when the client's rule does", async () => {
     const r = rig()
     const sock = await ready(r, { url: 'ws://resume.test:9000' })
     sock.drop(1006)
@@ -1491,6 +1621,7 @@ describe('a failure that cannot be reported', () => {
             },
           }
         },
+        isGatewayUrl: ANY_WS,
       },
     })
     await expect(r.gateway.start()).resolves.not.toThrow()
@@ -2698,6 +2829,7 @@ describe('the options it is given, and the ones it defaults', () => {
           if (bot === 1) throw new Error(`down: ${TOKEN}`)
           return { url: GATEWAY, remaining: 1000, resetAfterMs: 0 }
         },
+        isGatewayUrl: ANY_WS,
       },
       botToken: TOKEN,
       onDispatch: () => {},

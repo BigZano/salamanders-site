@@ -573,9 +573,23 @@ describe('checkCsp, the charset declaration and a byte order mark', () => {
 })
 
 describe('checkCsp, the script hashes as an HTML parser reads them', () => {
-  const escaped = (hash) => hash.replace(/[+/]/g, '\\$&')
+  // The hash as a pattern reads it literally: every character a RegExp gives a meaning to is escaped, the backslash too.
+  const escaped = (hash) => hash.replace(/[\\^$.*+?()[\]{}|/]/g, '\\$&')
   const NONE = '\\(none\\)'
   const agree = (scanned, parsed) => new RegExp(`csp\\.mjs reads the inline scripts of the page as ${scanned}, but an HTML parser reads ${parsed}`)
+
+  it('builds its patterns from text that a pattern reads as nothing but that text', () => {
+    fc.assert(
+      fc.property(fc.string({ unit: 'binary' }), (text) => {
+        expect(new RegExp(`^${escaped(text)}$`).test(text)).toBe(true)
+        expect(new RegExp(`^${escaped(text)}$`).test(`${text}x`)).toBe(false)
+      }),
+    )
+    for (const text of ['\\d', 'a.b', '(x)', '[+/]', '^$', 'a|b', '{1}', '*?']) {
+      expect(new RegExp(`^${escaped(text)}$`).test(text)).toBe(true)
+      expect(new RegExp(`^${escaped(text)}$`).test(text.replace(/./, 'z'))).toBe(false)
+    }
+  })
 
   it('agrees with csp.mjs for a plain page, and says nothing', async () => {
     expect(await problems(page({ head: meta(GOOD) + INLINE }))).toEqual([])

@@ -4,6 +4,8 @@
  * setArchived and deleteMessage. Nothing the site's members write goes through here: that is the webhook's.
  *
  * gatewayBot()  → { url, remaining, resetAfterMs }: where to connect, and how many connects are left in this window.
+ * isGatewayUrl(url) → whether the gateway client may connect to url, and so send it the bot token (see below). It asks
+ *   Discord nothing.
  * guild() / channel(id) → the raw object.
  * activeThreads() → the raw threads of the guild that are not archived.
  * archivedThreads(forumId, before | null) → { threads, hasMore }: one page of up to 100 archived public threads of a
@@ -68,9 +70,13 @@
  *   global (X-RateLimit-Global: true) is Discord's limit for the whole bot, not for one route, so every call made
  *   in that time waits for it too, not only the one that was refused.
  *
- * gatewayBot() takes the address only as one the gateway client can connect to: wss://, or ws:// as well when apiBase
- * is http:// (the e2e mock), and a session start limit that resets in more than a day (the longest window Discord
- * uses) is not Discord talking.
+ * gatewayBot() takes the address only when isGatewayUrl does, and a session start limit that resets in more than a day
+ * (the longest window Discord uses) is not Discord talking. isGatewayUrl takes wss:// on discord.gg or a subdomain of it,
+ * which is where Discord runs its gateways (gateway.discord.gg, and resume addresses such as
+ * gateway-us-east1-b.discord.gg), as a WebSocket reads the address: not a host that only names discord.gg in its user
+ * part, path, query or fragment. When apiBase is http:// (the e2e mock, which serves its own gateway), it takes ws:// or
+ * wss:// on the mock's own host, apiBase's, as well; Discord's hosts are still wss:// only. Anything that is not text is
+ * refused.
  *
  * Every failure is Upstream, whose message names a status at most: never the token, a url or anything Discord said.
  * That covers a network error or a timeout, a status other than 200, a reply that is not the JSON it should be, and a
@@ -84,6 +90,8 @@ import { isId } from './librariusText.js'
 const CURSOR = /^\d{1,20}$/
 const WSS_ONLY = /^wss:\/\//
 const WS_OR_WSS = /^wss?:\/\//
+// discord.gg and its subdomains, as the URL parser gives a host: in lower case, with no trailing dot.
+const DISCORD_GATEWAY_HOST = /^(?:[a-z\d-]+\.)*discord\.gg$/
 // The longest window Discord resets a session start limit in.
 const MAX_SESSION_RESET_MS = 86_400_000
 const MAX_WAIT_S = 30
@@ -101,6 +109,24 @@ const isList = (v) => Array.isArray(v) && v.every(isObject)
 
 const refused = (status, what) => new Upstream(`Discord answered ${status} for ${what}.`)
 const unusable = (what) => new Upstream(`Discord answered 200 for ${what}, but not with what the Librarius expected.`)
+
+// The host a WebSocket would connect to for `url`, or null for one it could not open.
+function hostOf(url) {
+  try {
+    return new URL(url).hostname
+  } catch {
+    return null
+  }
+}
+
+function isGatewayUrl(url, apiBase) {
+  if (typeof url !== 'string') return false
+  const host = hostOf(url)
+  if (host === null) return false
+  if (WSS_ONLY.test(url) && DISCORD_GATEWAY_HOST.test(host)) return true
+  // The e2e mock is plain http and so is its gateway, which it serves on its own host.
+  return typeof apiBase === 'string' && apiBase.startsWith('http://') && WS_OR_WSS.test(url) && host === hostOf(apiBase)
+}
 
 function needId(value, name) {
   if (!isId(value)) throw new TypeError(`${name} must be a Discord id.`)
@@ -244,11 +270,8 @@ export function createLibrariusDiscord({
       async gatewayBot() {
         const body = await getObject('/v10/gateway/bot', 'the gateway')
         const limit = body.session_start_limit
-        // Only wss:// is a gateway Discord runs. The e2e mock is plain http and so is its gateway, so ws:// is allowed there.
-        const schemes = apiBase.startsWith('http://') ? WS_OR_WSS : WSS_ONLY
         if (
-          typeof body.url !== 'string' ||
-          !schemes.test(body.url) ||
+          !isGatewayUrl(body.url, apiBase) ||
           !isObject(limit) ||
           !Number.isSafeInteger(limit.remaining) ||
           limit.remaining < 0 ||
@@ -399,6 +422,8 @@ export function createLibrariusDiscord({
         const kept = list.map((e) => [e.original, attachmentUrl(e.refreshed)]).filter(([, link]) => link !== null)
         return new Map(kept)
       },
+
+      isGatewayUrl: (url) => isGatewayUrl(url, apiBase),
 
       withMaxWait: (ms) => reader(needMaxWait(ms)),
     }
