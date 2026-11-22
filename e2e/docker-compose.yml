@@ -126,7 +126,7 @@ services:
       retries: 90
 
   playwright:
-    image: mcr.microsoft.com/playwright:v1.48.0-jammy
+    image: mcr.microsoft.com/playwright:v1.65.1-jammy
     # Share web's network namespace so the browser loads the site as
     # http://localhost:5173 — a secure context. WebCrypto (Legion Archive
     # decryption) doesn't exist on plain-http non-localhost origins like
