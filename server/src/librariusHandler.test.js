@@ -530,6 +530,19 @@ describe('GET /librarius/posts', () => {
     }
   })
 
+  it('sends the latest text whole, and names whoever it mentions anywhere in it', async () => {
+    const long = `${'x'.repeat(4000 - `<@${CARA}>`.length)}<@${CARA}>`
+    const astral = `${'\u{1F600}'.repeat(4000 - `<@!${DAN}>`.length)}<@!${DAN}>`
+    const spoiler = `x ||secret \`b|| W ${'y'.repeat(500)}\nnext\` z||`
+    const latest = (id, content) => ({ id, authorId: ALICE, authorName: 'Test Alice', authorAvatar: null, content, image: null })
+    const list = [post(POST, { latest: latest(M2, long), posterIds: [] }), post(POST_2, { latest: latest(M3, astral), posterIds: [] }), post('200000000000000412', { latest: latest(M4, spoiler), posterIds: [] })]
+    expect(Array.from(long)).toHaveLength(4000)
+    expect(Array.from(astral)).toHaveLength(4000)
+    const out = await body(await setup({ store: { listPosts: () => list }, roster: () => [member(CARA, 'Cara Now'), member(DAN, 'Dan Now')] }).get('/librarius/posts'))
+    expect(out.posts.map((p) => p.latest.content)).toEqual([long, astral, spoiler])
+    expect(Object.keys(out.people).sort()).toEqual([ALICE, CARA, DAN].sort())
+  })
+
   it("keeps the snapshot of an author's newest message when several posts carry one", async () => {
     const older = post(POST, { latest: { id: M1, authorId: ALICE, authorName: 'Alice Then', authorAvatar: null, content: 'x', image: null }, posterIds: [] })
     const newer = post(POST_2, { latest: { id: M3, authorId: ALICE, authorName: 'Alice Later', authorAvatar: avatar('later'), content: 'y', image: null }, posterIds: [] })
@@ -711,9 +724,9 @@ describe('GET /librarius/posts', () => {
     })
   })
 
-  describe('who made the latest message: origin, and the start of the source of a reply of the site', () => {
+  describe('who made the latest message: origin, and the whole source of a reply of the site', () => {
     const SOURCE = `Look: ![a map](upload:1) and <@${CARA}>`
-    // The latest message as the store answers it, with both columns as they are stored (listPosts cuts the source to 400 characters).
+    // The latest message as the store answers it, with both columns as they are stored (listPosts answers both texts whole).
     const latest = (id, over = {}) => ({ id, authorId: ALICE, authorName: 'Test Alice', authorAvatar: avatar(ALICE), content: 'the latest line', image: null, origin: 'discord', source: null, ...over })
     const sent = (id, over = {}) => ({ id, authorId: ALICE, authorName: 'Test Alice', authorAvatar: avatar(ALICE), content: 'the latest line', image: null, origin: 'discord', ...over })
     const listing = (list) => setup({ store: { listPosts: () => list }, roster: () => [member(BOB, 'Bob Now'), member(CARA, 'Cara Now'), member(DAN, 'Dan Now')] }).get('/librarius/posts')
@@ -741,27 +754,34 @@ describe('GET /librarius/posts', () => {
       },
     )
 
-    it("sends a reply of the site's source as the store holds it, null included (the list then reads its content), and none of Discord's", async () => {
-      const start = `${'word '.repeat(80)}`
+    it("sends a reply of the site's source whole, as the store holds it, null included (the list then reads its content), and none of Discord's", async () => {
+      const whole = `${'word '.repeat(3199)}last.`
+      const astral = '\u{1F600}'.repeat(7999) + '\u{1F525}'
       const list = [
-        post(POST, { latest: latest(M1, { origin: 'site', source: start }) }),
+        post(POST, { latest: latest(M1, { origin: 'site', source: whole }) }),
         post(POST_2, { latest: latest(M2, { origin: 'site', source: null }) }),
-        post('200000000000000412', { latest: latest(M3, { source: start }) }),
+        post('200000000000000412', { latest: latest(M3, { source: whole }) }),
+        post('200000000000000413', { latest: latest(M4, { origin: 'site', source: astral }) }),
       ]
       const out = await body(await listing(list))
       expect(out.posts.map((p) => [p.latest.origin, Object.hasOwn(p.latest, 'source') ? p.latest.source : 'none'])).toEqual([
-        ['site', start],
+        ['site', whole],
         ['site', null],
         ['discord', 'none'],
+        ['site', astral],
       ])
+      expect(whole).toHaveLength(16000)
     })
 
-    it('names those the start of a reply of the site mentions in its source, and reads no source of Discord', async () => {
+    it('names those a reply of the site mentions anywhere in its source, and reads no source of Discord', async () => {
       const list = [
         post(POST, { latest: latest(M1, { origin: 'site', source: `see <@${CARA}>`, content: 'no mention in the content' }), posterIds: [] }),
         post(POST_2, { latest: latest(M2, { content: `<@${BOB}>`, source: `<@${DAN}>` }), posterIds: [] }),
       ]
       expect(Object.keys((await body(await listing(list))).people).sort()).toEqual([ALICE, BOB, CARA].sort())
+      // The source is sent whole, so one mentioned at its very end, past the 400 characters a list once read, is named too.
+      const far = [post(POST, { latest: latest(M1, { origin: 'site', source: `${'x'.repeat(15978)}<@${CARA}>`, content: 'plain' }), posterIds: [] })]
+      expect(Object.keys((await body(await listing(far))).people).sort()).toEqual([ALICE, CARA].sort())
       // A reply of the site with no source is named from its content.
       const bare = [post(POST, { latest: latest(M1, { origin: 'site', source: null, content: `<@${DAN}>` }), posterIds: [] })]
       expect(Object.keys((await body(await listing(bare))).people).sort()).toEqual([ALICE, DAN].sort())
@@ -1349,30 +1369,33 @@ describe('the reply line of a message', () => {
     })
   })
 
-  it('names whoever a quoted message mentions, as far as the quote shows it', async () => {
+  it('names whoever a quoted message mentions, anywhere in its text', async () => {
     const mention = (id) => `<@${id}>`
     const roster = () => [member(CARA, 'Cara Now'), member(DAN, 'Dan Now'), member(BOB, 'Bob Now')]
     const stored = (content) => [{ id: M1, authorId: BOB, authorName: 'Test Bob', authorAvatar: null, content }]
     const run = async (content) => body(await setup({ roster, store: { ...page([row(M3, { replyTo: M1, content: 'plain' })]), quotedMessages: () => stored(content) } }).get(messagesPath()))
+    const named = async (content) => Object.keys((await run(content)).people).sort()
 
-    // Shown in the quote: named.
-    expect(Object.keys((await run(`hi ${mention(CARA)} and <@!${DAN}>`)).people).sort()).toEqual([ALICE, BOB, CARA, DAN].sort())
-    // Cut off by the 200 characters of the quote, whole or in part: not shown, so not named.
+    expect(await named(`hi ${mention(CARA)} and <@!${DAN}>`)).toEqual([ALICE, BOB, CARA, DAN].sort())
+    // The site reads the quote from the whole text, so a mention past what it shows still counts.
     const upTo = (n) => 'x'.repeat(n)
-    expect(Object.keys((await run(`${upTo(200)}${mention(CARA)}`)).people).sort()).toEqual([ALICE, BOB].sort())
-    expect(Object.keys((await run(`${upTo(190)}${mention(CARA)}`)).people).sort()).toEqual([ALICE, BOB].sort())
-    // The last one that fits, 200 characters to its closing bracket: named.
-    const fits = `${upTo(200 - mention(CARA).length)}${mention(CARA)}`
-    expect(Array.from(fits)).toHaveLength(200)
-    expect(Object.keys((await run(fits)).people).sort()).toEqual([ALICE, BOB, CARA].sort())
+    expect(await named(`${upTo(190)}${mention(CARA)}`)).toEqual([ALICE, BOB, CARA].sort())
+    expect(await named(`${upTo(200)}${mention(CARA)}`)).toEqual([ALICE, BOB, CARA].sort())
+    const last = `${upTo(4000 - mention(DAN).length)}${mention(DAN)}`
+    expect(Array.from(last)).toHaveLength(4000)
+    expect(await named(last)).toEqual([ALICE, BOB, DAN].sort())
+    expect(await named(`${'\u{1F600}'.repeat(3970)}${mention(CARA)}`)).toEqual([ALICE, BOB, CARA].sort())
+    // Nobody is named for a text that mentions nobody.
+    expect(await named(upTo(4000))).toEqual([ALICE, BOB].sort())
   })
 
-  it('names whoever a quoted message of the page mentions, as far as the quote shows it', async () => {
-    // The page's own message M1 mentions Cara past its 200th character, so the quote does not show it, but M1 itself does.
-    const rows = [row(M1, { content: `${'x'.repeat(205)}<@${CARA}>` }), row(M2, { replyTo: M1 })]
+  it('names whoever a quoted message of the page mentions, anywhere in it', async () => {
+    // The page's own message M1 mentions Cara past its 200th character, and the quote of it is the whole of it.
+    const content = `${'x'.repeat(205)}<@${CARA}>`
+    const rows = [row(M1, { authorId: BOB, content }), row(M2, { replyTo: M1 })]
     const out = await body(await setup({ roster: () => [member(CARA, 'Cara Now')], store: page(rows) }).get(messagesPath()))
-    expect(out.messages[1].replyTo.content).toBe('x'.repeat(200))
-    expect(Object.keys(out.people).sort()).toEqual([ALICE, CARA].sort())
+    expect(out.messages[1].replyTo.content).toBe(content)
+    expect(Object.keys(out.people).sort()).toEqual([ALICE, BOB, CARA].sort())
   })
 
   it('does not list the author of a message that is quoted by nobody on the page', async () => {
@@ -1384,42 +1407,56 @@ describe('the reply line of a message', () => {
     expect(Object.keys((await body(await get(messagesPath()))).people).sort()).toEqual([ALICE, BOB].sort())
   })
 
-  it('cuts the quote at 200 characters, whether the message was in the page or stored', async () => {
-    const long = 'x'.repeat(250)
-    const exact = 'y'.repeat(200)
-    const rows = [row(M1, { content: long }), row(M2, { content: exact }), row(M3, { replyTo: M1 }), row(M4, { replyTo: M2 }), row(M5, { replyTo: '200000000000000499' })]
-    const { get } = setup({ store: { ...page(rows), quotedMessages: () => [{ id: '200000000000000499', authorId: BOB, authorName: 'Test Bob', authorAvatar: null, content: long }] } })
+  it('sends the whole text of the message a reply answers, whether the message was in the page or stored', async () => {
+    const long = `${'x'.repeat(3999)}Z`
+    const short = 'y'.repeat(200)
+    const stored = `${'w'.repeat(3999)}Q`
+    const rows = [row(M1, { content: long }), row(M2, { content: short }), row(M3, { replyTo: M1 }), row(M4, { replyTo: M2 }), row(M5, { replyTo: '200000000000000499' })]
+    const { get } = setup({ store: { ...page(rows), quotedMessages: () => [{ id: '200000000000000499', authorId: BOB, authorName: 'Test Bob', authorAvatar: null, content: stored }] } })
     const out = await body(await get(messagesPath()))
-    expect(out.messages[2].replyTo.content).toBe('x'.repeat(200))
-    expect(out.messages[3].replyTo.content).toBe(exact)
-    expect(out.messages[4].replyTo.content).toBe('x'.repeat(200))
-    // The message itself is not cut.
+    expect(out.messages[2].replyTo.content).toBe(long)
+    expect(out.messages[3].replyTo.content).toBe(short)
+    expect(out.messages[4].replyTo.content).toBe(stored)
     expect(out.messages[0].content).toBe(long)
   })
 
-  it('keeps 199 characters whole, and cuts one past 200', async () => {
-    for (const [length, expected] of [[0, 0], [1, 1], [199, 199], [200, 200], [201, 200], [202, 200]]) {
-      const rows = [row(M1, { content: 'z'.repeat(length) }), row(M2, { replyTo: M1 })]
+  it('sends a text of any length whole, up to the 4,000 characters of a Discord message', async () => {
+    for (const length of [0, 1, 199, 200, 201, 399, 400, 401, 2000, 3999, 4000]) {
+      const content = 'z'.repeat(length)
+      const rows = [row(M1, { content }), row(M2, { replyTo: M1 })]
       const out = await body(await setup({ store: page(rows) }).get(messagesPath()))
-      expect(out.messages[1].replyTo.content).toBe('z'.repeat(expected))
+      expect(out.messages[1].replyTo.content, `${length} characters`).toBe(content)
     }
   })
 
-  it('counts characters, not UTF-16 units, and never splits a pair', async () => {
-    const rows = [row(M1, { content: `${'a'.repeat(199)}\u{1F600}\u{1F600}` }), row(M2, { replyTo: M1 })]
-    const out = await body(await setup({ store: page(rows) }).get(messagesPath()))
-    expect(out.messages[1].replyTo.content).toBe(`${'a'.repeat(199)}\u{1F600}`)
+  it('sends astral characters whole, however many there are', async () => {
+    for (const content of [`${'a'.repeat(199)}\u{1F600}\u{1F600}`, '\u{1F600}'.repeat(4000), `${'\u{1F525}'.repeat(250)}||secret\u{1F600}||`]) {
+      const rows = [row(M1, { content }), row(M2, { replyTo: M1 })]
+      const stored = [{ id: '200000000000000499', authorId: BOB, authorName: 'Test Bob', authorAvatar: null, content }]
+      const out = await body(await setup({ store: { ...page([...rows, row(M3, { replyTo: '200000000000000499' })]), quotedMessages: () => stored } }).get(messagesPath()))
+      expect(out.messages[1].replyTo.content).toBe(content)
+      expect(out.messages[2].replyTo.content).toBe(content)
+    }
   })
 
-  it('cuts any text to a prefix of at most 200 characters, and keeps a short one whole (property)', async () => {
+  it('sends a spoiler whose closing bar lies past the 200th character whole, bars and all', async () => {
+    // Its first line alone would read as a closed spoiler and then shown words; the whole reads the code as running on.
+    const content = `x ||secret \`b|| W ${'y'.repeat(300)}\nnext\` z||`
+    const rows = [row(M1, { content }), row(M2, { replyTo: M1 }), row(M3, { replyTo: '200000000000000499' })]
+    const stored = [{ id: '200000000000000499', authorId: BOB, authorName: 'Test Bob', authorAvatar: null, content }]
+    const out = await body(await setup({ store: { ...page(rows), quotedMessages: () => stored } }).get(messagesPath()))
+    expect(out.messages.slice(1).map((m) => m.replyTo.content)).toEqual([content, content])
+  })
+
+  it('sends any text whole, from the page or the store (property)', async () => {
     await fc.assert(
-      fc.asyncProperty(fc.string({ unit: 'binary', maxLength: 450 }), async (content) => {
-        const rows = [row(M1, { content }), row(M2, { replyTo: M1 })]
-        const out = await body(await setup({ store: page(rows) }).get(messagesPath()))
-        const quoted = out.messages[1].replyTo.content
-        const length = Array.from(content).length
-        expect(Array.from(quoted).length).toBe(Math.min(length, 200))
-        expect(content.startsWith(quoted)).toBe(true)
+      // size 'max' draws lengths over the whole range, not only short texts.
+      fc.asyncProperty(fc.string({ unit: 'binary', maxLength: 4000, size: 'max' }), fc.string({ unit: 'grapheme', maxLength: 4000, size: 'max' }), async (own, kept) => {
+        const rows = [row(M1, { content: own }), row(M2, { replyTo: M1 }), row(M3, { replyTo: '200000000000000499' })]
+        const stored = [{ id: '200000000000000499', authorId: BOB, authorName: 'Test Bob', authorAvatar: null, content: kept }]
+        const out = await body(await setup({ store: { ...page(rows), quotedMessages: () => stored } }).get(messagesPath()))
+        expect(out.messages[1].replyTo.content).toBe(own)
+        expect(out.messages[2].replyTo.content).toBe(kept)
       }),
     )
   })
@@ -1430,8 +1467,8 @@ describe('the reply line of a message: who made the message it quotes', () => {
   const Q2 = '200000000000000446'
   const SOURCE = `![a map](upload:1) and <@${CARA}>`
   const siteRow = (id, over = {}) => row(id, { origin: 'site', source: SOURCE, content: SOURCE, webhookId: '200000000000000495', ...over })
-  // A message a reply quotes that is not on the page, as quotedMessages answers it (the store cuts both texts to 200 characters).
-  const stored = (id, over = {}) => ({ id, authorId: BOB, authorName: 'Test Bob', authorAvatar: null, content: 'the start', origin: 'discord', source: null, ...over })
+  // A message a reply quotes that is not on the page, as quotedMessages answers it (both texts whole).
+  const stored = (id, over = {}) => ({ id, authorId: BOB, authorName: 'Test Bob', authorAvatar: null, content: 'the text', origin: 'discord', source: null, ...over })
   const page = (rows) => ({ listMessages: () => ({ rows, hasOlder: false, hasNewer: false }) })
   const changed = (rows) => ({ changes: () => ({ rows, deleted: [], rev: 'unused', full: false }) })
   // The two routes that answer messages, both through present().
@@ -1457,7 +1494,7 @@ describe('the reply line of a message: who made the message it quotes', () => {
         { id: M1, authorId: ALICE, authorName: 'Test Alice', content: SOURCE, origin: 'site', source: SOURCE },
         { id: M2, authorId: ALICE, authorName: 'Test Alice', content: `hello ${M2}`, origin: 'discord' },
         { id: Q1, authorId: BOB, authorName: 'Test Bob', content: SOURCE, origin: 'site', source: SOURCE },
-        { id: Q2, authorId: BOB, authorName: 'Test Bob', content: 'the start', origin: 'discord' },
+        { id: Q2, authorId: BOB, authorName: 'Test Bob', content: 'the text', origin: 'discord' },
       ])
       expect(Object.hasOwn(got[3], 'source') || Object.hasOwn(got[5], 'source')).toBe(false)
     },
@@ -1476,19 +1513,25 @@ describe('the reply line of a message: who made the message it quotes', () => {
     },
   )
 
-  it('cuts the source it quotes to 200 characters, as the content, whether the message was on the page or stored, and never splits a pair', async () => {
+  it('sends the source it quotes whole, as the content, whether the message was on the page or stored', async () => {
+    // The page reads a spoiler over the whole source and cuts only the plain text it shows: a cut copy could show a word the reply hides.
     const pair = `${'a'.repeat(199)}\u{1F600}\u{1F600} tail`
+    const most = `${'y'.repeat(15999)}Y`
+    const astral = '\u{1F600}'.repeat(7999) + '\u{1F525}'
     const rows = [
       siteRow(M1, { source: pair, content: 'short' }),
-      siteRow(M2, { source: 'y'.repeat(200) }),
+      siteRow(M2, { source: most }),
       row(M3, { replyTo: M1 }),
       row(M4, { replyTo: M2 }),
       row(M5, { replyTo: Q1 }),
+      row('200000000000000447', { replyTo: Q2 }),
     ]
-    const { lines: got } = await lines(rows, [stored(Q1, { origin: 'site', source: 'z'.repeat(250), content: 'z'.repeat(250) })])
-    expect(got[2]).toMatchObject({ content: 'short', source: `${'a'.repeat(199)}\u{1F600}` })
-    expect(got[3].source).toBe('y'.repeat(200))
-    expect(got[4]).toMatchObject({ content: 'z'.repeat(200), source: 'z'.repeat(200) })
+    const quoted = [stored(Q1, { origin: 'site', source: most, content: most }), stored(Q2, { origin: 'site', source: astral, content: astral })]
+    const { lines: got } = await lines(rows, quoted)
+    expect(got[2]).toMatchObject({ content: 'short', source: pair })
+    expect(got[3].source).toBe(most)
+    expect(got[4]).toMatchObject({ content: most, source: most })
+    expect(got[5]).toMatchObject({ content: astral, source: astral })
   })
 
   it('quotes a reply of the site with no source as null, so the page reads its content', async () => {
@@ -1499,20 +1542,23 @@ describe('the reply line of a message: who made the message it quotes', () => {
     }
   })
 
-  it('names whoever the start of a quoted reply of the site mentions in its source, and reads no source of Discord', async () => {
+  it('names whoever a quoted reply of the site mentions anywhere in its source, and reads no source of Discord', async () => {
     const rows = [row(M3, { replyTo: Q1, content: 'plain' }), row(M4, { replyTo: Q2, content: 'plain' })]
     const quoted = [stored(Q1, { origin: 'site', source: `see <@${CARA}>`, content: 'no mention in the content' }), stored(Q2, { content: 'plain', source: `<@${DAN}>` })]
     expect(Object.keys((await lines(rows, quoted)).people).sort()).toEqual([ALICE, BOB, CARA].sort())
-    // Past the 200 characters of the quote it is not shown, so not named; a reply with no source is named from its content.
+    // The source is sent whole, so one mentioned past its 200th character, at its very end, is named; a reply with no source is named from
+    // its content.
     const far = [stored(Q1, { origin: 'site', source: `${'x'.repeat(200)}<@${CARA}>`, content: 'plain' }), stored(Q2, { origin: 'site', source: null, content: `<@${DAN}>` })]
-    expect(Object.keys((await lines(rows, far)).people).sort()).toEqual([ALICE, BOB, DAN].sort())
+    expect(Object.keys((await lines(rows, far)).people).sort()).toEqual([ALICE, BOB, CARA, DAN].sort())
+    const end = [stored(Q1, { origin: 'site', source: `${'x'.repeat(15978)}<@${CARA}>`, content: 'plain' })]
+    expect(Object.keys((await lines([rows[0]], end)).people).sort()).toEqual([ALICE, BOB, CARA].sort())
   })
 
-  it('answers origin and a cut source by the one rule, for any message quoted, on either route (property)', async () => {
+  it('answers origin and the whole source by the one rule, for any message quoted, on either route (property)', async () => {
     await fc.assert(
       fc.asyncProperty(
         fc.constantFrom('site', 'discord', 'Site', '', null, undefined),
-        fc.option(fc.string({ unit: 'binary', maxLength: 260 }), { nil: null }),
+        fc.option(fc.string({ unit: 'binary', maxLength: 16000, size: 'max' }), { nil: null }),
         fc.boolean(),
         async (origin, source, viaChanges) => {
           const rows = [row(M1, { origin, source }), row(M2, { replyTo: M1 })]
@@ -1522,10 +1568,7 @@ describe('the reply line of a message: who made the message it quotes', () => {
           expect(line.origin).toBe(site ? 'site' : 'discord')
           expect(Object.hasOwn(line, 'source')).toBe(site)
           if (site && source === null) expect(line.source).toBeNull()
-          if (site && source !== null) {
-            expect(Array.from(line.source).length).toBe(Math.min(Array.from(source).length, 200))
-            expect(source.startsWith(line.source)).toBe(true)
-          }
+          if (site && source !== null) expect(line.source === source, `${source.length} units`).toBe(true)
         },
       ),
       { numRuns: 150, examples: [['site', 'x', false]] },

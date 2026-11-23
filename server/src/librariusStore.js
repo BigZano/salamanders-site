@@ -87,8 +87,7 @@ const LIST_POSTS = `select p.id, p.title, p.tag_ids, p.pinned, p.locked, p.archi
     case when r.last_read is null then 0
          else (select count(*)::int from librarius_messages m where m.post_id = p.id and m.id > r.last_read) end as unread,
     lm.id as latest_id, lm.author_id as latest_author_id, lm.author_name as latest_author_name,
-    lm.author_avatar as latest_author_avatar, left(lm.content, 400) as latest_content,
-    lm.origin as latest_origin, left(lm.source, 400) as latest_source,
+    lm.author_avatar as latest_author_avatar, lm.content as latest_content, lm.origin as latest_origin, lm.source as latest_source,
     im.id as image_id, im.url as image_url, im.expires_at as image_expires_at,
     (select coalesce(array_agg(ps.author_id::text order by ps.newest desc), '{}')
        from (select m.author_id, max(m.id) as newest from librarius_messages m where m.post_id = p.id
@@ -369,9 +368,13 @@ export function createLibrariusStore(pool) {
     /**
      * The topic list for one member: pinned posts first, then the latest activity. → [{ id, title, tagIds, pinned,
      * locked, archived, createdAt, lastActivityAt, replies, unread, latest: { id, authorId, authorName, authorAvatar,
-     * content (first 400 characters), origin, source (first 400 characters, or null), image: { id, url, expiresAt } |
-     * null } | null, posterIds (the last 3 distinct authors, newest first) }]. One statement. `origin` and `source` are
-     * as stored: what the site is told of them is the handler's rule.
+     * content (the whole text), origin, source (the whole source, or null), image: { id, url, expiresAt } | null } | null,
+     * posterIds (the last 3 distinct authors, newest first) }]. One statement. `origin` and `source` are as stored: what
+     * the site is told of them is the handler's rule. Neither text is cut here: the site reads a spoiler over the whole
+     * message, and a cut copy can read as a spoiler closed before words the whole message hides. The site cuts the plain
+     * text it shows, after reading. A Discord message is at most 4,000 characters, and what is stored is at most 65,536
+     * UTF-16 units: parseMessage keeps a text whole up to that, and drops one over it, which Discord never sends. A reply
+     * of the site's source is at most 16,000 units (librariusSend.js MAX_SOURCE).
      */
     async listPosts(memberId) {
       needId(memberId, 'memberId')
@@ -527,9 +530,9 @@ export function createLibrariusStore(pool) {
 
     /**
      * The messages of a post that a reply can quote: those of `ids` that are stored in the post, each as { id, authorId,
-     * authorName, authorAvatar, content (the first 200 characters), origin, source (the first 200 characters, or null) },
-     * in no order: a quote shows the start of a message, and a reply of the site is read from its source. `origin` and
-     * `source` are as stored, as listPosts answers them. An id that is not stored is left out. An empty list sends nothing.
+     * authorName, authorAvatar, content (the whole text, never cut, as in listPosts), origin, source (the whole source, or
+     * null) }, in no order: a reply of the site is read from its source. `origin` and `source` are as stored, as listPosts
+     * answers them. An id that is not stored is left out. An empty list sends nothing.
      */
     async quotedMessages(postId, ids) {
       needId(postId, 'postId')
@@ -537,7 +540,7 @@ export function createLibrariusStore(pool) {
       for (const id of ids) needId(id, 'messageId')
       if (ids.length === 0) return []
       const { rows } = await pool.query(
-        'select id, author_id, author_name, author_avatar, left(content, 200) as content, origin, left(source, 200) as source from librarius_messages where post_id = $1 and id = any($2::bigint[])',
+        'select id, author_id, author_name, author_avatar, content, origin, source from librarius_messages where post_id = $1 and id = any($2::bigint[])',
         [postId, ids],
       )
       return rows.map((r) => ({

@@ -431,12 +431,74 @@ describe('TopicList: the latest line of a reply written on the site', () => {
     expect(texts(w)).toEqual([READ_ON_SITE])
   })
 
+  // Sources whose first `n` characters end where a cut makes a construct that the whole source has not: the ``` of a ```js line
+  // closes a code block opened above, or the hyphens of a |-|-|-|-|-x line make a rule row under a header, which reads every pipe as
+  // a cell's border. Either shows W, which the whole source hides in a spoiler. The server once cut a latest line's source to 400
+  // characters (a quote's to 200).
+  const traps = (n) => {
+    const fence = 'x\n```\n||W||\n'
+    const table = 'x\n\n| a ||W|| '
+    return [`${fence}${'y '.repeat((n - fence.length - 4) / 2)}\n\`\`\`js\nz`, `${table}${'y '.repeat((n - table.length - 13) / 2)} |\n|-|-|-|-|-x\nz`]
+  }
+  const cut = (source, n) => Array.from(source).slice(0, n).join('')
+
+  it("reads it from its whole source, so a cut's code block or table never shows a word it hides", async () => {
+    const sources = [...traps(400), ...traps(200)]
+    const w = await show(sources.map((source, i) => post(430 + i, { latest: latest(430 + i, { origin: 'site', source, content: source }) })))
+    const shown = texts(w)
+    expect(shown).toHaveLength(4)
+    for (const line of shown) {
+      expect(line).toMatch(/^x /)
+      expect(line).not.toContain('W')
+    }
+  })
+
+  it('would show W from a cut of those sources: so the line is read from the whole one, never from a cut', async () => {
+    const cuts = [400, 200].flatMap((n) => traps(n).map((source) => cut(source, n)))
+    const w = await show(cuts.map((source, i) => post(430 + i, { latest: latest(430 + i, { origin: 'site', source, content: '' }) })))
+    for (const line of texts(w)) expect(line).toContain('W')
+  })
+
   it('cuts it to about 120 characters, after the picture became its word', async () => {
     const w = await show([post(430, { latest: latest(430, { origin: 'site', source: `![a](upload:1) ${'word '.repeat(100)}`, content: '' }) })])
     const [text] = texts(w)
     expect(text.startsWith('picture word word')).toBe(true)
     expect(Array.from(text)).toHaveLength(120)
     expect(text.endsWith('…')).toBe(true)
+  })
+})
+
+describe('TopicList: a spoiler in the latest line', () => {
+  // Texts whose first line, read alone, closes a spoiler and shows W, while the whole message hides W: a later line holds
+  // the bar the spoiler runs to, and the line holds a mark (`, *, [) that lets a reading run on past its own bars.
+  // The server once cut the latest line to 400 characters; the padding puts all that unsettles the line past that cut.
+  const PAD = 'y '.repeat(250)
+  const hiding = () => ['x ||secret `b|| W\nnext` z||', `x ||secret \`b|| W ${PAD}\nnext\` z||`, `x ||a|| W ${PAD}*\nnext ||`, `x ||a [b|| W ${PAD}\nnext ||`]
+  const lines = async (contents) => {
+    const w = await show(contents.map((content, i) => post(430 + i, { latest: { ...post(430 + i).latest, content } })))
+    return w.findAll('.lb-topic-text').map((t) => t.text())
+  }
+
+  it('reads the whole newest message, so a spoiler that a later line closes hides the words after its bars', async () => {
+    expect(await lines(hiding())).toEqual(hiding().map(() => 'x ▒▒▒'))
+  })
+
+  it('would show W from a cut of those texts: so the line is read from the whole one, never from a cut', async () => {
+    const cuts = hiding().slice(1).flatMap((content) => [200, 400].map((n) => Array.from(content).slice(0, n).join('')))
+    const shown = await lines(['x ||secret `b|| W', ...cuts])
+    expect(shown[0]).toBe('x ▒▒▒ W')
+    for (const line of shown.slice(1)) expect(line).toMatch(/^x ▒▒▒ W y/)
+  })
+
+  it('keeps the line of a 4,000-character message at 120 characters, astral ones counted as one', async () => {
+    const contents = ['word '.repeat(800), '\u{1F600}'.repeat(4000), `${'\u{1F525} '.repeat(1999)}\u{1F525}\u{1F525}`]
+    const shown = await lines(contents)
+    shown.forEach((line, i) => {
+      expect(Array.from(contents[i]).length).toBeGreaterThanOrEqual(4000)
+      expect(Array.from(line)).toHaveLength(120)
+      expect(line.endsWith('…')).toBe(true)
+      expect(contents[i].replace(/\s+/g, ' ').startsWith(line.slice(0, -1))).toBe(true)
+    })
   })
 })
 

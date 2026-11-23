@@ -364,6 +364,47 @@ describe('LibMessage: the reply line', () => {
     expect(w.find('.lb-reply').text()).toBe('↪ replying to Ixen Calloway: the answer is ▒▒▒')
   })
 
+  // Texts whose first line, read alone, closes a spoiler and shows W, while the whole message hides W: a later line holds
+  // the bar the spoiler runs to, and the line holds a mark (`, *, [) that lets a reading run on past its own bars.
+  // The server once cut a quote to 200 characters (a latest line to 400); the padding puts all that unsettles the
+  // line past those cuts.
+  const PAD = 'y '.repeat(250)
+  const hiding = () => ['x ||secret `b|| W\nnext` z||', `x ||secret \`b|| W ${PAD}\nnext\` z||`, `x ||a|| W ${PAD}*\nnext ||`, `x ||a [b|| W ${PAD}\nnext ||`]
+  const quoteOf = (content) => mountMsg(message({ replyTo: replyTo({ content }) })).find('.lb-reply-quote').text()
+
+  it('reads the quote from the whole text, so a spoiler that a later line closes hides the words after its bars', () => {
+    for (const content of hiding()) expect(quoteOf(content), content).toBe('x ▒▒▒')
+  })
+
+  it('would show W from a cut of those texts: so the quote is read from the whole one, never from a cut', () => {
+    expect(quoteOf('x ||secret `b|| W')).toBe('x ▒▒▒ W')
+    for (const content of hiding().slice(1)) {
+      for (const cut of [200, 400]) expect(quoteOf(Array.from(content).slice(0, cut).join('')), `${cut}: ${content}`).toMatch(/^x ▒▒▒ W y/)
+    }
+  })
+
+  it('shows no word in the quote that the message itself hides', () => {
+    for (const content of hiding()) {
+      const w = mountMsg(message({ content, replyTo: replyTo({ content }) }))
+      const hidden = w.findAll('.lb-body .md-spoiler')
+      expect(hidden).toHaveLength(1)
+      expect(hidden[0].text()).toContain('W')
+      const shown = w.findAll('.lb-body p.md-line').filter((p) => !p.element.closest('.md-spoiler')).map((p) => p.text())
+      expect(shown, content).toEqual(['x'])
+      expect(w.find('.lb-reply-quote').text()).not.toContain('W')
+    }
+  })
+
+  it('keeps the quote of a 4,000-character text at 120 characters, astral ones counted as one', () => {
+    for (const content of ['word '.repeat(800), '\u{1F600}'.repeat(4000), `${'\u{1F525} '.repeat(1999)}\u{1F525}\u{1F525}`]) {
+      expect(Array.from(content).length).toBeGreaterThanOrEqual(4000)
+      const quote = quoteOf(content)
+      expect(Array.from(quote), content.slice(0, 8)).toHaveLength(120)
+      expect(quote.endsWith('…')).toBe(true)
+      expect(content.replace(/\s+/g, ' ').startsWith(quote.slice(0, -1))).toBe(true)
+    }
+  })
+
   it('names the author the page knows now, else the one stored with the quote', () => {
     expect(mountMsg(message({ replyTo: replyTo({ authorId: TOR, authorName: 'Old Name' }) })).find('.lb-reply-name').text()).toBe('Tor Mardan')
     expect(mountMsg(message({ replyTo: replyTo({ authorId: '200000000000000499', authorName: 'Ghost' }) })).find('.lb-reply-name').text()).toBe('Ghost')
@@ -425,6 +466,44 @@ describe('LibMessage: the reply line', () => {
       for (const to of [{ source: '', content: SOURCE }, { source: '   ', content: SOURCE }, { source: null, content: null }, { source: 5, content: undefined }]) {
         const line = mountMsg(message({ replyTo: replyTo({ origin: 'site', ...to }) })).find('.lb-reply')
         expect(line.text(), JSON.stringify(to)).toBe('↪ replying to Ixen Calloway')
+      }
+    })
+
+    // Sources whose first `n` characters end where a cut makes a construct that the whole source has not: the ``` of a ```js line
+    // closes a code block opened above, or the hyphens of a |-|-|-|-|-x line make a rule row under a header, which reads every pipe as
+    // a cell's border. Either shows W, which the whole source hides in a spoiler. The server once cut a quote's source to 200
+    // characters and a latest line's to 400.
+    const traps = (n) => {
+      const fence = 'x\n```\n||W||\n'
+      const table = 'x\n\n| a ||W|| '
+      return [`${fence}${'y '.repeat((n - fence.length - 4) / 2)}\n\`\`\`js\nz`, `${table}${'y '.repeat((n - table.length - 13) / 2)} |\n|-|-|-|-|-x\nz`]
+    }
+    const cut = (source, n) => Array.from(source).slice(0, n).join('')
+
+    it("quotes it from its whole source, so a cut's code block or table never shows a word it hides", () => {
+      for (const source of [...traps(200), ...traps(400)]) {
+        const quote = quoteOf({ origin: 'site', source, content: source })
+        expect(quote, source.slice(0, 20)).toMatch(/^x /)
+        expect(quote).not.toContain('W')
+      }
+    })
+
+    it('would show W from a cut of those sources: so the quote is read from the whole one, never from a cut', () => {
+      for (const n of [200, 400]) {
+        for (const source of traps(n)) {
+          expect(Array.from(cut(source, n)).length).toBe(n)
+          expect(quoteOf({ origin: 'site', source: cut(source, n), content: '' }), `${n}: ${source.slice(0, 20)}`).toContain('W')
+        }
+      }
+    })
+
+    it('shows no word in the quote that the reply itself hides', () => {
+      for (const source of [...traps(200), ...traps(400)]) {
+        const w = mountMsg(message({ origin: 'site', source, content: source, replyTo: replyTo({ origin: 'site', source, content: source }) }))
+        const hidden = w.findAll('.lb-body .md-spoiler')
+        expect(hidden).toHaveLength(1)
+        expect(hidden[0].text()).toBe('W')
+        expect(w.find('.lb-reply-quote').text()).not.toContain('W')
       }
     })
   })

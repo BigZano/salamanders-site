@@ -48,7 +48,8 @@
  * cannot be renewed keeps the link the store has.
  *
  * Names and avatars: the roster's now, else the ones stored with the message. `people` answers them by member id for
- * everyone a page names: its authors, those a message mentions, and the authors of the messages it replies to.
+ * everyone a page names: its authors, those a message mentions, the authors of the messages it replies to, and those the
+ * messages it quotes mention.
  */
 import { Upstream } from './discordRoles.js'
 import { reply, send } from './httpReply.js'
@@ -70,7 +71,6 @@ const CHANGES_LIMIT = 200
 const CHANGES_SLACK = 100
 const REFRESH_WITHIN_MS = 300_000
 const REFRESH_MAX = 50
-const QUOTE_LENGTH = 200
 const JSON_MAX_BYTES = 1024
 
 const NO_SUCH_POST = 'No such post.'
@@ -85,32 +85,21 @@ const BAD_MESSAGE = 'That message id is not valid.'
 /** → the ids of the members a text mentions, `<@id>` or `<@!id>`, each as often as it does. */
 const mentionsIn = (text) => Array.from(text.matchAll(MENTION), (m) => m[1])
 
-/** The first 200 characters of a message, counted as characters so that no pair is cut in two. */
-const quote = (text) => Array.from(text).slice(0, QUOTE_LENGTH).join('')
-
 /** Whether a stored message is a reply written on the site: its origin is exactly 'site'. Anything else is Discord's (fail closed). */
 const fromSite = (m) => m.origin === 'site'
 
-/**
- * → the text the site reads a message by: a reply of the site's whole extended source (its content is cut to what one Discord message
- * holds), else its content, as the post page does (LibMessage.vue).
- */
+/** → the text the site reads a message by: a reply of the site's whole extended source, else its content, as the post page does (LibMessage.vue). */
 const textOf = (m) => (fromSite(m) && typeof m.source === 'string' ? m.source : m.content)
 
 /**
- * → who made a message, as the site is told it: { origin: 'site', source } for a reply of the site, else { origin: 'discord' } and no
- * source, whatever the row holds (fail closed). `cut` gives what of the source is sent: all of it as the store holds it, unless the site
- * reads only its start.
+ * → who made a message, as the site is told it: { origin: 'site', source } for a reply of the site, its source the text the store holds
+ * or null for none, else { origin: 'discord' } and no source, whatever the row holds (fail closed). The source is sent whole wherever the
+ * site reads it: a page, the reply line, the topic list. The site reads a spoiler over the whole text and cuts only the plain text it
+ * shows, as a cut copy could show a word the reply hides.
  */
-const madeBy = (m, cut = (source) => source) => (fromSite(m) ? { origin: 'site', source: cut(m.source) } : { origin: 'discord' })
+const madeBy = (m) => (fromSite(m) ? { origin: 'site', source: typeof m.source === 'string' ? m.source : null } : { origin: 'discord' })
 
-/** The start of a source a reply line quotes, as of its content (200 characters); null when there is no source. */
-const quotedSource = (source) => (typeof source === 'string' ? quote(source) : null)
-
-/**
- * → the latest message of a row of the topic list as the site is told it: what the list shows of it, and who made it. A reply of the
- * site carries the start of its source (the store reads the first 400 characters), which the list reads its line from.
- */
+/** → the latest message of a row of the topic list as the site is told it: what the list shows of it, and who made it. */
 const latestOut = (m) => ({ id: m.id, authorId: m.authorId, authorName: m.authorName, authorAvatar: m.authorAvatar, content: m.content, image: m.image, ...madeBy(m) })
 
 /** → the 1 KB JSON request of a PUT: { body, blank } or { status, error }. It is counted as it arrives, and a body past 1 KB is
@@ -193,7 +182,7 @@ export function createLibrariusHandler({
    * → { messages, people } for message rows of a post: each as the site shows it, and everyone they name. A message says who made it,
    * `origin` 'site' or 'discord', and a reply of the site also its `source` (as the store holds it: text, or null for none); the people
    * a reply of the site names are those its source mentions. The message a reply quotes says who made it by the same rule, a reply of
-   * the site with the start of its source, which the page reads the quote from.
+   * the site with its whole source, which the page reads the quote from.
    */
   async function present(postId, rows) {
     const renewed = await renewedLinks(rows.flatMap((m) => m.attachments))
@@ -208,8 +197,10 @@ export function createLibrariusHandler({
       const target = quoted.get(m.replyTo)
       if (target !== undefined) {
         directory.note(target.authorId, target.authorName, target.authorAvatar, target.id)
-        // The quote shows only its first 200 characters, and so only the mentions in those (of the source, for a reply of the site).
-        for (const id of mentionsIn(quote(textOf(target)))) directory.want(id)
+        // The reply line is sent the whole text it quotes, never a cut of it: the site reads a spoiler over the whole
+        // message and cuts only the plain text it shows, as a cut copy could show a word the message hides. So whoever
+        // that text mentions, anywhere in it (in the source, for a reply of the site), is named.
+        for (const id of mentionsIn(textOf(target))) directory.want(id)
       }
       for (const id of mentionsIn(textOf(m))) directory.want(id)
     }
@@ -232,8 +223,8 @@ export function createLibrariusHandler({
                 id: target.id,
                 authorId: target.authorId,
                 authorName: directory.shown(target.authorId, { name: target.authorName }).name,
-                content: quote(target.content),
-                ...madeBy(target, quotedSource),
+                content: target.content,
+                ...madeBy(target),
               },
         attachments: m.attachments.map((a) => ({
           id: a.id,
