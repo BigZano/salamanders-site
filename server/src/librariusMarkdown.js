@@ -5,9 +5,10 @@
  * so hostile input stays linear.
  *
  * parse(src, { dialect = 'discord', oneLine = false }) → block nodes. parseInline(s, { dialect }) → inline nodes.
- * plainText(nodes, { raw }) → text. walk(nodes, visit) visits every node, in document order. A dialect other than these
- * two is a RangeError, and so is `oneLine: true` in the extended dialect; options that are no object, or a `oneLine`
- * that is no boolean, are a TypeError.
+ * plainText(nodes, { raw }) → text. walk(nodes, visit) visits every node, in document order. maskSpoilers(src) → the text
+ * with SPOILER_MASK in place of all a spoiler may hide in it (see the end of this comment). A dialect other than these two
+ * is a RangeError, and so is `oneLine: true` in the extended dialect; options that are no object, or a `oneLine` that is
+ * no boolean, are a TypeError.
  *
  * The `discord` dialect is what Discord itself shows, for every message written in Discord: bold, italic, underline,
  * strike, spoilers, code, quotes, headings 1-3, subtext, lists, masked links, mentions and custom emoji.
@@ -69,6 +70,16 @@
  *   note is one line of inline nodes, in which no reference is resolved: a note cannot cite itself or another.
  *   A reference to a label that no note defines is literal text.
  * parseInline has no notes to point at, so it never makes a footnoteRef.
+ *
+ * maskSpoilers(src) is how the site quotes a message: a quote is read again in the extended dialect and sent to Discord as
+ * that reads it, so nothing hidden may go into one. It gives the text with SPOILER_MASK in place of each pair of bars on a
+ * certain line before U, with what is between them, and of all from the first `||` of U to the last `||` (of U alone, when
+ * it holds the last): what any reading of Discord's may hide (above). What is left holds no `||`, so no reading of it in
+ * either dialect hides anything, and it holds only words that every reading shows. It masks all the extended dialect hides
+ * too: a spoiler over lines opens only at a `||` its line leaves open, which a certain line never does, and the dialect's
+ * own constructs start at a mark a certain line has not (`[` for a picture or a note), or are whole lines with no bars (a
+ * divider), or read a line's pipes as the borders of cells (a table), which hides nothing. So a reply of the site's is
+ * quoted through it as well. A source that is no string is a TypeError.
  */
 const MAX_DEPTH = 16
 const MAX_COLUMNS = 10
@@ -232,6 +243,22 @@ function readSpoilers(lines, env) {
     { type: 'spoiler', children: parseBlocks(inner, false, env, CARRY[roles[u]]), lastBar: true },
     ...parseBlocks([lines[last].slice(c + 2), ...lines.slice(last + 1)], false, env, CARRY[roles[last]]),
   ]
+}
+
+/** What a quote shows in place of all a spoiler may hide (maskSpoilers), and what a preview shows for a spoiler. */
+export const SPOILER_MASK = '▒▒▒'
+
+/** → the text with SPOILER_MASK in place of all a spoiler may hide in it, under any reading (see the comment at the top). */
+export function maskSpoilers(src) {
+  if (typeof src !== 'string') throw new TypeError('markdown source must be a string')
+  const lines = linesOf(src)
+  const { u, last } = uncertainty(lines)
+  // A certain line: each of its pairs, and what is between the two bars, is the mask.
+  const pairs = (line) => line.split(SPOILER).map((piece, k) => (k % 2 === 0 ? piece : SPOILER_MASK)).join('')
+  if (u === -1) return lines.map(pairs).join('\n')
+  const from = lines[u].slice(0, lines[u].indexOf(SPOILER))
+  const to = lines[last].slice(lines[last].lastIndexOf(SPOILER) + 2)
+  return [...lines.slice(0, u).map(pairs), from + SPOILER_MASK + to, ...lines.slice(last + 1)].join('\n')
 }
 
 /**

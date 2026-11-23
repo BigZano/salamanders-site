@@ -404,6 +404,94 @@ describe('PostPage: replying to a message, and quoting it', () => {
     expect(area(w).element.value).toBe('> With **marks**\n')
   })
 
+  describe('Quote keeps no word a spoiler hides: the composer reads a quote again, in its own markdown, and sends it as that reads it', () => {
+    const MASK = '\u2592\u2592\u2592'
+    const quoted = async (w, id) => {
+      await tool(w, id, 'Quote').trigger('click')
+      await settle()
+      return area(w).element.value
+    }
+    /** Selects from (node, offset) to (node, offset) in the page. */
+    const select = (from, fromAt, to, toAt) => {
+      const range = document.createRange()
+      range.setStart(from, fromAt)
+      range.setEnd(to, toAt)
+      document.getSelection().removeAllRanges()
+      document.getSelection().addRange(range)
+    }
+    const textIn = (w, id, words) => {
+      const all = [...el(w, id).get('.lb-body').element.querySelectorAll('*')].flatMap((e) => [...e.childNodes])
+      return all.find((n) => n.nodeType === 3 && n.textContent.includes(words))
+    }
+
+    it('masks each spoiler of a whole message, and a spoiler over lines from its first bar to the last, and sends no word of them', async () => {
+      const content = 'Before ||the vault|| and\n**Boss** ||the Warden\nfalls|| after'
+      const w = await show({ messages: [opener(), msg(1, { content })] })
+      expect(el(w, m(1)).findAll('.lb-body .md-spoiler')).toHaveLength(2)
+      expect(await quoted(w, m(1))).toBe(`> Before ${MASK} and\n> **Boss** ${MASK} after\n`)
+      await sendButton(w).trigger('click')
+      await settle()
+      const [sent] = server.sent('POST', `/librarius/posts/${POST}/messages`)
+      expect(sent.body.source).toBe(`> Before ${MASK} and\n> **Boss** ${MASK} after\n`)
+      expect(sent.body.source).not.toMatch(/vault|Warden|falls|\|\|/)
+    })
+
+    it('masks a spoiler over lines that runs to the end of the message, and keeps the words before it', async () => {
+      const w = await show({ messages: [opener(), msg(1, { content: 'Look **here** ||the Warden\nfalls at the ford||' })] })
+      expect(await quoted(w, m(1))).toBe(`> Look **here** ${MASK}\n`)
+    })
+
+    it('masks a one-line spoiler over a row of pipes, which the composer would read as a table and so show', async () => {
+      const w = await show({ messages: [opener(), msg(1, { content: 'x | y ||the vault||\n-|-|-|-|-' })] })
+      expect(await quoted(w, m(1))).toBe(`> x | y ${MASK}\n> -|-|-|-|-\n`)
+    })
+
+    it('masks the spoilers of a reply written on the site, whose bars a quote would pair another way', async () => {
+      const source = '> ||not closed\n||the vault\nkey||'
+      const w = await show({ messages: [opener(), mine(1, { source, content: source })] })
+      expect(await quoted(w, m(1))).toBe(`> > ${MASK}\n`)
+    })
+
+    it('masks each spoiler the selection holds, shown or not, and keeps the words around them', async () => {
+      const w = await show({ messages: [opener(), msg(1, { content: 'Before ||the vault|| and ||the key|| after' })] })
+      const body = el(w, m(1)).get('.lb-body').element
+      await el(w, m(1)).findAll('.md-spoiler')[1].trigger('click')
+      expect(el(w, m(1)).findAll('.md-spoiler.is-shown')).toHaveLength(1)
+      const range = document.createRange()
+      range.selectNodeContents(body)
+      document.getSelection().removeAllRanges()
+      document.getSelection().addRange(range)
+      expect(await quoted(w, m(1))).toBe(`> Before ${MASK} and ${MASK} after\n`)
+    })
+
+    it('masks a selection inside a spoiler, or one that starts or ends in it', async () => {
+      const w = await show({ messages: [opener(), msg(1, { content: 'Before ||the vault key|| after' })] })
+      const inside = textIn(w, m(1), 'vault')
+      select(inside, 4, inside, 9)
+      expect(await quoted(w, m(1))).toBe(`> ${MASK}\n`)
+      await type(w, '')
+      const before = textIn(w, m(1), 'Before')
+      select(before, 0, inside, 9)
+      expect(await quoted(w, m(1))).toBe(`> Before ${MASK}\n`)
+      await type(w, '')
+      const after = textIn(w, m(1), 'after')
+      select(inside, 4, after, after.textContent.length)
+      expect(await quoted(w, m(1))).toBe(`> ${MASK} after\n`)
+    })
+
+    it('masks a spoiler over lines in the selection, the lines around it kept on lines of their own', async () => {
+      const w = await show({ messages: [opener(), msg(1, { content: 'First\nseen **here** ||the Warden\nfalls|| after' })] })
+      expect(el(w, m(1)).find('.lb-body .md-spoiler-block').exists()).toBe(true)
+      const range = document.createRange()
+      range.selectNodeContents(el(w, m(1)).get('.lb-body').element)
+      document.getSelection().removeAllRanges()
+      document.getSelection().addRange(range)
+      const draft = await quoted(w, m(1))
+      expect(draft).not.toMatch(/Warden|falls/)
+      expect(draft.split('\n').filter((l) => l !== '>' && l !== '')).toEqual(['> First', '> seen here', `> ${MASK}`, '>  after'])
+    })
+  })
+
   it('Quote of a message with no words only replies to it', async () => {
     const w = await show({ messages: [opener(), msg(1, { content: '', stickers: [{ id: mid(470), name: 'wave' }] })] })
     await tool(w, m(1), 'Quote').trigger('click')

@@ -50,7 +50,7 @@
  *   or after the Discord epoch (a RangeError before it, and for a string that is no date). A `lastAt` before `createdAt`
  *   gives the month of `createdAt` alone. More than 1200 months is a RangeError.
  */
-import { parse, plainText, walk } from '../archive/markdown'
+import { parse, plainText, SPOILER_MASK, walk } from '../archive/markdown'
 
 const ARTICLE_LENGTH = 600
 const ARTICLE_IMAGES = 2
@@ -61,7 +61,6 @@ const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', '
 const ID = /^\d{1,20}$/
 const IMAGE = /^image\//i
 const WHITE_SPACE = /\s+/g
-const SPOILER_MASK = '▒▒▒'
 const SPOILER_OPENER = '||'
 const SPOILER_FILE = /^spoiler_/i
 // What a picture of a reply of the site is in an excerpt. The spaces keep it a word of its own; the excerpt makes them one.

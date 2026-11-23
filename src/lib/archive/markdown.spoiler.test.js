@@ -1,11 +1,12 @@
 import { describe, it, expect } from 'vitest'
 import fc from 'fast-check'
-import { parse, plainText, walk } from './markdown'
+import { maskSpoilers, parse, plainText, SPOILER_MASK, walk } from './markdown'
 import { parse as parseBefore } from './markdown-22b6793.fixture'
 
 // A spoiler that runs over lines, read so that it fails closed (the default), and the Legion Archive's one-line reading.
 const E = '123456789012345678'
 const ONE = { oneLine: true }
+const EXT = { dialect: 'extended' }
 const LS = String.fromCharCode(0x2028)
 const ZWSP = String.fromCharCode(0x200b)
 const t = (value) => ({ type: 'text', value })
@@ -453,7 +454,8 @@ describe('fail closed', () => {
     }
   })
 
-  it('hides every word any reading of Discord, or the site line by line, hides', () => {
+  /** → messages of the union oracle's alphabet: { s, lines, codeLines }, the text, its lines, and which of them the fences hold. */
+  function messages() {
     const tok = fc.constantFrom('W', 'W', '||', '||', '||W||', '`W||W`', '`W`', '`', '```', '\\||', '\\|\\|', '**W ||W**', '*W ||W*', '**', '*', '_',
       '~~', '[W ||W](https://a.io)', '**W**', '|||', '||||', '|||||', 'W|W', '[W](https://a.io "', '" )', '[W](https://a.io/(', '))', ')',
       '"', '[W', '](https://a.io)', '(W', '<x:/W', 'W>', '<W', '@W>', '>', ']')
@@ -467,7 +469,7 @@ describe('fail closed', () => {
       fc.array(fc.constantFrom('||', '||', 'W', '" )', "' )", '))', ')', 'W>', '@W>', '](https://a.io)'), { minLength: 2, maxLength: 7 }),
       fc.constantFrom(' ', ''),
     ).map(([open, parts, gap]) => ({ lines: [open, parts.join(gap)], code: [false, false] }))
-    fc.assert(fc.property(fc.array(fc.oneof(text, text, fence, blank, runOn), { minLength: 1, maxLength: 7 }), (blocks) => {
+    return fc.array(fc.oneof(text, text, fence, blank, runOn), { minLength: 1, maxLength: 7 }).map((blocks) => {
       let deep = false
       const all = blocks.map((b) => {
         if (b.body === undefined) {
@@ -480,6 +482,12 @@ describe('fail closed', () => {
       const s = numbered(all.flatMap((b) => b.lines).join('\n'))
       const lines = s.split('\n')
       const codeLines = all.flatMap((b) => b.code)
+      return { s, lines, codeLines }
+    })
+  }
+
+  it('hides every word any reading of Discord, or the site line by line, hides', () => {
+    fc.assert(fc.property(messages(), ({ s, lines, codeLines }) => {
       const stretches = READINGS.flatMap((o) => readingHides(lines, codeLines, o))
       const byLine = new Set(exposure(parseBefore(s)).hidden)
       const nodes = parse(s)
@@ -526,6 +534,44 @@ describe('fail closed', () => {
       expect(exposure(parse(s)), JSON.stringify(s)).toEqual({ hidden: expected.hidden.sort(order), shown: expected.shown.sort(order) })
     }), { numRuns: 2000 })
   })
+
+  it('masks for a quote every word any reading of Discord, or the site in either dialect or line by line, hides, and keeps the words outside the bars', () => {
+    fc.assert(fc.property(messages(), ({ s, lines, codeLines }) => {
+      const masked = maskSpoilers(s)
+      const kept = new Set(masked.match(WORD) ?? [])
+      const stretches = READINGS.flatMap((o) => readingHides(lines, codeLines, o))
+      const site = new Set([...exposure(parse(s)).hidden, ...exposure(parse(s, EXT)).hidden, ...exposure(parseBefore(s)).hidden])
+      const first = s.indexOf('||')
+      const last = s.lastIndexOf('||')
+      // No `||` is left, so neither dialect hides anything in what is quoted: what is left is read as words.
+      expect(masked).not.toContain('||')
+      for (const dialect of ['discord', 'extended']) expect(exposure(parse(masked, { dialect })).hidden).toEqual([])
+      for (const m of s.matchAll(WORD)) {
+        const why = `${m[0]} in ${JSON.stringify(s)}`
+        if (site.has(m[0]) || stretches.some(([a, b]) => m.index >= a && m.index < b)) expect(kept.has(m[0]), why).toBe(false)
+        if (first === -1 || m.index < first || m.index > last + 1) expect(kept.has(m[0]), why).toBe(true)
+      }
+    }), { numRuns: globalThis.__stryker__ ? 150 : 1000 })
+  }, 300_000)
+
+  it('masks for a quote exactly the pairs of the certain lines before the first uncertain one, and all from its first bar to the last', () => {
+    const certainTok = fc.constantFrom('W', 'W', '||W||', '|| W ||', 'a | W')
+    const certainLine = fc.tuple(fc.constantFrom('', '> ', '- ', '# '), fc.array(certainTok, { maxLength: 4 })).map(([p, parts]) => p + parts.join(' '))
+    const unsure = fc.constantFrom('||', '**W**', '`W`', 'W_W', '\\x', '[W](https://a.io)', '|||')
+    const uncertainLine = fc.tuple(fc.array(certainTok, { maxLength: 2 }), unsure, fc.array(certainTok, { maxLength: 2 }))
+      .map(([a, x, b]) => [...a, x, ...b, '||W||'].join(' '))
+    const anyLine = fc.oneof(certainLine, uncertainLine, fc.constantFrom('', 'W', 'W ||W', 'W|| W'))
+    fc.assert(fc.property(fc.array(certainLine, { maxLength: 3 }), uncertainLine, fc.array(anyLine, { maxLength: 4 }), (before, u, after) => {
+      const s = numbered([...before, u, ...after].join('\n'))
+      const lines = s.split('\n')
+      const uStart = lines.slice(0, before.length).reduce((n, l) => n + l.length + 1, 0)
+      const first = s.indexOf('||', uStart)
+      const last = s.lastIndexOf('||')
+      const oldHidden = new Set(exposure(parseBefore(lines.slice(0, before.length).join('\n'))).hidden)
+      const want = [...s.matchAll(WORD)].filter((m) => !(m.index > first && m.index < last) && !(m.index < uStart && oldHidden.has(m[0]))).map((m) => m[0])
+      expect(maskSpoilers(s).match(WORD) ?? [], JSON.stringify(s)).toEqual(want)
+    }), { numRuns: 2000 })
+  })
 })
 
 describe('the nodes inside it', () => {
@@ -538,4 +584,75 @@ describe('the nodes inside it', () => {
     expect(plainText(parse('a ||b\nc|| d'))).toBe('a \nb\nc\n d\n')
     expect(plainText(parse('||a\n```js\nx\n```\nb||'), { raw: true })).toBe('a\njsx\nb\n')
   })
+})
+
+describe('maskSpoilers: a quote keeps no word a spoiler may hide', () => {
+  const m = SPOILER_MASK
+  it.each([
+    ['a spoiler on its line', 'a ||b|| c', `a ${m} c`],
+    ['two on a certain line, and the words between them', 'w0 ||w1|| w2 ||w3|| w4', `w0 ${m} w2 ${m} w4`],
+    ['a spoiler over lines', 'w0 ||w1\nw2|| w3', `w0 ${m} w3`],
+    ['certain lines, then all from the first bar of the first uncertain one to the last bar', 'a ||b|| c\n**x** ||d\ne|| f\ng', `a ${m} c\n**x** ${m} f\ng`],
+    ['a spoiler over lines that runs to the end of the message', 'see **this** ||w1\nw2||', `see **this** ${m}`],
+    ['the last bar on the first uncertain line', 'x\n**a** ||b|| c', `x\n**a** ${m} c`],
+    ['a bar on its own, which hides nothing but is masked all the same', 'a || b', `a ${m} b`],
+    ['a quote that the bars cut', '> a ||b\n> c||\n> d', `> a ${m}\n> d`],
+    ['no bar at all: as it was, its line breaks \\n', 'a\r\nb\rc', 'a\nb\nc'],
+    ['bars escaped, which are no `||`', '\\|\\|a\\|\\|', '\\|\\|a\\|\\|'],
+    ['nothing', '', ''],
+  ])('%s', (_, src, masked) => {
+    expect(maskSpoilers(src)).toBe(masked)
+  })
+
+  it('is the mask the excerpts show', () => {
+    expect(SPOILER_MASK).toBe('\u2592\u2592\u2592')
+  })
+
+  it('masks what a quote would show once the extended dialect reads it again', () => {
+    const asQuoted = (src) => src.split('\n').map((l) => `> ${l}`).join('\n')
+    // A one-line spoiler of Discord's over a row of pipes: the extended dialect reads the two lines as a table, its bars as borders.
+    const table = 'x | y ||w0||\n-|-|-|-|-'
+    expect(exposure(parse(table)).hidden).toEqual(['w0'])
+    const read = parse(asQuoted(table), EXT)
+    const kinds = []
+    walk(read, (n) => kinds.push(n.type))
+    expect(kinds).toContain('table')
+    expect(kinds).not.toContain('spoiler')
+    expect(plainText(read)).toContain('w0')
+    expect(maskSpoilers(table)).toBe(`x | y ${m}\n-|-|-|-|-`)
+    // A reply of the site's, whose quote marks a quote makes words: its bars pair another way.
+    const reply = '> ||w0\n||w1\nw2||'
+    expect(exposure(parse(reply, EXT)).hidden).toEqual(['w1', 'w2'])
+    expect(exposure(parse(asQuoted(reply), EXT)).shown).toEqual(expect.arrayContaining(['w1', 'w2']))
+    expect(maskSpoilers(reply)).toBe(`> ${m}`)
+  })
+
+  it('masks every word the extended dialect hides: in tables, pictures, notes and spoilers over the lines of a paragraph (property)', () => {
+    const tok = fc.constantFrom('W', 'W', ' ', '||', '||', '||W||', '\n', '\n', '\n\n', '| W | W |', '|-|-|', '| ||W|| |', '|', '![W](upload:1)', '||![W](upload:2)||',
+      '[^a]', '[^a]: W', '[^a]: ||W||', '#### ', '---', '> ', '>>> ', '- ', '**', '*', '`', '\\|', '\\', '[W](https://a.io)')
+    fc.assert(fc.property(fc.array(tok, { maxLength: 40 }), (parts) => {
+      const s = numbered(parts.join(''))
+      const kept = new Set(maskSpoilers(s).match(WORD) ?? [])
+      const first = s.indexOf('||')
+      const last = s.lastIndexOf('||')
+      // walk reaches every node, a table's cells and the notes too.
+      const hidden = []
+      walk(parse(s, EXT), (n) => n.type === 'spoiler' && hidden.push(...(plainText(n.children, { raw: true }).match(WORD) ?? [])))
+      for (const word of hidden) expect(kept.has(word), `${word} in ${JSON.stringify(s)}`).toBe(false)
+      for (const w of s.matchAll(WORD)) if (first === -1 || w.index < first || w.index > last + 1) expect(kept.has(w[0]), `${w[0]} in ${JSON.stringify(s)}`).toBe(true)
+    }), { numRuns: 3000 })
+  })
+
+  it('takes only a string', () => {
+    for (const src of [null, undefined, 42, ['a']]) expect(() => maskSpoilers(src)).toThrow(new TypeError('markdown source must be a string'))
+  })
+
+  it('stays linear on hostile input', () => {
+    const budget = globalThis.__stryker__ ? 60_000 : 6000
+    for (const src of ['a ||b|| c\n'.repeat(100_000), '||a\n'.repeat(100_000), '```a\n'.repeat(100_000) + '||b', '|'.repeat(200_000)]) {
+      const at = performance.now()
+      maskSpoilers(src)
+      expect(performance.now() - at).toBeLessThan(budget)
+    }
+  }, 120_000)
 })

@@ -31,7 +31,7 @@
 //     Discord lets reply. It is given the store's writes: a reply, an edit, a picture (held by place; only for a member who may
 //     attach, else its 🖼 is unavailable), whether a picture a draft shows is still held, the member search, and the server's own emoji.
 //   - Each message offers Reply (the composer replies to it), Quote (the words selected in it, else all of it, go in as a quote,
-//     with each mention written as the page names it, and the composer replies to it), Edit (the reader's own replies written on the site: the composer opens with the source)
+//     with each mention written as the page names it and the mask in place of what a spoiler hides, and the composer replies to it), Edit (the reader's own replies written on the site: the composer opens with the source)
 //     and Delete (the reader's own messages when /me says they may delete them, `can.delete`, which a timeout leaves them, or any
 //     but the post's opening message for a member who manages messages; it asks first). None is offered in a locked post but to a member who manages threads, as the server refuses them there.
 //   - What the reader has on its way is the store's `outbox`, asked for when the post opens (what was sent before the page was
@@ -43,7 +43,7 @@ import { useRoute } from 'vue-router'
 import { useAuth } from '../../stores/auth'
 import { POLL_MS, useLibrarius } from '../../stores/librarius'
 import { listEmoji, searchMembers } from '../../lib/librarius/api'
-import { parse } from '../../lib/archive/markdown'
+import { maskSpoilers, parse, SPOILER_MASK } from '../../lib/archive/markdown'
 import { asQuote, namedMentions } from '../../lib/librarius/composer'
 import { articleMemo, firstUnread, groupMessages, isRead, railMonths, samePeople } from '../../lib/librarius/layout'
 import { createRenderCtx } from '../../lib/librarius/render'
@@ -278,17 +278,43 @@ async function answer(message) {
   await nextTick()
   composer.value?.focus()
 }
-/** → the words of the message the reader has selected, when the selection lies in its text, else null. */
+// What a quote holds goes into the composer, which reads it again in the site's own markdown and sends it to Discord as that
+// reads it: bars a message pairs one way may pair another way there, or be text, and be sent escaped. So nothing a spoiler
+// hides, or may hide, goes into a quote. A whole message is quoted through maskSpoilers (librariusMarkdown.js), which puts the
+// mask in place of all any reading may hide. A selection that touches a spoiler, shown or not, has the mask in its place.
+
+// The elements that are lines of their own in the words of a selection.
+const LINE_TAGS = new Set(['P', 'DIV', 'LI', 'BLOCKQUOTE', 'PRE', 'H1', 'H2', 'H3', 'H4', 'H5', 'H6', 'UL', 'OL', 'TABLE', 'TR', 'TD', 'TH', 'SECTION', 'HR'])
+/** → the words of a copy of what a range holds, each spoiler in it the mask. */
+function wordsIn(node) {
+  if (node.nodeType === Node.TEXT_NODE) return node.nodeValue
+  if (node.nodeType === Node.ELEMENT_NODE && node.classList.contains('md-spoiler')) return SPOILER_MASK
+  const inner = [...node.childNodes].map(wordsIn).join('')
+  return LINE_TAGS.has(node.tagName) ? `\n${inner}\n` : inner
+}
+/** → the element (or the document) a range lies in, the parent of a text node it lies in. */
+const holderOf = (range) => (range.commonAncestorContainer.nodeType === Node.TEXT_NODE ? range.commonAncestorContainer.parentNode : range.commonAncestorContainer)
+const inSpoiler = (range) => holderOf(range).closest?.('.md-spoiler') != null
+const touchesSpoiler = (range) => inSpoiler(range) || [...holderOf(range).querySelectorAll('.md-spoiler')].some((spoiler) => range.intersectsNode(spoiler))
+/** → the words a range holds with each spoiler it touches the mask: the mask alone for a range inside one. */
+const maskedWords = (range) => (inSpoiler(range) ? SPOILER_MASK : wordsIn(range.cloneContents()))
+
+/**
+ * → the words of the message the reader has selected, when the selection lies in its text, else null: as the browser reads them,
+ * or, when the selection touches a spoiler, with the mask in its place.
+ */
 function selectedIn(id) {
   const body = messageElement(id)?.querySelector('.lb-body')
   const selection = document.getSelection()
   if (!body || !selection || selection.isCollapsed || !body.contains(selection.anchorNode) || !body.contains(selection.focusNode)) return null
-  return selection.toString()
+  const ranges = Array.from({ length: selection.rangeCount }, (_, k) => selection.getRangeAt(k))
+  return ranges.some(touchesSpoiler) ? ranges.map(maskedWords).join('') : selection.toString()
 }
 const wordsOf = (message) => (message.origin === 'site' && typeof message.source === 'string' ? message.source : message.content)
 // The mentions of the words are written as the page names them: a quote pings nobody, and is not refused for a mention nobody picked.
 async function quote(message) {
-  const words = selectedIn(message.id) ?? wordsOf(message)
+  const whole = wordsOf(message)
+  const words = selectedIn(message.id) ?? (typeof whole === 'string' ? maskSpoilers(whole) : whole)
   await answer(message)
   if (isWords(words)) await composer.value?.insert(asQuote(namedMentions(words, (node) => ctx.value.mention(node).label)))
 }
