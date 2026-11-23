@@ -45,7 +45,6 @@ const CHANGES_LIMIT = 200
 const CHANGES_SLACK = 100
 const REFRESH_WITHIN_MS = 300_000
 const REFRESH_MAX = 50
-const QUOTE_LENGTH = 200
 const JSON_MAX_BYTES = 1024
 
 const NO_SUCH_POST = 'No such post.'
@@ -54,9 +53,6 @@ const BAD_MESSAGE = 'That message id is not valid.'
 
 /** → the ids of the members a text mentions, `<@id>` or `<@!id>`, each as often as it does. */
 const mentionsIn = (text) => Array.from(text.matchAll(MENTION), (m) => m[1])
-
-/** The first 200 characters of a message, counted as characters so that no pair is cut in two. */
-const quote = (text) => Array.from(text).slice(0, QUOTE_LENGTH).join('')
 
 /** → the 1 KB JSON request of a PUT: { body, blank } or { status, error }, as httpReply.readJson. */
 const readJson = (request) => readJsonWithin(request, { maxBytes: JSON_MAX_BYTES, tooLarge: 'The request is too large (1 KB at most).' })
@@ -128,8 +124,10 @@ export function createLibrariusHandler({ access, store, guild, links, importer, 
       const target = quoted.get(m.replyTo)
       if (target !== undefined) {
         directory.note(target.authorId, target.authorName, target.authorAvatar, target.id)
-        // The quote shows only its first 200 characters, and so only the mentions in those.
-        for (const id of mentionsIn(quote(target.content))) directory.want(id)
+        // The reply line is sent the whole text it quotes, never a cut of it: the site reads a spoiler over the whole
+        // message and cuts only the plain text it shows, as a cut copy could show a word the message hides. So whoever
+        // that text mentions, anywhere in it, is named.
+        for (const id of mentionsIn(target.content)) directory.want(id)
       }
       for (const id of mentionsIn(m.content)) directory.want(id)
     }
@@ -152,7 +150,7 @@ export function createLibrariusHandler({ access, store, guild, links, importer, 
                 id: target.id,
                 authorId: target.authorId,
                 authorName: directory.shown(target.authorId, { name: target.authorName }).name,
-                content: quote(target.content),
+                content: target.content,
               },
         attachments: m.attachments.map((a) => ({
           id: a.id,

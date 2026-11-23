@@ -97,6 +97,9 @@ const embed = (over = {}) => ({
 const reaction = (over = {}) => ({ count: 3, me: false, emoji: { id: null, name: FIRE }, ...over })
 
 /** Every string anywhere in a value. */
+// Whether a long text came back exactly as expected, checked without a diff: a reporter takes minutes to diff two texts
+// of 65,536 units, so a failure reports their lengths instead.
+const same = (got, want, label) => expect({ units: got?.length, same: got === want }, label).toEqual({ units: want?.length, same: true })
 const strings = (value, out = []) => {
   if (typeof value === 'string') out.push(value)
   else if (value && typeof value === 'object') for (const v of Object.values(value)) strings(v, out)
@@ -734,13 +737,63 @@ describe('parseMessage', () => {
   })
 
   describe('the text', () => {
-    it('cuts the content to 4000 characters and no further', () => {
+    // The site reads a spoiler over the whole of a message, so a cut copy could show a word the message hides. Discord
+    // caps a message at 4,000 characters, counted in units, code points or graphemes: none of them reaches 65,536 units.
+    it('keeps the content whole, however Discord counts its 4,000 characters', () => {
       const content = (s) => parseMessage(message({ content: s })).content
-      expect(content('c'.repeat(3999))).toBe('c'.repeat(3999))
-      expect(content('c'.repeat(4000))).toBe('c'.repeat(4000))
-      expect(content('c'.repeat(4001))).toBe('c'.repeat(4000))
-      expect(content('c'.repeat(5000))).toBe('c'.repeat(4000))
-      expect(content('c'.repeat(3999) + FIRE)).toBe('c'.repeat(3999))
+      const family = '\u{1F468}\u200D\u{1F469}\u200D\u{1F467}\u200D\u{1F466}'
+      expect(family).toHaveLength(11)
+      for (const text of ['c'.repeat(4000), 'c'.repeat(4001), FIRE.repeat(4000), `${'c'.repeat(3999)}${FIRE}`, family.repeat(4000), `x ||secret \`b|| W ${'y'.repeat(7000)}\nnext\` z||`]) {
+        same(content(text), text, `${text.length} units`)
+      }
+      expect(Array.from(FIRE.repeat(4000))).toHaveLength(4000)
+      expect(FIRE.repeat(4000).length).toBe(8000)
+    })
+
+    it('keeps a text of 65,536 units whole, and drops one over that, never cutting it', () => {
+      const content = (s) => parseMessage(message({ content: s })).content
+      same(content('c'.repeat(65536)), 'c'.repeat(65536))
+      same(content(FIRE.repeat(32768)), FIRE.repeat(32768))
+      for (const text of ['c'.repeat(65537), `${FIRE.repeat(32768)}c`, `c${FIRE.repeat(32768)}`, 'c'.repeat(200000), `x ||secret \`b|| W ${'y'.repeat(65536)}\nnext\` z||`]) {
+        same(content(text), '', `${text.length} units`)
+      }
+    })
+
+    it('counts the units it would store: U+0000 left out, a lone surrogate as the one unit of U+FFFD', () => {
+      const content = (s) => parseMessage(message({ content: s })).content
+      same(content(`${'c'.repeat(65536)}${NUL}${NUL}`), 'c'.repeat(65536))
+      same(content(`${'c'.repeat(65535)}${LONE_HIGH}`), `${'c'.repeat(65535)}${FFFD}`)
+      same(content(`${LONE_LOW}${'c'.repeat(65535)}`), `${FFFD}${'c'.repeat(65535)}`)
+      same(content(`${'c'.repeat(65536)}${LONE_HIGH}`), '')
+      same(content(`${'c'.repeat(65536)}${NUL}d`), '')
+    })
+
+    it('keeps any content and description whole, made storable (property)', () => {
+      const storable = (v) => v.replaceAll(NUL, '').toWellFormed()
+      fc.assert(
+        // size 'max' draws lengths over the whole range, well past 4,000 units.
+        fc.property(fc.string({ unit: 'binary', maxLength: 9000, size: 'max' }), (text) => {
+          const row = parseMessage(message({ content: text, embeds: [embed({ description: text })] }))
+          same(row.content, storable(text))
+          same(row.embeds[0].description, storable(text) || null)
+        }),
+        // A failing text this long is not shrunk: that takes minutes, and its length says enough.
+        { numRuns: 200, endOnFailure: true },
+      )
+    })
+
+    it('keeps a text near the bound whole while it fits, and drops it once over, never cutting it (property)', () => {
+      const storable = (v) => v.replaceAll(NUL, '').toWellFormed()
+      fc.assert(
+        fc.property(fc.integer({ min: 65450, max: 65536 }), fc.string({ unit: 'binary', minLength: 1, maxLength: 120 }), fc.boolean(), (n, tail, before) => {
+          const text = before ? `${tail}${'c'.repeat(n)}` : `${'c'.repeat(n)}${tail}`
+          const kept = storable(text)
+          const row = parseMessage(message({ content: text, embeds: [embed({ description: text })] }))
+          same(row.content, kept.length <= 65536 ? kept : '')
+          same(row.embeds[0].description, kept.length <= 65536 ? kept : null)
+        }),
+        { numRuns: 300, endOnFailure: true },
+      )
     })
 
     it('keeps the content as written, spaces and newlines included', () => {
@@ -1032,6 +1085,15 @@ describe('parseMessage', () => {
       expect(row({ filename: 5 })[0].filename).toBe('')
     })
 
+    it('keeps the SPOILER_ mark of a long filename: the cut takes the end, and the site reads only the start', () => {
+      for (const name of [`SPOILER_${'f'.repeat(300)}.png`, `spoiler_${FIRE.repeat(150)}.png`]) {
+        const kept = row({ filename: name })[0].filename
+        expect(kept.length).toBeLessThanOrEqual(200)
+        expect(kept.slice(0, 8).toUpperCase()).toBe('SPOILER_')
+        expect(name.startsWith(kept)).toBe(true)
+      }
+    })
+
     it('keeps the content type, cut at 100, or null when there is none', () => {
       expect(row({ content_type: 'video/mp4' })[0].contentType).toBe('video/mp4')
       expect(row({ content_type: 'x'.repeat(100) })[0].contentType).toBe('x'.repeat(100))
@@ -1117,16 +1179,24 @@ describe('parseMessage', () => {
       for (const url of bad) expect(row({ url })[0].url, String(url)).toBeNull()
     })
 
-    it('cuts title, description, provider and type to their limits', () => {
+    it('cuts title, provider and type to their limits: the site shows them as plain text', () => {
       const cut = (over) => row(over)[0]
       expect(cut({ title: 't'.repeat(256) }).title).toBe('t'.repeat(256))
       expect(cut({ title: 't'.repeat(257) }).title).toBe('t'.repeat(256))
-      expect(cut({ description: 'd'.repeat(4096) }).description).toBe('d'.repeat(4096))
-      expect(cut({ description: 'd'.repeat(4097) }).description).toBe('d'.repeat(4096))
       expect(cut({ provider: { name: 'p'.repeat(256) } }).provider).toBe('p'.repeat(256))
       expect(cut({ provider: { name: 'p'.repeat(257) } }).provider).toBe('p'.repeat(256))
       expect(cut({ type: 'y'.repeat(32) }).type).toBe('y'.repeat(32))
       expect(cut({ type: 'y'.repeat(33) }).type).toBe('y'.repeat(32))
+    })
+
+    // The site reads the description as Markdown, spoilers included, so it is kept whole or not at all, as a message is.
+    it('keeps the description whole, however Discord counts its 4,096 characters, and drops one over 65,536 units', () => {
+      const description = (d) => row({ description: d })[0].description
+      for (const text of ['d'.repeat(4096), 'd'.repeat(4097), FIRE.repeat(4096), `a ||secret \`b|| W ${'y'.repeat(5000)}\nnext\` z||`, 'd'.repeat(65536)]) {
+        same(description(text), text, `${text.length} units`)
+      }
+      for (const text of ['d'.repeat(65537), `${FIRE.repeat(32768)}d`, `${'d'.repeat(65536)}${LONE_LOW}`]) same(description(text), null, `${text.length} units`)
+      same(description(`${'d'.repeat(65536)}${NUL}`), 'd'.repeat(65536))
     })
 
     it('keeps embed text storable', () => {
@@ -1412,6 +1482,8 @@ describe('parseMessage', () => {
     )
     const SNOW = /^\d{17,20}$/
     const wellFormed = (s) => !s.includes(NUL) && s === s.toWellFormed()
+    // A text as the store keeps it, or null for one that is no string.
+    const storable = (v) => (typeof v === 'string' ? v.replaceAll(NUL, '').toWellFormed() : null)
     let answered = 0
     fc.assert(
       fc.property(raw, (r) => {
@@ -1426,7 +1498,8 @@ describe('parseMessage', () => {
         expect(row.authorName.length).toBeGreaterThan(0)
         expect(row.authorName.length).toBeLessThanOrEqual(80)
         expect(row.authorAvatar === null || row.authorAvatar === `https://cdn.discordapp.com/avatars/${row.authorId}/${r.author.avatar}.png?size=64`).toBe(true)
-        expect(row.content.length).toBeLessThanOrEqual(4000)
+        // The site reads both as Markdown: each is the text as sent, made storable, whole (no text drawn here is over the bound).
+        same(row.content, storable(r.content) ?? '')
         expect(Number.isNaN(Date.parse(row.createdAt))).toBe(false)
         expect(row.editedAt === null || !Number.isNaN(Date.parse(row.editedAt))).toBe(true)
         expect(row.attachments.length).toBeLessThanOrEqual(10)
@@ -1440,9 +1513,11 @@ describe('parseMessage', () => {
           for (const d of [a.width, a.height]) expect(d === null || (Number.isInteger(d) && d > 0)).toBe(true)
         })
         expect(row.embeds.length).toBeLessThanOrEqual(10)
+        const sent = (Array.isArray(r.embeds) ? r.embeds : []).filter((e) => typeof e === 'object' && e !== null && !Array.isArray(e))
+        row.embeds.forEach((e, i) => same(e.description, storable(sent[i].description) || null))
         for (const e of row.embeds) {
           expect(e.url === null || e.url.startsWith('https://')).toBe(true)
-          for (const [k, max] of [['title', 256], ['description', 4096], ['provider', 256], ['type', 32]]) expect(e[k] === null || (e[k].length > 0 && e[k].length <= max)).toBe(true)
+          for (const [k, max] of [['title', 256], ['provider', 256], ['type', 32]]) expect(e[k] === null || (e[k].length > 0 && e[k].length <= max)).toBe(true)
           for (const img of [e.thumbnail, e.image]) {
             if (img !== null) expect(img.url).toMatch(/^https:\/\/(?:media|images-ext-\d+)\.discordapp\.net\//)
           }

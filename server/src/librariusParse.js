@@ -6,8 +6,12 @@
  * shape:
  *
  * - ids are snowflakes (strings of 17 to 20 digits) or the row is null, or the field is null;
- * - text is cut to its limit in UTF-16 units and is always something Postgres can store: U+0000 is dropped, a lone
- *   surrogate becomes U+FFFD, and a cut never leaves half of an emoji;
+ * - text is always something Postgres can store: U+0000 is dropped, and a lone surrogate becomes U+FFFD;
+ * - text the site shows as plain text (a title, a name, a file name) is cut to its limit in UTF-16 units, and a cut
+ *   never leaves half of an emoji;
+ * - text the site reads as Markdown (a message's content, an embed's description) is never cut: a cut copy can read
+ *   as a spoiler closed before words the whole text hides. It is kept whole up to MARKDOWN_MAX units, which no text
+ *   Discord sends reaches, and one over that is dropped (stored empty, so the site shows nothing of it);
  * - links are the ones the site may load: attachments from Discord's CDN, embed images through Discord's media
  *   proxy only (an outside image address is never kept), and embed links over https;
  * - timestamps are ISO times Postgres will take, from Discord's own epoch on, else the time inside the snowflake.
@@ -24,6 +28,10 @@ const EPOCH_MS = 1420070400000
 const LAST_SECOND = 253402300799
 // The largest value of a Postgres integer column.
 const INT_MAX = 2147483647
+// The most UTF-16 units of Markdown text kept, whole. Discord caps a message at 4,000 characters and an embed's
+// description at 4,096, but whether it counts units, code points or graphemes is not settled, and a grapheme can be
+// many units (a family emoji is 11). This is 16 units for each of 4,096 characters, so no text Discord sends reaches it.
+const MARKDOWN_MAX = 65536
 
 const SNOWFLAKE = /^\d{17,20}$/
 const HEX = /^[0-9a-f]+$/i
@@ -47,14 +55,27 @@ const list = (v) => (Array.isArray(v) ? v : [])
 // A whole number from 1 to INT_MAX, else null: what a width or a height may be.
 const dimension = (n) => (Number.isSafeInteger(n) && n > 0 && n <= INT_MAX ? n : null)
 
+/** The text as Postgres can store it: U+0000 left out, and each lone surrogate made U+FFFD. */
+const storable = (text) => text.replaceAll('\u0000', '').toWellFormed()
+
 /**
  * The text cut to `max` UTF-16 units, always something Postgres can store, or '' when it is no string. U+0000 goes
  * first, then any lone surrogate becomes U+FFFD, then the cut, which never leaves the first half of a pair.
  */
 function clean(v, max) {
   if (typeof v !== 'string') return ''
-  const cut = v.replaceAll('\u0000', '').toWellFormed().slice(0, max)
+  const cut = storable(v).slice(0, max)
   return HIGH_SURROGATE_END.test(cut) ? cut.slice(0, -1) : cut
+}
+
+/**
+ * Text the site reads as Markdown, whole and storable, or '' when it is no string or, once storable, is over
+ * MARKDOWN_MAX units. It is never cut: a cut copy could show a word the whole text hides behind a spoiler.
+ */
+function whole(v) {
+  if (typeof v !== 'string') return ''
+  const text = storable(v)
+  return text.length <= MARKDOWN_MAX ? text : ''
 }
 
 /** The link as a URL, or null when it is no string or no URL. */
@@ -237,7 +258,7 @@ function embedRow(e) {
     type: clean(e.type, 32) || null,
     url: link !== null && link.protocol === 'https:' ? link.href : null,
     title: clean(e.title, 256) || null,
-    description: clean(e.description, 4096) || null,
+    description: whole(e.description) || null,
     provider: clean(e.provider?.name, 256) || null,
     thumbnail: embedImage(e.thumbnail),
     image: embedImage(e.image),
@@ -277,7 +298,7 @@ export function parseMessage(raw) {
     webhookId: isId(raw.webhook_id) ? raw.webhook_id : null,
     // `|| 0`: MESSAGE_KINDS.has(-0) is true, and minus zero must not reach the row as the kind.
     kind: raw.type || 0,
-    content: clean(raw.content, 4000),
+    content: whole(raw.content),
     embeds: list(raw.embeds).map(embedRow).filter((e) => e !== null).slice(0, 10),
     stickers: list(raw.sticker_items)
       .filter((s) => isObj(s) && isId(s.id))

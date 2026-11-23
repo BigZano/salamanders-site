@@ -959,13 +959,24 @@ describe('listPosts', () => {
     )
   })
 
-  it('takes the newest message by id as the latest, with its first 400 characters', async () => {
+  it('takes the newest message by id as the latest, with the whole of its text', async () => {
     const { pool, log } = fakePool()
     await store(pool).listPosts(MEMBER)
     const sql = log[0].sql
     expect(sql).toContain('left join lateral (select m.* from librarius_messages m where m.post_id = p.id order by m.id desc limit 1) lm on true')
-    expect(sql).toContain('left(lm.content, 400) as latest_content')
+    expect(sql).toContain('lm.author_avatar as latest_author_avatar, lm.content as latest_content,')
     expect(sql).toContain('coalesce(lm.created_at, p.created_at) as last_activity_at')
+    // The site reads its spoilers over the whole message, so a cut copy could show a word the message hides.
+    expect(sql).not.toMatch(/\b(left|right|substr|substring|overlay|split_part)\s*\(/)
+  })
+
+  it('answers the latest text whole: one of 4,000 characters, and one of 4,000 astral characters', async () => {
+    const long = `${'a'.repeat(3999)}Z`
+    const astral = '\u{1F600}'.repeat(3999) + '\u{1F525}'
+    const { pool } = fakePool([['from librarius_posts p', [dbPost({ latest_content: long }), dbPost({ id: POST_2, latest_content: astral })]]])
+    const out = await store(pool).listPosts(MEMBER)
+    expect(out.map((p) => p.latest.content)).toEqual([long, astral])
+    expect(Array.from(out[1].latest.content)).toHaveLength(4000)
   })
 
   it('takes the first image of the latest message as its thumbnail', async () => {
@@ -1618,28 +1629,44 @@ describe('changes', () => {
 })
 
 describe('quotedMessages', () => {
-  const SQL =
-    'select id, author_id, author_name, author_avatar, left(content, 200) as content from librarius_messages where post_id = $1 and id = any($2::bigint[])'
+  const SQL = 'select id, author_id, author_name, author_avatar, content from librarius_messages where post_id = $1 and id = any($2::bigint[])'
 
-  it('asks for the named messages of the post in one plain statement, with the first 200 characters of each', async () => {
+  it('asks for the named messages of the post in one plain statement, with the whole text of each', async () => {
     const { pool, log, release } = fakePool([[SQL, []]])
     await store(pool).quotedMessages(POST, [MSG, MSG_2])
     expect(log).toEqual([{ sql: SQL, params: [POST, [MSG, MSG_2]] }])
     expect(release).not.toHaveBeenCalled()
   })
 
-  it('answers each stored one as its id, author, name, avatar and start, and leaves out any that is not stored', async () => {
+  it('answers each text whole: one of 4,000 characters, and one of 4,000 astral characters', async () => {
+    const long = `${'a'.repeat(3999)}Z`
+    const astral = '\u{1F600}'.repeat(3999) + '\u{1F525}'
     const { pool } = fakePool([
       [
         SQL,
         [
-          { id: MSG_2, author_id: AUTHOR, author_name: 'Test Author', author_avatar: 'https://cdn.discordapp.com/avatars/x.png', content: 'the start' },
+          { id: MSG, author_id: AUTHOR, author_name: 'Test Author', author_avatar: null, content: long },
+          { id: MSG_2, author_id: OWNER, author_name: 'Other', author_avatar: null, content: astral },
+        ],
+      ],
+    ])
+    const out = await store(pool).quotedMessages(POST, [MSG, MSG_2])
+    expect(out.map((q) => q.content)).toEqual([long, astral])
+    expect(Array.from(out[1].content)).toHaveLength(4000)
+  })
+
+  it('answers each stored one as its id, author, name, avatar and text, and leaves out any that is not stored', async () => {
+    const { pool } = fakePool([
+      [
+        SQL,
+        [
+          { id: MSG_2, author_id: AUTHOR, author_name: 'Test Author', author_avatar: 'https://cdn.discordapp.com/avatars/x.png', content: 'the text' },
           { id: MSG, author_id: OWNER, author_name: 'Other', author_avatar: null, content: '' },
         ],
       ],
     ])
     expect(await store(pool).quotedMessages(POST, [MSG, MSG_2, MSG_3])).toEqual([
-      { id: MSG_2, authorId: AUTHOR, authorName: 'Test Author', authorAvatar: 'https://cdn.discordapp.com/avatars/x.png', content: 'the start' },
+      { id: MSG_2, authorId: AUTHOR, authorName: 'Test Author', authorAvatar: 'https://cdn.discordapp.com/avatars/x.png', content: 'the text' },
       { id: MSG, authorId: OWNER, authorName: 'Other', authorAvatar: null, content: '' },
     ])
   })
