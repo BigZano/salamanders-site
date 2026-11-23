@@ -29,7 +29,8 @@
  * (only they see it) and `allowed_mentions: { parse: [] }`, in one of these (the copy is the spec's and Ruling B12's):
  *   - the message is one this member wrote on the site, with the replies on: "This was written on the site. Delete it there:" and the
  *     link `<site>/reliquarium/librarius/<post>#m-<message>`, the post being the one the store has the message in. A later part of a
- *     reply is answered as the reply (the store maps it first, in the same deadline), and linked to the reply;
+ *     reply is answered as the reply (the store maps it first, in the same deadline), and linked to the reply. The site lets its author
+ *     delete it there whether or not they are timed out or may reply (librariusWrites.js mayDelete, /librarius/me `can.delete`);
  *   - the message was written on the site, with the replies off, whoever wrote it: "Deleting from the site is switched off right now. A
  *     moderator can delete this in Discord." Whether they are on is asked once the store has answered, so a member is not sent to a
  *     site whose delete would be refused;

@@ -32,8 +32,8 @@
 //     attach, else its 🖼 is unavailable), whether a picture a draft shows is still held, the member search, and the server's own emoji.
 //   - Each message offers Reply (the composer replies to it), Quote (the words selected in it, else all of it, go in as a quote,
 //     with each mention written as the page names it, and the composer replies to it), Edit (the reader's own replies written on the site: the composer opens with the source)
-//     and Delete (the reader's own messages, or any but the post's opening message for a member who manages messages; it asks
-//     first). None is offered in a locked post but to a member who manages threads, as the server refuses them there.
+//     and Delete (the reader's own messages when /me says they may delete them, `can.delete`, which a timeout leaves them, or any
+//     but the post's opening message for a member who manages messages; it asks first). None is offered in a locked post but to a member who manages threads, as the server refuses them there.
 //   - What the reader has on its way is the store's `outbox`, asked for when the post opens (what was sent before the page was
 //     loaded again shows too): a reply on its way stands under the thread, greyed, with "sending…", until it is in the post; an
 //     edit or a delete greys its message. One that the server's rules blocked can be edited or let go, and one that failed tried
@@ -253,7 +253,8 @@ function actionsOf(message) {
   const actions = []
   if (writing.value) actions.push('reply', 'quote')
   if (writing.value && own && message.origin === 'site' && typeof message.source === 'string') actions.push('edit')
-  const deletes = (own && can.value.reply === true) || can.value.manageMessages === true
+  // Their own, by the server's rule (can.delete: a member who is timed out may still delete theirs), or anyone's for one who manages messages.
+  const deletes = (own && can.value.delete === true) || can.value.manageMessages === true
   if (message.id !== props.postId && !lockedOut.value && deletes) actions.push('delete')
   return listOf(actions)
 }

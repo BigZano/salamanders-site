@@ -29,7 +29,7 @@ const PEOPLE = {
   [IXEN]: { name: 'Ixen Calloway', avatar: null },
   [SELF]: { name: 'Sefa Orrin', avatar: null },
 }
-const CAN = { reply: true, attach: true, manageMessages: false, manageThreads: false }
+const CAN = { reply: true, attach: true, delete: true, manageMessages: false, manageThreads: false }
 const me = (over = {}) => ({ access: true, ready: true, tags: [], roles: [], guildId: GUILD, forumId: FORUM, form: 'v2', can: CAN, ...over })
 const info = (over = {}) => ({ id: POST, ownerId: TOR, title: 'The Long Road', tagIds: [], pinned: false, locked: false, archived: false, createdAt: '2026-11-08T21:14:00.000Z', replies: 3, ...over })
 const minutes = (n) => new Date(Date.parse('2026-11-09T10:00:00.000Z') + n * 60_000).toISOString()
@@ -612,6 +612,23 @@ describe('PostPage: deleting a message', () => {
     expect(el(w, m(1)).classes()).not.toContain('lb-pending')
   })
 
+  // The owner's ruling (2026-11-22): a member who is timed out may delete their own reply, as the server lets them.
+  it('is offered on the reader\'s own messages when they may delete them, timed out and unable to reply, and on nobody else\'s', async () => {
+    vi.spyOn(window, 'confirm').mockReturnValue(true)
+    const timedOut = { reply: false, attach: false, delete: true, manageMessages: false, manageThreads: false }
+    const w = await show({ who: me({ can: timedOut }), messages: [opener(), mine(1), msg(2)] })
+    expect(w.find('.lb-dock .lb-composer').exists()).toBe(false)
+    expect(tools(w, m(1))).toEqual(['Delete'])
+    expect(el(w, m(2)).find('.lb-actions').exists()).toBe(false)
+    await tool(w, m(1), 'Delete').trigger('click')
+    await settle()
+    expect(server.sent('DELETE', `/librarius/messages/${m(1)}`)).toHaveLength(1)
+    mounted.splice(0).forEach((x) => x.unmount())
+    // A server that says the reader may reply, and not that they may delete, is taken at its word.
+    const replying = await show({ who: me({ can: { ...CAN, delete: false } }), messages: [opener(), mine(1)] })
+    expect(tools(replying, m(1))).not.toContain('Delete')
+  })
+
   it('is offered on anyone\'s message to a member who may manage messages, and never on the post\'s opening message', async () => {
     const w = await show({ who: me({ can: { ...CAN, manageMessages: true } }) })
     expect(tools(w, m(1))).toContain('Delete')
@@ -625,7 +642,7 @@ describe('PostPage: deleting a message', () => {
     const w = await show({ who: me({ can: { ...CAN, reply: false, manageMessages: true } }), messages: [opener(), msg(1), msg(2, { authorId: SELF })] })
     expect(tools(w, m(1))).toEqual(['Delete'])
     mounted.splice(0).forEach((x) => x.unmount())
-    const none = await show({ who: me({ can: { ...CAN, reply: false } }), messages: [opener(), msg(1, { authorId: SELF })] })
+    const none = await show({ who: me({ can: { ...CAN, reply: false, delete: false } }), messages: [opener(), msg(1, { authorId: SELF })] })
     expect(none.find(`#m-${m(1)} .lb-actions`).exists()).toBe(false)
   })
 

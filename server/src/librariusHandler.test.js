@@ -417,7 +417,7 @@ describe('GET /librarius/me', () => {
       guildId: GUILD,
       forumId: FORUM,
       form: 'v2',
-      can: { reply: false, attach: false, manageMessages: false, manageThreads: false },
+      can: { reply: false, attach: false, delete: false, manageMessages: false, manageThreads: false },
       limits: FRESH_LIMITS,
     })
   })
@@ -2405,9 +2405,9 @@ describe('GET /librarius/me: what the member may do, and what they have left', (
   it('says what the verdict says when the webhook is there', async () => {
     const t = setup({ verdict: VERDICTS.librarian, outbox: LIVE })
     const out = await body(await t.get('/librarius/me'))
-    expect(out.can).toEqual({ reply: true, attach: true, manageMessages: true, manageThreads: true })
+    expect(out.can).toEqual({ reply: true, attach: true, delete: true, manageMessages: true, manageThreads: true })
     const reader = await body(await setup({ outbox: LIVE }).get('/librarius/me'))
-    expect(reader.can).toEqual({ reply: true, attach: false, manageMessages: false, manageThreads: false })
+    expect(reader.can).toEqual({ reply: true, attach: false, delete: true, manageMessages: false, manageThreads: false })
     const outsider = await body(await setup({ verdict: { ...VERDICTS.reader, reply: false }, outbox: LIVE }).get('/librarius/me'))
     expect(outsider.can.reply).toBe(false)
   })
@@ -2415,8 +2415,35 @@ describe('GET /librarius/me: what the member may do, and what they have left', (
   it('says a member can do nothing while there is no webhook, or Discord has refused it', async () => {
     for (const outbox of [undefined, { ...LIVE, refused: { status: 404, text: 'gone' } }]) {
       const out = await body(await setup({ verdict: VERDICTS.librarian, outbox }).get('/librarius/me'))
-      expect(out.can).toEqual({ reply: false, attach: false, manageMessages: false, manageThreads: false })
+      expect(out.can).toEqual({ reply: false, attach: false, delete: false, manageMessages: false, manageThreads: false })
     }
+  })
+
+  // The owner's ruling (2026-11-22): a member who is timed out may still delete their own reply, as the DELETE route lets them.
+  it('says a member who is timed out, or may not reply, may still delete their own messages', async () => {
+    for (const verdict of [{ ...VERDICTS.reader, reply: false, timedOut: true, timeoutUntil: '2026-11-23T10:00:00.000Z' }, { ...VERDICTS.reader, reply: false }]) {
+      const out = await body(await setup({ verdict, outbox: LIVE }).get('/librarius/me'))
+      expect(out.can).toEqual({ reply: false, attach: false, delete: true, manageMessages: false, manageThreads: false })
+      const res = await setup({ verdict, outbox: LIVE, store: { outboxMessage: () => siteMessage() } }).call('DELETE', `/librarius/messages/${M1}`)
+      expect(res.status).toBe(202)
+    }
+  })
+
+  // What the site offers is (own && can.delete) || can.manageMessages: each must be what the route does, whatever the member and the webhook.
+  it('says of deleting exactly what the DELETE route does: can.delete for their own message, can.manageMessages for another\'s', async () => {
+    const verdicts = fc.record({ reply: fc.boolean(), attach: fc.boolean(), timedOut: fc.boolean(), manageMessages: fc.boolean(), manageThreads: fc.boolean() })
+    const outboxes = fc.constantFrom(LIVE, undefined, { ...LIVE, refused: { status: 404, text: 'gone' } })
+    await fc.assert(
+      fc.asyncProperty(verdicts, outboxes, async (flags, outbox) => {
+        const verdict = { ...VERDICTS.reader, ...flags, timeoutUntil: flags.timedOut ? '2026-11-23T10:00:00.000Z' : null }
+        const { can } = await body(await setup({ verdict, outbox }).get('/librarius/me'))
+        const own = await setup({ verdict, outbox, store: { outboxMessage: () => siteMessage() } }).call('DELETE', `/librarius/messages/${M1}`)
+        const another = await setup({ verdict, outbox, store: { outboxMessage: () => siteMessage({ authorId: OUTSIDER.id }) } }).call('DELETE', `/librarius/messages/${M1}`)
+        expect(own.status === 202).toBe(can.delete)
+        expect(another.status === 202).toBe(can.manageMessages)
+      }),
+      { numRuns: 120 },
+    )
   })
 
   it('says what is left of each limit, for the member who asks', async () => {

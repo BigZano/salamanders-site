@@ -19,8 +19,9 @@
  * The handler takes `outbox` (librariusOutbox.js: kick, sendingPausedUntil, webhookRefused; null while LIBRARIUS_WEBHOOK_URL is
  * unset), `limits` (a createLimits() by default), `form` ('v2' or 'plain'), `siteUrl` (https://sm2salamanders.site) and `newKey`.
  *
- * /librarius/me adds, for a reader, `can: { reply, attach, manageMessages, manageThreads }`, which are what the verdict says and
- * false for all of them while no write is possible, `limits` (librariusLimits.js snapshot: what the member has left of each)
+ * /librarius/me adds, for a reader, `can: { reply, attach, delete, manageMessages, manageThreads }`, which are what the verdict says
+ * (`delete`: whether they may delete their own messages, by the DELETE route's rule, librariusWrites.js mayDelete) and false for all
+ * of them while no write is possible, `limits` (librariusLimits.js snapshot: what the member has left of each)
  * and `form`, 'v2' or 'plain': the form the reply route checks a reply in, so that the composer measures it by the same caps.
  * For a member who may manage messages it also says `sendingPausedUntil` (ISO time while the outbox's breaker holds all sending,
  * else null), `sendingFatal` (Discord has refused the webhook) and `automodUnchecked` (the names of the server's AutoMod rules with a
@@ -55,7 +56,7 @@ import { readJsonWithin } from './librariusBody.js'
 import { createLimits } from './librariusLimits.js'
 import { automodUnchecked } from './librariusSend.js'
 import { BIGINT_MAX, isStoreId } from './librariusText.js'
-import { createLibrariusWrites } from './librariusWrites.js'
+import { createLibrariusWrites, mayDelete } from './librariusWrites.js'
 
 const REV = /^\d{1,19}$/
 // A page's limit: 1 to 100, written without leading zeros.
@@ -282,6 +283,8 @@ export function createLibrariusHandler({
       can: {
         reply: writable && verdict.reply,
         attach: writable && verdict.attach,
+        // Their own messages: the DELETE route's own rule, so a member who is timed out, or may not reply, is offered it too.
+        delete: writable && mayDelete(verdict, verdict.user.id),
         manageMessages: writable && verdict.manageMessages,
         manageThreads: writable && verdict.manageThreads,
       },

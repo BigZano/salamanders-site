@@ -1,6 +1,6 @@
 import { afterEach, describe, it, expect, vi } from 'vitest'
 import * as fc from 'fast-check'
-import { createLibrariusWrites } from './librariusWrites.js'
+import { createLibrariusWrites, mayDelete } from './librariusWrites.js'
 import { createLimits, tooFast } from './librariusLimits.js'
 import { COPY as OUTBOX_COPY } from './librariusOutbox.js'
 import { Upstream } from './discordRoles.js'
@@ -201,6 +201,29 @@ function streamed(chunks, headers) {
   const body = new ReadableStream({ pull(c) { if (i >= chunks.length) return c.close(); seen.pulled++; c.enqueue(chunks[i++]) } }, { highWaterMark: 0 })
   return { request: new Request(URL_, { method: 'POST', body, headers, duplex: 'half' }), seen }
 }
+
+describe('mayDelete: who may delete a message, for the route and for /me alike', () => {
+  const ME = '300000000000000201'
+  const SOMEONE = '300000000000000202'
+  const verdict = (over = {}) => ({ user: { id: ME }, read: true, reply: true, timedOut: false, manageMessages: false, ...over })
+
+  it('lets its author delete it, timed out, without the right to reply, or both, and anyone who manages messages', () => {
+    for (const over of [{}, { timedOut: true, reply: false }, { reply: false }, { timedOut: true }]) {
+      expect(mayDelete(verdict(over), ME), JSON.stringify(over)).toBe(true)
+      expect(mayDelete(verdict(over), SOMEONE), JSON.stringify(over)).toBe(false)
+      expect(mayDelete(verdict({ ...over, manageMessages: true }), SOMEONE), JSON.stringify(over)).toBe(true)
+    }
+  })
+
+  it('lets nobody who cannot read the forum delete anything, and takes only a plain true for a right', () => {
+    for (const read of [false, undefined, 'true', 1]) {
+      expect(mayDelete(verdict({ read }), ME), String(read)).toBe(false)
+      expect(mayDelete(verdict({ read, manageMessages: true }), SOMEONE), String(read)).toBe(false)
+    }
+    for (const manageMessages of ['true', 1, {}]) expect(mayDelete(verdict({ manageMessages }), SOMEONE), String(manageMessages)).toBe(false)
+    for (const authorId of [undefined, null, '', ` ${ME}`, Number(ME)]) expect(mayDelete(verdict(), authorId), String(authorId)).toBe(false)
+  })
+})
 
 describe('createLibrariusWrites: what it needs', () => {
   const parts = () => ({ store: {}, guild: {}, roster: {}, outbox: {}, limits: createLimits(), guildId: GUILD, forumId: FORUM, siteUrl: SITE })

@@ -49,7 +49,7 @@
  *   deletes share it), then the same checks as a reply. Pictures are fixed when a reply is sent: `uploads` is absent, or lists the
  *   file names the message has (`picture-N.ext`, in order), and an edit that would move or change a picture, as the form's
  *   placement() says, is 400 "That edit would move or change a picture...". → 202 { pending: { key: the message id, state } }.
- * remove(messageId, verdict): DELETE /librarius/messages/:id by its author, or anyone with Manage Messages, a message of Discord's
+ * remove(messageId, verdict): DELETE /librarius/messages/:id by its author (timed out or not), or anyone with Manage Messages (mayDelete), a message of Discord's
  *   or the site's alike (the outbox deletes it from Discord by the webhook or the bot). A whole post is never deleted here (the
  *   message that opens it is 403), and nothing in a locked post but by a member who manages threads (403 "This post is locked.",
  *   as in Discord, the author included). 404, 403, 409 while it is being changed, 429 as for an edit. → 202.
@@ -148,6 +148,14 @@ export function siteBase(url) {
   if (!/^https:\/\/[^\s<>/]+$/.test(base) || `${base}/reliquarium/librarius/${WORST_ID}`.length > MAX_URL) throw new RangeError(SITE_MESSAGE)
   return base
 }
+
+/**
+ * → whether the member of `verdict` may delete a message that `authorId` wrote: one who can read the forum, and is its author or may
+ * manage messages. A member who is timed out, or may not reply, may still delete their own (the owner's ruling, 2026-11-22). The DELETE
+ * route asks this of the message, and /librarius/me of the member's own (`can.delete`), so the site offers what the route does; the rest
+ * is the message's (the opening message, a locked post, a change on its way).
+ */
+export const mayDelete = (verdict, authorId) => verdict.read === true && (authorId === verdict.user.id || verdict.manageMessages === true)
 
 export function createLibrariusWrites({ store, guild, roster, outbox, limits, guildId, forumId, form = DEFAULT_FORM, siteUrl, now = Date.now, newKey = randomUUID }) {
   if (!FORMS.includes(form)) throw new RangeError('form must be "v2" or "plain".')
@@ -355,7 +363,7 @@ export function createLibrariusWrites({ store, guild, roster, outbox, limits, gu
     const { message, post, refusal } = await messageAndPost(messageId, verdict)
     if (refusal) return refusal
     if (message.id === message.postId) return reply(403, { error: COPY.wholePost })
-    if (message.authorId !== verdict.user.id && !verdict.manageMessages) return reply(403, { error: COPY.cantDelete })
+    if (!mayDelete(verdict, message.authorId)) return reply(403, { error: COPY.cantDelete })
     // As in Discord, nothing is deleted in a locked post but by those who manage threads: the author of a message is no exception.
     const locked = lockedFor(post, verdict)
     if (locked !== null) return locked
