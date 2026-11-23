@@ -17,8 +17,8 @@
  *     it holds none of `` ` \ * _ ~ [ < ``, `://` or another line break, and
  *     none of `) > ]` from its first `||` on. A Discord mention, channel, role,
  *     emoji, timestamp or slash command (TOKEN) is a word there when it comes
- *     before the first `||`, or after it with a space before its `>` on the
- *     line and no `_` in it.
+ *     before the first `||`, or after it with a space before its `>` and past
+ *     the line's leading spaces, tabs and `>`, and no `_` in it.
  *   - The lines before the first line that is not certain parse as they always
  *     did. From the first `||` of that line to the last `||` of the message,
  *     when that is on a later line, all is one `spoiler` node (`lastBar: true`,
@@ -41,16 +41,22 @@
  *   mailto) starts at `<` and ends at `>`; a reference link would end at `]`; a
  *   bare address starts at `://`, cannot cross a line break, but may hold bars;
  *   a quote, heading, subtext or list item is a block of whole lines, which
- *   ends no spoiler a line leaves closed.
+ *   ends no spoiler a line leaves closed; a quote's or a list item's text is
+ *   read again without the leading spaces, tabs (read as spaces) and `>` of
+ *   its lines, and an item's, a heading's or a subtext's without its marker,
+ *   but such a text starts at that marker's line.
  *   A token lies on one line and holds no bar, and of those marks only `<`,
  *   `>` and, in a name, `_`. Read whole, it is a word. A reading that reads
  *   into it may start an angle form at its `<`, which ends at its own `>` and
  *   is neither (no `:/`, nothing before its `@`), or a span at a `_`; a `_` may
  *   end a span, and its `>` an angle form, begun before it. Before the first
  *   bar, what it ends held none of the bars, and a span it starts ends before
- *   them too, or covers the rest of the line (no `_` comes after the first
- *   bar). After the first bar it has no `_`, and an angle form ending at its
- *   `>` would hold the space before that `>`, which no autolink or mailto can.
+ *   them too, or covers the rest of the line, inside which they pair as above
+ *   (no `_` comes after the first bar). After the first bar it has no `_`, and
+ *   an angle form ending at its `>` would hold the space before that `>` in
+ *   every text that reads the line, which no autolink or mailto can: no
+ *   reading cuts a space past the leading run, and a marker's space is cut only
+ *   from a text that starts on its line, which holds no earlier `<`.
  * (2) No reading hides anything after the last `||` L: a hidden stretch ends at
  * a bar. (3) Nor anything on U before its first `||`, by (1). So all a reading
  * hides lies before U, where the site hides as much, or from the first `||` of
@@ -157,8 +163,9 @@ const TOKEN = /<(?:@[!&]?\d{17,20}|#\d{17,20}|a?:[A-Za-z0-9_-]{1,32}:\d{17,20}|t
 function certain(line, role) {
   if (!line.includes('||')) return true
   const at = line.indexOf('||')
-  const space = line.indexOf(' ')
-  // A token that ends by the first bar, or one after it with a space before its `>` and no `_` in it, is read as a word.
+  // A quote or a list item reads its lines again without their leading spaces, tabs and `>`: only a space past them counts.
+  const space = line.indexOf(' ', line.search(/[^ \t>]/))
+  // A token that ends by the first bar, or one after it with such a space before its `>` and no `_` in it, is read as a word.
   const read = line.replace(TOKEN, (token, from) => {
     const end = from + token.length
     return end <= at || (space !== -1 && space < end && !token.includes('_')) ? 'x' : token
