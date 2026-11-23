@@ -29,7 +29,7 @@ const SITE_URL = 'https://sm2salamanders.site'
 // The budget meter is budget() of the same module the server cuts a reply with, given what the server gives it (the form, the
 // author, the post's link on the site, the message replied to and a file for each picture), so a reply the meter takes never
 // fails in Discord for its length. Reply is disabled while the reply needs more than 3 messages, or is longer than the server
-// reads, or cannot be measured at all.
+// reads, or cannot be measured at all; and while a picture is inside a spoiler, which the server refuses in the same words.
 //
 // Drafts are kept in the member's own browser, a second after the last change, under the post and the message replied to
 // (draftKey). A draft is kept when the composer closes or the page goes, too, but never for someone who has signed out since.
@@ -60,7 +60,7 @@ import MentionPopover from './MentionPopover.vue'
 import { parse, walk } from '../../lib/archive/markdown'
 import { apply, clearDraft, draftStorage, insertBlock, loadDraft, saveDraft } from '../../lib/librarius/composer'
 import { createUploadQueue, paced } from '../../lib/librarius/requests'
-import { DEFAULT_FORM, MAX_PARTS, budget, toDiscord } from '../../../server/src/librariusForm.js'
+import { DEFAULT_FORM, MAX_PARTS, PICTURE_IN_SPOILER, budget, pictureInSpoiler, toDiscord } from '../../../server/src/librariusForm.js'
 import { useAuth } from '../../stores/auth'
 import './librarius.css'
 
@@ -245,7 +245,9 @@ const budgetText = computed(() => {
 })
 // Whether the text shows a picture that nothing holds now (the page was loaded again since it was written). An edit's are its own.
 const dead = computed(() => props.editing === null && props.held !== null && images.value.some(({ ref }) => !props.held(ref)))
-const canSend = computed(() => !sending.value && !blank.value && measured.value !== null && !over.value && uploading.value === 0 && !dead.value)
+// Whether a picture is inside a spoiler: the site hides it and Discord would not, so the server refuses the reply (and an edit).
+const spoiled = computed(() => pictureInSpoiler(nodes.value))
+const canSend = computed(() => !sending.value && !blank.value && measured.value !== null && !over.value && uploading.value === 0 && !dead.value && !spoiled.value)
 
 // The Discord view: each message as its blocks, worked out only while the tab is shown.
 const discord = computed(() => {
@@ -671,6 +673,7 @@ defineExpose({ act, insert, focus: () => area.value.focus() })
 
     <p v-if="uploading > 0" class="lb-uploading" role="status">{{ uploadingText }}</p>
     <p v-if="dead" class="lb-dead-pictures" role="status">{{ COPY.deadPictures }}</p>
+    <p v-if="spoiled" class="lb-spoiled-picture" role="status">{{ PICTURE_IN_SPOILER }}</p>
     <p v-if="pictureAlert" class="lb-composer-error" role="alert">{{ pictureAlert }}</p>
     <p v-if="failure" class="lb-composer-error" role="alert">{{ failure.text }}<template v-if="failure.match"> The words it matched are selected in your reply.</template></p>
 

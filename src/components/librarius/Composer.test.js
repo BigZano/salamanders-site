@@ -1414,6 +1414,54 @@ describe('Composer: pictures from before the page was loaded again', () => {
   })
 })
 
+// The server refuses a reply with a picture inside a spoiler (Discord would show the picture), so the composer does not offer to send one.
+describe('Composer: a picture inside a spoiler', () => {
+  const WORDS = "A picture can't go inside a spoiler yet: put it outside the bars."
+
+  it('says so in the server\'s words and sends nothing, until the picture is outside the bars', async () => {
+    const onSend = vi.fn(async () => ({}))
+    const w = mountComposer({ onSend })
+    await type(w, 'The ending: ||she dies ![map](upload:1)||')
+    expect(w.get('.lb-spoiled-picture').text()).toBe(WORDS)
+    expect(w.get('.lb-spoiled-picture').attributes('role')).toBe('status')
+    expect(replyButton(w).attributes('disabled')).toBeDefined()
+    await replyButton(w).trigger('click')
+    expect(onSend).not.toHaveBeenCalled()
+    await type(w, 'The ending: ||she dies|| ![map](upload:1)')
+    expect(w.find('.lb-spoiled-picture').exists()).toBe(false)
+    expect(replyButton(w).attributes('disabled')).toBeUndefined()
+    await replyButton(w).trigger('click')
+    expect(onSend).toHaveBeenCalledTimes(1)
+  })
+
+  it('says so for a picture the toolbar\'s spoiler button wraps', async () => {
+    const w = mountComposer()
+    await type(w, '![the last map](upload:1)', 0, '![the last map](upload:1)'.length)
+    await button(w, 'Spoiler').trigger('click')
+    await flushPromises()
+    expect(area(w).element.value).toBe('||![the last map](upload:1)||')
+    expect(w.get('.lb-spoiled-picture').text()).toBe(WORDS)
+    expect(replyButton(w).attributes('disabled')).toBeDefined()
+  })
+
+  it('says so in an edit too, whose Save edit it disables', async () => {
+    const w = mountComposer({ editing: { id: MSG, source: '![map](upload:1)', replyTo: null } })
+    expect(button(w, 'Save edit').attributes('disabled')).toBeUndefined()
+    await type(w, '||![map](upload:1)||')
+    expect(w.get('.lb-spoiled-picture').text()).toBe(WORDS)
+    expect(button(w, 'Save edit').attributes('disabled')).toBeDefined()
+  })
+
+  it('says nothing of bars round code or escaped bars, which hide no picture', async () => {
+    const w = mountComposer()
+    for (const text of ['`||![a](upload:1)||`', '\\|\\|![a](upload:1)\\|\\|', '||secret|| and ![a](upload:1)']) {
+      await type(w, text)
+      expect(w.find('.lb-spoiled-picture').exists(), text).toBe(false)
+      expect(replyButton(w).attributes('disabled'), text).toBeUndefined()
+    }
+  })
+})
+
 describe('Composer: when the sign-in ends', () => {
   beforeEach(fakeTimers)
 

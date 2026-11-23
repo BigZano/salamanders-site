@@ -1225,6 +1225,12 @@ a.lb-file {
   font-size: var(--text-md);
   color: var(--color-ember);
 }
+/* A picture inside a spoiler, which the server refuses: said as a picture that needs adding again is. */
+.lb-spoiled-picture {
+  margin: 0;
+  font-size: var(--text-md);
+  color: var(--color-ember);
+}
 
 /* A reply written on the site: the "site" tag by its name (or, on a grouped one, above its text). */
 .lb-site-tag {

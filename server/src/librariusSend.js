@@ -151,7 +151,7 @@ import { spawn } from 'node:child_process'
 import { dirname } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { parse, walk } from './librariusMarkdown.js'
-import { DEFAULT_FORM, limitFor, toDiscord } from './librariusForm.js'
+import { DEFAULT_FORM, PICTURE_IN_SPOILER, limitFor, pictureInSpoiler, toDiscord } from './librariusForm.js'
 
 export const MAX_SOURCE = 16_000
 export const MENTION_CAP = 10
@@ -1283,7 +1283,8 @@ export async function validateReply(input, options) {
   if (NOTHING.test(source)) return refused(400, COPY.empty)
 
   const text = source.replaceAll('\u0000', '�').toWellFormed()
-  const seen = inspect(parse(text, { dialect: 'extended' }))
+  const nodes = parse(text, { dialect: 'extended' })
+  const seen = inspect(nodes)
   const replyTo = body.replyTo ?? null
   const images = [...seen.refs].map((ref) => ({ ref, name: `image-${ref}.png` }))
   const common = { form, authorId, replyTo, siteUrl }
@@ -1291,6 +1292,8 @@ export async function validateReply(input, options) {
   if (sent.overBudget) return refused(413, COPY.budget)
 
   if (hasBadLink(seen.literal)) return refused(400, COPY.link)
+  // The site hides a picture inside a spoiler, and Discord would show it (librariusForm.js pictureInSpoiler).
+  if (pictureInSpoiler(nodes)) return refused(400, PICTURE_IN_SPOILER)
 
   const uploads = body.uploads ?? []
   if (!Array.isArray(uploads)) return refused(400, COPY.upload)

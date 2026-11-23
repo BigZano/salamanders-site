@@ -123,7 +123,7 @@ describe('librarius.css', () => {
   })
 
   it('sizes the words of what is written on the site, and what is on its way, from the ramp', () => {
-    for (const selector of ['.lb-site-tag', '.lb-act', '.lb-locked', '.lb-editing-text', '.lb-dead-pictures', '.lb-unedit']) {
+    for (const selector of ['.lb-site-tag', '.lb-act', '.lb-locked', '.lb-editing-text', '.lb-dead-pictures', '.lb-spoiled-picture', '.lb-unedit']) {
       expect(rule(selector), selector).toMatch(/font-size:\s*var\(--text-(?:xs|sm|md|base)\)/)
     }
     expect(css).toMatch(/\.lb-state,\s*\.lb-action-error\s*\{[^}]*font-size:\s*var\(--text-sm\)/)

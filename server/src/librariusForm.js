@@ -148,6 +148,28 @@ function formOf(form) {
   return chosen
 }
 
+/** The words a reply with a picture inside a spoiler is refused in, by the server (librariusSend.js validateReply) and the composer alike. */
+export const PICTURE_IN_SPOILER = "A picture can't go inside a spoiler yet: put it outside the bars."
+
+/**
+ * → whether a parsed reply (`nodes`, as parse() gives them) has a picture inside a spoiler: an `image` node anywhere under a `spoiler`
+ * node, however deep, whatever the spoiler holds. The site hides such a picture, but toDiscord sends it as a Media Gallery item or a
+ * file that nothing hides, which Discord shows to every reader, so a reply with one is refused until the form can send it hidden.
+ * Every value of every node is looked through, not only the children the parser makes now, so that a spoiler that holds whole lines or
+ * blocks is read with no change here. The walk keeps a list of what is left to look at, so no depth of nesting runs out of stack.
+ */
+export function pictureInSpoiler(nodes) {
+  const left = [{ value: nodes, hidden: false }]
+  while (left.length > 0) {
+    const { value, hidden } = left.pop()
+    if (typeof value !== 'object' || value === null) continue
+    if (hidden && value.type === 'image') return true
+    const inside = hidden || value.type === 'spoiler'
+    for (const child of Object.values(value)) left.push({ value: child, hidden: inside })
+  }
+  return false
+}
+
 export function limitFor(form) {
   if (!FORMS.includes(form)) throw new RangeError('form must be "v2" or "plain"')
   return BODY_LIMIT[form]

@@ -6,12 +6,14 @@ import {
   DEFAULT_FORM,
   FORMS,
   MAX_PARTS,
+  PICTURE_IN_SPOILER,
   PLAIN_LIMIT,
   PRIMARY_LIMIT,
   budget,
   displayableLength,
   limitFor,
   markers,
+  pictureInSpoiler,
   placement,
   split,
   toDiscord,
@@ -2961,6 +2963,120 @@ describe('placement: which pictures are attached to which part', () => {
         for (const refsOfPart of got) for (const ref of refsOfPart) expect(refs).toContain(ref)
       }),
       { numRuns: 150 },
+    )
+  })
+})
+
+// A picture leaves the text for a Media Gallery item or a file that nothing hides yet, so Discord shows one that the site's preview
+// hides: until the form can send it hidden, a reply with one is refused (the server and the composer, in the same words).
+describe('pictureInSpoiler', () => {
+  const read = (src) => pictureInSpoiler(parse(src, { dialect: 'extended' }))
+
+  it('says the words both sides refuse such a reply with', () => {
+    expect(PICTURE_IN_SPOILER).toBe("A picture can't go inside a spoiler yet: put it outside the bars.")
+  })
+
+  it('finds a picture inside a spoiler, alone, with text round it, inside other marks, in a quote, a list, a heading and over lines', () => {
+    for (const src of [
+      '||![the last map](upload:1)||',
+      '||The ending: ![map](upload:1) she dies||',
+      '||**bold ![a](upload:2) bold**||',
+      '**||_![a](upload:1)_||**',
+      '> ||![a](upload:1)||',
+      '- one\n- ||two ![a](upload:3)||',
+      '### ||![a](upload:1)||',
+      '-# ||![a](upload:1)||',
+      '||first line\n![a](upload:1)\nlast line||',
+      'before\n\n||![a](upload:1)|| and ||plain||',
+      '[x](https://a.example/) ||![a](upload:10)||',
+      // Rows that are no table (a cell short) are lines, and their bars a spoiler.
+      '| a |\n| - |\n| ||![a](upload:1)|| |',
+    ]) {
+      expect(read(src), src).toBe(true)
+    }
+  })
+
+  it('finds none in a reply whose pictures are all outside the bars, or whose bars hold none', () => {
+    for (const src of [
+      '',
+      '![a](upload:1)',
+      '||secret|| ![a](upload:1)',
+      '![a](upload:1) ||secret||',
+      '||a||![b](upload:1)||c||',
+      '`||![a](upload:1)||`',
+      '```\n||![a](upload:1)||\n```',
+      '\\|\\|![a](upload:1)\\|\\|',
+      '||not closed ![a](upload:1)',
+      '||![a](https://a.example/x.png)||',
+      '| a | b |\n| - | - |\n| ![a](upload:1) | ||c|| |',
+    ]) {
+      expect(read(src), src).toBe(false)
+    }
+  })
+
+  it('looks under a spoiler whatever it holds: lines, blocks, or kinds of children the parser has none of yet', () => {
+    const image = { type: 'image', ref: 1, alt: 'a' }
+    for (const spoiler of [
+      { type: 'spoiler', children: [image] },
+      { type: 'spoiler', children: [{ type: 'line', children: [{ type: 'strong', children: [image] }] }] },
+      { type: 'spoiler', blocks: [{ type: 'quote', children: [{ type: 'list', items: [{ children: [{ type: 'line', children: [image] }] }] }] }] },
+      { type: 'spoiler', lines: [[{ type: 'text', value: 'x' }], [image]] },
+      { type: 'spoiler', body: { type: 'table', head: [[[image]]], rows: [] } },
+      { type: 'spoiler', children: [{ type: 'spoiler', children: [image] }] },
+    ]) {
+      expect(pictureInSpoiler([spoiler]), JSON.stringify(spoiler)).toBe(true)
+      expect(pictureInSpoiler([{ type: 'quote', children: [{ type: 'line', children: [spoiler] }] }])).toBe(true)
+    }
+    // A picture next to a spoiler, or under a node that only names a spoiler, is no picture inside one.
+    expect(pictureInSpoiler([{ type: 'line', children: [{ type: 'spoiler', children: [{ type: 'text', value: 'x' }] }, image] }])).toBe(false)
+    expect(pictureInSpoiler([{ type: 'line', spoiler: true, children: [image] }, { type: 'text', value: 'spoiler' }])).toBe(false)
+    expect(pictureInSpoiler([{ type: 'line', children: [{ type: 'imageish', kind: 'image' }] }])).toBe(false)
+  })
+
+  it('reads a nesting of any depth without running out of stack', () => {
+    let deep = { type: 'image', ref: 1 }
+    for (let i = 0; i < 100_000; i++) deep = { type: i === 50_000 ? 'spoiler' : 'strong', children: [deep] }
+    expect(pictureInSpoiler([deep])).toBe(true)
+  })
+
+  it('finds a picture under a spoiler anywhere in a tree of any shape, and none in a tree without one', () => {
+    const KEYS = ['children', 'items', 'blocks', 'lines', 'rows', 'body']
+    const leaf = fc.oneof(fc.constant({ type: 'text', value: 'x' }), fc.constant({ type: 'image', ref: 1 }), fc.constant(null), fc.string(), fc.integer())
+    const { tree } = fc.letrec((tie) => ({
+      tree: fc.oneof({ maxDepth: 6, depthIdentifier: 'tree' }, leaf, tie('node'), fc.array(tie('tree'), { maxLength: 4 })),
+      node: fc
+        .tuple(fc.constantFrom('line', 'strong', 'em', 'quote', 'list', 'link', 'spoiler', 'heading'), fc.constantFrom(...KEYS), fc.array(tie('tree'), { maxLength: 4 }))
+        .map(([type, key, kids]) => ({ type, [key]: kids })),
+    }))
+    // The oracle: a recursive reading, every value of every node.
+    const has = (value, hidden) => {
+      if (typeof value !== 'object' || value === null) return false
+      if (hidden && value.type === 'image') return true
+      return Object.values(value).some((child) => has(child, hidden || value.type === 'spoiler'))
+    }
+    fc.assert(
+      fc.property(tree, fc.constantFrom(...KEYS), (t, key) => {
+        expect(pictureInSpoiler([t])).toBe(has(t, false))
+        // The same tree put under a spoiler, beside a picture: found.
+        expect(pictureInSpoiler([{ type: 'spoiler', [key]: [t, { type: 'image', ref: 2 }] }])).toBe(true)
+        // The same tree with every spoiler renamed: none found.
+        const plain = JSON.parse(JSON.stringify(t ?? null).replaceAll('"spoiler"', '"strong"'))
+        expect(pictureInSpoiler([plain])).toBe(false)
+      }),
+      { numRuns: 400 },
+    )
+  })
+
+  it('agrees with what the form sends: a reply it refuses has a picture that is sent and that no spoiler of the text holds', () => {
+    const IMAGES = [1, 2].map((ref) => ({ ref, name: `u${ref}.png` }))
+    const piece = fc.constantFrom('a', ' ', '||', '![p](upload:1)', '![q](upload:2)', '**', '\n', '> ', 'b c')
+    fc.assert(
+      fc.property(fc.array(piece, { maxLength: 30 }).map((a) => a.join('')), (src) => {
+        if (!read(src)) return
+        const sent = toDiscord(src, opts({ images: IMAGES }))
+        expect(sent.parts.flatMap((part) => part.files).length).toBeGreaterThan(0)
+      }),
+      { numRuns: 400 },
     )
   })
 })

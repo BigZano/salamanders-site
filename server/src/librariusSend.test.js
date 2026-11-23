@@ -3259,6 +3259,30 @@ describe('validateReply: pictures', () => {
   })
 })
 
+// Discord would show a picture inside a spoiler (the form sends it as a gallery item or a file that nothing hides), and the site hides it.
+describe('validateReply: a picture inside a spoiler', () => {
+  const INSIDE = { ok: false, status: 400, error: "A picture can't go inside a spoiler yet: put it outside the bars." }
+  const own = { ownUploadIds: ['u1', 'u2'] }
+
+  it.each(['v2', 'plain'])('refuses one in the %s form, alone, with text round it, in a quote or over lines', async (form) => {
+    for (const source of ['||![the last map](upload:1)||', '||The ending: ![map](upload:1) she dies||', '> ||![a](upload:1)||', '||a\n![b](upload:2)\nc||', '![a](upload:1) ||**![b](upload:2)**||']) {
+      expect(await send(reply(source, { uploads: ['u1', 'u2'] }), { ...own, form }), source).toEqual(INSIDE)
+    }
+  })
+
+  it('takes the same pictures outside the bars, and bars with none in them', async () => {
+    for (const source of ['![the last map](upload:1) ||the ending||', '||the ending|| ![map](upload:1)', '`||![a](upload:1)||` ![b](upload:2)', '\\|\\|![a](upload:1)\\|\\|']) {
+      expect((await send(reply(source, { uploads: ['u1', 'u2'] }), own)).ok, source).toBe(true)
+    }
+  })
+
+  it('is told after the length and the links, and before whose the pictures are', async () => {
+    expect(await send(reply(`[x](ftp://y) ||![a](upload:1)||`))).toEqual({ ok: false, status: 400, error: 'Links must start with http:// or https://.' })
+    expect(await send(reply(`${'word '.repeat(2_500)} ||![a](upload:1)||`))).toEqual({ ok: false, status: 413, error: "That's longer than Discord can carry in 3 messages." })
+    expect(await send(reply('||![a](upload:1)||', { uploads: ['u9'] }), own)).toEqual(INSIDE)
+  })
+})
+
 describe('validateReply: mentions', () => {
   const PICK = (cap = 10) => ({ ok: false, status: 400, error: `Pick people to mention from the list (${cap} at most).` })
   const id = (n) => `2000000000000005${String(n).padStart(2, '0')}`
@@ -3595,9 +3619,13 @@ describe('validateReply: the text that is sent, not only the text that was writt
   })
 
   it('refuses a picture that is all a mark holds, which is left out with the picture', async () => {
-    for (const source of ['zo||![x](upload:1)||rp', 'zo**![x](upload:1)**rp', 'zo~~![x](upload:1)~~rp', 'zo*![x](upload:1)*rp', 'zo__![x](upload:1)__rp', '[zo![x](upload:1)rp](https://example.test/a)']) {
+    for (const source of ['zo**![x](upload:1)**rp', 'zo~~![x](upload:1)~~rp', 'zo*![x](upload:1)*rp', 'zo__![x](upload:1)__rp', '[zo![x](upload:1)rp](https://example.test/a)']) {
       expect(zorp(source), source).toBeNull()
       for (const form of ['v2', 'plain']) expect(await via(source, zorp, { form }), `${form} ${source}`).toEqual(BLOCK('No Zorp'))
+    }
+    // A spoiler of a picture is refused before the rules read it: the picture would show in Discord.
+    for (const form of ['v2', 'plain']) {
+      expect(await via('zo||![x](upload:1)||rp', zorp, { form }), form).toEqual({ ok: false, status: 400, error: "A picture can't go inside a spoiler yet: put it outside the bars." })
     }
   })
 
