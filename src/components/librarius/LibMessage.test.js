@@ -354,6 +354,11 @@ describe('LibMessage: the reply line', () => {
     expect(w.find('.lb-reply').text()).not.toContain('secret')
   })
 
+  it('masks a spoiler that runs over lines in the quote as one mask, and shows the words after it', () => {
+    const w = mountMsg(message({ replyTo: replyTo({ content: 'the answer is ||the secret\n> quoted secret\n- listed secret|| and more' }) }))
+    expect(w.find('.lb-reply').text()).toBe('↪ replying to Ixen Calloway: the answer is ▒▒▒ and more')
+  })
+
   it('names the author the page knows now, else the one stored with the quote', () => {
     expect(mountMsg(message({ replyTo: replyTo({ authorId: TOR, authorName: 'Old Name' }) })).find('.lb-reply-name').text()).toBe('Tor Mardan')
     expect(mountMsg(message({ replyTo: replyTo({ authorId: '200000000000000499', authorName: 'Ghost' }) })).find('.lb-reply-name').text()).toBe('Ghost')
@@ -810,5 +815,22 @@ describe('LibMessage: Discord content is untrusted (hostile battery)', () => {
       }),
     )
     for (const img of w.findAll('img')) expect(img.attributes('src') ?? '').not.toContain('evil.example')
+  })
+})
+
+
+describe('LibMessage: a spoiler that runs over lines', () => {
+  it('is one hidden toggle, with every line, link and mention of it inside', () => {
+    const w = mountMsg(message({ content: `seen ||hidden one\n[the road](https://discord.com/channels/${GUILD}/${POST})\n- <@${IXEN}>|| seen too` }))
+    const units = w.findAll('.lb-body .md-spoiler')
+    expect(units).toHaveLength(1)
+    const s = units[0]
+    expect(s.attributes()).toMatchObject({ role: 'button', 'aria-expanded': 'false', 'aria-label': 'Spoiler, activate to reveal' })
+    expect(s.find('a.md-link').attributes('href')).toBe(`/reliquarium/librarius/${POST}`)
+    expect(s.find('.md-mention').text()).toBe('@Ixen Calloway')
+    expect(s.text()).toContain('hidden one')
+    const shown = w.findAll('.lb-body p.md-line').filter((p) => !p.element.closest('.md-spoiler')).map((p) => p.text())
+    expect(shown).toEqual(['seen', 'seen too'])
+    expect(w.findAll('.lb-body a, .lb-body .md-mention').filter((el) => !el.element.closest('.md-spoiler'))).toHaveLength(0)
   })
 })

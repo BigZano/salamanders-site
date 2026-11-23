@@ -48,6 +48,49 @@ describe('ArchiveMarkdown hostile input', () => {
   })
 })
 
+describe('ArchiveMarkdown: a spoiler that runs over lines', () => {
+  const mountMd = (src) => mount(ArchiveMarkdown, { props: { nodes: parse(src), ctx: textCtx }, global: { plugins: [router()] } })
+  const outside = (w, selector) => w.findAll(selector).filter((el) => !el.element.closest('.md-spoiler')).map((el) => el.text())
+
+  it('is one hidden toggle round every block it holds, read like a one-line spoiler', async () => {
+    const w = mountMd('before ||ALPHA\n> quoted\n- item\n```\ncode\n```\nBRAVO|| after')
+    const units = w.findAll('.md-spoiler')
+    expect(units).toHaveLength(1)
+    const s = units[0]
+    expect(s.element.tagName).toBe('DIV')
+    expect(s.attributes()).toMatchObject({ role: 'button', tabindex: '0', 'aria-expanded': 'false', 'aria-label': 'Spoiler, activate to reveal' })
+    expect(s.classes()).toEqual(['md-spoiler', 'md-spoiler-block'])
+    expect(s.findAll('p.md-line').filter((p) => p.element.parentElement === s.element).map((p) => p.text())).toEqual(['ALPHA', 'BRAVO'])
+    expect(s.find('blockquote.md-quote').text()).toBe('quoted')
+    expect(s.find('ul.md-list li').text()).toBe('item')
+    expect(s.find('pre.md-pre').text()).toBe('code')
+    expect(outside(w, 'p.md-line')).toEqual(['before', 'after'])
+    expect(outside(w, 'blockquote, ul, pre')).toEqual([])
+    await s.trigger('click')
+    expect(s.classes()).toContain('is-shown')
+    expect(s.attributes('aria-expanded')).toBe('true')
+    expect(s.attributes('aria-label')).toBeUndefined()
+    expect(s.attributes('tabindex')).toBe('-1')
+  })
+
+  it.each([['Enter'], [' ']])('reveals on %j', async (key) => {
+    const s = mountMd('||a\nb||').find('.md-spoiler')
+    await s.trigger('keydown', { key })
+    expect(s.attributes('aria-expanded')).toBe('true')
+  })
+
+  it('keeps a one-line spoiler a span in its line, and one inside a spoiler over lines hidden on its own', async () => {
+    const w = mountMd('||a\n||b|| c||')
+    const [outer, inner] = w.findAll('.md-spoiler')
+    expect(outer.element.tagName).toBe('DIV')
+    expect(inner.element.tagName).toBe('SPAN')
+    expect(inner.classes()).toEqual(['md-spoiler'])
+    expect(inner.element.parentElement.closest('.md-spoiler')).toBe(outer.element)
+    await outer.trigger('click')
+    expect(inner.attributes('aria-expanded')).toBe('false')
+  })
+})
+
 async function mountView(path, { status = 'ready', signedIn = true, index = makeIndex() } = {}) {
   const r = router()
   const pinia = createPinia()

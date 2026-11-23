@@ -166,3 +166,16 @@ describe('properties', () => {
     }), { numRuns: 2000 })
   })
 })
+
+describe('a spoiler that runs over lines', () => {
+  it('dropDeadLines keeps or drops it whole, as it does a line with a one-line spoiler', () => {
+    expect(dropDeadLines(parse(`||${D(1)}\n${D(2)}||\nb`), classify)).toEqual([{ type: 'line', children: [{ type: 'text', value: 'b' }] }])
+    const kept = parse(`||${D(1)}\nwords||`)
+    expect(dropDeadLines(kept, classify)).toEqual(kept)
+  })
+  it('tocOnly keeps it whole when a live link is inside it, and liveRefs finds that link', () => {
+    const nodes = parse(`||${D(1)}\n- ${L(1)}||\nplain`)
+    expect(tocOnly(nodes, classify)).toEqual([nodes[0]])
+    expect(liveRefs(nodes, classify)).toEqual(['https://discord.com/live1'])
+  })
+})

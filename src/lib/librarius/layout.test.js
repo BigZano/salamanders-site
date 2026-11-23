@@ -372,14 +372,17 @@ describe('excerpt', () => {
 
   it('is the plain text of the parse, spoilers masked, collapsed and cut, whatever the content', () => {
     // The model: the same parse, each spoiler turned into the mask in place, and a text node (or address) that holds a
-    // `||` no spoiler took cut there and ended with the mask and a sentinel; the archive's plainText then reads it all,
-    // and what comes after the sentinel is dropped.
+    // `||` no spoiler took cut there and ended with the mask and a sentinel, as is a spoiler over lines closed at the last
+    // `||` (`lastBar`); the archive's plainText then reads it all, and what comes after the sentinel is dropped.
     const maskedText = (content) => {
       const nodes = parse(content)
       let closed = false
       walk(nodes, (node) => {
-        if (node.type === 'spoiler') Object.assign(node, { type: 'text', value: '▒▒▒', children: undefined })
-        else if (!closed && node.type === 'url' && node.href.includes('||')) {
+        if (node.type === 'spoiler') {
+          const cut = !closed && node.lastBar === true
+          Object.assign(node, { type: 'text', value: cut ? '▒▒▒\u0000' : '▒▒▒', children: undefined })
+          closed ||= cut
+        } else if (!closed && node.type === 'url' && node.href.includes('||')) {
           closed = true
           Object.assign(node, { type: 'text', value: node.href.slice(0, node.href.indexOf('||')) + '▒▒▒\u0000' })
         } else if (!closed && node.type === 'text' && node.value.includes('||')) {
@@ -535,6 +538,18 @@ describe('excerpt', () => {
         expect(excerpt('||line one\nline two\nline three||')).toBe(MASK)
         expect(excerpt('first\n||second\nthird')).toBe(`first ${MASK}`)
         expect(excerpt('first\n\n||second\n\nthird\n\nfourth||')).toBe(`first ${MASK}`)
+      })
+
+      it('masks a spoiler that runs over lines as one mask, and shows what follows its closer', () => {
+        expect(excerpt('a ||secret\nmore secret|| after')).toBe(`a ${MASK} after`)
+        expect(excerpt('a ||secret\n> quoted secret\n- listed secret\n```\ncode secret\n```\nlast secret|| after\nnext')).toBe(`a ${MASK} after next`)
+        expect(excerpt('> a ||secret\n> more secret|| after')).toBe(`a ${MASK} after`)
+      })
+
+      it('masks from a spoiler over lines that closes at the last bar to the end: that bar may open one a cut closed off', () => {
+        expect(excerpt('a ||secret\nmore secret|| and ||open')).toBe(`a ${MASK}`)
+        expect(excerpt('a ||secret\nmore ||secret|| tail')).toBe(`a ${MASK}`)
+        expect(excerpt('a ||secret\n`code||` tail')).toBe(`a ${MASK}`)
       })
 
       it('keeps the spoilers that closed before it, masked, and the text before it', () => {
