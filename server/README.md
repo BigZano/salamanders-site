@@ -947,12 +947,12 @@ the site follows. Use a second account of your own for the mention and the reply
    Pass: in the first, `a` is hidden and `b` can be read, with the last `||` shown as text; in the second, an empty spoiler
    shows, and `SECRET` and `OTHER` are hidden. Anything else in those two (in the first, everything hidden, or `||||` shown
    as text with `a` and `b` both hidden) means Discord pairs the bars otherwise than the site expects when it cuts a reply:
-   stop, and say so. The third settles what was never checked in Discord, whether a blank line ends a spoiler; either answer
-   is safe for what the site sends, which never has a blank line inside a spoiler, but say which it was. Both words shown,
-   with the bars as text: Discord ends a spoiler at a blank line, as the site does. Both hidden: Discord does not, and the
-   site differs there. It reads such a text with its bars as text, so a reply written so on the site shows unhidden in the
-   preview and goes out unhidden, and a message written so in Discord, which Discord hides, is shown unhidden on the site:
-   that is the one to say.
+   stop, and say so. The third shows what was never checked in Discord, whether a blank line ends a spoiler. Neither answer
+   is a stop. The site hides a message of Discord's written so either way: all from the first bar of a spoiler that runs
+   over lines to the message's last bar is hidden, and more where the site is unsure how Discord pairs the bars. A reply
+   written so on the site shows its bars as text in the preview and goes out with them escaped, so Discord shows it as the
+   preview did. Say which it was, both words shown with the bars as text or both hidden: what Discord really does may later
+   let the site hide less.
 10. **An edit.** Edit the first reply's text. In Discord the same message changes and is marked edited, and the site shows the
     new text. Then send a reply with a picture and edit its text: **the picture stays**, in the same place, and the text is
     the new one. (Discord keeping a picture through a `v2` edit was never probed: this is where it is found out. If the
