@@ -281,6 +281,20 @@ describe('TopicList: a row', () => {
     expect(line.text()).not.toMatch(/[*#`|]/)
   })
 
+  it('masks a spoiler of Discord\'s that runs over lines, and all after it, and a cut one from its first bar on', async () => {
+    const over = 'Seen **here** ||the Warden\nfalls|| after\n||the vault||'
+    // The server reads the first 400 characters of the content: a spoiler over lines may be cut before its last bar.
+    const cut = `Seen ||the Warden\n${'falls '.repeat(70)}`.slice(0, 400)
+    for (const content of [over, cut]) {
+      const w = await show([post(430, { latest: { ...post(430).latest, content } })])
+      const text = w.get('.lb-topic-text').text()
+      expect(text, content).toMatch(/^Seen /)
+      expect(text, content).toContain('▒▒▒')
+      expect(text, content).not.toMatch(/Warden|falls|after|vault/)
+      leave(w)
+    }
+  })
+
   it('falls back on the name the message came with when the author is not among the people', async () => {
     const w = await show([post(430, { latest: { ...post(430).latest, authorId: mid(499), authorName: 'Stored Name' } })], { people: {} })
     expect(w.find('.lb-topic-author').text()).toBe('Stored Name')

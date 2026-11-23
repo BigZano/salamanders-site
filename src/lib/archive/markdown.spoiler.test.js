@@ -1,7 +1,8 @@
 import { describe, it, expect } from 'vitest'
 import fc from 'fast-check'
-import { maskSpoilers, parse, plainText, SPOILER_MASK, walk } from './markdown'
+import { maskSpoilers, parse, parseInline, plainText, SPOILER_MASK, walk } from './markdown'
 import { parse as parseBefore } from './markdown-22b6793.fixture'
+import { parse as parseBatch2, parseInline as parseInlineBatch2 } from './markdown-8a17c63.fixture'
 
 // A spoiler that runs over lines, read so that it fails closed (the default), and the Legion Archive's one-line reading.
 const E = '123456789012345678'
@@ -655,4 +656,28 @@ describe('maskSpoilers: a quote keeps no word a spoiler may hide', () => {
       expect(performance.now() - at).toBeLessThan(budget)
     }
   }, 120_000)
+})
+
+describe('the extended dialect, the one replies are written in on the site: unchanged', () => {
+  it('reads a spoiler over the lines of a paragraph as one, and bars over a blank line as text, as its Preview shows them', () => {
+    const br = { type: 'br' }
+    expect(parse('||a\nb||', EXT)).toEqual([line(spoiler(t('a'), br, t('b')))])
+    expect(parse('||a\n\nb||', EXT)).toEqual([line(t('||a')), blank, line(t('b||'))])
+    expect(parse('||a\n- b\nc||', EXT)).toEqual([line(t('||a')), list('b'), line(t('c||'))])
+    expect(parse('**x** ||a\nb|| c\n||d||', EXT)).toEqual([line({ type: 'strong', children: [t('x')] }, t(' '), spoiler(t('a'), br, t('b')), t(' c')), line(spoiler(t('d')))])
+  })
+
+  it('reads every text exactly as at 8a17c63', () => {
+    const tokens = ['**', '*', '_', '__', '~~', '||', '||', '|', '|||', '`', '```', '> ', '>>> ', '# ', '#### ', '-# ', '- ', '1. ', '---', '[', '](', ')', '<', '>',
+      '\\', `<:e:${E}>`, `<@&${E}>`, 'https://a.io/x', 'word', ' ', '\\|', ZWSP, LS, '\n', '\n', '\n\n', '\r\n', '| a | b |', '|-|-|', '| ||a|| |',
+      '![a](upload:1)', '||![a](upload:2)||', '[^a]', '[^a]: n', '[x](https://a.io)']
+    fc.assert(fc.property(fc.array(fc.constantFrom(...tokens), { maxLength: 80 }), (parts) => {
+      const s = parts.join('')
+      expect(parse(s, EXT)).toEqual(parseBatch2(s, EXT))
+      expect(parseInline(s, EXT)).toEqual(parseInlineBatch2(s, EXT))
+    }), { numRuns: 4000 })
+    fc.assert(fc.property(fc.string({ maxLength: 300 }), (s) => {
+      expect(parse(s, EXT)).toEqual(parseBatch2(s, EXT))
+    }), { numRuns: 2000 })
+  })
 })

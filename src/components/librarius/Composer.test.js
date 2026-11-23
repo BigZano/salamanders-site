@@ -380,6 +380,40 @@ describe('Composer: the Discord view', () => {
     expect(panel.find('.lb-dv-button').exists()).toBe(false)
   })
 
+  // The extended dialect keeps the bars of a spoiler that runs past its paragraph as text, and the form sends them escaped: the
+  // Preview and Discord agree. The Discord dialect's fail-closed reading (librariusMarkdown.js) is for messages written in Discord.
+  it('shows bars over a blank line as text in the Preview, sends them escaped, and so shows them in the Discord view too', async () => {
+    const w = mountComposer()
+    const source = 'see ||the vault\n\nkey|| after'
+    await type(w, source)
+    const preview = w.get('.md')
+    expect(preview.find('.md-spoiler').exists()).toBe(false)
+    expect(preview.findAll('p.md-line').map((p) => p.text())).toEqual(['see ||the vault', 'key|| after'])
+    const sent = toDiscord(source, formOptions()).parts[0].components[0].components.filter((c) => c.type === 10).map((c) => c.content).join('\n')
+    expect(sent).toContain('see \\|\\|the vault\n\nkey\\|\\| after')
+    const panel = await openDiscord(w)
+    expect(panel.find('.md-spoiler').exists()).toBe(false)
+    expect(panel.text()).toContain('see ||the vault')
+    expect(panel.text()).toContain('key|| after')
+  })
+
+  it('shows a spoiler over the lines of a paragraph as one in the Preview, sends its bars, and hides it in the Discord view', async () => {
+    const w = mountComposer()
+    const source = 'see ||the vault\nkey|| after'
+    await type(w, source)
+    const preview = w.get('.md')
+    expect(preview.findAll('.md-spoiler')).toHaveLength(1)
+    expect(preview.get('.md-spoiler').text()).toBe('the vaultkey')
+    const sent = toDiscord(source, formOptions()).parts[0].components[0].components.filter((c) => c.type === 10).map((c) => c.content).join('\n')
+    expect(sent).toContain('see ||the vault\nkey|| after')
+    const panel = await openDiscord(w)
+    const hidden = panel.findAll('.md-spoiler')
+    expect(hidden).toHaveLength(1)
+    expect(hidden[0].text()).toContain('the vault')
+    expect(hidden[0].text()).toContain('key')
+    expect(panel.findAll('p.md-line').filter((p) => !p.element.closest('.md-spoiler')).map((p) => p.text())).toEqual(expect.arrayContaining(['see', 'after']))
+  })
+
   it('says when a reply needs more messages than Discord will be sent', async () => {
     const w = mountComposer()
     await type(w, paragraphs(4, 3000))
