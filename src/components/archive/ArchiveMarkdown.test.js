@@ -6,8 +6,8 @@ import { createRouter, createMemoryHistory } from 'vue-router'
 import ArchiveMarkdown from './ArchiveMarkdown'
 import { parse } from '../../lib/archive/markdown'
 
-// What the renderer makes of the nodes only the site's extended markdown has, and of the line break inside a spoiler that
-// runs over lines. Discord's own nodes are exercised through the Archive and the Librarius (archive.test.js, LibMessage).
+// What the renderer makes of the nodes only the site's extended markdown has, and of a spoiler that runs over lines in either
+// dialect. Discord's own nodes are exercised through the Archive and the Librarius (archive.test.js, LibMessage).
 const base = { link: () => ({ kind: 'text' }), emoji: (n) => `:${n.name}:`, mention: () => ({ label: '@x', color: null }) }
 const EXT = { dialect: 'extended' }
 
@@ -96,11 +96,19 @@ describe('ArchiveMarkdown: extended nodes', () => {
     expect(w.findAll('img.test-img').map((img) => img.attributes('data-ref'))).toEqual(['1', '2', '3', '4', '5', '6'])
   })
 
-  it('a spoiler over lines is one spoiler with a line break in it', () => {
-    const w = render('x ||a\nb|| y', base, {})
+  it('a spoiler over the lines of a paragraph (the extended dialect) is one spoiler with a line break in it', () => {
+    const w = render('x ||a\nb|| y')
     expect(w.findAll('.md-spoiler')).toHaveLength(1)
     expect(w.find('.md-spoiler').html()).toContain('<br>')
     expect(w.find('.md-spoiler').text()).toBe('ab')
     expect(w.findAll('p.md-line')).toHaveLength(1)
+  })
+  it('a spoiler over lines in the Discord dialect is one block toggle, the words before and after it lines of their own', () => {
+    const w = render('x ||a\nb|| y', base, {})
+    expect(w.findAll('.md-spoiler')).toHaveLength(1)
+    expect(w.find('.md-spoiler').element.tagName).toBe('DIV')
+    expect(w.find('.md-spoiler').classes()).toContain('md-spoiler-block')
+    expect(w.findAll('.md-spoiler p.md-line').map((p) => p.text())).toEqual(['a', 'b'])
+    expect(w.findAll('p.md-line').filter((p) => !p.element.closest('.md-spoiler')).map((p) => p.text())).toEqual(['x', 'y'])
   })
 })

@@ -340,13 +340,39 @@ describe('dialect option', () => {
     expect(() => parse(null, EXT)).toThrow(new TypeError('markdown source must be a string'))
     expect(() => parse(['a'], EXT)).toThrow(new TypeError('markdown source must be a string'))
   })
-  it('extended agrees with discord on everything Discord has (no table, divider, image, footnote or 4-6 hashes)', () => {
-    const tok = fc.constantFrom('**', '*', '_', '__', '~~', '||', '`', '```', '\n', '> ', '>>> ', '# ', '## ', '### ', '-# ', '- ', '* ',
-      '  ', '1. ', '[', '](', ')', '<', '>', '\\', `<:e:${E}>`, `<@&${E}>`, `<#${E}>`, 'https://a.io/x', '[x](https://a.io)', 'word', '9', 'é')
-    fc.assert(fc.property(fc.array(tok, { maxLength: 60 }), (parts) => {
+  it('the one-line reading is the Discord dialect\'s alone: oneLine true in the extended dialect is a RangeError, false is the dialect as ever', () => {
+    expect(() => parse('||a\nb||', { dialect: 'extended', oneLine: true })).toThrow(new RangeError('the one-line reading is of the discord dialect only'))
+    expect(parse('||a\nb||', { dialect: 'extended', oneLine: false })).toEqual(parse('||a\nb||', EXT))
+    expect(parse('||a\nb||', { dialect: 'discord', oneLine: true })).toEqual([line(t('||a')), line(t('b||'))])
+    expect(() => parse('x', { dialect: 'extended', oneLine: 'yes' })).toThrow(new TypeError('oneLine must be true or false'))
+  })
+  // Discord's own markdown, the tokens of the two properties below: no table, divider, image, footnote or 4-6 hashes.
+  const DISCORD_TOKENS = ['**', '*', '_', '__', '~~', '`', '```', '\n', '> ', '>>> ', '# ', '## ', '### ', '-# ', '- ', '* ',
+    '  ', '1. ', '[', '](', ')', '<', '>', '\\', `<:e:${E}>`, `<@&${E}>`, `<#${E}>`, 'https://a.io/x', '[x](https://a.io)', 'word', '9', 'é']
+  it('extended agrees with discord on everything Discord has, where no || is', () => {
+    fc.assert(fc.property(fc.array(fc.constantFrom(...DISCORD_TOKENS), { maxLength: 60 }), (parts) => {
       const s = parts.join('')
       expect(parse(s, EXT)).toEqual(parse(s))
     }), { numRuns: 3000 })
+  })
+  it('and where neither reads a spoiler over lines: discord makes none that runs to the last ||, and extended none with a break in it', () => {
+    const overLines = (nodes, dialect) => {
+      let found = false
+      walk(nodes, (n) => {
+        if (n.type === 'spoiler' && (dialect === 'discord' ? n.lastBar === true : n.children.some((c) => c.type === 'br'))) found = true
+      })
+      return found
+    }
+    let compared = 0
+    fc.assert(fc.property(fc.array(fc.constantFrom(...DISCORD_TOKENS, '||', '||', 'x||y||'), { maxLength: 60 }), (parts) => {
+      const s = parts.join('')
+      const discord = parse(s)
+      const extended = parse(s, EXT)
+      if (overLines(discord, 'discord') || overLines(extended, 'extended')) return
+      compared++
+      expect(extended).toEqual(discord)
+    }), { numRuns: 3000 })
+    expect(compared).toBeGreaterThan(1500)
   })
   it('discord never makes a table, divider, image, footnote or a heading past level 3', () => {
     const tok = fc.constantFrom('| a | b |', '|-|-|', '---', '#### ', '###### ', '![a](upload:1)', '[^a]', '[^a]: x', '\n', '\n', ' ', 'x', '||')
@@ -678,7 +704,8 @@ describe('extended: footnotes', () => {
   })
 })
 
-describe.each([['discord', {}], ['extended', EXT]])('spoilers over lines (%s)', (_name, opts) => {
+describe('extended: spoilers over lines, in a paragraph', () => {
+  const opts = EXT
   const spoiler = (...children) => ({ type: 'spoiler', children })
   it('a || opened on one line closes on a later line of the same paragraph', () => {
     expect(parse('||a\nb||', opts)).toEqual([line(spoiler(t('a'), BR, t('b')))])
@@ -773,6 +800,49 @@ describe.each([['discord', {}], ['extended', EXT]])('spoilers over lines (%s)', 
       const seen = []
       walk(parse(src, opts), (n) => n.type === 'spoiler' && seen.push(plainText(n.children)))
       expect(seen).toEqual(hidden(src))
+    }), { numRuns: 4000 })
+  })
+})
+
+describe('discord: a spoiler over lines fails closed, hiding all the extended dialect hides and more', () => {
+  // The rule, its proof and its own tests are in the comment at the top and in src/lib/archive/markdown.spoiler.test.js. Here: what
+  // the extended dialect, which Discord's dialect read the same way until the fail-closed reading came, hides, Discord's hides too.
+  const PROBE = /w\d+/g
+  /** → the probe words (w0, w1, …) the nodes hold inside a spoiler, sorted. */
+  const hiddenIn = (nodes) => {
+    const found = []
+    const visit = (list, inside) => {
+      for (const n of list) {
+        const within = inside || n.type === 'spoiler'
+        if (within) found.push(...([n.value, n.text, n.href].join(' ').match(PROBE) ?? []))
+        if (n.children) visit(n.children, within)
+        if (n.items) for (const item of n.items) visit(item.children, within)
+      }
+    }
+    visit(nodes, false)
+    return found.sort()
+  }
+  const numbered = (text) => {
+    let n = 0
+    return text.replace(/W/g, () => `w${n++}`)
+  }
+  it.each([
+    'W ||W\nW|| W', '||W\nW||\n||W\nW||', '||W|| ||W\nW|| ||W||', '||**W**\n*W*||', '||W\n||||', 'W ||\nW||', '> ||W\n> W||', '>>> ||W\nW||\nW',
+    '||W\n\nW||', '||W\n# W\nW||', '**W ||W**\nW||', '`W ||W`\nW|| W ||W||',
+  ])('%j: as one spoiler from its first bar to the last', (shape) => {
+    const src = numbered(shape)
+    const extended = hiddenIn(parse(src, EXT))
+    const discord = hiddenIn(parse(src))
+    for (const word of extended) expect(discord, src).toContain(word)
+    expect(parse(src).some((n) => n.type === 'spoiler' && n.lastBar === true), src).toBe(true)
+  })
+  it('hides every word the extended dialect hides, whatever the text (property)', () => {
+    const tok = fc.constantFrom('W', 'W', ' ', '||', '||', '\n', '\n', '\n\n', '**', '*', '_', '~~', '`', '```', '> ', '>>> ', '# ', '- ', '1. ', '-# ', '\\', '|',
+      '[W](https://a.io)', `<@${E}>`, 'https://a.io/W')
+    fc.assert(fc.property(fc.array(tok, { maxLength: 50 }), (parts) => {
+      const src = numbered(parts.join(''))
+      const discord = hiddenIn(parse(src))
+      for (const word of hiddenIn(parse(src, EXT))) expect(discord, src).toContain(word)
     }), { numRuns: 4000 })
   })
 })

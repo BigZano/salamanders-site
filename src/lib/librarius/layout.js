@@ -16,8 +16,10 @@
  *   with "…" so that it is no more than `max` characters (code points: no pair is cut in two). `max` is a whole number
  *   from 1; anything else is a RangeError. An excerpt is a preview, and a preview never shows a spoiler: each spoiler,
  *   wherever it sits (in bold, a quote, a list, a link's label), is "▒▒▒" whatever it hides, and the cut is made after.
- *   It fails closed: a `||` that no `||` closes (a preview cut the spoiler open, or it runs over lines, or it was escaped
- *   or is a lone bar) is masked from there to the end, and nothing after it is shown. In code a `||` is only text.
+ *   In Discord's dialect a spoiler that runs over lines is one "▒▒▒", and nothing after it is shown: it runs to the last
+ *   `||` of the message, which may open a spoiler a cut took the close of. It fails closed: a `||` that no `||` closes (a
+ *   preview cut the spoiler open, or, in the extended dialect, it runs past its paragraph, or it was escaped or is a lone
+ *   bar) is masked from there to the end, and nothing after it is shown. In code a `||` is only text.
  *   `dialect` is the markdown's (librariusMarkdown.js): 'discord' (the default) for a message written in Discord, 'extended'
  *   for a reply written on the site, and anything else a RangeError. In the extended dialect a picture is the word "picture"
  *   (never the words under it), a table is the text of its cells, row by row, and a `||` in a cell is masked as anywhere else.
@@ -189,8 +191,9 @@ const maskedFrom = (text) => text.slice(0, text.indexOf(SPOILER_OPENER)) + SPOIL
 /**
  * → a copy of the nodes in which every spoiler, nested ones included, is a text node of the mask, and in which the first
  * text or address that holds a `||` (one no spoiler took, so it has no closing `||`) is cut there and ends with the mask,
- * and every node after it, in the reading order, is gone. A picture is a text node of its word, and a table's cells are
- * read in their order, the head's first, as plainText reads them.
+ * and every node after it, in the reading order, is gone. So is every node after a spoiler over lines that the parse closed
+ * at the message's last `||` (`lastBar`): that bar may open a spoiler instead. A picture is a text node of its word, and a
+ * table's cells are read in their order, the head's first, as plainText reads them.
  */
 function previewNodes(nodes) {
   let closed = false
@@ -198,8 +201,10 @@ function previewNodes(nodes) {
     const kept = []
     for (const node of list) {
       if (closed) break
-      if (node.type === 'spoiler') kept.push({ type: 'text', value: SPOILER_MASK })
-      else if (node.type === 'image') kept.push({ type: 'text', value: PICTURE_WORD })
+      if (node.type === 'spoiler') {
+        kept.push({ type: 'text', value: SPOILER_MASK })
+        closed = node.lastBar === true
+      } else if (node.type === 'image') kept.push({ type: 'text', value: PICTURE_WORD })
       else if (readable(node)?.includes(SPOILER_OPENER)) {
         closed = true
         kept.push({ type: 'text', value: maskedFrom(readable(node)) })

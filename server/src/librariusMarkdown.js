@@ -4,15 +4,55 @@
  * Unrecognised syntax stays literal text, the way Discord shows it. Every scan is memoised, bounded or sticky-anchored,
  * so hostile input stays linear.
  *
- * parse(src, { dialect = 'discord' }) → block nodes. parseInline(s, { dialect }) → inline nodes. plainText(nodes, { raw })
- * → text. walk(nodes, visit) visits every node, in document order. A dialect other than these two is a RangeError.
+ * parse(src, { dialect = 'discord', oneLine = false }) → block nodes. parseInline(s, { dialect }) → inline nodes.
+ * plainText(nodes, { raw }) → text. walk(nodes, visit) visits every node, in document order. A dialect other than these
+ * two is a RangeError, and so is `oneLine: true` in the extended dialect; options that are no object, or a `oneLine`
+ * that is no boolean, are a TypeError.
  *
  * The `discord` dialect is what Discord itself shows, for every message written in Discord: bold, italic, underline,
- * strike, spoilers, code, quotes, headings 1-3, subtext, lists, masked links, mentions and custom emoji. A `||` that is
- * opened on one line closes on a later line of the same paragraph (no blank line, heading, list, quote or code block
- * between): that makes one `line` node, its spoiler holding the lines with a { type: 'br' } between them.
+ * strike, spoilers, code, quotes, headings 1-3, subtext, lists, masked links, mentions and custom emoji.
+ *
+ * Its lines are read one by one (and only so with `{ oneLine: true }`, the Legion Archive's reading, exactly as the
+ * site's parser read them at 22b6793), but by default a spoiler can run over them, and Discord may read the bars of a
+ * message in more ways than one. Its spoiler rule may match bars as text, across lines and through code; its bold,
+ * italics and code may run over lines or end mid-line, and its code blocks may open and close mid-line; a quote, a
+ * heading or a list item may be read alone. So the site fails closed by construction, without choosing among them:
+ *   - A line is certain when it has no `||`, or when its bars pair within it under every reading: it is no code, its
+ *     pipes come in runs of one or two, it has an even number of bars with words (not blank) between each pair, it holds
+ *     none of `` ` \ * _ ~ [ < ``, `://` or another line break, and none of `) > ]` from its first `||` on.
+ *   - The lines before the first line that is not certain parse as they always did. From the first `||` of that line to
+ *     the last `||` of the message, when that is on a later line, all is one `spoiler` node (`lastBar: true`, so a
+ *     preview masks from it to the end).
+ * Why that hides all any reading hides. A reading hides only between two bars it pairs. (1) Before the first line U that
+ * is not certain, no reading has a spoiler open when a line starts. That holds at the start; a line with no bars opens
+ * none; and nothing can hold the bars of a certain line but a construct that covers all of it, so a reading either shows
+ * them (as code, an address, a title) or pairs them within the line, each bar with the next, as the site's one-line
+ * parse does, and ends the line with none open. So before U a reading hides at most what the site hides there. Nothing
+ * else can, as a certain line has no mark that starts a construct, nor one that ends one after its first bar (what ends
+ * before it held none of the line's bars):
+ *   code and code blocks start and end at `` ` ``; spans at `*`, `_` (`__`), `~` (`~~`); an escape is `\`; a link or an
+ *   image starts at `[` (`![`) and ends at `)`, its title and its `( … )` address lying between the brackets and that
+ *   `)`, so `"`, `'` and `(` need no place; an angle form (autolink, mailto, mention, emoji, timestamp) starts at `<` and
+ *   ends at `>`; a reference link would end at `]`; a bare address starts at `://`, cannot cross a line break, but may
+ *   hold bars; a quote, heading, subtext or list item is a block of whole lines, which ends no spoiler a line leaves
+ *   closed.
+ * (2) No reading hides anything after the last `||` L: a hidden stretch ends at a bar. (3) Nor anything on U before its
+ * first `||`, by (1). So all a reading hides lies before U, where the site hides as much, or from the first `||` of U to
+ * L. When L is on U, every other bar is on a certain line, and the old one-line parse stands.
+ * The node's children are blocks. The words before its first bar and after its last are lines of their own. A quote cut
+ * by the bars goes on, as a quote, on both sides; what a cut leaves after the bars is read as words; markers alone before
+ * the first bar (`- `, `# `, `1. `) are words at the start of the node. A text with every bar on one line, or only on
+ * certain lines, parses exactly as it did when lines were read alone.
+ * Where this dialect differs from the parser of 22b6793 it is in none of that. Its paragraphs are runs of lines (see
+ * joinRuns), but it never joins their lines into one spoiler, as the extended dialect does (below): each line is read
+ * alone, so the one-line parse the proof leans on is the same, and the extended dialect's constructs are never read here.
  *
  * The `extended` dialect is for messages written on the site. It is the Discord set, plus:
+ * - a spoiler over lines: a `||` opened on one line closes on a later line of the same paragraph (no blank line, heading,
+ *   list, quote or code block between), which makes one `line` node, its spoiler holding the lines with a { type: 'br' }
+ *   between them. Bars this leaves open (over a blank line, say) are text, in the composer's Preview as here, and the form
+ *   sends them escaped. None of the Discord dialect's fail-closed reading is done here: what a member writes on the site
+ *   is shown as they previewed it;
  * - headings of levels 4 to 6;
  * - { type: 'divider' } for a line of three or more hyphens;
  * - { type: 'table', head: cells, rows: cells[] }, where a cell is a list of inline nodes: a header row, a rule row of
@@ -74,24 +114,148 @@ function dialectOf(dialect) {
   throw new RangeError('markdown dialect must be "discord" or "extended"')
 }
 
-export function parse(src, { dialect = 'discord' } = {}) {
+const linesOf = (src) => src.replace(/\r\n?/g, '\n').split('\n')
+
+/**
+ * → the blocks of a message. In the Discord dialect a spoiler may run over lines, read so that it fails closed (see the
+ * comment at the top); `{ oneLine: true }` reads each line alone, exactly as the site's parser did at 22b6793: the Legion
+ * Archive's reading, whose formatting never changes. The extended dialect has no such reading.
+ */
+export function parse(src, options) {
   if (typeof src !== 'string') throw new TypeError('markdown source must be a string')
+  if (options !== undefined && (typeof options !== 'object' || options === null)) throw new TypeError('markdown options must be an object')
+  const { dialect = 'discord', oneLine } = options ?? {}
+  if (oneLine !== undefined && typeof oneLine !== 'boolean') throw new TypeError('oneLine must be true or false')
   const extended = dialectOf(dialect)
-  const lines = src.replace(/\r\n?/g, '\n').split('\n')
+  if (extended && oneLine) throw new RangeError('the one-line reading is of the discord dialect only')
+  const lines = linesOf(src)
+  if (!extended) return oneLine ? parseBlocks(lines, false, envOf(false, NO_LABELS)) : readSpoilers(lines, envOf(false, NO_LABELS))
   // A reference is a footnoteRef only when a note by its label is defined, and a definition may come after the reference,
   // so a document with notes is read a second time, told which labels there are. The notes it finds are the same.
-  const first = envOf(extended, NO_LABELS)
+  const first = envOf(true, NO_LABELS)
   const nodes = parseBlocks(lines, false, first)
   // Stryker disable next-line ConditionalExpression: a second pass over a document with no notes gives the same nodes; the check only saves the time
   if (first.notes.size === 0) return nodes
   return parseBlocks(lines, false, envOf(true, new Set(first.notes.keys())))
 }
 
-function parseBlocks(lines, inQuote, env) {
+// How a line sits in the message, as parseBlocks reads it: what quote it is in and whether it is code.
+const PLAIN = 'plain'
+const CODE = 'code'
+const GROUP = 'group' // a line of a > quote
+const START = 'start' // the line that opens a >>> quote
+const DEEP = 'deep' // a line a >>> quote holds after it
+// What a line keeps of its quote when a spoiler's bars cut it: the piece after the bars is read as words in it.
+const CARRY = { [PLAIN]: 'text', [CODE]: 'text', [GROUP]: '> ', [START]: '>>> ', [DEEP]: '>>> ' }
+// The quote marker written at the start of a whole line.
+const OWN = { [GROUP]: '> ', [START]: '>>> ' }
+// Nothing but the markers of a list item, a heading or a subtext.
+const BARE = /^[ \t]*(?:(?:#{1,3}|-#|[-*]|\d{1,9}\.) +)?$/
+const quoted = (line) => line.startsWith('> ') || line === '>'
+
+/**
+ * → for each line from `i`, the index of the fence line that closes the code block opening there, or -1. A line after the
+ * last fence line `ends` can close nothing, so no scan looks for one past it, and each scan stops at the close it finds.
+ */
+const fenceEnd = (lines, i, ends) => (i < ends && FENCE_OPEN.test(lines[i]) ? lines.indexOf('```', i + 1) : -1)
+
+/** → for each line, whether a fence holds it, in the lines of a quote (no quote opens in them). */
+function codeIn(lines) {
+  const ends = lines.lastIndexOf('```')
+  const code = []
+  for (let i = 0; i < lines.length; ) {
+    const close = fenceEnd(lines, i, ends)
+    for (const end = Math.max(close, i); i <= end; i++) code.push(close !== -1)
+  }
+  return code
+}
+
+/** → the role of each line of the message: the fences and quotes parseBlocks would find, in the same order. */
+function rolesOf(lines) {
+  const ends = lines.lastIndexOf('```')
+  const roles = []
+  for (let i = 0; i < lines.length; ) {
+    const close = fenceEnd(lines, i, ends)
+    if (close !== -1) {
+      for (; i <= close; i++) roles.push(CODE)
+    } else if (lines[i].startsWith('>>> ')) {
+      codeIn([lines[i].slice(4), ...lines.slice(i + 1)]).forEach((code, k) => roles.push(code ? CODE : k === 0 ? START : DEEP))
+      break
+    } else if (quoted(lines[i])) {
+      const from = i
+      while (i < lines.length && quoted(lines[i])) i++
+      for (const code of codeIn(lines.slice(from, i).map((line) => line.slice(2)))) roles.push(code ? CODE : GROUP)
+    } else {
+      roles.push(PLAIN)
+      i++
+    }
+  }
+  return roles
+}
+
+// Marks that start, or start and end, a construct of some reading that can hold bars or run over a line break (see
+// the comment at the top): code, escapes, spans, links, angle forms, addresses, and line breaks other than \n.
+const UNSURE = /[`\\*_~[<\u2028\u2029\u0085\v\f]|:\/\//
+// Marks that only end one: a link's `)`, an angle form's `>`, a reference link's `]`. They start with `[` or `<`.
+const ENDS = /[)>\]]/
+
+/** Whether every reading pairs the line's bars within it (see the comment at the top). */
+function certain(line, role) {
+  if (!line.includes(SPOILER)) return true
+  if (role === CODE || UNSURE.test(line) || line.includes('|||') || ENDS.test(line.slice(line.indexOf(SPOILER)))) return false
+  const pieces = line.split(SPOILER)
+  return pieces.length % 2 === 1 && pieces.every((piece, k) => k % 2 === 0 || /\S/.test(piece))
+}
+
+/** → { u, last }: the first line that is not certain (-1 for none) and the last line with a `||` (-1 for none). */
+function uncertainty(lines) {
+  const roles = rolesOf(lines)
+  return { roles, u: lines.findIndex((line, k) => !certain(line, roles[k])), last: lines.findLastIndex((line) => line.includes(SPOILER)) }
+}
+
+/** The message's blocks: the lines before the first one that is not certain as they were, then one spoiler to the last `||`. */
+function readSpoilers(lines, env) {
+  const { roles, u, last } = uncertainty(lines)
+  if (u === -1 || u === last) return parseBlocks(lines, false, env)
+  const at = lines[u].indexOf(SPOILER)
+  const c = lines[last].lastIndexOf(SPOILER)
+  const head = lines[u].slice(0, at)
+  const rest = head.slice((OWN[roles[u]] ?? '').length)
+  // Nothing but markers before the first bar: they are words at the start of the spoiler. Anything more stays before it.
+  const bare = BARE.test(rest)
+  const before = bare ? lines.slice(0, u) : [...lines.slice(0, u), head]
+  const inner = [(bare ? rest : '') + lines[u].slice(at + 2), ...lines.slice(u + 1, last)]
+  const closing = lines[last].slice(0, c)
+  if (closing.slice((OWN[roles[last]] ?? '').length).trim() !== '') inner.push(closing)
+  return [
+    ...parseBlocks(before, false, env),
+    { type: 'spoiler', children: parseBlocks(inner, false, env, CARRY[roles[u]]), lastBar: true },
+    ...parseBlocks([lines[last].slice(c + 2), ...lines.slice(last + 1)], false, env, CARRY[roles[last]]),
+  ]
+}
+
+/**
+ * Blocks from lines. `lead` says how the first line is read when it is the piece of a line a spoiler's bars cut (the
+ * Discord dialect's spoiler over lines): 'text' as words only (never a fence, quote, heading or list), '> ' as such words
+ * going on in a > quote, '>>> ' as such words in a >>> quote of all the lines. A quote the cut leaves empty is left out.
+ */
+function parseBlocks(lines, inQuote, env, lead) {
   const out = []
   // Set once no closing fence is left in `lines`, so that no later opener looks for one again (each look is a scan to the end).
   let fenceless = false
   let i = 0
+  if (lead === '>>> ') {
+    const children = parseBlocks(lines, true, env, 'text')
+    return children.length ? [{ type: 'quote', children }] : out
+  }
+  if (lead === '> ') {
+    for (i = 1; i < lines.length && quoted(lines[i]); ) i++
+    const children = parseBlocks([lines[0], ...lines.slice(1, i).map((line) => line.slice(2))], true, env, 'text')
+    if (children.length) out.push({ type: 'quote', children })
+  } else if (lead === 'text') {
+    if (lines[0].trim() !== '') out.push({ type: 'line', children: inline(lines[0], env, null) })
+    i = 1
+  }
   while (i < lines.length) {
     const line = lines[i]
     const fence = fenceless ? null : FENCE_OPEN.exec(line)
@@ -108,9 +272,9 @@ function parseBlocks(lines, inQuote, env) {
       out.push({ type: 'quote', children: parseBlocks([line.slice(4), ...lines.slice(i + 1)], true, env) })
       break
     }
-    if (!inQuote && (line.startsWith('> ') || line === '>')) {
+    if (!inQuote && quoted(line)) {
       const inner = []
-      while (i < lines.length && (lines[i].startsWith('> ') || lines[i] === '>')) {
+      while (i < lines.length && quoted(lines[i])) {
         inner.push(lines[i].slice(2)) // '>'.slice(2) is '' too
         i++
       }
@@ -169,7 +333,7 @@ function parseBlocks(lines, inQuote, env) {
 
 /**
  * The blocks, with each paragraph (a run of plain lines, no blank line, heading, list, quote or code block between them)
- * turned into line nodes: a line each, except where a spoiler runs over lines.
+ * turned into line nodes: a line each, except where a spoiler of the extended dialect runs over lines.
  */
 function joinRuns(blocks, env) {
   const out = []
@@ -190,8 +354,9 @@ function joinRuns(blocks, env) {
 }
 
 /**
- * A paragraph's lines → its line nodes. Each line is read with the lines after it in hand (see inline), so a `||` that no
- * `||` closes on its own line takes as many of the next lines as the spoiler needs to close, into one line node.
+ * A paragraph's lines → its line nodes. In the extended dialect each line is read with the lines after it in hand (see
+ * inline), so a `||` that no `||` closes on its own line takes as many of the next lines as the spoiler needs to close,
+ * into one line node.
  * A line with such a `||` and none after it in the paragraph is read as it would be alone, and a scan for a closer that
  * finds none means no later line has a `||` either, so a paragraph is scanned to its end once at most.
  */
@@ -200,7 +365,8 @@ function joinRun(run, env) {
   const out = []
   for (let k = 0; k < lines.length; ) {
     const flow = { lines, at: k }
-    out.push({ type: 'line', children: inline(lines[k], env, flow) })
+    // The Discord dialect reads each line alone: its spoiler over lines is readSpoilers' (see the comment at the top).
+    out.push({ type: 'line', children: inline(lines[k], env, env.extended ? flow : null) })
     k = flow.at + 1
   }
   return out
@@ -301,8 +467,8 @@ export function parseInline(s, { dialect = 'discord' } = {}) {
 // to the *nearest* closer of its delimiter, so no delimiter kind can recur
 // inside itself (and link labels exclude brackets). Chains top out at ~8.
 //
-// `flow` is null for a span's inner text, and for text that is no line of a paragraph: it never reaches past its line.
-// For a line of a paragraph it is { lines, at }, the paragraph's lines and the index of the one being read: a `||` with no
+// `flow` is null for a span's inner text, for text that is no line of a paragraph, and for every line of the Discord
+// dialect: it never reaches past its line. For a line of a paragraph in the extended dialect it is { lines, at }, the paragraph's lines and the index of the one being read: a `||` with no
 // closer on its line closes at the first `||` on a later line, if any, and reading goes on from there (`at` moves with it).
 // Each line inside the spoiler is read on its own, so no other mark runs over lines.
 function inline(s, env, flow) {

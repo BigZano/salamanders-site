@@ -1,7 +1,9 @@
 /**
  * AST → VNodes. Text goes through Vue's escaping; no raw markup is
  * written anywhere in the archive. Links come only from classifyHref: route,
- * external https, or plain text.
+ * external https, or plain text. A spoiler that runs over lines is one
+ * block-level toggle (a div) round the blocks it holds, the same toggle a
+ * one-line spoiler is (a span), hidden until it is shown.
  *
  * The nodes of the site's extended markdown (tables, dividers, headings 4-6, footnotes, pictures) are drawn here too. A
  * picture is whatever `ctx.image(ref, alt)` returns, a VNode: only the page knows where an upload is. With no such function,
@@ -12,12 +14,13 @@ import { RouterLink } from 'vue-router'
 
 const Spoiler = defineComponent({
   name: 'ArchiveSpoiler',
-  setup(_, { slots }) {
+  props: { block: Boolean },
+  setup(props, { slots }) {
     const shown = ref(false)
     const reveal = () => (shown.value = true)
     return () =>
-      h('span', {
-        class: ['md-spoiler', { 'is-shown': shown.value }],
+      h(props.block ? 'div' : 'span', {
+        class: ['md-spoiler', { 'md-spoiler-block': props.block, 'is-shown': shown.value }],
         role: 'button',
         tabindex: shown.value ? -1 : 0,
         'aria-expanded': String(shown.value),
@@ -50,6 +53,7 @@ export default defineComponent({
         case 'divider': return h('hr', { class: 'md-hr' })
         case 'table': return table(n)
         case 'footnotes': return h('section', { class: 'md-footnotes', 'aria-label': 'Footnotes' }, n.items.map((it) => h('div', { class: 'md-footnote' }, [marker(it.label), h('div', it.children.map(block))])))
+        case 'spoiler': return h(Spoiler, { block: true }, () => n.children.map(block))
         default: return h('p', { class: 'md-line' }, inl(n.children))
       }
     }
