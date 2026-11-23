@@ -128,6 +128,15 @@ describe('a spoiler that runs over lines', () => {
     expect(exposure(parse('```\nw0 ||w1||\n```\nw2 ||w3|| w4'))).toEqual({ hidden: words(1, 3), shown: ['w0', 'w4'] })
   })
 
+  it('finds the fences inside quotes as parseBlocks does, so bars in them are uncertain', () => {
+    // A fence that opens on the >>> line itself, after its marker.
+    expect(exposure(parse('x\n>>> ```\nw0 ||w1||\n```\nw2 ||w3||'))).toEqual({ hidden: words(1, 3), shown: ['w0'] })
+    // A fence in a >>> quote that starts after other lines.
+    expect(exposure(parse('x\n>>> a\n```\nw0 ||w1||\n```\nw2 ||w3||'))).toEqual({ hidden: words(1, 3), shown: ['w0'] })
+    // A fence in a > quote, its lines read without their marker.
+    expect(exposure(parse('> ```\n> w0 ||w1||\n> ```\nw2 ||w3||'))).toEqual({ hidden: words(1, 3), shown: ['w0'] })
+  })
+
   it.each([['plain', ''], ['quote', '> '], ['heading', '# '], ['list item', '- '], ['numbered item', '1. '], ['subtext', '-# '], ['>>> quote', '>>> ']])(
     'reads a %s line whose bars pair within it as certain', (_, prefix) => {
       for (const src of [`${prefix}w0 ||w1|| w2\nw3 ||w4|| w5`, `${prefix}a | b ||w0|| || w1 || c\n||w2||`, `x\n${prefix}w0 ||w1||`]) {
@@ -142,6 +151,22 @@ describe('a spoiler that runs over lines', () => {
     expect(parse("> a ||b\nc||")).toEqual([quote(line(t('a '))), unit(quote(line(t('b'))), line(t('c')))])
     expect(parse('a ||b\n> c||\nd')).toEqual([line(t('a ')), unit(line(t('b')), quote(line(t('c')))), line(t('d'))])
     expect(parse('||a\n> b||')).toEqual([unit(line(t('a')), quote(line(t('b'))))])
+  })
+
+  it('drops the >>> marker alone before the first bar, and keeps the quote', () => {
+    expect(parse('>>> ||a\nb||')).toEqual([unit(quote(line(t('a')), line(t('b'))))])
+    expect(parse('||a\n>>> ||\nc')).toEqual([unit(line(t('a'))), quote(line(t('c')))])
+  })
+
+  it('reads the lines after the last bar as blocks again, quotes too, but nests no quote in a quote it carries on', () => {
+    expect(parse('||a\nb||\n> c\n>>> d')).toEqual([unit(line(t('a')), line(t('b'))), quote(line(t('c'))), quote(line(t('d')))])
+    expect(parse('>>> ||a\nb||\n> c')).toEqual([unit(quote(line(t('a')), line(t('b')))), quote(line(t('> c')))])
+    expect(parse('> a ||b\n> c||\n> > d')).toEqual([quote(line(t('a '))), unit(quote(line(t('b')), line(t('c')))), quote(line(t('> d')))])
+  })
+
+  it('leaves out a piece the bars leave blank', () => {
+    expect(parse('||a\nb||   \nc')).toEqual([unit(line(t('a')), line(t('b'))), line(t('c'))])
+    expect(parse('||   \na||')).toEqual([unit(line(t('a')))])
   })
 
   it('keeps a >>> quote around what comes after the last bar', () => {
