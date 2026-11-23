@@ -350,7 +350,8 @@ export function createLibrariusStore(pool) {
      * content (the whole text), image: { id, url, expiresAt } | null } | null, posterIds (the last 3 distinct authors,
      * newest first) }]. One statement. The text is never cut here: the site reads a spoiler over the whole message, and
      * a cut copy can read as a spoiler closed before words the whole message hides. The site cuts the plain text it
-     * shows, after reading; a Discord message is at most 4,000 characters.
+     * shows, after reading. A Discord message is at most 4,000 characters, and what is stored is at most 65,536 UTF-16
+     * units: parseMessage keeps a text whole up to that, and drops one over it, which Discord never sends.
      */
     async listPosts(memberId) {
       needId(memberId, 'memberId')
