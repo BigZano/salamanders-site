@@ -22,7 +22,7 @@
  *     pipes come in runs of one or two, it has an even number of bars with words (not blank) between each pair, it holds
  *     none of `` ` \ * _ ~ [ < ``, `://` or another line break, and none of `) > ]` from its first `||` on. A Discord
  *     mention, channel, role, emoji, timestamp or slash command (TOKEN) is a word there when it comes before the first
- *     `||`, or after it with a space before its `>` and past the line's leading spaces, tabs and `>`, and no `_` in it.
+ *     `||`, or after it with a space before its `>` and past the line's leading white space and `>`, and no `_` in it.
  *   - The lines before the first line that is not certain parse as they always did. From the first `||` of that line to
  *     the last `||` of the message, when that is on a later line, all is one `spoiler` node (`lastBar: true`, so a
  *     preview masks from it to the end).
@@ -46,8 +46,9 @@
  *   Before the first bar, what it ends held none of the bars, and a span it starts ends before them too, or covers the
  *   rest of the line, inside which they pair as above (no `_` comes after the first bar). After the first bar it has no
  *   `_`, and an angle form ending at its `>` would hold the space before that `>` in every text that reads the line,
- *   which no autolink or mailto can: no reading cuts a space past the leading run, and a marker's space is cut only from
- *   a text that starts on its line, which holds no earlier `<`.
+ *   which no autolink or mailto can: no reading cuts a space past the leading run of white space and `>` but a marker's,
+ *   and that only from a text that starts on its line, which holds no earlier `<`. (Quotes and lists cut only spaces,
+ *   tabs and `>` there; the site skips any other white space as well, so a reading that cut it too would change nothing.)
  * (2) No reading hides anything after the last `||` L: a hidden stretch ends at a bar. (3) Nor anything on U before its
  * first `||`, by (1). So all a reading hides lies before U, where the site hides as much, or from the first `||` of U to
  * L. When L is on U, every other bar is on a certain line, and the old one-line parse stands.
@@ -228,7 +229,8 @@ function certain(line, role) {
   if (!line.includes(SPOILER)) return true
   const at = line.indexOf(SPOILER)
   // A quote or a list item reads its lines again without their leading spaces, tabs and `>`: only a space past them counts.
-  const space = line.indexOf(' ', line.search(/[^ \t>]/))
+  // Any other white space there is skipped too, in case a reading cuts it as well.
+  const space = line.indexOf(' ', line.search(/[^\s>]/))
   // A token that ends by the first bar, or one after it with such a space before its `>` and no `_` in it, is read as a word.
   const read = line.replace(TOKEN, (token, from) => {
     const end = from + token.length

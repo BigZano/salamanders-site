@@ -243,7 +243,9 @@ describe('a Discord mention, channel, role, emoji, timestamp or slash command be
     }
   })
 
-  it.each(['> ', '>', '  > ', '> > ', '>>> ', '  ', '\t', ' \t> '])('counts no space of a leading %j before a token after the first bar', (lead) => {
+  // The leading run of a line, whose spaces a quote's or a list item's text loses: spaces, tabs and `>`, and any other white space.
+  const leads = ['> ', '>', '  > ', '> > ', '>>> ', '  ', '\t', ' \t> ', `${NBSP}> `, ` ${NBSP}> `, `${NBSP} `, '\u3000> ', '\u2003 ']
+  it.each(leads)('counts no space of a leading %j before a token after the first bar', (lead) => {
     for (const x of [`<@${E}>`, `<:gg:${E}>`, '<t:1:R>', `</roll:${E}>`]) {
       expect(exposure(parse(`${lead}w0||w1||${x} w2\nw3 ||w4|| w5`)), x).toEqual({ hidden: words(1, 4), shown: ['w0', 'w5'] })
     }
@@ -398,6 +400,10 @@ describe('what the reviews found shown, hidden now', () => {
     ['a mailto over a numbered list item', `1. <w0\n   w1||w2<@${E}>||w3\n   w4||`, ['w0', 'w1']],
     ['a mailto over a list item in a quote', `> - <w0\n>   w1||w2<@${E}>||w3\n>   w4||`, ['w0', 'w1']],
     ['a mailto over a list item indented with a tab, read as spaces', `100. <w0\n\t w1||w2<@${E}>||w3\n\t w4||`, ['w0', 'w1']],
+    // No reading known cuts more than spaces, tabs and `>` there, but the site skips every white space, in case one does.
+    ['a mailto over quote lines that a no-break space starts', `> <w0\n\u00a0> w1||w2<@${E}>||w3\n\u00a0> w4||`, ['w0', 'w1']],
+    ['a mailto over quote lines that an ideographic space starts', `> <w0\n\u3000> w1||w2<@${E}>||w3\n\u3000> w4||`, ['w0', 'w1']],
+    ['a mailto over a list item indented with a no-break space and a space', `- <w0\n\u00a0 w1||w2<@${E}>||w3\n\u00a0 w4||`, ['w0', 'w1']],
   ])('%s', (_, src, shown) => {
     const all = src.match(WORD)
     expect(exposure(parse(src))).toEqual({ hidden: all.filter((w) => !shown.includes(w)).sort((a, b) => a.slice(1) - b.slice(1)), shown })
@@ -449,8 +455,9 @@ describe('fail closed', () => {
    * title are not; an autolink `<…:/…>` or `<…@…>` is not read), Discord's tokens (mentions, channels, roles, emoji,
    * timestamps and slash commands read whole, or not at all, so that a span may start in one), and blocks (one flow;
    * each quote, heading, subtext and list item read alone and the lines around them apart; or every line read again
-   * without its leading spaces, tabs and `>`, as a quote's or a list item's text is, and a list item, heading or subtext
-   * starting a text of its own without its marker).
+   * without its leading white space and `>`, as a quote's or a list item's text is without its spaces, tabs and `>` (and
+   * as a reading that cut any other white space there would read it), and a list item, heading or subtext starting a text
+   * of its own without its marker).
    * → [start, end) of each stretch it hides, in the message.
    */
   function readingHides(lines, code, o) {
@@ -565,7 +572,7 @@ describe('fail closed', () => {
         started = false
       }
       shown.forEach((l, k) => {
-        const lead = /^[ \t>]*/.exec(l)[0].length
+        const lead = /^[\s>]*/.exec(l)[0].length
         const marker = /^(?:[-*+]|\d{1,9}\.|#{1,3}|-#) +/.exec(l.slice(lead))
         if (marker) flush()
         else if (started) {
@@ -652,6 +659,8 @@ describe('fail closed', () => {
         fc.constantFrom(['- ', '  '], ['- ', '- '], ['> - ', '>   '], ['1. ', '   ']),
         // A tab is read as spaces, and a list item's lines lose as many as its marker is wide.
         fc.constantFrom(['100. ', '\t '], ['- ', '\t '], ['\t', '\t '], ['> ', '>\t ']),
+        // Other white space before the markers, which the site skips too.
+        fc.constantFrom(['> ', '\u00a0> '], ['\u00a0> ', '\u00a0> '], ['\u3000> ', '\u3000> '], ['- ', '\u00a0 ']),
       ),
       fc.constantFrom('', '<W', '<x:/W', 'W<W@', '_W', '__W', '[W](<W'),
       run(fc.oneof(fc.constant('W'), token), 2),
@@ -689,15 +698,24 @@ describe('fail closed', () => {
       const first = s.indexOf('||')
       const last = s.lastIndexOf('||')
       // The last line with bars keeps its one-line parse when it is the first that is not certain (the ruling: a reading
-      // may differ within that one line, as before). So a stretch that starts on it is not held against the site.
+      // may differ within that one line, as before). So a stretch that starts on it is not held against the site then, and
+      // only then: on a certain last line, as on a one-line message, every stretch is held. A stretch that starts before it
+      // is held whatever the parse says. Whether the last line is uncertain is read from the text with one more line of
+      // bars, which makes a unit of that line exactly when it is not certain (a line added after changes no earlier role).
       const lastLine = s.lastIndexOf('\n', last) + 1
-      const held = stretches.filter(([a]) => a < lastLine)
+      const uncertainLast = !nodes.some((n) => n.lastBar) && parse(`${s}\n||`).some((n) => n.lastBar)
+      const held = stretches.filter(([a]) => a < lastLine || !uncertainLast)
       for (const m of s.matchAll(WORD)) {
         const why = `${m[0]} in ${JSON.stringify(s)}`
         if (byLine.has(m[0]) || held.some(([a, b]) => m.index >= a && m.index < b)) expect(hidden, why).toContain(m[0])
         if (first === -1 || m.index < first || m.index > last + 1) expect(shown, why).toContain(m[0])
       }
-    }), { numRuns: globalThis.__stryker__ ? 150 : 1500 })
+    }), {
+      numRuns: globalThis.__stryker__ ? 150 : 1500,
+      // A certain() that let code through would read this one-line message as certain, and so be held to every reading of
+      // it: one that reads no code pairs `||w1` || ` and hides w1.
+      examples: [[{ s: '`w0||w1` || w2', lines: ['`w0||w1` || w2'], codeLines: [false] }]],
+    })
     // 1620 readings a document: well past vitest's 5 s default under coverage.
   }, 300_000)
 
