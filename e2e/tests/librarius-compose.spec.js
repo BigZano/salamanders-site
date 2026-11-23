@@ -20,6 +20,9 @@ const SITE = `https://sm2salamanders.site/reliquarium/librarius/${COMPOSE}`
 const BUTTON_ROW = { type: 1, components: [{ type: 2, style: 5, label: 'Open On Site', url: SITE }] }
 // How long what the page sends may take to reach Discord and come back: the outbox's queue, then the page's poll (every 10 s).
 const SENT = { timeout: 60_000 }
+// A picture of one pixel, which the api takes (PNG, judged by its bytes).
+const PNG = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==', 'base64')
+const as = (token) => ({ Authorization: `Bearer ${token}` })
 
 async function signIn(page, token) {
   await page.goto(`/#access_token=${token}&expires_in=3600`)
@@ -191,5 +194,109 @@ test.describe('Librarius composer', () => {
     await expect(page.locator('.lb-composer')).toHaveCount(0)
     // Nor anything else that writes: no Reply or Quote on its messages.
     await expect(page.locator('.lb-actions')).toHaveCount(0)
+  })
+  test('a picture inside a spoiler is refused in the composer, in the server\'s words, until it is outside the bars', async ({ page }) => {
+    await signIn(page, ILLUMINATOR.token)
+    await page.goto(`/reliquarium/librarius/${COMPOSE}`)
+    const composer = page.locator('.lb-dock .lb-composer')
+    const box = composer.getByRole('textbox', { name: 'Your reply, in markdown' })
+    const send = composer.locator('.lb-send')
+    await composer.locator('input[type="file"]').setInputFiles({ name: 'e2e-map.png', mimeType: 'image/png', buffer: PNG })
+    await expect(box).toHaveValue(/!\[e2e-map\]\(upload:1\)/, SENT)
+    await box.fill('||![e2e-map](upload:1)||')
+    await expect(composer.locator('.lb-spoiled-picture')).toHaveText("A picture can't go inside a spoiler yet: put it outside the bars.")
+    await expect(send).toBeDisabled()
+    await box.fill(`![e2e-map](upload:1) ||E2E spoiled ${RUN}||`)
+    await expect(composer.locator('.lb-spoiled-picture')).toHaveCount(0)
+    await expect(send).toBeEnabled()
+    // Leave no draft behind.
+    await box.fill('')
+  })
+
+  // What the next test deletes: the reply this one sends.
+  let retriedId
+
+  test('a reply that failed is sent once when Retry is pressed twice, and stays put away after a reload', async ({ page, request }) => {
+    test.setTimeout(150_000)
+    await signIn(page, ILLUMINATOR.token)
+    await page.goto(`/reliquarium/librarius/${COMPOSE}`)
+    // Discord refuses the next message in the post (403, as it would a post locked on its way).
+    expect((await request.post(`${MOCK}/__test/librarius/refuse-next/${COMPOSE}`, { data: {} })).status()).toBe(200)
+    const composer = page.locator('.lb-dock .lb-composer')
+    const words = `E2E retried reply ${RUN}`
+    await composer.getByRole('textbox', { name: 'Your reply, in markdown' }).fill(words)
+    await composer.locator('.lb-send').click()
+    const outgoing = page.locator('article.lb-outgoing', { hasText: words })
+    await expect(outgoing.locator('.lb-state')).toContainText("Couldn't send. Try again.", SENT)
+
+    // Pressed twice before the first press is answered: one reply.
+    await outgoing.getByRole('button', { name: 'Try the reply again' }).dblclick()
+    const made = async () => (await webhook(request)).executes.filter((e) => e.threadId === COMPOSE && says(e.body, words))
+    await expect.poll(async () => (await made()).length, { ...SENT, intervals: [500] }).toBe(1)
+    const message = page.locator('.lb-thread .lb-msg', { hasText: words })
+    await expect(message).toHaveCount(1, SENT)
+    await expect(outgoing).toHaveCount(0, SENT)
+    retriedId = (await made())[0].messageId
+    // The server still lists the failed one for a day: after a reload the page shows the reply once, and no Retry.
+    const listed = page.waitForResponse((res) => res.url().endsWith(`/librarius/posts/${COMPOSE}/pending`))
+    await page.reload()
+    await listed
+    await expect(message).toHaveCount(1)
+    await expect(page.locator('article.lb-outgoing', { hasText: words })).toHaveCount(0)
+    expect(await made()).toHaveLength(1)
+  })
+
+  // The owner's ruling (2026-11-22): a member who is timed out may still delete their own reply.
+  test('a writer who is timed out has no composer, and is still offered Delete on their own reply, which goes', async ({ page, request }) => {
+    test.setTimeout(150_000)
+    expect(retriedId, 'the reply of the test before').toBeTruthy()
+    const timeout = (until) => request.post(`${MOCK}/__test/librarius/timeout/${ILLUMINATOR.id}`, { data: { until } })
+    try {
+      expect((await timeout(new Date(Date.now() + 3_600_000).toISOString())).status()).toBe(200)
+      const can = async () => (await (await request.get(`${API}/librarius/me`, { headers: as(ILLUMINATOR.token) })).json()).can
+      await expect.poll(can, { timeout: 60_000, intervals: [1000], message: 'the api sees the timeout' }).toMatchObject({ reply: false, delete: true })
+
+      await signIn(page, ILLUMINATOR.token)
+      await page.goto(`/reliquarium/librarius/${COMPOSE}`)
+      const message = page.locator(`#m-${retriedId}`)
+      await expect(message).toBeVisible()
+      await expect(page.locator('.lb-composer')).toHaveCount(0)
+      await expect(message.locator('.lb-actions button')).toHaveText(['Delete'])
+      // Nothing on another's message.
+      await expect(page.locator('.lb-thread .lb-msg').first().locator('.lb-actions')).toHaveCount(0)
+      page.once('dialog', (dialog) => dialog.accept())
+      await message.getByRole('button', { name: `Delete ${ILLUMINATOR.name}'s message` }).click()
+      await expect.poll(async () => (await webhook(request)).deletes.some((d) => d.messageId === retriedId && d.found), { ...SENT, intervals: [500] }).toBe(true)
+      await expect(message).toHaveCount(0, SENT)
+    } finally {
+      await timeout(null)
+    }
+  })
+
+  // The route's root is a stacking context of its own, under the site's sticky header: full screen in it, the header hid the
+  // composer's top bar, and with it every way out on a phone.
+  test('on a phone, full screen covers the site\'s header, and its own top bar takes it back', async ({ page, request }) => {
+    test.setTimeout(90_000)
+    // The timeout of the test before is lifted: the composer is offered again once the api sees it.
+    const can = async () => (await (await request.get(`${API}/librarius/me`, { headers: as(ILLUMINATOR.token) })).json()).can
+    await expect.poll(can, { timeout: 60_000, intervals: [1000] }).toMatchObject({ reply: true })
+    // Signed in at the usual width, whose bar shows the name, and then a phone's.
+    await signIn(page, ILLUMINATOR.token)
+    await page.setViewportSize({ width: 390, height: 740 })
+    await page.goto(`/reliquarium/librarius/${COMPOSE}`)
+    const composer = page.locator('section.lb-composer')
+    await expect(composer).toBeVisible()
+    await composer.getByRole('button', { name: 'Full screen' }).click()
+    await expect(composer).toHaveClass(/lb-composer-full/)
+    const head = composer.locator('.lb-composer-head')
+    expect((await head.boundingBox()).y).toBeLessThan(30)
+    // What is at the middle of "Replying in" is the composer's own, not the header's.
+    const where = await composer.locator('.lb-composer-where').boundingBox()
+    expect(await page.evaluate(([x, y]) => document.elementFromPoint(x, y)?.closest('.lb-composer') !== null, [where.x + where.width / 2, where.y + where.height / 2])).toBe(true)
+    // Playwright clicks only what would take the click: the button is not under the header.
+    await composer.getByRole('button', { name: 'Full screen' }).click({ timeout: 5_000 })
+    await expect(composer).not.toHaveClass(/lb-composer-full/)
+    await expect(page.locator('.lb-dock .lb-composer')).toBeVisible()
+    await expect(composer.getByRole('textbox', { name: 'Your reply, in markdown' })).toBeFocused()
   })
 })

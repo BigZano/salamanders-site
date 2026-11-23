@@ -580,6 +580,8 @@ const AUTOMOD_RULES = [
 // What reached the webhook, oldest first, for the specs to read (GET /__test/librarius/webhook): every message made (`executes`),
 // every one refused (`refused`), every edit and every delete. Each says when it came (`at`, in ms) and the thread it was for.
 const webhookLog = { executes: [], refused: [], edits: [], deletes: [] }
+// The next messages the webhook is to refuse, by post, oldest first: { status, code, message } each (POST /__test/librarius/refuse-next).
+const refuseNext = new Map()
 // What the bot did to the forum through its own token: the posts it archived or opened again, and the messages it deleted.
 const botLog = { threadChanges: [], deletes: [] }
 
@@ -678,6 +680,8 @@ async function executeWebhook(request, url, hook) {
   // A webhook that is not the application's own may send components only when it is asked to (with_components), and a post that is
   // archived or locked takes no message from it.
   if (Array.isArray(body.components) && url.searchParams.get('with_components') !== 'true') return refuse(400, 50035, 'Invalid Form Body')
+  const forced = refuseNext.get(post.id)?.shift()
+  if (forced !== undefined) return refuse(forced.status, forced.code, forced.message)
   if (post.thread_metadata.locked) return refuse(403, 50001, 'Missing Access')
   if (post.thread_metadata.archived) return refuse(400, 50083, 'Thread is archived')
   if (textsOf(body).some((text) => text.toLowerCase().includes(AUTOMOD_WORD))) return refuse(400, 200000, 'Message was blocked by automatic moderation')
@@ -957,6 +961,28 @@ async function librariusHook(request, url) {
     const heard = readySockets()
     broadcast('INTERACTION_CREATE', d)
     return withCors(Response.json({ id: d.id, token: d.token, heard }))
+  }
+
+  // The webhook refuses the next message made in a post, as Discord would: body { status, code, message } (a 403 Missing Access by
+  // default), once for each call. Nothing else changes: the post stays open, and the message after it goes.
+  const refuseIn = pathname.match(/^\/__test\/librarius\/refuse-next\/(\d+)$/)
+  if (refuseIn) {
+    if (!forumPosts.has(refuseIn[1])) return withCors(Response.json({ error: 'No such post.' }, { status: 404 }))
+    const list = refuseNext.get(refuseIn[1]) ?? []
+    list.push({ status: body?.status ?? 403, code: body?.code ?? 50001, message: body?.message ?? 'Missing Access' })
+    refuseNext.set(refuseIn[1], list)
+    return withCors(Response.json({ waiting: list.length }))
+  }
+
+  // A reader of the Librarius is timed out in the guild until `until` (an ISO time), or no longer is (`until` null), as the member
+  // lookup then says (communication_disabled_until).
+  const timeout = pathname.match(/^\/__test\/librarius\/timeout\/(\d+)$/)
+  if (timeout) {
+    const member = LIBRARIUS_MEMBERS[timeout[1]]
+    if (member === undefined) return withCors(Response.json({ error: 'No such reader.' }, { status: 404 }))
+    if (typeof body?.until === 'string') member.communication_disabled_until = body.until
+    else delete member.communication_disabled_until
+    return withCors(Response.json({ until: member.communication_disabled_until ?? null }))
   }
 
   // A post is locked in Discord (or opened again, with { locked: false }): stored, and THREAD_UPDATE sent.
