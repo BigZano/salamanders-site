@@ -941,9 +941,11 @@ describe('both dialects: no input throws, and none is slow', () => {
       expect(performance.now() - start, name).toBeLessThan(budget)
     }
   }, 60_000)
-  it.each([['discord', {}], ['extended', EXT]])('100,000 fence openers, and as many lines in a paragraph of spoilers, take no more than 2 s (%s)', (_name, opts) => {
+  it.each([['discord', {}], ['extended', EXT]])('200,000 fence openers, and 100,000 lines in a paragraph of spoilers, take no more than 2 s (%s)', (_name, opts) => {
     // The first is the shape that made the old scan for a closing fence quadratic: each opener looked to the end of the text.
-    for (const src of ['```a\n'.repeat(100_000), '||a\n'.repeat(100_000), 'a\n'.repeat(100_000) + '||b']) {
+    // At 200,000 a scan of that kind takes some 30 s even before Stryker slows it, past the budget either way; read in one pass,
+    // it is under half a second.
+    for (const src of ['```a\n'.repeat(200_000), '||a\n'.repeat(100_000), 'a\n'.repeat(100_000) + '||b']) {
       const start = performance.now()
       parse(src, opts)
       expect(performance.now() - start).toBeLessThan(globalThis.__stryker__ ? 20_000 : 2000)

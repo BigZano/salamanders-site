@@ -413,6 +413,16 @@ describe('what the reviews found shown, hidden now', () => {
 describe('unchanged where every bar pairs on its line', () => {
   const tokens = ['**', '*', '_', '__', '~~', '||', '|', '`', '```', '> ', '>>> ', '# ', '-# ', '- ', '1. ', '[', '](', ')', '<', '>', '\\',
     `<:e:${E}>`, `<@&${E}>`, 'https://a.io/x', 'word', ' ', '\\|', ZWSP]
+  it.each([
+    ['a code block', 'w0 ||w1|| w2\n```\ncode\n```\nw3 ||w4|| w5'],
+    ['a code block with a language', 'w0 ||w1|| w2\n```js\ncode\n```\nw3 ||w4|| w5'],
+    ['a code block in a quote', '> w0 ||w1|| w2\n> ```\n> code\n> ```\n> w3 ||w4|| w5'],
+    ['a code block in a >>> quote', '>>> w0 ||w1|| w2\n```\ncode\n```\nw3 ||w4|| w5'],
+  ])('reads only the lines of %s as code, and the certain lines round it as before', (_, src) => {
+    // A line before a code block is no code: were it read as code, its bars would make it uncertain and hide all to the last bar.
+    expect(exposure(parse(src))).toEqual({ hidden: ['w1', 'w4'], shown: ['w0', 'w2', 'w3', 'w5'] })
+    expect(parse(src)).toEqual(parseBefore(src))
+  })
   it('parses every text with no line break exactly as before', () => {
     fc.assert(fc.property(fc.array(fc.constantFrom(...tokens), { maxLength: 60 }), (parts) => {
       const s = parts.join('')

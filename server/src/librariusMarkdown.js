@@ -180,6 +180,7 @@ const quoted = (line) => line.startsWith('> ') || line === '>'
  * → for each line from `i`, the index of the fence line that closes the code block opening there, or -1. A line after the
  * last fence line `ends` can close nothing, so no scan looks for one past it, and each scan stops at the close it finds.
  */
+// Stryker disable next-line EqualityOperator: at i = ends the line is the last ``` itself, after which no ``` is left, so `<=` scans once and finds none (-1, as `<` gives); the `>=` this hides too is killed today (200,000 fence openers time out under it)
 const fenceEnd = (lines, i, ends) => (i < ends && FENCE_OPEN.test(lines[i]) ? lines.indexOf('```', i + 1) : -1)
 
 /** → for each line, whether a fence holds it, in the lines of a quote (no quote opens in them). */
