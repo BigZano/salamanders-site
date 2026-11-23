@@ -542,14 +542,15 @@ describe('excerpt', () => {
 
       it('masks a spoiler that runs over lines as one mask, and shows what follows its closer', () => {
         expect(excerpt('a ||secret\nmore secret|| after')).toBe(`a ${MASK} after`)
-        expect(excerpt('a ||secret\n> quoted secret\n- listed secret\n```\ncode secret\n```\nlast secret|| after\nnext')).toBe(`a ${MASK} after next`)
         expect(excerpt('> a ||secret\n> more secret|| after')).toBe(`a ${MASK} after`)
       })
 
-      it('masks from a spoiler over lines that closes at the last bar to the end: that bar may open one a cut closed off', () => {
+      it('masks to the end from a spoiler over lines the readings of Discord pair differently, closed at the last bar', () => {
         expect(excerpt('a ||secret\nmore secret|| and ||open')).toBe(`a ${MASK}`)
         expect(excerpt('a ||secret\nmore ||secret|| tail')).toBe(`a ${MASK}`)
         expect(excerpt('a ||secret\n`code||` tail')).toBe(`a ${MASK}`)
+        expect(excerpt('a ||secret\n> quoted secret\n- listed secret\n```\ncode secret\n```\nlast secret|| after\nnext')).toBe(`a ${MASK}`)
+        expect(excerpt('a ||secret\n`x||` ||more secret\nlast secret|| after')).toBe(`a ${MASK}`)
       })
 
       it('keeps the spoilers that closed before it, masked, and the text before it', () => {

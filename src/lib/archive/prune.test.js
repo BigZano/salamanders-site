@@ -168,10 +168,21 @@ describe('properties', () => {
 })
 
 describe('a spoiler that runs over lines', () => {
-  it('dropDeadLines keeps or drops it whole, as it does a line with a one-line spoiler', () => {
+  it('dropDeadLines prunes inside it as inside a quote, and drops it when nothing but blank lines is left', () => {
     expect(dropDeadLines(parse(`||${D(1)}\n${D(2)}||\nb`), classify)).toEqual([{ type: 'line', children: [{ type: 'text', value: 'b' }] }])
+    expect(dropDeadLines(parse(`||${D(1)}\n\n${D(2)}||`), classify)).toEqual([])
     const kept = parse(`||${D(1)}\nwords||`)
-    expect(dropDeadLines(kept, classify)).toEqual(kept)
+    expect(dropDeadLines(kept, classify)).toEqual([{ ...kept[0], children: [kept[0].children[1]] }])
+  })
+  it('dropDeadLines keeps one that holds a list, a fence or a quote with real words beside dead links', () => {
+    for (const body of ['- real words', '```\nreal words\n```', '> real words']) {
+      const nodes = parse(`||${D(1)}\n${body}||\nafter`)
+      const [spoiler, ...rest] = dropDeadLines(nodes, classify)
+      expect(spoiler.type, body).toBe('spoiler')
+      expect(texts([spoiler]) + (spoiler.children.find((n) => n.type === 'codeblock')?.text ?? ''), body).toContain('real words')
+      expect(texts([spoiler]), body).not.toContain('D1')
+      expect(rest.map((n) => texts([n]))).toEqual(['after'])
+    }
   })
   it('tocOnly keeps it whole when a live link is inside it, and liveRefs finds that link', () => {
     const nodes = parse(`||${D(1)}\n- ${L(1)}||\nplain`)

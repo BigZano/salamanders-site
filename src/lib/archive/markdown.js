@@ -7,23 +7,27 @@
  * Lines are read one by one, but a spoiler can run over them. A `||` that its
  * line leaves as text (no `||` closes it there, and it is in no code) opens a
  * spoiler when a later line holds a `||`. It fails closed: the site hides all
- * that Discord may hide, and more where Discord's reading is unclear.
- *   - It closes at the first `||` a later line leaves as text. A one-line
- *     spoiler or code on the lines between sits inside it (nesting: Discord
- *     may read two spoilers with words shown between them; one hides more).
- *   - With no such `||`, it closes at the last `||` of the message, even one
- *     in inline code or a fence (a closer inside code: Discord may take it or
- *     skip it; this hides the most either way). Such a node has `lastBar:
- *     true`: that bar may instead open a spoiler whose close a cut took, so a
- *     preview masks from it to the end.
- *   - Bars in inline code or a fence never open one: Discord reads code first,
- *     and an opener there would pair the bars after it the other way round.
- *   - An opener in a quote, a list item or a heading cuts that line there. The
- *     spoiler runs to its closer, out of the quote if the closer is (an opener
- *     on a quote's last line: Discord may end it with the quote), and a quote
- *     cut by its bars goes on, as a quote, on both sides. What a cut leaves
- *     after the bars is read as words; markers alone before an opener (`- `,
- *     `# `, `1. `) are words at the start of the spoiler.
+ * that any plausible reading of Discord hides. Those readings differ on:
+ *   - the closer: the first `||` a later line leaves as text, or the first
+ *     `||` of all, even one in inline code, a fence or a `\||` (Discord's rule
+ *     may match bars as text), or the first one outside code;
+ *   - the opener: a `||` inside bold, italics or a link's label may open one
+ *     (the line's own reading leaves it open), or not (the span is read first);
+ *   - blocks: a quote, a heading, a subtext, a list item or a fence may be read
+ *     alone, and the lines around it apart, so that bars pair only within one
+ *     (an opener on a quote's last line ends with the quote), or not.
+ * Each reading that closes at a different bar pairs every bar after it the
+ * other way round, so the spoiler is that pair only when they all agree: an
+ * opener and a closer in no span, no `||` between them, and every line from one
+ * to the other in one block of one kind (plain lines, a > quote or the >>> one;
+ * never a heading, a subtext, a list item or code, which may be read alone).
+ * Otherwise it runs to the last `||` of the message, and has `lastBar: true`:
+ * no reading hides past that bar, and a preview masks from it to the end (it
+ * may open a spoiler a cut took the close of). Bars in code never open one:
+ * Discord reads code first. An opener in a quote, a list item or a heading cuts
+ * that line there, and a quote cut by the bars goes on, as a quote, on both
+ * sides. What a cut leaves after the bars is read as words; markers alone
+ * before an opener (`- `, `# `, `1. `) are words at the start of the spoiler.
  * It is one `spoiler` node among the blocks, whose children are blocks. The
  * words before its opener and after its closer are lines of their own. A `||`
  * that nothing closes stays text, and a text with no spoiler over lines parses
@@ -103,27 +107,42 @@ function rolesOf(lines) {
   return roles
 }
 
-/** → where the first `||` that the text, read as one line, leaves as text starts; -1 when there is none. */
-function openBar(text) {
-  if (!text.includes('||')) return -1
-  const bars = []
-  parseInline(text, bars)
-  return bars.length ? bars[0] : -1
+/** → what the text, read as one line, leaves: see parseInline's `seen`. */
+function readLine(text) {
+  const seen = { open: [], pairs: [], code: [], escaped: [] }
+  if (text.includes('||')) parseInline(text, seen)
+  return seen
 }
 
-/** → [line, column, whether it is the last bar] of the `||` that closes a spoiler opened on line i (see the top). */
-function closerAfter(lines, roles, i, last) {
+/**
+ * Whether every plausible reading of Discord (see the comment at the top) pairs `bar` of line i with the `||` `close`
+ * of line j: both are in no span, no `||` lies between them, and every line from i to j is in the same block of
+ * the same kind (plain lines, one > quote or the >>> one, never a heading, a subtext, a list item or code).
+ */
+function agreed(lines, roles, i, bar, j, close) {
+  const kind = (k) => (roles[k] === START ? DEEP : roles[k])
+  const own = (k) => lines[k].slice((OWN[roles[k]] ?? '').length)
+  const alone = (k) => HEADING.test(own(k)) || SUBTEXT.test(own(k)) || LIST_ITEM.test(own(k))
+  if (!bar.top || !close.top || alone(i)) return false
+  for (let k = i + 1; k < j; k++) if (kind(k) !== kind(i) || alone(k) || lines[k].includes('||')) return false
+  return kind(j) === kind(i) && !alone(j) && !lines[j].slice(0, close.at + 1).includes('||')
+}
+
+/** → [line, bar] of the first `||` a later line that is no code leaves as text, or null. */
+function closerAfter(roles, readOf, i, last) {
   for (let j = i + 1; j <= last; j++) {
-    const at = roles[j] === CODE ? -1 : openBar(lines[j])
-    if (at !== -1) return [j, at, false]
+    const bar = roles[j] === CODE ? undefined : readOf(j).open[0]
+    if (bar) return [j, bar]
   }
-  return [last, lines[last].lastIndexOf('||'), true]
+  return null
 }
 
 /** The message's blocks, with each spoiler that runs over lines read as one node (see the comment at the top). */
 function readSpoilers(lines) {
   const roles = rolesOf(lines)
   const last = lines.findLastIndex((line) => line.includes('||'))
+  const reads = []
+  const readOf = (k) => (reads[k] ??= readLine(lines[k]))
   const out = []
   let piece = []
   let pieceLead
@@ -139,14 +158,18 @@ function readSpoilers(lines) {
   let text = lines[0]
   let lead
   for (let i = 0; i < lines.length; ) {
-    const at = i < last && roles[i] !== CODE ? openBar(text) : -1
-    if (at === -1) {
+    const bar = i < last && roles[i] !== CODE ? (lead === undefined ? readOf(i) : readLine(text)).open[0] : undefined
+    if (!bar) {
       take(text, lead)
       text = lines[++i]
       lead = undefined
       continue
     }
-    const [j, c, lastBar] = closerAfter(lines, roles, i, last)
+    const at = bar.at
+    const close = closerAfter(roles, readOf, i, last)
+    // Where the readings differ, it hides to the last `||` of the message: no reading hides anything after it.
+    const lastBar = !(close && agreed(lines, roles, i, bar, ...close))
+    const [j, c] = lastBar ? [last, lines[last].lastIndexOf('||')] : [close[0], close[1].at]
     const head = text.slice(0, at)
     const rest = head.slice((OWN[roles[i]] ?? '').length)
     // Nothing but markers before an opener that starts its line: they are words at the start of the spoiler. Anything
@@ -271,9 +294,12 @@ function sticky(re, s, i) {
 // Recursion depth is bounded without a counter: a span's inner text runs up
 // to the *nearest* closer of its delimiter, so no delimiter kind can recur
 // inside itself (and link labels exclude brackets). Chains top out at ~8.
-// `bars`, when given, gets where each `||` left as text starts, `at` on from
-// where `s` starts in the line.
-export function parseInline(s, bars, at = 0) {
+// `seen`, when given, is told where things start in the line (`at` is where
+// `s` starts in it, `deep` whether a span holds it): each `||` left as text
+// (`open`: { at, top }), each one-line spoiler (`pairs`: { from, to, top },
+// from its opening to its closing `||`), each inline code span (`code`:
+// [start, end)) and each character a backslash escapes (`escaped`).
+export function parseInline(s, seen, at = 0, deep = false) {
   const out = []
   let text = ''
   const flush = () => {
@@ -294,6 +320,7 @@ export function parseInline(s, bars, at = 0) {
     const c = s[i]
     let m
     if (c === '\\' && ESCAPABLE.test(s.charAt(i + 1))) {
+      seen?.escaped.push(at + i + 1)
       text += s[i + 1]
       i += 2
       continue
@@ -302,6 +329,7 @@ export function parseInline(s, bars, at = 0) {
       const ticks = s.startsWith('``', i) ? '``' : '`'
       const end = closing(ticks, i + ticks.length)
       if (end > i + ticks.length) {
+        seen?.code.push([at + i, at + end + ticks.length])
         i = push({ type: 'code', text: s.slice(i + ticks.length, end) }, end + ticks.length)
         continue
       }
@@ -319,7 +347,7 @@ export function parseInline(s, bars, at = 0) {
       continue
     }
     if ((m = sticky(MASKED, s, i))) {
-      i = push({ type: 'link', href: m[2], children: parseInline(m[1], bars, at + i + 1) }, i + m[0].length)
+      i = push({ type: 'link', href: m[2], children: parseInline(m[1], seen, at + i + 1, true) }, i + m[0].length)
       continue
     }
     if ((m = sticky(BARE_URL, s, i))) {
@@ -329,7 +357,7 @@ export function parseInline(s, bars, at = 0) {
     if (s.startsWith('***', i)) {
       const end = closing('***', i + 3)
       if (end > i + 3) {
-        const inner = { type: 'em', children: parseInline(s.slice(i + 3, end), bars, at + i + 3) }
+        const inner = { type: 'em', children: parseInline(s.slice(i + 3, end), seen, at + i + 3, true) }
         i = push({ type: 'strong', children: [inner] }, end + 3)
         continue
       }
@@ -338,18 +366,19 @@ export function parseInline(s, bars, at = 0) {
     if (pair) {
       const end = closing(pair[0], i + 2)
       if (end > i + 2) {
-        i = push({ type: pair[1], children: parseInline(s.slice(i + 2, end), bars, at + i + 2) }, end + 2)
+        if (pair[1] === 'spoiler') seen?.pairs.push({ from: at + i, to: at + end, top: !deep })
+        i = push({ type: pair[1], children: parseInline(s.slice(i + 2, end), seen, at + i + 2, true) }, end + 2)
         continue
       }
     }
     if ((c === '*' || c === '_') && isEmOpen(s, i, c)) {
       const end = closing(c, i + 1)
       if (end !== -1 && isEmClose(s, end, c)) {
-        i = push({ type: 'em', children: parseInline(s.slice(i + 1, end), bars, at + i + 1) }, end + 1)
+        i = push({ type: 'em', children: parseInline(s.slice(i + 1, end), seen, at + i + 1, true) }, end + 1)
         continue
       }
     }
-    if (bars && pair?.[0] === '||') bars.push(at + i)
+    if (pair?.[0] === '||') seen?.open.push({ at: at + i, top: !deep })
     text += c
     i++
   }

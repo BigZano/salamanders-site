@@ -355,8 +355,13 @@ describe('LibMessage: the reply line', () => {
   })
 
   it('masks a spoiler that runs over lines in the quote as one mask, and shows the words after it', () => {
-    const w = mountMsg(message({ replyTo: replyTo({ content: 'the answer is ||the secret\n> quoted secret\n- listed secret|| and more' }) }))
+    const w = mountMsg(message({ replyTo: replyTo({ content: 'the answer is ||the secret\nmore secret|| and more' }) }))
     expect(w.find('.lb-reply').text()).toBe('↪ replying to Ixen Calloway: the answer is ▒▒▒ and more')
+  })
+
+  it('masks the rest of the quote after a spoiler over lines that Discord may read more than one way', () => {
+    const w = mountMsg(message({ replyTo: replyTo({ content: 'the answer is ||the secret\n> quoted secret\n- listed secret|| and more' }) }))
+    expect(w.find('.lb-reply').text()).toBe('↪ replying to Ixen Calloway: the answer is ▒▒▒')
   })
 
   it('names the author the page knows now, else the one stored with the quote', () => {
