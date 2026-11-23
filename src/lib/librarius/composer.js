@@ -415,11 +415,16 @@ export function namedMentions(words, name) {
   if (typeof words !== 'string') throw new TypeError('the words must be a string')
   if (typeof name !== 'function') throw new TypeError('the names must come from a function')
   const all = mentionCount(words)
+  // Stryker disable next-line ConditionalExpression: with no mention read, no count is below it, so the filter below names none and the words come back as they are; the check only saves the work
   if (all === 0) return words
   // Every mention the parser reads looks like one, so when as many look like one, they all are. Else one that only looks like a mention
   // (in code, or escaped) is told by the parser reading the same number without it.
   const looks = [...words.matchAll(MENTION)]
-  const mentions = looks.length === all ? looks : looks.filter((m) => mentionCount(`${words.slice(0, m.index)}x${words.slice(m.index + m[0].length)}`) < all)
+  const mentions =
+    // Stryker disable next-line ConditionalExpression: when they all are, the filter keeps every one, since the parser reads one fewer without it; the check only saves a parse for each
+    looks.length === all
+      ? looks
+      : looks.filter((m) => mentionCount(`${words.slice(0, m.index)}x${words.slice(m.index + m[0].length)}`) < all)
   let out = ''
   let at = 0
   for (const m of mentions) {

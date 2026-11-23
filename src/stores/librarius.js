@@ -435,6 +435,7 @@ function nameOf(file) {
 }
 
 /** → the key of a draft's pictures: its post, and the message it replies to (null for the post). */
+// Stryker disable next-line StringLiteral: `replyTo` is null or a message's id (replyToOf), so an empty word keeps the post's draft apart from every message's as well
 const draftOf = (postId, replyTo) => `${postId}:${replyTo ?? 'new'}`
 
 /** → `replyTo` as it was given, the id of a message or null, else a TypeError. */
@@ -512,7 +513,9 @@ function doneKey(postId) {
 function doneWith(postId) {
   const key = doneKey(postId)
   try {
+    // Stryker disable next-line OptionalChaining,StringLiteral: a browser with no storage, or no list in it, keeps nothing either way: the read that throws instead is caught below, and gives the same empty list
     const kept = key === null ? null : JSON.parse(draftStorage()?.getItem(key) ?? 'null')
+    // Stryker disable next-line ArrayDeclaration: a Map of a list that holds anything but pairs throws, and the catch below gives the same empty list
     return new Map(isObject(kept) ? Object.entries(kept).filter(([, time]) => Number.isFinite(time)) : [])
   } catch {
     return new Map()
@@ -525,6 +528,7 @@ function keepDone(postId, id, time) {
   kept.set(id, Math.max(time, kept.get(id) ?? -Infinity))
   const since = Date.now() - DONE_KEPT_MS
   try {
+    // Stryker disable next-line OptionalChaining: with no storage the write that throws instead is caught below, and nothing is kept either way
     draftStorage()?.setItem(key, JSON.stringify(Object.fromEntries([...kept].filter(([, at]) => at >= since))))
   } catch {
     // A browser that keeps nothing keeps it in memory, for this page.
@@ -605,7 +609,13 @@ function takePending(store, f, n, answer) {
     if (listed !== undefined) {
       // The server lists an edit without its words: the ones this page sent it with are kept, for Edit to open again.
       const taken = entryOf(listed)
-      next.push(taken.source === null && held.source !== null ? { ...taken, source: held.source } : taken)
+      next.push(
+        taken.source === null &&
+          // Stryker disable next-line ConditionalExpression: held words that are null, put in place of listed words that are null, make the same entry
+          held.source !== null
+          ? { ...taken, source: held.source }
+          : taken,
+      )
       newest.delete(id)
     } else if (held.state === 'sending' && f.after.get(id) >= n) {
       next.push(held)

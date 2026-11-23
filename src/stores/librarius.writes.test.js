@@ -447,6 +447,16 @@ describe('librarius store: the pictures of each draft', () => {
     expect(() => s.movePictures(MSG, null)).not.toThrow()
   })
 
+  it('moves nothing, and does not throw, when the post its drafts held pictures in was let go of', async () => {
+    seed()
+    await hold(1, '7001', MSG)
+    getChanges.mockRejectedValue(apiError(404, 'No such post.'))
+    await expect(s.poll('tok')).resolves.toBe(true)
+    expect(s.post).toBeNull()
+    expect(() => s.movePictures(MSG, null)).not.toThrow()
+    expect(s.holdsPicture(1)).toBe(false)
+  })
+
   it('refuses a message replied to that is no message id', async () => {
     seed()
     for (const bad of ['', '12', 5, {}, `${MSG} `]) {
@@ -627,6 +637,22 @@ describe('librarius store: editing and deleting', () => {
     expect(states()).toEqual([['edit', MSG, 'sending']])
     deleteMessage.mockResolvedValue(queued(MSG))
     await s.remove('tok', MSG)
+    expect(states()).toEqual([['delete', MSG, 'sending']])
+  })
+
+  it('keeps an edit that ended put away when a delete puts away the new edit that took its place, before the server listed that one', async () => {
+    seed()
+    vi.useFakeTimers()
+    const ended = () => entry(MSG, { kind: 'edit', state: 'failed', error: "Couldn't send. Try again.", source: null })
+    getPending.mockResolvedValueOnce(listed(ended()))
+    await s.pending('tok')
+    editMessage.mockResolvedValue(queued(MSG))
+    await s.edit('tok', MSG, { source: 'again' })
+    deleteMessage.mockResolvedValue(queued(MSG))
+    await s.remove('tok', MSG)
+    // The new edit went (the server lists it no more); the one that ended it lists for a day, beside the delete.
+    getPending.mockResolvedValueOnce(listed(ended(), entry(MSG, { kind: 'delete', source: null, createdAt: '2026-11-18T10:00:05.000Z' })))
+    await s.pending('tok')
     expect(states()).toEqual([['delete', MSG, 'sending']])
   })
 })
@@ -1056,6 +1082,17 @@ describe('librarius store: trying again, and putting away', () => {
     ])
   })
 
+  it('holds a failed edit it sends again with the words it sends, so that Edit opens them again', async () => {
+    seed()
+    editMessage.mockResolvedValue(queued(MSG))
+    await s.edit('tok', MSG, { source: `Edit <@${FRIEND}>` })
+    getPending.mockResolvedValueOnce(listed(entry(MSG, { kind: 'edit', state: 'failed', error: 'x', source: null })))
+    await vi.advanceTimersByTimeAsync(3_000)
+    const sending = { key: MSG, kind: 'edit', state: 'sending', error: null, source: `Edit <@${FRIEND}>`, createdAt: null }
+    await expect(s.retry('tok', { kind: 'edit', key: MSG })).resolves.toEqual(sending)
+    expect(s.outbox).toEqual([sending])
+  })
+
   it('keeps the words of an edit it sent when the server lists the edit without them, blocked or failed, so that Edit opens them again', async () => {
     seed()
     editMessage.mockResolvedValue(queued(MSG))
@@ -1252,6 +1289,51 @@ describe('librarius store: what was tried again or put away stays so', () => {
     s.dismiss({ kind: 'send', key: 'k-old' })
     s.dismiss({ kind: 'send', key: 'k-1' })
     expect(JSON.parse(localStorage.getItem(`lb-done:${SELF}:${POST}`))).toEqual({ 'send:k-1': Date.parse(AT) })
+  })
+
+  it('keeps what it put away until it is two days old, to the millisecond', async () => {
+    asMember()
+    seed()
+    const edge = '2026-11-16T12:00:00.000Z'
+    await learnFailed(failed('k-edge', { createdAt: edge }), failed('k-older', { createdAt: '2026-11-16T11:59:59.999Z' }))
+    s.dismiss({ kind: 'send', key: 'k-edge' })
+    s.dismiss({ kind: 'send', key: 'k-older' })
+    expect(JSON.parse(localStorage.getItem(`lb-done:${SELF}:${POST}`))).toEqual({ 'send:k-edge': Date.parse(edge) })
+  })
+
+  it('takes no time from what the browser keeps that is not a number, even one written in digits', async () => {
+    asMember()
+    seed()
+    localStorage.setItem(`lb-done:${SELF}:${POST}`, JSON.stringify({ 'send:k-1': String(Date.parse(AT)), 'send:k-2': Date.parse(AT), 'send:k-3': [Date.parse(AT)] }))
+    await learnFailed(failed('k-1'), failed('k-2'), failed('k-3'))
+    expect(states()).toEqual([
+      ['send', 'k-1', 'failed'],
+      ['send', 'k-3', 'failed'],
+    ])
+  })
+
+  it.each([
+    ['who is not signed in', null],
+    ['whose id is empty', { id: '', username: 'invented', isMember: true, librarius: true }],
+  ])('neither reads what the browser keeps nor writes to it for a reader %s', async (_, member) => {
+    useAuth().$patch({ member })
+    seed()
+    // A list under any key such a reader could be given would put away k-1 and k-9; it is no one's.
+    const list = JSON.stringify({ 'send:k-1': Date.parse(AT), 'send:k-9': Date.parse(AT) })
+    for (const key of ['null', 'undefined', `${POST}`, `lb-done::${POST}`, `lb-done:null:${POST}`, `lb-done:undefined:${POST}`]) localStorage.setItem(key, list)
+    const kept = { ...localStorage }
+    await learnFailed(failed('k-1'), failed('k-2'))
+    expect(states()).toEqual([
+      ['send', 'k-1', 'failed'],
+      ['send', 'k-2', 'failed'],
+    ])
+    s.dismiss({ kind: 'send', key: 'k-2' })
+    postReply.mockResolvedValueOnce(queued('k-3'))
+    await s.retry('tok', { kind: 'send', key: 'k-1' })
+    expect({ ...localStorage }).toEqual(kept)
+    // What it put away stays so in memory, for this page (and the retry, listed no more, has gone).
+    await learnFailed(failed('k-1'), failed('k-2'))
+    expect(states()).toEqual([['send', 'k-3', 'sent']])
   })
 })
 

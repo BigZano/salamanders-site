@@ -3604,6 +3604,25 @@ describe('a delete keyed by no stored message that ends for good is told, since 
     expect(tellings()).toEqual([told(w.entry(d), [p1, p3])])
   })
 
+  it('ends a reply and an edit for good at once while the store cannot read a stored message: only the end of a delete reads one', async () => {
+    const id = await sentReply('Before.')
+    const failures = () => Array.from({ length: 50 }, () => new Error('connection lost'))
+    w.script.push(forbidden())
+    const r = w.enqueue({ payload: sendPayload({ source: 'Another.' }) })
+    w.storeFails.outboxMessage = failures()
+    outbox.kick()
+    await later(10_000)
+    expect(w.entry(r)).toMatchObject({ state: 'failed', attempts: 0, lastError: COPY.locked })
+    // An edit reads its message when it runs, and the store fails under every read after that one.
+    w.script.push(forbidden())
+    const e = w.enqueue({ kind: 'edit', key: id, payload: { postId: THREAD, source: 'After.', mentions: [] } })
+    w.storeFails.outboxMessage = [null, ...failures()]
+    outbox.kick()
+    await later(10_000)
+    expect(w.entry(e)).toMatchObject({ state: 'failed', attempts: 0, lastError: COPY.locked })
+    expect(tellings()).toEqual([])
+  })
+
   it("tells nothing of a member's delete whose tries all failed at the read, when the gateway took the message meanwhile: it never learnt the parts", async () => {
     const id = await sentReply(THREE('a', 'b', 'c'))
     w.storeFails.outboxMessage = Array.from({ length: 5 }, () => new Error('connection lost'))

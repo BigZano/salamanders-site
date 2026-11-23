@@ -704,6 +704,7 @@ export function createOutbox({ store, webhook, discord, form = DEFAULT_FORM, gui
    */
   async function straysOf(entry) {
     if (entry.kind !== 'delete' || (await store.outboxMessage(entry.messageKey)) !== null) return []
+    // Stryker disable next-line OptionalChaining: a delete that gets here has its notes, which runDelete makes before anything of it can fail
     return entry.payload.progress?.partIds ?? entry.payload.partIds ?? []
   }
 

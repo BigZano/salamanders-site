@@ -818,6 +818,11 @@ describe('namedMentions', () => {
     }
   })
 
+  it("reads the words as the composer does, in the site's dialect: the name of a picture is no mention", () => {
+    expect(namedMentions(`![<@${MEMBER}>](upload:1)`, label)).toBe(`![<@${MEMBER}>](upload:1)`)
+    expect(namedMentions(`![<@${MEMBER}>](upload:1) <@${MEMBER}>`, label)).toBe(`![<@${MEMBER}>](upload:1) @Tor Mardan`)
+  })
+
   it('asks the page for each name it writes, with what the parser reads the mention as', () => {
     const asked = []
     namedMentions(`<@${MEMBER}> <@!${MEMBER}> <@&${ROLE}> <#${POST}>`, (node) => (asked.push(node), '@x'))
