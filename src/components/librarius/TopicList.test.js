@@ -393,6 +393,40 @@ describe('TopicList: a row', () => {
   })
 })
 
+describe('TopicList: a spoiler in the latest line', () => {
+  // Texts whose first line, read alone, closes a spoiler and shows W, while the whole message hides W: a later line holds
+  // the bar the spoiler runs to, and the line holds a mark (`, *, [) that lets a reading run on past its own bars.
+  // The server once cut the latest line to 400 characters; the padding puts all that unsettles the line past that cut.
+  const PAD = 'y '.repeat(250)
+  const hiding = () => ['x ||secret `b|| W\nnext` z||', `x ||secret \`b|| W ${PAD}\nnext\` z||`, `x ||a|| W ${PAD}*\nnext ||`, `x ||a [b|| W ${PAD}\nnext ||`]
+  const lines = async (contents) => {
+    const w = await show(contents.map((content, i) => post(430 + i, { latest: { ...post(430 + i).latest, content } })))
+    return w.findAll('.lb-topic-text').map((t) => t.text())
+  }
+
+  it('reads the whole newest message, so a spoiler that a later line closes hides the words after its bars', async () => {
+    expect(await lines(hiding())).toEqual(hiding().map(() => 'x ▒▒▒'))
+  })
+
+  it('would show W from a cut of those texts: so the line is read from the whole one, never from a cut', async () => {
+    const cuts = hiding().slice(1).flatMap((content) => [200, 400].map((n) => Array.from(content).slice(0, n).join('')))
+    const shown = await lines(['x ||secret `b|| W', ...cuts])
+    expect(shown[0]).toBe('x ▒▒▒ W')
+    for (const line of shown.slice(1)) expect(line).toMatch(/^x ▒▒▒ W y/)
+  })
+
+  it('keeps the line of a 4,000-character message at 120 characters, astral ones counted as one', async () => {
+    const contents = ['word '.repeat(800), '\u{1F600}'.repeat(4000), `${'\u{1F525} '.repeat(1999)}\u{1F525}\u{1F525}`]
+    const shown = await lines(contents)
+    shown.forEach((line, i) => {
+      expect(Array.from(contents[i]).length).toBeGreaterThanOrEqual(4000)
+      expect(Array.from(line)).toHaveLength(120)
+      expect(line.endsWith('…')).toBe(true)
+      expect(contents[i].replace(/\s+/g, ' ').startsWith(line.slice(0, -1))).toBe(true)
+    })
+  })
+})
+
 describe('TopicList: a spoiler thumbnail', () => {
   const SPOILER = 'https://cdn.discordapp.com/attachments/200000000000000401/200000000000000460/SPOILER_file.png?ex=65f0&hm=ab12'
   const withImage = (url, over = {}) => post(430, { latest: { ...post(430).latest, image: { id: mid(460), url, expiresAt: null, ...over } } })
