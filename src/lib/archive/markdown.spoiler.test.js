@@ -111,7 +111,7 @@ describe('a spoiler that runs over lines', () => {
 
   it.each([
     ['inline code', '`c`'], ['a backslash', '\\x'], ['italics', '*e*'], ['underscores', 'snake_case'], ['a strike', '~~s~~'],
-    ['a link', '[l](https://a.io)'], ['a mention', `<@${E}>`], ['an address', 'https://a.io/x'], ['three bars', 'a|||b'],
+    ['a link', '[l](https://a.io)'], ['a broken mention', '<@1234>'], ['an address', 'https://a.io/x'], ['three bars', 'a|||b'],
     ['four bars', 'a||||b'], ['a line separator', `a${LS}b`], ['an odd bar', '||'], ['a blank pair', '|| ||'],
   ])('reads a line with %s as uncertain', (_, x) => {
     expect(exposure(parse(`w0 ${x} ||w1|| w2\nw3 ||w4|| w5`))).toEqual({ hidden: words(1, 4), shown: ['w0', 'w5'] })
@@ -201,6 +201,94 @@ describe('a spoiler that runs over lines', () => {
   })
 })
 
+describe('a Discord mention, channel, role, emoji, timestamp or slash command beside the bars', () => {
+  const NBSP = String.fromCharCode(0xa0)
+  const tokens = () => {
+    const [id17, id20] = ['12345678901234567', '12345678901234567890']
+    return [
+      `<@${E}>`, `<@!${id17}>`, `<@&${id20}>`, `<#${id17}>`, `<#${id20}>`, `<:gg:${id17}>`, `<a:g-g:${id20}>`, `<:${'a'.repeat(32)}:${E}>`,
+      `<:A:${E}>`, '<t:1>', `<t:${'1'.repeat(17)}>`, '<t:-1700000000>', ...[...'tTdDfFR'].map((style) => `<t:1700000000:${style}>`),
+      `</roll:${id17}>`, `</roll dice:${id20}>`, `</${'r'.repeat(32)} ${'d'.repeat(32)}:${E}>`, `</R-1:${E}>`,
+    ]
+  }
+  const underscored = () => [`<:pepe_hands:${E}>`, `<a:_:${E}>`, `<:e__x:${E}>`, `</set_role:${E}>`, `</roll x_:${E}>`]
+  const broken = () => {
+    const [id16, id21] = ['1234567890123456', '123456789012345678901']
+    return [
+      `<@${id16}>`, `<@${id21}>`, `<#${id16}>`, `<#${id21}>`, `<@!&${E}>`, `<@ ${E}>`, `<@${E} >`, `<${E}>`, `<@${E}`, `<#${E}`, `<<@${E}>`, `<@${'１'.repeat(18)}>`,
+      `<:${'a'.repeat(33)}:${E}>`, `<::${E}>`, `<:e.e:${E}>`, `<b:e:${E}>`, `<:e:${id16}>`, `<:e:${id21}>`, `<:e:${E}`,
+      '<t:>', `<t:${'1'.repeat(18)}>`, '<t:1:X>', '<t:1:RR>', '<t:1:>', '<t:x>', '<t:--1>', '<T:1>',
+      `</:${E}>`, `</a b c:${E}>`, `</a  b:${E}>`, '</a b:>', `</a:${id16}>`, `</a b:${id21}>`, `</${'r'.repeat(33)}:${E}>`, `</a\tb:${E}>`,
+    ]
+  }
+
+  it.each([...tokens(), ...underscored()])('reads a line with %s before its first bar as certain', (x) => {
+    for (const src of [`${x}||w0|| w1\nw2 ||w3||`, `w0${x} ||w1||\n||w2||`, `> ${x} w0 ||w1||\nw2 ||w3||`, `${x}${x}||w0||\n||w1||`]) {
+      expect(parse(src), src).toEqual(parseBefore(src))
+    }
+  })
+
+  it.each(tokens())('reads a line with %s after its first bar as certain when a space comes earlier on the line', (x) => {
+    for (const src of [`w0 ||w1||${x}\nw2 ||w3||`, `||w0|| ${x}||w1||\n||w2||`, `a ||w0|| b${x}c\n||w1||`, `a ||w0||${x}${x}\n||w1||`]) {
+      expect(parse(src), src).toEqual(parseBefore(src))
+    }
+  })
+
+  it.each(tokens().filter((x) => !x.includes(' ')))('reads a line with %s after its first bar and no space before it as uncertain, a tab or a no-break space before it too', (x) => {
+    for (const gap of ['', '\t', NBSP]) {
+      expect(exposure(parse(`w0${gap}||w1||${gap}${x} w2\nw3 ||w4|| w5`)), gap).toEqual({ hidden: words(1, 4), shown: ['w0', 'w5'] })
+      expect(exposure(parse(`w0${gap}||w1||${gap}${x}\nw2 ||w3||`)), gap).toEqual({ hidden: words(1, 3), shown: ['w0'] })
+    }
+  })
+
+  it.each(['> ', '>', '  > ', '> > ', '>>> ', '  ', '\t', ' \t> '])('counts no space of a leading %j before a token after the first bar', (lead) => {
+    for (const x of [`<@${E}>`, `<:gg:${E}>`, '<t:1:R>', `</roll:${E}>`]) {
+      expect(exposure(parse(`${lead}w0||w1||${x} w2\nw3 ||w4|| w5`)), x).toEqual({ hidden: words(1, 4), shown: ['w0', 'w5'] })
+    }
+  })
+
+  it.each(['> - ', '- ', '1. ', '# ', '-# ', '> a '])('counts the space of a leading %j before a token after the first bar', (lead) => {
+    const src = numbered(`${lead}W||W||<@${E}>\nW ||W||`)
+    expect(parse(src), src).toEqual(parseBefore(src))
+  })
+
+  it('reads a line with a slash command and its subcommand after its first bar as certain, the space in it before its >', () => {
+    for (const src of [`w0||w1||</roll dice:${E}>\nw2 ||w3||`, `w0\t||w1||</roll dice:${E}><@${E}>\n||w2||`]) expect(parse(src), src).toEqual(parseBefore(src))
+    expect(exposure(parse(`w0||w1||</roll_dice x:${E}>\nw2 ||w3||`))).toEqual({ hidden: words(1, 3), shown: ['w0'] })
+  })
+
+  it('reads a pair that holds nothing but a token as no blank pair', () => {
+    for (const src of [`a || <@${E}> ||\n||w0||`, `<t:1> ||<t:1>||\n||w0||`]) expect(parse(src), src).toEqual(parseBefore(src))
+  })
+
+  it.each(underscored())('reads a line with %s after its first bar as uncertain, a space before it or not', (x) => {
+    expect(exposure(parse(`w0 ||w1|| ${x} w2\nw3 ||w4|| w5`))).toEqual({ hidden: words(1, 4), shown: ['w0', 'w5'] })
+  })
+
+  it.each(broken())('reads a line with %s as uncertain, before its first bar or after it', (x) => {
+    for (const src of [`w0 ${x} ||w1|| w2\nw3 ||w4|| w5`, `w0 ||w1|| ${x} w2\nw3 ||w4|| w5`]) {
+      expect(exposure(parse(src)), src).toEqual({ hidden: words(1, 4), shown: ['w0', 'w5'] })
+    }
+  })
+
+  it.each([
+    ['a reply that opens with a mention', `<@${E}> ||w0 w1||\nw2 w3\nw4 ||w5||`, ['w2', 'w3', 'w4']],
+    ['an emoji after a spoiler', `w0 ||w1|| <:gg:${E}>\nw2\n||w3||`, ['w0', 'w2']],
+    ['an emoji with an underscore before a spoiler', `<:pepe_hands:${E}> w0 ||w1||\nw2\n||w3||`, ['w0', 'w2']],
+    ['a timestamp before a spoiler', `w0 <t:1700000000:R> ||w1||\nw2 w3\n||w4||`, ['w0', 'w2', 'w3']],
+    ['a role and a channel round a spoiler', `<@&${E}> w0 ||w1|| in <#${E}>\nw2\n||w3||`, ['w0', 'w2']],
+    ['a slash command after a spoiler', `w0 ||w1|| try </roll dice:${E}>\nw2\n||w3||`, ['w0', 'w2']],
+    ['mentions on every line', `<@${E}> ||w0||\n<@${E}> w1\n<@!${E}> ||w2|| <@${E}>`, ['w1']],
+    ['an emoji after a spoiler in a quote', `> w0 ||w1|| <:gg:${E}>\n> w2\n> ||w3||`, ['w0', 'w2']],
+    ['a mention after a spoiler in a list, the bullet spaced', `- w0||w1||<@${E}>\n- w2\n- ||w3||`, ['w0', 'w2']],
+    ['a mention after a spoiler under a heading marker', `# w0||w1||<@${E}>\nw2\n||w3||`, ['w0', 'w2']],
+  ])('shows what lies between the spoilers now: %s', (_, src, shown) => {
+    const all = src.match(WORD)
+    expect(exposure(parse(src))).toEqual({ hidden: all.filter((w) => !shown.includes(w)), shown })
+    expect(parse(src)).toEqual(parseBefore(src))
+  })
+})
+
 describe('hostile input', () => {
   it.each([
     ['`||` at the end of a line and the start of the next', 'a ||\nb\n|| c', [line(t('a ')), unit(line(t('b'))), line(t(' c'))]],
@@ -238,6 +326,9 @@ describe('hostile input', () => {
     ['an opener, then 100k lines of one-line spoilers', '||open\n' + Array.from({ length: 100_000 }, () => '||x|| y').join('\n')],
     ['100k mixed lines', Array.from({ length: 100_000 }, (_, i) => ['||a', '> b ||c||', '- d||', '```', 'x || y', '```', '`||` e', '>>> f ||'][i % 8]).join('\n')],
     ['100k certain lines', Array.from({ length: 100_000 }, () => 'a ||b|| c').join('\n')],
+    ['100k certain lines of tokens', Array.from({ length: 100_000 }, () => `<@${E}> ||b|| <:gg:${E}>`).join('\n')],
+    ['100k tokens after a bar, a space before them', `a ||b|| ${`<@${E}>`.repeat(100_000)}\n||c||`],
+    ['100k tokens after a bar, no space before them', `||b||${`<t:1:R>`.repeat(100_000)}\n||c||`],
   ])('%s parse in bounded time', (_, s) => {
     const budget = globalThis.__stryker__ ? 60_000 : 6000
     const at = performance.now()
@@ -275,6 +366,36 @@ describe('what the reviews found shown, hidden now', () => {
     ['a link title over lines, with the last bar next', '[x](https://a.io "\n|| " ) ||w0\nw1||', []],
     ['an autolink over lines', '<x:/a\nb||c>||d||e||w0\nw1||', []],
     ['a mailto autolink over lines', '<a\nb||c@d>||e||f||w0\nw1||', []],
+    // A token's `>` may end an angle form begun on an earlier line, and a `_` in its name may end a span begun there.
+    ['a mailto over lines that ends at a mention', `<w0\nw1||w2<@${E}> ||w3\nw4||`, ['w0', 'w1']],
+    ['an autolink over lines that ends at a channel', `<x:/w0\nw1||w2<#${E}> ||w3\nw4||`, ['w0', 'w1']],
+    ['a mailto over lines that ends at a mention on the bar', `<w0\nw1||<@${E}> ||w2\nw3||`, ['w0', 'w1']],
+    ['a mailto over lines that ends at an emoji', `<w0@\nw1||w2<:gg:${E}> ||w3\nw4||`, ['w0', 'w1']],
+    ['a mailto over lines that ends at a timestamp', `<w0@x\nw1||w2<t:1:R> ||w3\nw4||`, ['w0', 'w1']],
+    ['a mailto over lines that ends at a slash command', `<w0@x\nw1||w2</roll:${E}> ||w3\nw4||`, ['w0', 'w1']],
+    ['a mailto over lines that ends at a mention after a tab', `<w0\nw1\t||w2\t<@${E}> ||w3\nw4||`, ['w0', 'w1']],
+    ['italics over lines that end in an emoji name', `_w0\nw1 ||w2 <:e_:${E}> ||w3\nw4||`, ['w0', 'w1']],
+    ['an underline over lines that ends in an emoji name', `__w0\nw1 ||w2 <:e__x:${E}> ||w3\nw4||`, ['w0', 'w1']],
+    ['italics over lines that end in a slash command', `_w0\nw1 ||w2 </a_:${E}> ||w3\nw4||`, ['w0', 'w1']],
+    ["the site's own italics between two slash commands", `</_a:${E}> ||w0 </b_:${E}> w1||\nw2\n||w3||`, []],
+    // A quote's or a list item's text is read again without its lines' leading spaces, tabs and `>`, so their spaces don't count.
+    ['a mailto over quote lines that ends at a mention', `> <w0\n> w1||w2<@${E}>||w3\n> w4||`, ['w0', 'w1']],
+    ['a mailto over quote lines that ends at a mention, the last bar next', `> <w0\n> w1||w2<@${E}>||\n> w3||`, ['w0', 'w1']],
+    ['a mailto over quote lines that ends at a mention on the bar', `> <w0\n> ||<@${E}> ||w1\n> w2||`, ['w0']],
+    ['an autolink over quote lines that ends at a channel', `> <x:/w0\n> w1||w2<#${E}>||w3\n> w4||`, ['w0', 'w1']],
+    ['a mailto over quote lines that ends at an emoji', `> <w0@\n> w1||w2<:gg:${E}>||w3\n> w4||`, ['w0', 'w1']],
+    ['a mailto over quote lines that ends at a role', `> <w0@\n> w1||w2<@&${E}>||w3\n> w4||`, ['w0', 'w1']],
+    ['a mailto over quote lines that ends at a nickname mention', `> <w0@\n> w1||w2<@!${E}>||w3\n> w4||`, ['w0', 'w1']],
+    ['a mailto over quote lines that ends at a timestamp', `> <w0@\n> w1||w2<t:1:R>||w3\n> w4||`, ['w0', 'w1']],
+    ['a mailto over quote lines that ends at a slash command', `> <w0@\n> w1||w2</roll:${E}>||w3\n> w4||`, ['w0', 'w1']],
+    ['a mailto over quote lines with spaces before the markers', `  > <w0\n  > w1||w2<@${E}>||w3\n  > w4||`, ['w0', 'w1']],
+    ['a mailto over quote lines, CRLF', `> <w0\r\n> w1||w2<@${E}>||w3\r\n> w4||`, ['w0', 'w1']],
+    ['a mailto over nested quote markers', `> > <w0\n> > w1||w2<@${E}>||w3\n> > w4||`, ['w0', 'w1']],
+    ['a heart in a quoted reply', `> gg w0 <3\n> w1||w2<@${E}> ||w3 w4\n> w5|| w6`, ['w0', 'w1', 'w6']],
+    ['a mailto over a list item', `- <w0\n  w1||w2<@${E}>||w3\n  w4||`, ['w0', 'w1']],
+    ['a mailto over a numbered list item', `1. <w0\n   w1||w2<@${E}>||w3\n   w4||`, ['w0', 'w1']],
+    ['a mailto over a list item in a quote', `> - <w0\n>   w1||w2<@${E}>||w3\n>   w4||`, ['w0', 'w1']],
+    ['a mailto over a list item indented with a tab, read as spaces', `100. <w0\n\t w1||w2<@${E}>||w3\n\t w4||`, ['w0', 'w1']],
   ])('%s', (_, src, shown) => {
     const all = src.match(WORD)
     expect(exposure(parse(src))).toEqual({ hidden: all.filter((w) => !shown.includes(w)).sort((a, b) => a.slice(1) - b.slice(1)), shown })
@@ -305,7 +426,8 @@ describe('unchanged where every bar pairs on its line', () => {
     }), { numRuns: 3000 })
   })
   it('parses every text whose lines with bars are all certain exactly as before', () => {
-    const tok = fc.constantFrom('W', 'W.', '||W||', '||W W||', '|| W ||', 'a | b', '#', '-', '(x', '!', '?', '@here', ':e:', '1.')
+    const tok = fc.constantFrom('W', 'W.', '||W||', '||W W||', '|| W ||', 'a | b', '#', '-', '(x', '!', '?', '@here', ':e:', '1.', `<@${E}>`,
+      `<#${E}>`, `<a:gg:${E}>`, '<t:1700000000:R>', `</roll dice:${E}>`)
     const lineOf = fc.tuple(fc.constantFrom('', '', '> ', '>>> ', '- ', '1. ', '# ', '-# ', '  '), fc.array(tok, { maxLength: 6 }))
       .map(([prefix, parts]) => prefix + parts.join(' '))
     fc.assert(fc.property(fc.array(lineOf, { minLength: 1, maxLength: 10 }), (lines) => {
@@ -322,9 +444,12 @@ describe('fail closed', () => {
    * the site's fence lines, or open and close at any ```), inline code (none, on one line, or over lines), spans `**`
    * `__` `~~` `*` `_` (none, on one line, or over lines; an em that may hold a `**` or not), escapes, masked links and
    * angle forms (none, on one line, or over lines: a link's label is read, its address, with `( … )` in it, and its
-   * title are not; an autolink `<…:/…>` or `<…@…>` is not read), and blocks (one flow, or each quote, heading, subtext
-   * and list item read alone and the lines around them apart).
-   * → [start, end) of each stretch it hides.
+   * title are not; an autolink `<…:/…>` or `<…@…>` is not read), Discord's tokens (mentions, channels, roles, emoji,
+   * timestamps and slash commands read whole, or not at all, so that a span may start in one), and blocks (one flow;
+   * each quote, heading, subtext and list item read alone and the lines around them apart; or every line read again
+   * without its leading spaces, tabs and `>`, as a quote's or a list item's text is, and a list item, heading or subtext
+   * starting a text of its own without its marker).
+   * → [start, end) of each stretch it hides, in the message.
    */
   function readingHides(lines, code, o) {
     const starts = []
@@ -361,6 +486,13 @@ describe('fail closed', () => {
         if (o.escapes && s[i] === '\\') {
           i += 2
           continue
+        }
+        if (o.tokens && s[i] === '<') {
+          DISCORD_TOKEN.lastIndex = i
+          if (DISCORD_TOKEN.test(s)) {
+            i = DISCORD_TOKEN.lastIndex
+            continue
+          }
         }
         if (o.fence === 'mid' && s.startsWith('```', i)) {
           const e = s.indexOf('```', i + 3)
@@ -417,6 +549,35 @@ describe('fail closed', () => {
       scan(shown.join('\n'), 0)
       return out
     }
+    if (o.blocks === 'content') {
+      // The text read so far, and where each of its characters lies in the message.
+      let text = ''
+      let at = []
+      let started = false
+      const flush = () => {
+        const from = out.length
+        scan(text, 0)
+        for (const stretch of out.slice(from)) stretch.splice(0, 2, at[stretch[0]], at[stretch[1] - 1] + 1)
+        text = ''
+        at = []
+        started = false
+      }
+      shown.forEach((l, k) => {
+        const lead = /^[ \t>]*/.exec(l)[0].length
+        const marker = /^(?:[-*+]|\d{1,9}\.|#{1,3}|-#) +/.exec(l.slice(lead))
+        if (marker) flush()
+        else if (started) {
+          text += '\n'
+          at.push(starts[k] - 1)
+        }
+        const from = lead + (marker ? marker[0].length : 0)
+        text += l.slice(from)
+        for (let c = from; c < l.length; c++) at.push(starts[k] + c)
+        started = true
+      })
+      flush()
+      return out
+    }
     let deep = false
     const key = lines.map((l, k) => {
       deep ||= !code[k] && l.startsWith('>>> ')
@@ -434,29 +595,38 @@ describe('fail closed', () => {
     return out
   }
 
+  // Discord's own token rules, wider than the site's: any id, an emoji's name in \w, a slash command with up to two more words.
+  const DISCORD_TOKEN = /<(?:@[!&]?\d+|#\d+|a?:\w+:\d+|t:-?\d{1,17}(?::[tTdDfFR])?|\/[\w-]{1,32}(?: [\w-]{1,32}){0,2}:\d+)>/y
   const READINGS = []
   for (const fence of ['none', 'lines', 'mid']) {
     for (const code of ['none', 'line', 'over']) {
       for (const [spans, em] of [['none', 'near'], ['line', 'near'], ['line', 'skip'], ['over', 'near'], ['over', 'skip']]) {
         for (const escapes of [true, false]) {
-          for (const blocks of ['flow', 'alone']) for (const raw of ['none', 'line', 'over']) READINGS.push({ fence, code, spans, em, escapes, blocks, raw })
+          for (const blocks of ['flow', 'alone', 'content']) {
+            for (const raw of ['none', 'line', 'over']) for (const tokens of [true, false]) READINGS.push({ fence, code, spans, em, escapes, blocks, raw, tokens })
+          }
         }
       }
     }
   }
 
-  it('has readings that hide what the reviews found behind a link or an autolink over lines', () => {
-    for (const s of ['[x](https://a.io "\n|| " ) ||w0\nw1||\nw2 ||w3||', '[x](https://a.io/(\n|| )) ||w0\nw1||\nw2 ||w3||', '<x:/a\nb||c>||d||e||w0\nw1||', '<a\nb||c@d>||e||f||w0\nw1||']) {
+  it('has readings that hide what the reviews found behind a link, an angle form or a span over lines', () => {
+    for (const [s, word] of [
+      ['[x](https://a.io "\n|| " ) ||w0\nw1||\nw2 ||w3||', 'w0'], ['[x](https://a.io/(\n|| )) ||w0\nw1||\nw2 ||w3||', 'w0'],
+      ['<x:/a\nb||c>||d||e||w0\nw1||', 'w0'], ['<a\nb||c@d>||e||f||w0\nw1||', 'w0'], [`<w0\nw1||w2<@${E}> ||w3\nw4||`, 'w3'],
+      [`_w0\nw1 ||w2 <:e_:${E}> ||w3\nw4||`, 'w3'], [`</_a:${E}> ||w0 </b_:${E}> w1||\nw2\n||w3||`, 'w0'],
+      [`> <w0\n> w1||w2<@${E}>||w3\n> w4||`, 'w3'], [`- <w0\n  w1||w2<@${E}>||w3\n  w4||`, 'w3'], [`100. <w0\n\t w1||w2<@${E}>||w3\n\t w4||`, 'w3'],
+    ]) {
       const lines = s.split('\n')
       const stretches = READINGS.flatMap((o) => readingHides(lines, lines.map(() => false), o))
-      expect(stretches.some(([a, b]) => s.indexOf('w0') >= a && s.indexOf('w0') < b), s).toBe(true)
+      expect(stretches.some(([a, b]) => s.indexOf(word) >= a && s.indexOf(word) < b), s).toBe(true)
     }
   })
 
   it('hides every word any reading of Discord, or the site line by line, hides', () => {
     const tok = fc.constantFrom('W', 'W', '||', '||', '||W||', '`W||W`', '`W`', '`', '```', '\\||', '\\|\\|', '**W ||W**', '*W ||W*', '**', '*', '_',
       '~~', '[W ||W](https://a.io)', '**W**', '|||', '||||', '|||||', 'W|W', '[W](https://a.io "', '" )', '[W](https://a.io/(', '))', ')',
-      '"', '[W', '](https://a.io)', '(W', '<x:/W', 'W>', '<W', '@W>', '>', ']')
+      '"', '[W', '](https://a.io)', '(W', '<x:/W', 'W>', '<W', '@W>', '>', ']', `<@${E}>`, `<:e_:${E}>`, '<t:1:R>', `</a b:${E}>`)
     const text = fc.tuple(fc.constantFrom('', '', '> ', '>', '>>> ', '- ', '1. ', '# ', '-# '), fc.array(tok, { maxLength: 5 }))
       .map(([prefix, parts]) => ({ lines: [prefix + parts.join(' ')], code: [false] }))
     const fence = fc.tuple(fc.boolean(), fc.array(tok, { minLength: 1, maxLength: 4 })).map(([quoted, parts]) => ({ quoted, body: parts.join(' ') }))
@@ -467,7 +637,30 @@ describe('fail closed', () => {
       fc.array(fc.constantFrom('||', '||', 'W', '" )', "' )", '))', ')', 'W>', '@W>', '](https://a.io)'), { minLength: 2, maxLength: 7 }),
       fc.constantFrom(' ', ''),
     ).map(([open, parts, gap]) => ({ lines: [open, parts.join(gap)], code: [false, false] }))
-    fc.assert(fc.property(fc.array(fc.oneof(text, text, fence, blank, runOn), { minLength: 1, maxLength: 7 }), (blocks) => {
+    // Discord tokens before, at and after a line's first bar, a space, a tab or nothing before each, after a line that may
+    // leave an angle form or a span open, both lines in one quote, one list item or neither.
+    const token = fc.constantFrom(`<@${E}>`, `<#${E}>`, `<@&${E}>`, `<:e:${E}>`, `<:e_:${E}>`, `<a:e__x:${E}>`, '<t:1:R>', `</a:${E}>`,
+      `</a b:${E}>`, `</_a:${E}>`, `</a_:${E}>`, '<@1>')
+    const run = (part, maxLength) => fc.array(fc.tuple(fc.constantFrom('', '', '\t', ' '), part), { maxLength }).map((parts) => parts.flat().join(''))
+    const tokens = fc.tuple(
+      fc.oneof(
+        fc.constant(['', '']),
+        fc.constantFrom(['> ', '> '], [' > ', ' > '], ['> > ', '> > '], ['>>> ', '']),
+        fc.constantFrom(['- ', '  '], ['- ', '- '], ['> - ', '>   '], ['1. ', '   ']),
+        // A tab is read as spaces, and a list item's lines lose as many as its marker is wide.
+        fc.constantFrom(['100. ', '\t '], ['- ', '\t '], ['\t', '\t '], ['> ', '>\t ']),
+      ),
+      fc.constantFrom('', '<W', '<x:/W', 'W<W@', '_W', '__W', '[W](<W'),
+      run(fc.oneof(fc.constant('W'), token), 2),
+      run(fc.constant('W'), 2),
+      fc.constantFrom('', '', '\t', ' '),
+      token,
+      run(fc.oneof(fc.constantFrom('||', '||', 'W'), token), 5),
+    ).map(([[first, then], open, head, mid, gap, tok, tail]) => {
+      const body = `${head}||${mid}${gap}${tok}${tail}`
+      return open ? { lines: [first + open, then + body], code: [false, false] } : { lines: [first + body], code: [false] }
+    })
+    fc.assert(fc.property(fc.array(fc.oneof(text, text, fence, blank, runOn, tokens, tokens, tokens), { minLength: 1, maxLength: 7 }), (blocks) => {
       let deep = false
       const all = blocks.map((b) => {
         if (b.body === undefined) {
@@ -486,23 +679,23 @@ describe('fail closed', () => {
       const { hidden, shown } = exposure(nodes)
       const first = s.indexOf('||')
       const last = s.lastIndexOf('||')
-      // With no spoiler over lines, every bar off the last line with bars is on a certain line, and that last line's
-      // one-line parse stands as it was (the ruling: a reading may differ within one line there, as before).
-      const frozen = nodes.some((n) => n.lastBar) ? [] : [s.lastIndexOf('\n', last) + 1, (s.indexOf('\n', last) + 1 || s.length + 1) - 1]
+      // The last line with bars keeps its one-line parse when it is the first that is not certain (the ruling: a reading
+      // may differ within that one line, as before). So a stretch that starts on it is not held against the site.
+      const lastLine = s.lastIndexOf('\n', last) + 1
+      const held = stretches.filter(([a]) => a < lastLine)
       for (const m of s.matchAll(WORD)) {
         const why = `${m[0]} in ${JSON.stringify(s)}`
-        const onFrozen = frozen.length > 0 && m.index >= frozen[0] && m.index < frozen[1]
-        if (!onFrozen && (byLine.has(m[0]) || stretches.some(([a, b]) => m.index >= a && m.index < b))) expect(hidden, why).toContain(m[0])
+        if (byLine.has(m[0]) || held.some(([a, b]) => m.index >= a && m.index < b)) expect(hidden, why).toContain(m[0])
         if (first === -1 || m.index < first || m.index > last + 1) expect(shown, why).toContain(m[0])
       }
     }), { numRuns: globalThis.__stryker__ ? 150 : 1500 })
-    // 540 readings a document: well past vitest's 5 s default under coverage.
+    // 1620 readings a document: well past vitest's 5 s default under coverage.
   }, 300_000)
 
   it('hides exactly what lies between the first bar of the first uncertain line and the last bar, after certain lines', () => {
-    const certainTok = fc.constantFrom('W', 'W', '||W||', '|| W ||', 'a | W')
+    const certainTok = fc.constantFrom('W', 'W', '||W||', '|| W ||', 'a | W', `<@${E}>`, `<:gg:${E}>`, '<t:1:R>')
     const certainLine = fc.tuple(fc.constantFrom('', '> ', '- ', '# '), fc.array(certainTok, { maxLength: 4 })).map(([p, parts]) => p + parts.join(' '))
-    const unsure = fc.constantFrom('||', '**W**', '`W`', 'W_W', '\\x', '[W](https://a.io)', '|||')
+    const unsure = fc.constantFrom('||', '**W**', '`W`', 'W_W', '\\x', '[W](https://a.io)', '|||', '<@1234>', `||W|| <:e_:${E}>`)
     const uncertainLine = fc.tuple(fc.array(certainTok, { maxLength: 2 }), unsure, fc.array(certainTok, { maxLength: 2 }))
       .map(([a, x, b]) => [...a, x, ...b, '||W||'].join(' '))
     const anyLine = fc.oneof(certainLine, uncertainLine, fc.constantFrom('', 'W', 'W ||W', 'W|| W'))
