@@ -16,8 +16,10 @@
  *   with "…" so that it is no more than `max` characters (code points: no pair is cut in two). `max` is a whole number
  *   from 1; anything else is a RangeError. An excerpt is a preview, and a preview never shows a spoiler: each spoiler,
  *   wherever it sits (in bold, a quote, a list, a link's label), is "▒▒▒" whatever it hides, and the cut is made after.
- *   It fails closed: a `||` that no `||` closes (a preview cut the spoiler open, or it runs over lines, or it was escaped
- *   or is a lone bar) is masked from there to the end, and nothing after it is shown. In code a `||` is only text.
+ *   A spoiler that runs over lines is one "▒▒▒", and nothing after it is shown: it runs to the last `||` of the message,
+ *   which may open a spoiler a cut took the close of. It fails closed: a `||` that no `||` closes (a preview cut the
+ *   spoiler open, or it was escaped or is a lone bar) is masked from there to the end, and nothing after it is shown.
+ *   In code a `||` is only text.
  * firstUnread(messages, lastRead) → the id of the first message in the list that is newer than `lastRead`, or null.
  *   `lastRead` null or undefined means the reader has read nothing: null, and there is no divider.
  * isSpoilerFile(nameOrUrl) → whether a file name, or the last segment of an address's path (before any ? or #), begins
@@ -180,7 +182,8 @@ const maskedFrom = (text) => text.slice(0, text.indexOf(SPOILER_OPENER)) + SPOIL
 /**
  * → a copy of the nodes in which every spoiler, nested ones included, is a text node of the mask, and in which the first
  * text or address that holds a `||` (one no spoiler took, so it has no closing `||`) is cut there and ends with the mask,
- * and every node after it, in the reading order, is gone.
+ * and every node after it, in the reading order, is gone. So is every node after a spoiler over lines that the parse closed
+ * at the message's last `||` (`lastBar`): that bar may open a spoiler instead.
  */
 function previewNodes(nodes) {
   let closed = false
@@ -188,7 +191,10 @@ function previewNodes(nodes) {
     const kept = []
     for (const node of list) {
       if (closed) break
-      if (node.type === 'spoiler') kept.push({ type: 'text', value: SPOILER_MASK })
+      if (node.type === 'spoiler') {
+        kept.push({ type: 'text', value: SPOILER_MASK })
+        closed = node.lastBar === true
+      }
       else if (readable(node)?.includes(SPOILER_OPENER)) {
         closed = true
         kept.push({ type: 'text', value: maskedFrom(readable(node)) })

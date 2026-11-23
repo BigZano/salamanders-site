@@ -26,6 +26,16 @@ describe('auditArchive', () => {
     idx.collections.ranks.files[f] = JSON.stringify(t)
     expect(kinds(idx)).toEqual(['unaccounted-link'])
   })
+  it('reads each line alone, as the archive renders it: an address with bars in it stays whole', () => {
+    const idx = makeIndex()
+    const f = `threads/${IDS.R_TOC}.json`
+    const t = JSON.parse(idx.collections.ranks.files[f])
+    t.messages[0].content = 'join https://discord.gg/abc||def\n||x'
+    idx.collections.ranks.files[f] = JSON.stringify(t)
+    const [p] = auditArchive(createArchive(idx)).problems
+    expect(p.kind).toBe('unaccounted-link')
+    expect(p.detail.startsWith('https://discord.gg/abc||def ')).toBe(true)
+  })
   it.each([
     ['unknown-emoji', `<:nope:111111111111111111>`],
     ['unknown-role', `<@&111111111111111111>`],

@@ -52,7 +52,8 @@ function deadOnly(inline, classify) {
 export function dropDeadLines(blocks, classify) {
   const out = []
   for (const b of blocks) {
-    if (b.type === 'quote') {
+    // A spoiler that runs over lines holds blocks, as a quote does.
+    if (b.type === 'quote' || b.type === 'spoiler') {
       const children = dropDeadLines(b.children, classify)
       if (children.some((c) => c.type !== 'blank')) out.push({ ...b, children })
     } else if (b.type === 'list') {

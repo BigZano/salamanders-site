@@ -3,6 +3,52 @@
  * render functions (never v-html), so this module never produces markup.
  * Unrecognised syntax stays literal text, the way Discord shows it. Every
  * scan is memoised or sticky-anchored, so hostile input stays linear.
+ *
+ * Lines are read one by one (and only so with `{ oneLine: true }`, the Legion
+ * Archive's reading), but by default a spoiler can run over them, and Discord may
+ * read the bars of a message in more ways than one. Its spoiler rule may match
+ * bars as text, across lines and through code; its bold, italics and code may
+ * run over lines or end mid-line, and its code blocks may open and close
+ * mid-line; a quote, a heading or a list item may be read alone. So the site
+ * fails closed by construction, without choosing among them:
+ *   - A line is certain when it has no `||`, or when its bars pair within it
+ *     under every reading: it is no code, its pipes come in runs of one or two,
+ *     it has an even number of bars with words (not blank) between each pair,
+ *     it holds none of `` ` \ * _ ~ [ < ``, `://` or another line break, and
+ *     none of `) > ]` from its first `||` on.
+ *   - The lines before the first line that is not certain parse as they always
+ *     did. From the first `||` of that line to the last `||` of the message,
+ *     when that is on a later line, all is one `spoiler` node (`lastBar: true`,
+ *     so a preview masks from it to the end).
+ * Why that hides all any reading hides. A reading hides only between two bars
+ * it pairs. (1) Before the first line U that is not certain, no reading has a
+ * spoiler open when a line starts. That holds at the start; a line with no
+ * bars opens none; and nothing can hold the bars of a certain line but a
+ * construct that covers all of it, so a reading either shows them (as code, an
+ * address, a title) or pairs them within the line, each bar with the next, as
+ * the site's one-line parse does, and ends the line with none open. So before
+ * U a reading hides at most what the site hides there. Nothing else can, as a
+ * certain line has no mark that starts a construct, nor one that ends one
+ * after its first bar (what ends before it held none of the line's bars):
+ *   code and code blocks start and end at `` ` ``; spans at `*`, `_` (`__`),
+ *   `~` (`~~`); an escape is `\`; a link or an image starts at `[` (`![`) and
+ *   ends at `)`, its title and its `( … )` address lying between the brackets
+ *   and that `)`, so `"`, `'` and `(` need no place; an angle form (autolink,
+ *   mailto, mention, emoji, timestamp) starts at `<` and ends at `>`; a
+ *   reference link would end at `]`; a bare address starts at `://`, cannot
+ *   cross a line break, but may hold bars; a quote, heading, subtext or list
+ *   item is a block of whole lines, which ends no spoiler a line leaves closed.
+ * (2) No reading hides anything after the last `||` L: a hidden stretch ends at
+ * a bar. (3) Nor anything on U before its first `||`, by (1). So all a reading
+ * hides lies before U, where the site hides as much, or from the first `||` of
+ * U to L. When L is on U, every other bar is on a certain line, and the old
+ * one-line parse stands.
+ * The node's children are blocks. The words before its first bar and after its
+ * last are lines of their own. A quote cut by the bars goes on, as a quote, on
+ * both sides; what a cut leaves after the bars is read as words; markers alone
+ * before the first bar (`- `, `# `, `1. `) are words at the start of the node.
+ * A text with every bar on one line, or only on certain lines, parses exactly
+ * as it did when lines were read alone.
  */
 const MAX_DEPTH = 16
 // Leading whitespace is tolerated (Discord shows such lines literally; authors meant a heading).
@@ -26,14 +72,123 @@ const PAIRS = [
 ]
 const MENTION_KIND = { '@': 'user', '@!': 'user', '@&': 'role', '#': 'channel' }
 
-export function parse(src) {
+/**
+ * → the blocks of a message. By default a spoiler may run over lines, read so that it fails closed (see the comment at
+ * the top). `{ oneLine: true }` reads each line alone, exactly as this parser did at 22b6793: the Legion Archive's
+ * reading, whose formatting never changes. Options that are no object, or a `oneLine` that is no boolean, are a TypeError.
+ */
+export function parse(src, options) {
   if (typeof src !== 'string') throw new TypeError('markdown source must be a string')
-  return parseBlocks(src.replace(/\r\n?/g, '\n').split('\n'), false)
+  if (options !== undefined && (typeof options !== 'object' || options === null)) throw new TypeError('markdown options must be an object')
+  if (options?.oneLine !== undefined && typeof options.oneLine !== 'boolean') throw new TypeError('oneLine must be true or false')
+  const lines = src.replace(/\r\n?/g, '\n').split('\n')
+  return options?.oneLine ? parseBlocks(lines, false) : readSpoilers(lines)
 }
 
-function parseBlocks(lines, inQuote) {
+// How a line sits in the message, as parseBlocks reads it: what quote it is in and whether it is code.
+const PLAIN = 'plain'
+const CODE = 'code'
+const GROUP = 'group' // a line of a > quote
+const START = 'start' // the line that opens a >>> quote
+const DEEP = 'deep' // a line a >>> quote holds after it
+// What a line keeps of its quote when a spoiler's bars cut it: the piece after the bars is read as words in it.
+const CARRY = { [PLAIN]: 'text', [CODE]: 'text', [GROUP]: '> ', [START]: '>>> ', [DEEP]: '>>> ' }
+// The quote marker written at the start of a whole line.
+const OWN = { [GROUP]: '> ', [START]: '>>> ' }
+// Nothing but the markers of a list item, a heading or a subtext.
+const BARE = /^[ \t]*(?:(?:#{1,3}|-#|[-*]|\d{1,9}\.) +)?$/
+const quoted = (line) => line.startsWith('> ') || line === '>'
+const fenceEnd = (lines, i) => (FENCE_OPEN.test(lines[i]) ? lines.indexOf('```', i + 1) : -1)
+
+/** → for each line, whether a fence holds it, in the lines of a quote (no quote opens in them). */
+function codeIn(lines) {
+  const code = []
+  for (let i = 0; i < lines.length; ) {
+    const close = fenceEnd(lines, i)
+    for (const end = Math.max(close, i); i <= end; i++) code.push(close !== -1)
+  }
+  return code
+}
+
+/** → the role of each line of the message: the fences and quotes parseBlocks would find, in the same order. */
+function rolesOf(lines) {
+  const roles = []
+  for (let i = 0; i < lines.length; ) {
+    const close = fenceEnd(lines, i)
+    if (close !== -1) {
+      for (; i <= close; i++) roles.push(CODE)
+    } else if (lines[i].startsWith('>>> ')) {
+      codeIn([lines[i].slice(4), ...lines.slice(i + 1)]).forEach((code, k) => roles.push(code ? CODE : k === 0 ? START : DEEP))
+      break
+    } else if (quoted(lines[i])) {
+      const from = i
+      while (i < lines.length && quoted(lines[i])) i++
+      for (const code of codeIn(lines.slice(from, i).map((line) => line.slice(2)))) roles.push(code ? CODE : GROUP)
+    } else {
+      roles.push(PLAIN)
+      i++
+    }
+  }
+  return roles
+}
+
+// Marks that start, or start and end, a construct of some reading that can hold bars or run over a line break (see
+// the comment at the top): code, escapes, spans, links, angle forms, addresses, and line breaks other than \n.
+const UNSURE = /[`\\*_~[<\u2028\u2029\u0085\v\f]|:\/\//
+// Marks that only end one: a link's `)`, an angle form's `>`, a reference link's `]`. They start with `[` or `<`.
+const ENDS = /[)>\]]/
+
+/** Whether every reading pairs the line's bars within it (see the comment at the top). */
+function certain(line, role) {
+  if (!line.includes('||')) return true
+  if (role === CODE || UNSURE.test(line) || line.includes('|||') || ENDS.test(line.slice(line.indexOf('||')))) return false
+  const pieces = line.split('||')
+  return pieces.length % 2 === 1 && pieces.every((piece, k) => k % 2 === 0 || /\S/.test(piece))
+}
+
+/** The message's blocks: the lines before the first one that is not certain as they were, then one spoiler to the last `||`. */
+function readSpoilers(lines) {
+  const roles = rolesOf(lines)
+  const last = lines.findLastIndex((line) => line.includes('||'))
+  const u = lines.findIndex((line, k) => !certain(line, roles[k]))
+  if (u === -1 || u === last) return parseBlocks(lines, false)
+  const at = lines[u].indexOf('||')
+  const c = lines[last].lastIndexOf('||')
+  const head = lines[u].slice(0, at)
+  const rest = head.slice((OWN[roles[u]] ?? '').length)
+  // Nothing but markers before the first bar: they are words at the start of the spoiler. Anything more stays before it.
+  const bare = BARE.test(rest)
+  const before = bare ? lines.slice(0, u) : [...lines.slice(0, u), head]
+  const inner = [(bare ? rest : '') + lines[u].slice(at + 2), ...lines.slice(u + 1, last)]
+  const closing = lines[last].slice(0, c)
+  if (closing.slice((OWN[roles[last]] ?? '').length).trim() !== '') inner.push(closing)
+  return [
+    ...parseBlocks(before, false),
+    { type: 'spoiler', children: parseBlocks(inner, false, CARRY[roles[u]]), lastBar: true },
+    ...parseBlocks([lines[last].slice(c + 2), ...lines.slice(last + 1)], false, CARRY[roles[last]]),
+  ]
+}
+
+/**
+ * Blocks from lines. `lead` says how the first line is read when it is the piece of a line a spoiler's bars cut:
+ * 'text' as words only (never a fence, quote, heading or list), '> ' as such words going on in a > quote, '>>> ' as
+ * such words in a >>> quote of all the lines. A quote the cut leaves empty is left out.
+ */
+function parseBlocks(lines, inQuote, lead) {
   const out = []
   let i = 0
+  if (lead === '>>> ') {
+    const children = parseBlocks(lines, true, 'text')
+    return children.length ? [{ type: 'quote', children }] : out
+  }
+  if (lead === '> ') {
+    for (i = 1; i < lines.length && quoted(lines[i]); ) i++
+    const children = parseBlocks([lines[0], ...lines.slice(1, i).map((line) => line.slice(2))], true, 'text')
+    if (children.length) out.push({ type: 'quote', children })
+  } else if (lead === 'text') {
+    if (lines[0].trim() !== '') out.push({ type: 'line', children: parseInline(lines[0]) })
+    i = 1
+  }
   while (i < lines.length) {
     const line = lines[i]
     const fence = FENCE_OPEN.exec(line)
@@ -49,9 +204,9 @@ function parseBlocks(lines, inQuote) {
       out.push({ type: 'quote', children: parseBlocks([line.slice(4), ...lines.slice(i + 1)], true) })
       break
     }
-    if (!inQuote && (line.startsWith('> ') || line === '>')) {
+    if (!inQuote && quoted(line)) {
       const inner = []
-      while (i < lines.length && (lines[i].startsWith('> ') || lines[i] === '>')) {
+      while (i < lines.length && quoted(lines[i])) {
         inner.push(lines[i].slice(2)) // '>'.slice(2) is '' too
         i++
       }

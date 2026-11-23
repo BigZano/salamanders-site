@@ -17,7 +17,8 @@ export function auditArchive(archive) {
       for (const m of messages) {
         const at = (kind, detail) => problems.push({ collectionKey: col.key, threadId, messageId: m.id, kind, detail })
         // Only mention nodes carry `kind`.
-        if (typeof m.content === 'string') walk(parse(m.content), (n) => {
+        // The archive's own reading: each line alone, as ArchiveThread renders it.
+        if (typeof m.content === 'string') walk(parse(m.content, { oneLine: true }), (n) => {
           const href = n.type === 'link' || n.type === 'url' ? n.href : n.kind === 'channel' ? n.raw : null
           if (href !== null) {
             const r = classifyHref(href, archive)

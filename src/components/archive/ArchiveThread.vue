@@ -27,7 +27,8 @@ const isToc = computed(() => props.threadId === col.value.tocThreadId)
 const kind = (href) => classifyHref(href, archive.archive).kind
 const messages = computed(() => {
   const shown = entry.value.messages.map((m) => {
-    const ast = parse(m.content ?? '')
+    // The archive reads each line alone, as it always has: its formatting must never change (owner's rule).
+    const ast = parse(m.content ?? '', { oneLine: true })
     return { m, ast: isToc.value ? tocOnly(ast, kind) : dropDeadLines(ast, kind), attachments: isToc.value ? [] : m.attachments ?? [] }
   })
   // The ToC gains the sealed overlay's entries, placed among the authored ones.

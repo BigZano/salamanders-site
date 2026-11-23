@@ -1,19 +1,22 @@
 /**
  * AST → VNodes. Text goes through Vue's escaping; no raw markup is
  * written anywhere in the archive. Links come only from classifyHref: route,
- * external https, or plain text.
+ * external https, or plain text. A spoiler that runs over lines is one
+ * block-level toggle (a div) round the blocks it holds, the same toggle a
+ * one-line spoiler is (a span), hidden until it is shown.
  */
 import { defineComponent, h, ref } from 'vue'
 import { RouterLink } from 'vue-router'
 
 const Spoiler = defineComponent({
   name: 'ArchiveSpoiler',
-  setup(_, { slots }) {
+  props: { block: Boolean },
+  setup(props, { slots }) {
     const shown = ref(false)
     const reveal = () => (shown.value = true)
     return () =>
-      h('span', {
-        class: ['md-spoiler', { 'is-shown': shown.value }],
+      h(props.block ? 'div' : 'span', {
+        class: ['md-spoiler', { 'md-spoiler-block': props.block, 'is-shown': shown.value }],
         role: 'button',
         tabindex: shown.value ? -1 : 0,
         'aria-expanded': String(shown.value),
@@ -41,6 +44,7 @@ export default defineComponent({
         case 'list': return h(n.ordered ? 'ol' : 'ul', { class: 'md-list' }, n.items.map((it) => h('li', it.children.map(block))))
         case 'codeblock': return h('pre', { class: 'md-pre' }, h('code', n.text))
         case 'blank': return h('div', { class: 'md-blank', 'aria-hidden': 'true' })
+        case 'spoiler': return h(Spoiler, { block: true }, () => n.children.map(block))
         default: return h('p', { class: 'md-line' }, inl(n.children))
       }
     }
