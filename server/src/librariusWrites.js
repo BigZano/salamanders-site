@@ -26,7 +26,7 @@
  *
  * reply(postId, request, verdict): POST /librarius/posts/:id/messages with { source, replyTo?, pingReply?, mentions[], uploads[] }
  *   → 202 { pending: { key, state: 'sending' } }. In this order: 404 for a post the store does not hold; 403 for a member who is
- *   timed out ("You're timed out in the server until <ISO time>.") or may not reply ("You can't reply in this post."), and for a
+ *   timed out ("You're timed out in the server until 21:14 UTC on 20 November 2026.") or may not reply ("You can't reply in this post."), and for a
  *   locked post without Manage Threads ("This post is locked."); 429 over 3 replies a minute (Retry-After says when); then the
  *   body (415, 413, and `source` that is no text: 400 "Write something first."); 403 "You can't attach pictures here." for `uploads`
  *   that holds anything from a member who may not attach (pictures held from before they lost the right are not sent, and nothing is
@@ -104,7 +104,7 @@ const ON_ITS_WAY = new Set(['pending', 'sending'])
 const COPY = {
   noPost: 'No such post.',
   noMessage: 'No such message.',
-  timedOut: (until) => `You're timed out in the server until ${until}.`,
+  timedOut: (until) => (until === null ? "You're timed out in the server." : `You're timed out in the server until ${until}.`),
   cantReply: "You can't reply in this post.",
   cantEdit: "You can't edit in this post.",
   cantAttach: "You can't attach pictures here.",
@@ -120,6 +120,20 @@ const COPY = {
   busy: 'This message is already being changed. Try again in a moment.',
   badQuery: 'Type 1 to 32 characters to search.',
   noRoster: 'The member list is not ready yet. Try again.',
+}
+
+const MONTHS = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December']
+const two = (n) => String(n).padStart(2, '0')
+
+/**
+ * → when a timeout ends (the verdict's ISO time), as a member reads it, "21:14 UTC on 20 November 2026", or null for a time that is
+ * none. The minute is rounded up, so that a member who tries again at the minute said is not refused once more.
+ */
+function untilWords(iso) {
+  const ms = Math.ceil(Date.parse(iso) / 60_000) * 60_000
+  if (Number.isNaN(ms)) return null
+  const at = new Date(ms)
+  return `${two(at.getUTCHours())}:${two(at.getUTCMinutes())} UTC on ${at.getUTCDate()} ${MONTHS[at.getUTCMonth()]} ${at.getUTCFullYear()}`
 }
 
 const isObject = (v) => typeof v === 'object' && v !== null && !Array.isArray(v)
@@ -144,7 +158,7 @@ export function createLibrariusWrites({ store, guild, roster, outbox, limits, gu
 
   /** → the 403 for a member who may not write, or null: timed out, or without the right to reply (`cant` is the copy). */
   function mayNotWrite(verdict, cant) {
-    if (verdict.timedOut) return reply(403, { error: COPY.timedOut(verdict.timeoutUntil) })
+    if (verdict.timedOut) return reply(403, { error: COPY.timedOut(untilWords(verdict.timeoutUntil)) })
     return verdict.reply ? null : reply(403, { error: cant })
   }
 

@@ -592,9 +592,14 @@ describe.skipIf(!runnable)('the outbox store on a real Postgres 16, as the data-
       await sql("update librarius_uploads set created_at = now() - interval '2 hours'")
       expect(await store.sweepUploads({ olderThan: new Date(Date.now() - 3_600_000) })).toBe(1)
       expect((await store.uploadsFor(MEMBER, [held.id, used.id])).map((u) => u.id)).toEqual([used.id])
+      // The edit the worker queues to put a message back is the worker's, not the member's: it is not listed (the edit it puts right is).
+      const failedEdit = await store.enqueueOutbox({ kind: 'edit', messageKey: A, authorId: MEMBER, payload: { postId: POST, source: 'Tried.', mentions: [] } })
+      await sql("update librarius_outbox set state = 'failed', last_error = 'x' where id = $1", [failedEdit.id])
+      await store.enqueueOutbox({ kind: 'edit', messageKey: A, authorId: MEMBER, payload: { postId: POST, mentions: [], restore: true } })
       const listed = await store.outboxFor(MEMBER, POST, new Date(Date.now() - 60_000))
-      expect(listed).toHaveLength(1)
+      expect(listed).toHaveLength(2)
       expect(listed[0]).toMatchObject({ kind: 'send', state: 'pending', source: 'with a picture' })
+      expect(listed[1]).toMatchObject({ kind: 'edit', key: A, state: 'failed', error: 'x' })
     })
   })
 

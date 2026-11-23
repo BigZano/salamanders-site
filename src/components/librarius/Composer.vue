@@ -10,7 +10,8 @@ const SITE_URL = 'https://sm2salamanders.site'
 // The markdown source is on the left, and beside it two tabs: the Preview, drawn by the post page's own renderer
 // (ArchiveMarkdown, with the page's context) from the site's extended markdown, and the Discord view, the messages Discord
 // will get as librariusForm.js makes them, in the form in use. The toolbar and Ctrl or Cmd with B, I and U change the text
-// through apply() (lib/librarius/composer.js), so nobody has to remember the markdown.
+// through apply() (lib/librarius/composer.js), so nobody has to remember the markdown. Ctrl or Cmd with Enter sends, and the focus
+// goes back to the text once it is sent.
 //
 // @ opens the member search (MentionPopover), through the page's `searchMembers`, paced so that typing never runs into the
 // server's searches a minute (lib/librarius/requests.js). The member picked goes in as <@id>, and the Preview names them. A
@@ -34,7 +35,9 @@ const SITE_URL = 'https://sm2salamanders.site'
 // Drafts are kept in the member's own browser, a second after the last change, under the post and the message replied to
 // (draftKey). A draft is kept when the composer closes or the page goes, too, but never for someone who has signed out since.
 // Given another message to reply to, the composer opens that one's draft and keeps its own text under the one it was written
-// for; when the other has none, the text goes with it. Given another post, it keeps the text with the post it was for.
+// for; when the other has none, the text goes with it, and `moved` ({ from, to }, the messages replied to, null for the post) tells
+// the page, whose pictures are held for each draft, to move the text's along. Given another post, it keeps the text with the post it
+// was for.
 //
 // Sending is the page's: the composer calls its `send` listener with { source, replyTo, pingReply, mentions } and waits on what it
 // returns. A promise that resolves means the reply is on its way: the text and its draft go, and `sent` passes on what it
@@ -156,7 +159,7 @@ const props = defineProps({
   // The member's own reply being edited, { id, source, replyTo: { id, authorId } | null }, or null for a new reply.
   editing: { type: Object, default: null },
 })
-const emit = defineEmits(['update:replyTo', 'update:editing', 'sent'])
+const emit = defineEmits(['update:replyTo', 'update:editing', 'sent', 'moved'])
 
 const auth = useAuth()
 const uid = `lb-composer-${++instances}`
@@ -392,6 +395,12 @@ function onDrop(event) {
 
 function onKey(event) {
   if (!(event.ctrlKey || event.metaKey) || event.altKey || event.shiftKey) return
+  // Ctrl or Cmd with Enter sends, as the Reply button does (and does nothing when it could not).
+  if (event.key === 'Enter') {
+    event.preventDefault()
+    send()
+    return
+  }
   const action = SHORTCUTS.get(event.key.toLowerCase())
   if (action === undefined) return
   event.preventDefault()
@@ -471,9 +480,15 @@ watch(
 const leaveEdit = () => {
   if (!sending.value) emit('update:editing', null)
 }
+// Going full screen, or back, moves the composer (see the template), and a moved element loses the focus: it goes to the text.
+async function setFull(on) {
+  full.value = on
+  await nextTick()
+  area.value?.focus()
+}
 // Escape leaves full screen first, then an edit.
 function onEscape() {
-  if (full.value) full.value = false
+  if (full.value) setFull(false)
   else if (props.editing !== null) leaveEdit()
 }
 
@@ -491,12 +506,15 @@ watch([() => props.postId, replyId], ([post, reply], [oldPost, oldReply]) => {
     keep(oldPost, oldReply)
     text.value = there ?? ''
     remember(text.value)
-  } else if (auth.signedIn) {
-    // The text goes with the composer to the message it now replies to.
-    clearTimeout(saveTimer)
-    saveTimer = null
-    clearDraft(storage, oldPost, oldReply)
-    saveDraft(storage, post, reply, text.value)
+  } else {
+    // The text goes with the composer to the message it now replies to, and so do the pictures held for it (`moved`).
+    if (auth.signedIn) {
+      clearTimeout(saveTimer)
+      saveTimer = null
+      clearDraft(storage, oldPost, oldReply)
+      saveDraft(storage, post, reply, text.value)
+    }
+    emit('moved', { from: oldReply, to: reply })
   }
 })
 
@@ -536,6 +554,9 @@ function failureOf(err, source) {
 async function send() {
   if (!canSend.value) return
   const source = text.value
+  // What it is sent to: the member may press Reply on another message, or ✕, while it is on its way.
+  const post = props.postId
+  const reply = replyId.value
   sending.value = true
   failure.value = null
   let answer
@@ -559,17 +580,30 @@ async function send() {
     // The reply that was being written comes back once the page leaves the edit.
     emit('sent', answer)
     emit('update:editing', null)
-    return
+  } else {
+    // The draft of what it was sent to goes. The text goes only if it is what was sent: moved to another message meanwhile, the
+    // composer shows that one's draft, which stays (the sent words went with it, as the draft of the first, and go now).
+    const storage = draftStorage()
+    clearDraft(storage, post, reply)
+    if (text.value === source) {
+      clearDraft(storage, props.postId, replyId.value)
+      text.value = ''
+    }
+    emit('sent', answer)
   }
-  clearDraft(draftStorage(), props.postId, replyId.value)
-  text.value = ''
-  emit('sent', answer)
+  // The button that sent it is disabled now, and would leave the focus to the page.
+  await nextTick()
+  area.value?.focus()
 }
 
 defineExpose({ act, insert, focus: () => area.value.focus() })
 </script>
 
 <template>
+  <!-- Full screen, it is teleported to <body>: the route's root is its own stacking context (the route fade), so inside it the composer
+       would open under the site's sticky header, which hides its top bar (Lightbox.vue does the same). It keeps its state. -->
+  <div class="lb-composer-host">
+  <Teleport to="body" :disabled="!full">
   <section class="lb-composer" :class="{ 'lb-composer-full': full }" aria-label="Reply composer" @keydown.esc="onEscape">
     <div class="lb-composer-head">
       <p class="lb-composer-where">Replying in: <b>{{ postTitle }}</b></p>
@@ -582,7 +616,7 @@ defineExpose({ act, insert, focus: () => area.value.focus() })
         <button type="button" class="lb-ping" :aria-label="`Ping ${replyName}`" :aria-pressed="String(ping)" @click="ping = !ping">@ {{ ping ? 'on' : 'off' }}</button>
         <button type="button" class="lb-unreply" :aria-label="`Stop replying to ${replyName}`" @click="emit('update:replyTo', null)"><span aria-hidden="true">✕</span></button>
       </div>
-      <button type="button" class="btn-ghost btn-sm lb-full" :aria-pressed="String(full)" @click="full = !full">Full screen</button>
+      <button type="button" class="btn-ghost btn-sm lb-full" :aria-pressed="String(full)" @click="setFull(!full)">Full screen</button>
     </div>
 
     <div ref="toolbar" class="lb-toolbar" role="toolbar" aria-label="Formatting" @keydown="moveInToolbar">
@@ -691,4 +725,6 @@ defineExpose({ act, insert, focus: () => area.value.focus() })
       <button type="button" class="btn-ember btn-sm lb-send" :disabled="!canSend" @click="send">{{ editing ? 'Save edit' : 'Reply' }}</button>
     </div>
   </section>
+  </Teleport>
+  </div>
 </template>

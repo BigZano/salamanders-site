@@ -41,6 +41,11 @@
  *   insertBlock(text, selection, block) → { text, selection }: the block on lines of its own after the selection, as an image or
  *     a table goes, and a caret on a new line under it, where the reply goes on. A block that is not text is a TypeError, one
  *     with nothing in it a RangeError, and the text and the selection are taken as apply() takes them.
+ *   namedMentions(words, name) → the words with each mention of a member or a role that the parser reads (`<@id>`, `<@!id>`,
+ *     `<@&id>`) written as the page names it, `name({ kind, id })` ('@Tor Mardan'), escaped so that it stays words. A quote of a
+ *     whole message holds its mentions as the source has them, and the server refuses a reply that mentions someone nobody picked
+ *     (a role, always): so quoted, it pings nobody and goes. A mention in code, or escaped, is no mention, and stays as it is; so
+ *     does a channel's. Words that are not text, or a `name` that is no function, are a TypeError.
  *
  * Drafts live in the member's own browser, under draftKey(postId, replyTo): lb-draft:<postId>:<replyTo|new>. The storage is
  * given (localStorage, in the page), and one that throws (full, or blocked in a private window) never makes these throw;
@@ -53,6 +58,8 @@
  *   draftStorage() → the browser's localStorage, to give these, or null where there is none or reading it throws (a
  *     browser that blocks storage): the helpers take null as a storage that keeps nothing.
  */
+
+import { parse, walk } from '../archive/markdown'
 
 const ID = /^\d{17,20}$/
 // The marks a line opens with: a quote, an indent, a list mark, a heading or subtext mark. Each may be missing, so the
@@ -388,6 +395,38 @@ export function asQuote(words) {
     .slice(first, last + 1)
     .map((line) => (line === '' ? '>' : `> ${line}`))
     .join('\n')
+}
+
+// A mention of a member or a role as the parser reads one, and the marks a name is escaped of so that it is read as words.
+const MENTION = /<(@!?|@&)(\d{17,20})>/g
+const MENTION_KIND = { '@': 'user', '@!': 'user', '@&': 'role' }
+const NAME_MARKS = /[\\*_~|`<>[\]]/g
+
+/** → how many mentions of a member or a role the parser reads in the words, as the composer reads them (the extended dialect). */
+function mentionCount(words) {
+  let n = 0
+  walk(parse(words, { dialect: 'extended' }), (node) => {
+    if (node.type === 'mention' && node.kind !== 'channel') n++
+  })
+  return n
+}
+
+export function namedMentions(words, name) {
+  if (typeof words !== 'string') throw new TypeError('the words must be a string')
+  if (typeof name !== 'function') throw new TypeError('the names must come from a function')
+  const all = mentionCount(words)
+  if (all === 0) return words
+  // Every mention the parser reads looks like one, so when as many look like one, they all are. Else one that only looks like a mention
+  // (in code, or escaped) is told by the parser reading the same number without it.
+  const looks = [...words.matchAll(MENTION)]
+  const mentions = looks.length === all ? looks : looks.filter((m) => mentionCount(`${words.slice(0, m.index)}x${words.slice(m.index + m[0].length)}`) < all)
+  let out = ''
+  let at = 0
+  for (const m of mentions) {
+    out += words.slice(at, m.index) + name({ kind: MENTION_KIND[m[1]], id: m[2] }).replace(NAME_MARKS, '\\$&')
+    at = m.index + m[0].length
+  }
+  return out + words.slice(at)
 }
 
 export function insertBlock(text, selection, md) {

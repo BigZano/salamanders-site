@@ -997,25 +997,25 @@ describe('LibMessage: what the page offers on it, and what is on its way', () =>
     expect(mountMsg(message()).classes()).not.toContain('lb-pending')
   })
 
-  it('says a blocked edit was blocked by the server\'s rules, and offers to edit it, where it may be, or to let it go', async () => {
+  it('says a blocked edit was blocked by the server\'s rules, and offers to edit it, where it may be, or to discard it', async () => {
     const w = mountMsg(message(), { entry: { kind: 'edit', state: 'blocked', error: 'Discord blocked this edit.' }, revisable: true })
     expect(w.classes()).not.toContain('lb-pending')
-    expect(w.get('.lb-state').text()).toBe("Blocked by the server's rules. Edit it or delete it.")
+    expect(w.get('.lb-state').text()).toBe("Blocked by the server's rules. Edit it or discard it.")
     expect(w.get('.lb-state').attributes('role')).toBe('alert')
     const buttons = w.findAll('.lb-state-tools button')
     expect(buttons.map((b) => [b.text(), b.attributes('aria-label')])).toEqual([
       ['Edit', 'Edit the blocked edit'],
-      ['Delete', 'Delete the blocked edit'],
+      ['Discard', 'Discard the blocked edit'],
     ])
     for (const b of buttons) await b.trigger('click')
     expect(w.emitted('act')).toEqual([['revise'], ['discard']])
     const fixed = mountMsg(message(), { entry: { kind: 'edit', state: 'blocked', error: null } })
-    expect(fixed.findAll('.lb-state-tools button').map((b) => b.text())).toEqual(['Delete'])
+    expect(fixed.findAll('.lb-state-tools button').map((b) => b.text())).toEqual(['Discard'])
   })
 
-  it('says a failed one could not be sent, with the server\'s reason when it gave words, and offers Retry and Dismiss', async () => {
+  it('says a failed one could not be sent, or a failed delete done, with the server\'s reason when it gave words, and offers Retry and Dismiss', async () => {
     const w = mountMsg(message(), { entry: { kind: 'delete', state: 'failed', error: 'This post is gone from Discord.' } })
-    expect(w.get('.lb-state').text()).toBe("Couldn't send. Try again. This post is gone from Discord.")
+    expect(w.get('.lb-state').text()).toBe("Couldn't delete. Try again. This post is gone from Discord.")
     const buttons = w.findAll('.lb-state-tools button')
     expect(buttons.map((b) => [b.text(), b.attributes('aria-label')])).toEqual([
       ['Retry', 'Try the delete again'],

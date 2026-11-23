@@ -75,10 +75,11 @@ function byStore() {
 const quiet = byStore()
 // By store: how many polls of the open post have asked, { id, n }, so that every INFO_EVERY-th reads the post again.
 const beats = byStore()
-// By store: the pictures sent for the replies of each post, by post id, as a list of their ids by place: `ids[N - 1]` is the one
-// `upload:N` names in the source. The composer gives each picture its place, and gives a place that its text no longer uses to the
-// next picture, which takes the place of the one before. A reply that is queued with pictures takes them all, and the places are
-// empty again. They are kept through a new load() (the reader's drafts are), not a reset().
+// By store: the pictures sent for the replies of each post, by draft (the post and the message replied to, as drafts are kept: one
+// post may have a draft for each message), as a list of their ids by place: `ids[N - 1]` is the one `upload:N` names in the source.
+// The composer gives each picture a place its draft does not use, and gives a place that its text no longer uses to the next picture,
+// which takes the place of the one before. A reply that is queued with pictures takes all of its draft's, and those places are empty
+// again; another draft's are its own. They are kept through a new load() (the reader's drafts are), not a reset().
 const pictures = byStore()
 // By store: the following of the open post's queue (see follow()).
 const follows = byStore()
@@ -433,12 +434,21 @@ function nameOf(file) {
   return name === '' ? 'picture' : name
 }
 
-/** → the pictures of the replies of a post by place (see `pictures`), made when there are none yet. */
-function picturesOf(store, postId) {
-  let byPost = pictures.get(store)
-  if (byPost === undefined) pictures.set(store, (byPost = new Map()))
-  let held = byPost.get(postId)
-  if (held === undefined) byPost.set(postId, (held = { ids: [] }))
+/** → the key of a draft's pictures: its post, and the message it replies to (null for the post). */
+const draftOf = (postId, replyTo) => `${postId}:${replyTo ?? 'new'}`
+
+/** → `replyTo` as it was given, the id of a message or null, else a TypeError. */
+function replyToOf(replyTo) {
+  if (replyTo !== null && !isMessageId(replyTo)) throw new TypeError('replyTo is the id of a message, or null.')
+  return replyTo
+}
+
+/** → the pictures of a draft by place (see `pictures`), made when there are none yet. */
+function picturesOf(store, postId, replyTo) {
+  let byDraft = pictures.get(store)
+  if (byDraft === undefined) pictures.set(store, (byDraft = new Map()))
+  let held = byDraft.get(draftOf(postId, replyTo))
+  if (held === undefined) byDraft.set(draftOf(postId, replyTo), (held = { ids: [] }))
   return held
 }
 
@@ -593,7 +603,9 @@ function takePending(store, f, n, answer) {
     const id = identity(held)
     const listed = newest.get(id)
     if (listed !== undefined) {
-      next.push(entryOf(listed))
+      // The server lists an edit without its words: the ones this page sent it with are kept, for Edit to open again.
+      const taken = entryOf(listed)
+      next.push(taken.source === null && held.source !== null ? { ...taken, source: held.source } : taken)
       newest.delete(id)
     } else if (held.state === 'sending' && f.after.get(id) >= n) {
       next.push(held)
@@ -785,10 +797,10 @@ export const useLibrarius = defineStore('librarius', {
     async reply(token, input) {
       if (!isObject(input) || typeof input.source !== 'string') throw new TypeError('reply takes { source, replyTo, pingReply, mentions }, with the source as text.')
       const { source, replyTo = null } = input
-      if (replyTo !== null && !isMessageId(replyTo)) throw new TypeError('replyTo is the id of a message, or null.')
+      replyToOf(replyTo)
       const mentions = pickedIn(input.mentions, source)
       const postId = openId(this)
-      const held = picturesOf(this, postId)
+      const held = picturesOf(this, postId, replyTo)
       const shown = lastPicture(source)
       const body = { source, replyTo, pingReply: input.pingReply === true, mentions, uploads: picturesUpTo(held.ids, shown) }
       const entry = await queue(this, token, postId, 'send', () => api.postReply(token, postId, body), { source, body })
@@ -815,17 +827,18 @@ export const useLibrarius = defineStore('librarius', {
       return queue(this, token, postId, 'delete', () => api.deleteMessage(token, messageId))
     },
 
-    // Sends a picture for a reply in the open post, to hold at place `n` (1 to 10), which the composer gives it: it is `upload:N` in
-    // the source. → { n, name }, `name` being what it is shown by; or { status, error } for one that was not taken, with the server's
-    // words (status 0 for a failure of the network, an answer that is no picture's, or no post open). Nothing is tried again here: the
-    // composer does that, for a 429 and a 503 only.
-    async upload(token, file, n) {
+    // Sends a picture for a reply in the open post, to hold at place `n` (1 to 10) of the draft that replies to `replyTo` (a message's
+    // id, or null for the post), which the composer gives it: it is `upload:N` in the source. → { n, name }, `name` being what it is
+    // shown by; or { status, error } for one that was not taken, with the server's words (status 0 for a failure of the network, an
+    // answer that is no picture's, or no post open). Nothing is tried again here: the composer does that, for a 429 and a 503 only.
+    async upload(token, file, n, replyTo = null) {
       if (!(file instanceof Blob)) throw new TypeError('upload takes a picture: a File or a Blob.')
       if (!Number.isInteger(n)) throw new TypeError('upload takes the place of the picture, a whole number.')
       if (n < 1 || n > MAX_PICTURES) throw new RangeError('A picture goes in place 1 to 10.')
+      replyToOf(replyTo)
       if (this.post === null) return { status: 0, error: COPY.noPost }
       const postId = this.post.id
-      const held = picturesOf(this, postId)
+      const held = picturesOf(this, postId, replyTo)
       let answer
       try {
         answer = await api.uploadPicture(token, file)
@@ -833,19 +846,34 @@ export const useLibrarius = defineStore('librarius', {
         return Number.isInteger(err?.status) ? { status: err.status, error: err.message } : { status: 0, error: COPY.pictureFailed }
       }
       // A picture that arrives after a sign-out is no one's now.
-      if (typeof answer?.id !== 'string' || !PICTURE_ID.test(answer.id) || pictures.get(this)?.get(postId) !== held) return { status: 0, error: COPY.pictureFailed }
+      if (typeof answer?.id !== 'string' || !PICTURE_ID.test(answer.id) || pictures.get(this)?.get(draftOf(postId, replyTo)) !== held) return { status: 0, error: COPY.pictureFailed }
       held.ids[n - 1] = answer.id
       return { n, name: nameOf(file) }
     },
 
-    // → whether a reply sent now would carry the picture `upload:N` names, N from 1 to 10: whether this page has held a picture at
-    // every place up to N in the open post (see upload(); a reply carries the places from 1 that have no gap). A draft that shows a
-    // place held by none (one written before the page was loaded again, or before a reply took its pictures) needs it added again.
-    holdsPicture(n) {
+    // → whether a reply to `replyTo` (a message's id, or null for the post) sent now would carry the picture `upload:N` names, N from
+    // 1 to 10: whether this page has held a picture at every place up to N of that draft in the open post (see upload(); a reply
+    // carries the places from 1 that have no gap). A draft that shows a place held by none (one written before the page was loaded
+    // again, or before a reply took its pictures) needs it added again.
+    holdsPicture(n, replyTo = null) {
       if (!Number.isInteger(n)) throw new TypeError('holdsPicture takes the place of a picture, a whole number.')
       if (n < 1 || n > MAX_PICTURES) throw new RangeError('A picture goes in place 1 to 10.')
-      const ids = pictures.get(this)?.get(this.post?.id)?.ids ?? []
+      replyToOf(replyTo)
+      const ids = pictures.get(this)?.get(draftOf(this.post?.id, replyTo))?.ids ?? []
       return picturesUpTo(ids, n).length === n
+    },
+
+    // The draft that replied to `from` replies to `to` now (a message's id, or null for the post, each), in the open post: its pictures
+    // go with it, in place of any that were held for `to` with no draft to show them (the composer moves a draft only to a message that
+    // has none). A draft that holds none leaves what is there.
+    movePictures(from, to) {
+      replyToOf(from)
+      replyToOf(to)
+      const byDraft = pictures.get(this)
+      const held = byDraft?.get(draftOf(this.post?.id, from))
+      if (held === undefined) return
+      byDraft.delete(draftOf(this.post.id, from))
+      byDraft.set(draftOf(this.post.id, to), held)
     },
 
     // Asks now what the reader has on its way in the open post, and follows it while any of it is sending. The page asks this when

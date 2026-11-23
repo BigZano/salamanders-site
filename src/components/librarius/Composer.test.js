@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
-import { mount, flushPromises } from '@vue/test-utils'
+import { DOMWrapper, mount, flushPromises } from '@vue/test-utils'
 import { nextTick } from 'vue'
 import { createPinia, setActivePinia } from 'pinia'
 import { createRouter, createMemoryHistory } from 'vue-router'
@@ -97,6 +97,8 @@ const settle = async () => {
   for (let i = 0; i < 10; i++) await Promise.resolve()
 }
 const area = (w) => w.get('textarea')
+// The composer itself, where it is: full screen, it is teleported to <body>, out of the wrapper (one composer mounted).
+const sheet = () => new DOMWrapper(document.querySelector('section.lb-composer'))
 const button = (w, name) => {
   const found = w.findAll('button').filter((b) => b.attributes('aria-label') === name || (!b.attributes('aria-label') && b.text() === name))
   expect(found, name).toHaveLength(1)
@@ -624,6 +626,79 @@ describe('Composer: sending', () => {
     expect(w.find('[role="alert"]').exists()).toBe(false)
   })
 
+  it('clears the draft of the message it sent to, and keeps the other\'s, when the reply was moved to another while it was sending', async () => {
+    localStorage.setItem(draftKey(POST, OTHER_MSG), 'The other draft')
+    let finish
+    const onSend = vi.fn(() => new Promise((resolve) => (finish = resolve)))
+    const w = mountComposer({ onSend, replyTo: IXEN_REPLY })
+    await type(w, 'Sent words')
+    await replyButton(w).trigger('click')
+    // While it is on its way, the member presses Reply on another message, which has a draft.
+    await w.setProps({ replyTo: { id: OTHER_MSG, authorId: TOR, authorName: 'Tor Mardan' } })
+    expect(area(w).element.value).toBe('The other draft')
+    finish({ pending: { key: 'k', state: 'sending' } })
+    await flushPromises()
+    expect(area(w).element.value).toBe('The other draft')
+    expect(localStorage.getItem(draftKey(POST, OTHER_MSG))).toBe('The other draft')
+    expect(localStorage.getItem(draftKey(POST, MSG))).toBeNull()
+  })
+
+  it('takes the sent words with it when the reply was moved, while sending, to a message with no draft', async () => {
+    let finish
+    const onSend = vi.fn(() => new Promise((resolve) => (finish = resolve)))
+    const w = mountComposer({ onSend, replyTo: IXEN_REPLY })
+    await type(w, 'Sent words')
+    await replyButton(w).trigger('click')
+    await w.setProps({ replyTo: null })
+    finish({ pending: { key: 'k', state: 'sending' } })
+    await flushPromises()
+    expect(area(w).element.value).toBe('')
+    expect(localStorage.getItem(draftKey(POST, MSG))).toBeNull()
+    expect(localStorage.getItem(draftKey(POST))).toBeNull()
+  })
+
+  it.each([
+    ['Ctrl', { ctrlKey: true }],
+    ['Cmd', { metaKey: true }],
+  ])('sends with %s+Enter, and gives the focus back to the text once it is sent', async (_, keys) => {
+    const onSend = vi.fn(async () => ({}))
+    const w = mountComposer({ onSend })
+    await type(w, 'By the keys')
+    await area(w).trigger('keydown', { key: 'Enter', ...keys })
+    await flushPromises()
+    expect(onSend).toHaveBeenCalledWith({ source: 'By the keys', replyTo: null, pingReply: false, mentions: [] })
+    expect(area(w).element.value).toBe('')
+    expect(document.activeElement).toBe(area(w).element)
+  })
+
+  it('sends nothing with Enter alone, with Shift or Alt too, or when there is nothing to send', async () => {
+    const onSend = vi.fn(async () => ({}))
+    const w = mountComposer({ onSend })
+    await type(w, 'Not yet')
+    for (const keys of [{}, { ctrlKey: true, shiftKey: true }, { metaKey: true, altKey: true }, { shiftKey: true }]) {
+      await area(w).trigger('keydown', { key: 'Enter', ...keys })
+    }
+    await type(w, '   ')
+    await area(w).trigger('keydown', { key: 'Enter', ctrlKey: true })
+    await flushPromises()
+    expect(onSend).not.toHaveBeenCalled()
+  })
+
+  it('gives the focus back to the text after the Reply button sent it, and after an edit is saved', async () => {
+    const w = mountComposer({ onSend: async () => ({}) })
+    await type(w, 'Pressed')
+    replyButton(w).element.focus()
+    await replyButton(w).trigger('click')
+    await flushPromises()
+    expect(document.activeElement).toBe(area(w).element)
+    const edit = mountComposer({ onSend: async () => ({}), editing: { id: MSG, source: 'Old', replyTo: null } })
+    await type(edit, 'New')
+    button(edit, 'Save edit').element.focus()
+    await button(edit, 'Save edit').trigger('click')
+    await flushPromises()
+    expect(document.activeElement).toBe(area(edit).element)
+  })
+
   it('sends no ping for a reply to nobody', async () => {
     const onSend = vi.fn(async () => ({}))
     const w = mountComposer({ onSend })
@@ -815,15 +890,42 @@ describe('Composer: around the text', () => {
     expect(full.attributes('aria-pressed')).toBe('false')
     await full.trigger('click')
     expect(full.attributes('aria-pressed')).toBe('true')
-    expect(w.classes()).toContain('lb-composer-full')
-    await area(w).trigger('keydown', { key: 'Escape' })
+    expect(sheet().classes()).toContain('lb-composer-full')
+    await area(sheet()).trigger('keydown', { key: 'Escape' })
     expect(full.attributes('aria-pressed')).toBe('false')
-    expect(w.classes()).not.toContain('lb-composer-full')
+    expect(sheet().classes()).not.toContain('lb-composer-full')
     await full.trigger('click')
     await full.trigger('click')
-    expect(w.classes()).not.toContain('lb-composer-full')
-    await area(w).trigger('keydown', { key: 'Escape' })
-    expect(w.classes()).not.toContain('lb-composer-full')
+    expect(sheet().classes()).not.toContain('lb-composer-full')
+    await area(sheet()).trigger('keydown', { key: 'Escape' })
+    expect(sheet().classes()).not.toContain('lb-composer-full')
+  })
+
+  // The route's root is a stacking context of its own (its fade), under the site's sticky header: full screen in it, the header would
+  // hide the composer's top bar, and on a phone there would be no way out.
+  it('goes to the end of <body> while full screen, out of the page, keeping what it holds, and comes back to its place', async () => {
+    const page = document.createElement('main')
+    document.body.append(page)
+    const w = mount(Composer, {
+      props: { postId: POST, postTitle: 'The Long Road', authorId: TOR, authorName: 'Tor Mardan', guildId: GUILD, ctx: makeCtx(), onSend: async () => ({}), replyTo: IXEN_REPLY },
+      global: { plugins: [pinia, makeRouter()] },
+      attachTo: page,
+    })
+    mounted.push(w)
+    await type(w, 'Kept words')
+    await button(w, 'Full screen').trigger('click')
+    await flushPromises()
+    const section = document.querySelector('section.lb-composer')
+    expect(section.parentElement).toBe(document.body)
+    expect(page.contains(section)).toBe(false)
+    expect(section.querySelector('textarea').value).toBe('Kept words')
+    expect(section.querySelector('.lb-replying-to').textContent).toContain('Ixen Calloway')
+    expect(document.activeElement).toBe(section.querySelector('textarea'))
+    await new DOMWrapper(section.querySelector('.lb-full')).trigger('click')
+    await flushPromises()
+    expect(page.contains(document.querySelector('section.lb-composer'))).toBe(true)
+    expect(document.querySelector('section.lb-composer textarea').value).toBe('Kept words')
+    expect(document.activeElement).toBe(document.querySelector('section.lb-composer textarea'))
   })
 })
 
@@ -961,25 +1063,25 @@ describe('Composer: @ mentions', () => {
   it('closes on Escape without leaving full screen, on a press outside it, and by @ again', async () => {
     const w = mountComposer({ searchMembers: async () => [] })
     await button(w, 'Full screen').trigger('click')
-    let search = await openSearch(w)
+    let search = await openSearch(sheet())
     await search.get('input').trigger('keydown', { key: 'Escape' })
-    expect(dialog(w, 'Mention someone').exists()).toBe(false)
-    expect(w.classes()).toContain('lb-composer-full')
-    expect(document.activeElement).toBe(area(w).element)
-    search = await openSearch(w)
+    expect(dialog(sheet(), 'Mention someone').exists()).toBe(false)
+    expect(sheet().classes()).toContain('lb-composer-full')
+    expect(document.activeElement).toBe(area(sheet()).element)
+    search = await openSearch(sheet())
     search.get('input').element.dispatchEvent(new MouseEvent('mousedown', { bubbles: true }))
     await nextTick()
-    expect(dialog(w, 'Mention someone').exists()).toBe(true)
+    expect(dialog(sheet(), 'Mention someone').exists()).toBe(true)
     document.body.dispatchEvent(new MouseEvent('mousedown', { bubbles: true }))
     await nextTick()
-    expect(dialog(w, 'Mention someone').exists()).toBe(false)
-    await openSearch(w)
-    await button(w, 'Mention someone').trigger('click')
-    expect(dialog(w, 'Mention someone').exists()).toBe(false)
-    await openSearch(w)
-    await button(w, 'Emoji').trigger('click')
-    expect(dialog(w, 'Mention someone').exists()).toBe(false)
-    expect(dialog(w, 'Emoji').exists()).toBe(true)
+    expect(dialog(sheet(), 'Mention someone').exists()).toBe(false)
+    await openSearch(sheet())
+    await button(sheet(), 'Mention someone').trigger('click')
+    expect(dialog(sheet(), 'Mention someone').exists()).toBe(false)
+    await openSearch(sheet())
+    await button(sheet(), 'Emoji').trigger('click')
+    expect(dialog(sheet(), 'Mention someone').exists()).toBe(false)
+    expect(dialog(sheet(), 'Emoji').exists()).toBe(true)
   })
 
   it('cannot be opened when the page gives no search', async () => {
@@ -1014,11 +1116,11 @@ describe('Composer: emoji', () => {
   it('closes on Escape without leaving full screen', async () => {
     const w = mountComposer()
     await button(w, 'Full screen').trigger('click')
-    await button(w, 'Emoji').trigger('click')
-    await dialog(w, 'Emoji').get('input').trigger('keydown', { key: 'Escape' })
-    expect(dialog(w, 'Emoji').exists()).toBe(false)
-    expect(w.classes()).toContain('lb-composer-full')
-    expect(document.activeElement).toBe(area(w).element)
+    await button(sheet(), 'Emoji').trigger('click')
+    await dialog(sheet(), 'Emoji').get('input').trigger('keydown', { key: 'Escape' })
+    expect(dialog(sheet(), 'Emoji').exists()).toBe(false)
+    expect(sheet().classes()).toContain('lb-composer-full')
+    expect(document.activeElement).toBe(area(sheet()).element)
   })
 })
 
@@ -1274,7 +1376,7 @@ describe('Composer: editing a reply', () => {
   it('leaves full screen first on Escape, then the edit', async () => {
     const w = mountComposer({ editing: EDIT })
     await w.get('.lb-full').trigger('click')
-    await area(w).trigger('keydown', { key: 'Escape' })
+    await area(sheet()).trigger('keydown', { key: 'Escape' })
     expect(w.get('.lb-full').attributes('aria-pressed')).toBe('false')
     expect(w.emitted('update:editing')).toBeUndefined()
     await area(w).trigger('keydown', { key: 'Escape' })

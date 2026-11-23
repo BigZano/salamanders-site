@@ -879,6 +879,10 @@ a.lb-file {
   border: 1px solid var(--color-ash);
   border-radius: var(--radius-md);
 }
+/* What the composer is mounted in on the page: no box of its own, so the dock lays the composer out as before. */
+.lb-composer-host {
+  display: contents;
+}
 .lb-composer-full {
   position: fixed;
   inset: 0;

@@ -1587,7 +1587,7 @@ describe('outboxFor', () => {
     expect(log).toHaveLength(1)
     // The recording pool lowercases what it is given; the real statement reads the key as 'postId' (proven against Postgres).
     expect(log[0].sql).toBe(
-      "select id, kind, message_key, state, last_error, case when kind = 'send' then payload->>'source' end as source, created_at from librarius_outbox where author_id = $1 and payload->>'postid' = $2 and state <> 'sent' and created_at >= $3::timestamptz order by id desc limit 20",
+      "select id, kind, message_key, state, last_error, case when kind = 'send' then payload->>'source' end as source, created_at from librarius_outbox where author_id = $1 and payload->>'postid' = $2 and state <> 'sent' and created_at >= $3::timestamptz and payload->>'restore' is distinct from 'true' order by id desc limit 20",
     )
     expect(log[0].params).toEqual([AUTHOR, POST, SINCE])
   })

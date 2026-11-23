@@ -28,10 +28,10 @@
 // it says none). The page does nothing the server would refuse, and the server judges every write again:
 //   - The composer is docked under the thread, apart from the messages (no .lb-msg in it, so the page never reads it as one), for
 //     a member who may reply; a locked post says "This post is locked." in its place, but to a member who manages threads, whom
-//     Discord lets reply. It is given the store's writes: a reply, an edit, a picture (held by place), whether a picture a draft
-//     shows is still held, the member search, and the server's own emoji.
+//     Discord lets reply. It is given the store's writes: a reply, an edit, a picture (held by place; only for a member who may
+//     attach, else its 🖼 is unavailable), whether a picture a draft shows is still held, the member search, and the server's own emoji.
 //   - Each message offers Reply (the composer replies to it), Quote (the words selected in it, else all of it, go in as a quote,
-//     and the composer replies to it), Edit (the reader's own replies written on the site: the composer opens with the source)
+//     with each mention written as the page names it, and the composer replies to it), Edit (the reader's own replies written on the site: the composer opens with the source)
 //     and Delete (the reader's own messages, or any but the post's opening message for a member who manages messages; it asks
 //     first). None is offered in a locked post but to a member who manages threads, as the server refuses them there.
 //   - What the reader has on its way is the store's `outbox`, asked for when the post opens (what was sent before the page was
@@ -44,7 +44,7 @@ import { useAuth } from '../../stores/auth'
 import { POLL_MS, useLibrarius } from '../../stores/librarius'
 import { listEmoji, searchMembers } from '../../lib/librarius/api'
 import { parse } from '../../lib/archive/markdown'
-import { asQuote } from '../../lib/librarius/composer'
+import { asQuote, namedMentions } from '../../lib/librarius/composer'
 import { articleMemo, firstUnread, groupMessages, isRead, railMonths, samePeople } from '../../lib/librarius/layout'
 import { createRenderCtx } from '../../lib/librarius/render'
 import { placeKey } from '../../lib/librarius/places'
@@ -202,8 +202,11 @@ const failures = reactive(new Map())
 
 // The composer's ways to the store and the server, made once, so that it is never drawn again for a new one.
 const send = (p) => (p.edit === undefined ? store.reply(auth.token, p) : store.edit(auth.token, p.edit, { source: p.source, mentions: p.mentions }))
-const upload = (file, n) => store.upload(auth.token, file, n)
-const holds = (n) => store.holdsPicture(n)
+// The pictures are held for each draft: the post and the message the composer replies to, as its drafts are kept.
+const draftTarget = () => replying.value?.id ?? null
+const upload = (file, n) => store.upload(auth.token, file, n, draftTarget())
+const holds = (n) => store.holdsPicture(n, draftTarget())
+const movePictures = ({ from, to }) => store.movePictures(from, to)
 const search = (q) => searchMembers(auth.token, q)
 // A reply that is on its way leaves the message it replied to: the next one is to the post, as in Discord.
 function onSent() {
@@ -282,10 +285,11 @@ function selectedIn(id) {
   return selection.toString()
 }
 const wordsOf = (message) => (message.origin === 'site' && typeof message.source === 'string' ? message.source : message.content)
+// The mentions of the words are written as the page names them: a quote pings nobody, and is not refused for a mention nobody picked.
 async function quote(message) {
   const words = selectedIn(message.id) ?? wordsOf(message)
   await answer(message)
-  if (isWords(words)) await composer.value?.insert(asQuote(words))
+  if (isWords(words)) await composer.value?.insert(asQuote(namedMentions(words, (node) => ctx.value.mention(node).label)))
 }
 /** The composer edits the reader's own reply, from `source`, measured with the message the reply answered. */
 async function edit(message, source) {
@@ -721,9 +725,10 @@ async function jump(month) {
           :on-send="send"
           :search-members="search"
           :custom-emoji="customEmoji"
-          :upload="upload"
+          :upload="can.attach === true ? upload : null"
           :held="holds"
           @sent="onSent"
+          @moved="movePictures"
         />
         <p v-else class="lb-locked" role="status">{{ COPY.locked }}</p>
       </div>

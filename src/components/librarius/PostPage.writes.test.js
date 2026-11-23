@@ -384,6 +384,19 @@ describe('PostPage: replying to a message, and quoting it', () => {
     expect(area(w).element.value).toBe('> First line\n> Second line\n')
   })
 
+  it('Quote of a whole message that mentions people writes them as the page names them, so the reply pings nobody and goes', async () => {
+    const ROLE = mid(420)
+    const who = me({ roles: [{ id: ROLE, name: 'Ash Wardens', color: '#aa5500' }] })
+    const w = await show({ who, messages: [opener(), msg(1, { content: `See <@${IXEN}> and <@&${ROLE}> about the caravans, not \`<@${TOR}>\`.` })] })
+    await tool(w, m(1), 'Quote').trigger('click')
+    await settle()
+    expect(area(w).element.value).toBe(`> See @Ixen Calloway and @Ash Wardens about the caravans, not \`<@${TOR}>\`.\n`)
+    await sendButton(w).trigger('click')
+    await settle()
+    const [sent] = server.sent('POST', `/librarius/posts/${POST}/messages`)
+    expect(sent.body).toMatchObject({ source: `> See @Ixen Calloway and @Ash Wardens about the caravans, not \`<@${TOR}>\`.\n`, replyTo: m(1), mentions: [] })
+  })
+
   it('Quote of a reply written on the site quotes its source', async () => {
     const w = await show({ messages: [opener(), mine(1, { source: 'With **marks**', content: 'With **marks**' })] })
     await tool(w, m(1), 'Quote').trigger('click')
@@ -405,6 +418,76 @@ describe('PostPage: replying to a message, and quoting it', () => {
     mounted.splice(0).forEach((x) => x.unmount())
     const locked = await show({ post: info({ locked: true }) })
     for (const id of [POST, m(1), m(2)]) expect(locked.find(`#m-${id} .lb-actions`).exists()).toBe(false)
+  })
+})
+
+describe('PostPage: pictures', () => {
+  const pictureTool = (w) => w.get('.lb-dock [aria-label="Add a picture"]')
+  const paste = (w) => {
+    const file = new File([new Uint8Array([0x89, 0x50, 0x4e, 0x47])], 'map.png', { type: 'image/png' })
+    const event = new Event('paste', { bubbles: true, cancelable: true })
+    event.clipboardData = { files: [file] }
+    area(w).element.dispatchEvent(event)
+    return event
+  }
+
+  it('offers no picture to a member who may not attach files, and sends none of theirs to the server', async () => {
+    const w = await show({ who: me({ can: { ...CAN, attach: false } }) })
+    expect(pictureTool(w).attributes('aria-disabled')).toBe('true')
+    expect(paste(w).defaultPrevented).toBe(false)
+    await settle()
+    expect(server.sent('POST', '/librarius/uploads')).toEqual([])
+  })
+
+  it('holds the pictures of each draft apart, so that a picture added to one never goes with another', async () => {
+    localStorage.setItem(draftKey(POST, m(1)), 'Draft for the first')
+    let next = 7001
+    const w = await show({ arrange: () => server.answer('POST', '/librarius/uploads', () => json({ id: String(next++) }, 201)) })
+    // A picture for the reply to the post, at place 1.
+    paste(w)
+    await settle()
+    expect(area(w).element.value).toBe('![map](upload:1)')
+    // Reply on the first message, which has a draft of its own: the composer opens it, and its picture is given place 1 of its own.
+    await tool(w, m(1), 'Reply').trigger('click')
+    await settle()
+    expect(area(w).element.value).toBe('Draft for the first')
+    paste(w)
+    await settle()
+    expect(area(w).element.value).toContain('![map](upload:1)')
+    await sendButton(w).trigger('click')
+    await settle()
+    // Sent, the composer replies to the post again, and opens its draft: its picture is the one it was given, not the other draft's.
+    expect(w.find('.lb-dock .lb-replying-to').exists()).toBe(false)
+    expect(area(w).element.value).toBe('![map](upload:1)')
+    expect(w.find('.lb-dock .lb-dead-pictures').exists()).toBe(false)
+    await sendButton(w).trigger('click')
+    await settle()
+    const sent = server.sent('POST', `/librarius/posts/${POST}/messages`).map((r) => [r.body.replyTo, r.body.uploads])
+    expect(sent).toEqual([
+      [m(1), ['7002']],
+      [null, ['7001']],
+    ])
+  })
+
+  it('moves the pictures of a draft with it when it replies to a message that has no draft', async () => {
+    const w = await show()
+    paste(w)
+    await settle()
+    await tool(w, m(2), 'Reply').trigger('click')
+    await settle()
+    expect(area(w).element.value).toBe('![map](upload:1)')
+    expect(w.find('.lb-dock .lb-dead-pictures').exists()).toBe(false)
+    await sendButton(w).trigger('click')
+    await settle()
+    expect(server.sent('POST', `/librarius/posts/${POST}/messages`).map((r) => [r.body.replyTo, r.body.uploads])).toEqual([[m(2), ['7001']]])
+  })
+
+  it('takes a picture from a member who may attach files', async () => {
+    const w = await show()
+    expect(pictureTool(w).attributes('aria-disabled')).toBeUndefined()
+    expect(paste(w).defaultPrevented).toBe(true)
+    await settle()
+    expect(server.sent('POST', '/librarius/uploads')).toHaveLength(1)
   })
 })
 
@@ -586,11 +669,11 @@ describe('PostPage: what is on its way', () => {
     expect(el(w, m(3)).get('.lb-body').text()).toBe('From before')
   })
 
-  it('says a blocked reply was blocked, and Edit puts it back in the composer while Delete lets it go', async () => {
+  it('says a blocked reply was blocked, and Edit puts it back in the composer while Discard lets it go', async () => {
     const w = await show({ pending: [entry('k-1', { state: 'blocked', error: 'Discord blocked this reply.', source: 'Heresy here' }), entry('k-2', { state: 'blocked', source: 'Second' })] })
     expect(outgoing(w).map((o) => o.get('.lb-state').text())).toEqual([
-      "Blocked by the server's rules. Edit it or delete it.",
-      "Blocked by the server's rules. Edit it or delete it.",
+      "Blocked by the server's rules. Edit it or discard it.",
+      "Blocked by the server's rules. Edit it or discard it.",
     ])
     expect(outgoing(w)[0].classes()).not.toContain('lb-pending')
     await type(w, 'Already here')
@@ -599,7 +682,7 @@ describe('PostPage: what is on its way', () => {
     expect(area(w).element.value).toBe('Already here\nHeresy here\n')
     expect(outgoing(w)).toHaveLength(1)
     const confirm = vi.spyOn(window, 'confirm')
-    await outgoing(w)[0].findAll('button').find((b) => b.text() === 'Delete').trigger('click')
+    await outgoing(w)[0].findAll('button').find((b) => b.text() === 'Discard').trigger('click')
     await settle()
     expect(confirm).not.toHaveBeenCalled()
     expect(outgoing(w)).toHaveLength(0)
@@ -630,7 +713,7 @@ describe('PostPage: what is on its way', () => {
 
   it('shows a blocked edit on its message, and Edit opens that edit again', async () => {
     const w = await show({ messages: [opener(), mine(1)], pending: [entry(m(1), { kind: 'edit', state: 'blocked', source: 'The blocked words' })] })
-    expect(el(w, m(1)).get('.lb-state').text()).toBe("Blocked by the server's rules. Edit it or delete it.")
+    expect(el(w, m(1)).get('.lb-state').text()).toBe("Blocked by the server's rules. Edit it or discard it.")
     expect(el(w, m(1)).classes()).not.toContain('lb-pending')
     await el(w, m(1)).findAll('.lb-state-tools button').find((b) => b.text() === 'Edit').trigger('click')
     await settle()
@@ -639,12 +722,12 @@ describe('PostPage: what is on its way', () => {
     expect(el(w, m(1)).find('.lb-state').exists()).toBe(false)
   })
 
-  it('opens a blocked edit whose words the server does not say with the reply\'s own source, and Delete lets the edit go', async () => {
+  it('opens a blocked edit whose words the server does not say with the reply\'s own source, and Discard lets the edit go', async () => {
     const w = await show({ messages: [opener(), mine(1), mine(2)], pending: [entry(m(1), { kind: 'edit', state: 'blocked', source: null }), entry(m(2), { kind: 'edit', state: 'blocked', source: null })] })
     await el(w, m(1)).findAll('.lb-state-tools button').find((b) => b.text() === 'Edit').trigger('click')
     await settle()
     expect(area(w).element.value).toBe('My reply 1')
-    await el(w, m(2)).findAll('.lb-state-tools button').find((b) => b.text() === 'Delete').trigger('click')
+    await el(w, m(2)).findAll('.lb-state-tools button').find((b) => b.text() === 'Discard').trigger('click')
     await settle()
     expect(el(w, m(2)).find('.lb-state').exists()).toBe(false)
     expect(server.sent('DELETE', /./)).toHaveLength(0)
@@ -652,7 +735,7 @@ describe('PostPage: what is on its way', () => {
 
   it('shows a failed delete on its message, and Retry deletes it again', async () => {
     const w = await show({ messages: [opener(), mine(1)], pending: [entry(m(1), { kind: 'delete', state: 'failed', source: null })] })
-    expect(el(w, m(1)).get('.lb-state').text()).toBe("Couldn't send. Try again.")
+    expect(el(w, m(1)).get('.lb-state').text()).toBe("Couldn't delete. Try again.")
     await el(w, m(1)).findAll('.lb-state-tools button').find((b) => b.text() === 'Retry').trigger('click')
     await settle()
     expect(server.sent('DELETE', `/librarius/messages/${m(1)}`)).toHaveLength(1)
@@ -669,7 +752,7 @@ describe('PostPage: what is on its way', () => {
 
   it('offers no way to edit what is blocked to a member who may no longer reply', async () => {
     const w = await show({ who: me({ can: { ...CAN, reply: false } }), pending: [entry('k-1', { state: 'blocked' })] })
-    expect(outgoing(w)[0].findAll('button').map((b) => b.text())).toEqual(['Delete'])
+    expect(outgoing(w)[0].findAll('button').map((b) => b.text())).toEqual(['Discard'])
   })
 
   it('leaves a message with nothing on its way as it is', async () => {

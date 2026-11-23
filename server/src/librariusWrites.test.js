@@ -373,8 +373,21 @@ describe('reply: who may', () => {
   it('is 403 for a member who is timed out, who is told until when', async () => {
     const t = world()
     const got = await out(await t.writes.reply(POST, json({ source: 'hello' }), verdictOf({ reply: false, timedOut: true, timeoutUntil: '2026-11-19T10:20:30.000Z' })))
-    expect(got).toMatchObject({ status: 403, body: { error: "You're timed out in the server until 2026-11-19T10:20:30.000Z." } })
+    // The minute it ends in is rounded up: a member who tries at the minute said is not refused again.
+    expect(got).toMatchObject({ status: 403, body: { error: "You're timed out in the server until 10:21 UTC on 19 November 2026." } })
     expect(t.queue).toStrictEqual([])
+  })
+
+  it('says until when in words, in UTC, for every month and at either end of a day, and only that a timeout runs when the time is none', async () => {
+    const t = world()
+    const until = async (timeoutUntil) => (await out(await t.writes.reply(POST, json({ source: 'hello' }), verdictOf({ reply: false, timedOut: true, timeoutUntil })))).body.error
+    const MONTHS = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December']
+    for (const [i, month] of MONTHS.entries()) {
+      expect(await until(`2027-${String(i + 1).padStart(2, '0')}-05T03:07:00.000Z`)).toBe(`You're timed out in the server until 03:07 UTC on 5 ${month} 2027.`)
+    }
+    expect(await until('2026-12-31T23:59:00.001Z')).toBe("You're timed out in the server until 00:00 UTC on 1 January 2027.")
+    expect(await until('2026-11-19T09:05:00.000Z')).toBe("You're timed out in the server until 09:05 UTC on 19 November 2026.")
+    for (const odd of [null, undefined, '', 'soon']) expect(await until(odd), String(odd)).toBe("You're timed out in the server.")
   })
 
   it('is 403 for a member who may not reply in the forum', async () => {
@@ -397,7 +410,7 @@ describe('reply: who may', () => {
   it('tells a member who is timed out of that before it tells them a post is locked, and one who may not reply of that', async () => {
     const t = world()
     const timed = await out(await t.writes.reply(LOCKED_POST, json({ source: 'hello' }), verdictOf({ reply: false, timedOut: true, timeoutUntil: '2026-11-19T00:00:00.000Z' })))
-    expect(timed.body.error).toBe("You're timed out in the server until 2026-11-19T00:00:00.000Z.")
+    expect(timed.body.error).toBe("You're timed out in the server until 00:00 UTC on 19 November 2026.")
     const barred = await out(await t.writes.reply(LOCKED_POST, json({ source: 'hello' }), verdictOf({ reply: false })))
     expect(barred.body.error).toBe("You can't reply in this post.")
   })
@@ -927,7 +940,7 @@ describe('reply: pictures need the right to attach', () => {
   it('still tells a member who is timed out, or may not reply, of that first', async () => {
     const t = world()
     const timed = await out(await t.writes.reply(POST, json({ source: 'x', uploads: ['7'] }), verdictOf({ attach: false, reply: false, timedOut: true, timeoutUntil: '2026-11-19T00:00:00.000Z' })))
-    expect(timed.body.error).toBe("You're timed out in the server until 2026-11-19T00:00:00.000Z.")
+    expect(timed.body.error).toBe("You're timed out in the server until 00:00 UTC on 19 November 2026.")
     const barred = await out(await t.writes.reply(POST, json({ source: 'x', uploads: ['7'] }), verdictOf({ attach: false, reply: false })))
     expect(barred.body.error).toBe("You can't reply in this post.")
   })
@@ -1043,7 +1056,7 @@ describe('edit', () => {
 
   it('is 403 for a member who is timed out, who may not reply, or who meets a locked post', async () => {
     const t = world()
-    expect(await out(await t.writes.edit(M_SITE, json({ source: 'x' }), verdictOf({ reply: false, timedOut: true, timeoutUntil: '2026-11-19T00:00:00.000Z' })))).toMatchObject({ status: 403, body: { error: "You're timed out in the server until 2026-11-19T00:00:00.000Z." } })
+    expect(await out(await t.writes.edit(M_SITE, json({ source: 'x' }), verdictOf({ reply: false, timedOut: true, timeoutUntil: '2026-11-19T00:00:00.000Z' })))).toMatchObject({ status: 403, body: { error: "You're timed out in the server until 00:00 UTC on 19 November 2026." } })
     expect(await out(await t.writes.edit(M_SITE, json({ source: 'x' }), verdictOf({ reply: false })))).toMatchObject({ status: 403, body: { error: "You can't edit in this post." } })
     expect(await out(await t.writes.edit(M_LOCKED, json({ source: 'x' }), verdictOf()))).toMatchObject({ status: 403, body: { error: 'This post is locked.' } })
     expect((await t.writes.edit(M_LOCKED, json({ source: 'x' }), verdictOf({ manageThreads: true }))).status).toBe(202)
@@ -1930,7 +1943,7 @@ describe('upload', () => {
 
   it('is 403 for a member who is timed out, who may not reply, and who may not attach: each with its own words', async () => {
     const t = world()
-    expect(await out(await t.writes.upload(formOf([{ bytes: PNG_CLEAN }]), verdictOf({ reply: false, attach: false, timedOut: true, timeoutUntil: '2026-11-19T00:00:00.000Z' })))).toMatchObject({ status: 403, body: { error: "You're timed out in the server until 2026-11-19T00:00:00.000Z." } })
+    expect(await out(await t.writes.upload(formOf([{ bytes: PNG_CLEAN }]), verdictOf({ reply: false, attach: false, timedOut: true, timeoutUntil: '2026-11-19T00:00:00.000Z' })))).toMatchObject({ status: 403, body: { error: "You're timed out in the server until 00:00 UTC on 19 November 2026." } })
     expect(await out(await t.writes.upload(formOf([{ bytes: PNG_CLEAN }]), verdictOf({ reply: false, attach: false })))).toMatchObject({ status: 403, body: { error: "You can't reply in this post." } })
     expect(await out(await t.writes.upload(formOf([{ bytes: PNG_CLEAN }]), verdictOf({ attach: false })))).toMatchObject({ status: 403, body: { error: "You can't attach pictures here." } })
     expect(t.uploads.size).toBe(0)

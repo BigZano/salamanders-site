@@ -82,7 +82,9 @@
  *   oldest first, as { key, kind, state, error, source, createdAt }: `key` is the entry's message key (a reply's random key, or
  *   the id of the message an edit or a delete is for), `state` the entry's ('pending', 'sending', 'blocked' or 'failed'), `error`
  *   its last error (what the member is told once it is 'blocked' or 'failed', a technical text while it is tried again) and
- *   `source` the text of a reply (null for an edit or a delete). It is the member's own entries only.
+ *   `source` the text of a reply (null for an edit or a delete). It is the member's own entries only, and not the edit the worker
+ *   queues under them to put a message back after their edit ended for good (payload.restore): listed, it would stand for their
+ *   edit, which the site would show as on its way, and then as sent, and never as failed.
  * sweepUploads({ olderThan }) → how many pictures it deleted: those held since before `olderThan`, and those that a reply that
  *   ended for good ('failed' or 'blocked') named, of any age, except any that a reply still on its way ('pending' or 'sending')
  *   names, of any age: that reply sends them, held up by the breaker's pause or not, and finishSend deletes them after.
@@ -695,6 +697,7 @@ export function createOutboxStore(pool) {
         `select id, kind, message_key, state, last_error, case when kind = 'send' then payload->>'source' end as source, created_at
            from librarius_outbox
           where author_id = $1 and payload->>'postId' = $2 and state <> 'sent' and created_at >= $3::timestamptz
+            and payload->>'restore' is distinct from 'true'
           order by id desc limit ${MAX_LISTED}`,
         [authorId, postId, from],
       )

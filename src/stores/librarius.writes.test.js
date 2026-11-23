@@ -403,6 +403,62 @@ describe('librarius store: pictures', () => {
   })
 })
 
+// A post can have a draft for each message replied to, and the composer gives each picture a place that its own draft does not use: the
+// places are each draft's, so that a picture added to one draft never goes with another.
+describe('librarius store: the pictures of each draft', () => {
+  const OTHER_MSG = mid(451)
+  const hold = async (n, id, replyTo) => {
+    uploadPicture.mockResolvedValueOnce({ id })
+    return s.upload('tok', picture(), n, replyTo)
+  }
+
+  it('holds the pictures of a reply to a message apart from those of a reply to the post, and of a reply to another message', async () => {
+    seed()
+    await hold(1, '7001', MSG)
+    await hold(1, '7002', null)
+    await hold(1, '7003', OTHER_MSG)
+    expect([s.holdsPicture(1, MSG), s.holdsPicture(1), s.holdsPicture(1, OTHER_MSG), s.holdsPicture(2, MSG)]).toEqual([true, true, true, false])
+    postReply.mockResolvedValue(queued('k-1'))
+    await s.reply('tok', { source: 'To the post ![a](upload:1)' })
+    expect(bodyOf(postReply, 0).uploads).toEqual(['7002'])
+    // A reply takes its own draft's pictures, and leaves the others'.
+    expect([s.holdsPicture(1, MSG), s.holdsPicture(1), s.holdsPicture(1, OTHER_MSG)]).toEqual([true, false, true])
+    await s.reply('tok', { source: 'To the message ![b](upload:1)', replyTo: MSG })
+    expect(bodyOf(postReply, 1).uploads).toEqual(['7001'])
+    expect([s.holdsPicture(1, MSG), s.holdsPicture(1, OTHER_MSG)]).toEqual([false, true])
+  })
+
+  it('moves the pictures of a draft with it to the message it now replies to, in place of any held there', async () => {
+    seed()
+    await hold(1, '7001', MSG)
+    await hold(2, '7002', MSG)
+    await hold(1, '7009', OTHER_MSG)
+    s.movePictures(MSG, OTHER_MSG)
+    expect([s.holdsPicture(2, OTHER_MSG), s.holdsPicture(1, MSG)]).toEqual([true, false])
+    s.movePictures(OTHER_MSG, null)
+    postReply.mockResolvedValue(queued('k-1'))
+    await s.reply('tok', { source: '![a](upload:1) ![b](upload:2)' })
+    expect(bodyOf(postReply).uploads).toEqual(['7001', '7002'])
+    // Moving what holds none leaves what is there, and nothing moves with no post open.
+    await hold(1, '7010', MSG)
+    s.movePictures(OTHER_MSG, MSG)
+    expect(s.holdsPicture(1, MSG)).toBe(true)
+    s.reset()
+    expect(() => s.movePictures(MSG, null)).not.toThrow()
+  })
+
+  it('refuses a message replied to that is no message id', async () => {
+    seed()
+    for (const bad of ['', '12', 5, {}, `${MSG} `]) {
+      await expect(s.upload('tok', picture(), 1, bad), String(bad)).rejects.toThrow(new TypeError('replyTo is the id of a message, or null.'))
+      expect(() => s.holdsPicture(1, bad), String(bad)).toThrow(new TypeError('replyTo is the id of a message, or null.'))
+      expect(() => s.movePictures(bad, null), String(bad)).toThrow(new TypeError('replyTo is the id of a message, or null.'))
+      expect(() => s.movePictures(null, bad), String(bad)).toThrow(new TypeError('replyTo is the id of a message, or null.'))
+    }
+    expect(uploadPicture).not.toHaveBeenCalled()
+  })
+})
+
 describe('librarius store: whether a picture a draft shows will go with it', () => {
   const at = async (...places) => {
     for (const n of places) {
@@ -998,6 +1054,24 @@ describe('librarius store: trying again, and putting away', () => {
       ['edit', MSG, 'sent'],
       ['delete', other, 'sent'],
     ])
+  })
+
+  it('keeps the words of an edit it sent when the server lists the edit without them, blocked or failed, so that Edit opens them again', async () => {
+    seed()
+    editMessage.mockResolvedValue(queued(MSG))
+    await s.edit('tok', MSG, { source: 'The blocked words' })
+    getPending.mockResolvedValueOnce(listed(entry(MSG, { kind: 'edit', state: 'blocked', error: 'x', source: null })))
+    await vi.advanceTimersByTimeAsync(3_000)
+    expect(s.outbox).toEqual([{ key: MSG, kind: 'edit', state: 'blocked', error: 'x', source: 'The blocked words', createdAt: '2026-11-18T10:00:00.000Z' }])
+    // Words the server does list are its own, and one it never saw the words of has none.
+    getPending.mockResolvedValueOnce(listed(entry(MSG, { kind: 'edit', state: 'blocked', error: 'x', source: 'Listed words' })))
+    await s.pending('tok')
+    expect(s.outbox[0].source).toBe('Listed words')
+    s.reset()
+    seed()
+    getPending.mockResolvedValueOnce(listed(entry(MSG, { kind: 'edit', state: 'blocked', error: 'x', source: null })))
+    await s.pending('tok')
+    expect(s.outbox[0].source).toBeNull()
   })
 
   it('cannot send again an edit it never saw the text of, and says so', async () => {

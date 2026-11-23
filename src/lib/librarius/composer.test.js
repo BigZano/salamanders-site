@@ -1,7 +1,7 @@
 import { describe, it, expect, afterEach } from 'vitest'
 import fc from 'fast-check'
 import { parse, plainText, walk } from '../archive/markdown'
-import { ACTIONS, apply, asQuote, insertBlock, draftKey, draftStorage, saveDraft, loadDraft, clearDraft, clearAllDrafts } from './composer'
+import { ACTIONS, apply, asQuote, insertBlock, draftKey, draftStorage, saveDraft, loadDraft, clearDraft, clearAllDrafts, namedMentions } from './composer'
 
 // Every id here is invented.
 const POST = '200000000000000410'
@@ -793,6 +793,59 @@ function refusingStorage() {
     removeItem: no,
   }
 }
+
+// A quote of a whole message holds its mentions as the source has them; one nobody picked is refused, and a role's never goes.
+describe('namedMentions', () => {
+  const ROLE = '200000000000000415'
+  const label = ({ kind, id }) => (kind === 'user' ? (id === MEMBER ? '@Tor Mardan' : '@unknown-member') : '@Ash *Wardens*')
+  const mentionsIn = (text) => {
+    const found = []
+    walk(parse(text, { dialect: 'extended' }), (node) => {
+      if (node.type === 'mention' && node.kind !== 'channel') found.push(node)
+    })
+    return found
+  }
+
+  it('writes a member, the same member with the old mark, and a role as the page names them, escaped so that they stay words', () => {
+    expect(namedMentions(`See <@${MEMBER}> and <@!${MEMBER}> about the caravans.`, label)).toBe('See @Tor Mardan and @Tor Mardan about the caravans.')
+    expect(namedMentions(`Ask <@&${ROLE}>, or <@${OTHER_POST}>.`, label)).toBe(String.raw`Ask @Ash \*Wardens\*, or @unknown-member.`)
+    expect(plainText(parse(namedMentions(`<@&${ROLE}>`, label), { dialect: 'extended' }))).toBe('@Ash *Wardens*\n')
+  })
+
+  it('leaves a channel, a mention in code, and what only looks like a mention as they are', () => {
+    for (const text of [`In <#${POST}>.`, `\`<@${MEMBER}>\``, `\`\`a <@${MEMBER}> b\`\``, `\`\`\`\n<@${MEMBER}>\n\`\`\``, '<@123>', `<@ ${MEMBER}>`, String.raw`\<@` + `${MEMBER}>`, 'no mention at all']) {
+      expect(namedMentions(text, label), text).toBe(text)
+    }
+  })
+
+  it('asks the page for each name it writes, with what the parser reads the mention as', () => {
+    const asked = []
+    namedMentions(`<@${MEMBER}> <@!${MEMBER}> <@&${ROLE}> <#${POST}>`, (node) => (asked.push(node), '@x'))
+    expect(asked).toEqual([
+      { kind: 'user', id: MEMBER },
+      { kind: 'user', id: MEMBER },
+      { kind: 'role', id: ROLE },
+    ])
+  })
+
+  it('refuses words that are no text, or a way to name that is no function', () => {
+    expect(() => namedMentions(5, label)).toThrow(new TypeError('the words must be a string'))
+    expect(() => namedMentions('a', null)).toThrow(new TypeError('the names must come from a function'))
+  })
+
+  it('leaves no mention of a member or a role that the parser reads, and changes nothing else, whatever the words', () => {
+    const piece = fc.constantFrom(`<@${MEMBER}>`, `<@!${MEMBER}>`, `<@&${ROLE}>`, `<#${POST}>`, '`', '``', '```\n', '\n', ' ', 'a', '*', '\\', '<', '>', '@', '&', '!', '#', '||')
+    fc.assert(
+      fc.property(fc.array(piece, { maxLength: 40 }).map((a) => a.join('')), (text) => {
+        const out = namedMentions(text, label)
+        expect(mentionsIn(out)).toEqual([])
+        // Where there was no mention to name, nothing is changed.
+        if (mentionsIn(text).length === 0) expect(out).toBe(text)
+      }),
+      { numRuns: 500 },
+    )
+  })
+})
 
 describe('asQuote', () => {
   it('puts each line of the words behind a quote mark, and an empty line behind the bare mark', () => {
