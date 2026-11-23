@@ -14,7 +14,8 @@
  *   - A line is certain when it has no `||`, or when its bars pair within it
  *     under every reading: it is no code, its pipes come in runs of one or two,
  *     it has an even number of bars with words (not blank) between each pair,
- *     and it holds none of `` ` \ * _ ~ [ < ``, `://` or another line break.
+ *     it holds none of `` ` \ * _ ~ [ < ``, `://` or another line break, and
+ *     none of `) > ]` from its first `||` on.
  *   - The lines before the first line that is not certain parse as they always
  *     did. From the first `||` of that line to the last `||` of the message,
  *     when that is on a later line, all is one `spoiler` node (`lastBar: true`,
@@ -22,11 +23,21 @@
  * Why that hides all any reading hides. A reading hides only between two bars
  * it pairs. (1) Before the first line U that is not certain, no reading has a
  * spoiler open when a line starts. That holds at the start; a line with no
- * bars opens none; and nothing can hold the bars of a certain line but a code
- * or a span that covers all of it (it has no mark to start or end one), so a
- * reading either shows them as code or pairs them within the line, each bar
- * with the next, as the site's one-line parse does, and ends the line with
- * none open. So before U a reading hides at most what the site hides there.
+ * bars opens none; and nothing can hold the bars of a certain line but a
+ * construct that covers all of it, so a reading either shows them (as code, an
+ * address, a title) or pairs them within the line, each bar with the next, as
+ * the site's one-line parse does, and ends the line with none open. So before
+ * U a reading hides at most what the site hides there. Nothing else can, as a
+ * certain line has no mark that starts a construct, nor one that ends one
+ * after its first bar (what ends before it held none of the line's bars):
+ *   code and code blocks start and end at `` ` ``; spans at `*`, `_` (`__`),
+ *   `~` (`~~`); an escape is `\`; a link or an image starts at `[` (`![`) and
+ *   ends at `)`, its title and its `( … )` address lying between the brackets
+ *   and that `)`, so `"`, `'` and `(` need no place; an angle form (autolink,
+ *   mailto, mention, emoji, timestamp) starts at `<` and ends at `>`; a
+ *   reference link would end at `]`; a bare address starts at `://`, cannot
+ *   cross a line break, but may hold bars; a quote, heading, subtext or list
+ *   item is a block of whole lines, which ends no spoiler a line leaves closed.
  * (2) No reading hides anything after the last `||` L: a hidden stretch ends at
  * a bar. (3) Nor anything on U before its first `||`, by (1). So all a reading
  * hides lies before U, where the site hides as much, or from the first `||` of
@@ -121,14 +132,16 @@ function rolesOf(lines) {
   return roles
 }
 
-// What may change how a line's bars pair, in some reading: code, escapes, spans, links, mentions, emoji, addresses,
-// and line breaks other than \n.
+// Marks that start, or start and end, a construct of some reading that can hold bars or run over a line break (see
+// the comment at the top): code, escapes, spans, links, angle forms, addresses, and line breaks other than \n.
 const UNSURE = /[`\\*_~[<\u2028\u2029\u0085\v\f]|:\/\//
+// Marks that only end one: a link's `)`, an angle form's `>`, a reference link's `]`. They start with `[` or `<`.
+const ENDS = /[)>\]]/
 
 /** Whether every reading pairs the line's bars within it (see the comment at the top). */
 function certain(line, role) {
   if (!line.includes('||')) return true
-  if (role === CODE || UNSURE.test(line) || line.includes('|||')) return false
+  if (role === CODE || UNSURE.test(line) || line.includes('|||') || ENDS.test(line.slice(line.indexOf('||')))) return false
   const pieces = line.split('||')
   return pieces.length % 2 === 1 && pieces.every((piece, k) => k % 2 === 0 || /\S/.test(piece))
 }

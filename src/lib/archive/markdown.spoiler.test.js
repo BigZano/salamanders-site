@@ -26,7 +26,8 @@ function exposure(nodes) {
   const visit = (list, inside) => {
     for (const n of list) {
       const within = inside || n.type === 'spoiler'
-      for (const word of [n.value, n.text].join(' ').match(WORD) ?? []) (within ? hidden : shown).push(word)
+      // A bare address shows its href; a masked link shows only its label.
+      for (const word of [n.value, n.text, n.type === 'url' ? n.href : ''].join(' ').match(WORD) ?? []) (within ? hidden : shown).push(word)
       if (n.children) visit(n.children, within)
       if (n.items) for (const item of n.items) visit(item.children, within)
     }
@@ -115,6 +116,13 @@ describe('a spoiler that runs over lines', () => {
   ])('reads a line with %s as uncertain', (_, x) => {
     expect(exposure(parse(`w0 ${x} ||w1|| w2\nw3 ||w4|| w5`))).toEqual({ hidden: words(1, 4), shown: ['w0', 'w5'] })
   })
+
+  it.each([['a parenthesis', ')'], ['an angle bracket', '>'], ['a square bracket', ']']])(
+    'reads a line with %s after its first bar as uncertain, and one with it only before as certain', (_, x) => {
+      expect(exposure(parse(`w0 ||w1|| b${x} c ||w2||\nw3 ||w4|| w5`))).toEqual({ hidden: words(1, 4), shown: ['w0', 'w5'] })
+      for (const src of [`(see${x} w0 ||w1|| w2\nw3 ||w4||`, `> a ${x} ||w0||\n||w1||`]) expect(parse(src), src).toEqual(parseBefore(src))
+    },
+  )
 
   it('reads a line with bars inside a fence as uncertain', () => {
     expect(exposure(parse('```\nw0 ||w1||\n```\nw2 ||w3|| w4'))).toEqual({ hidden: words(1, 3), shown: ['w0', 'w4'] })
@@ -237,6 +245,11 @@ describe('what the reviews found shown, hidden now', () => {
     ['the one-line em rule', '*w0 **x** ||w1*\nw2|| w3\nw4||', ['w0']],
     ['a bare > in a quote', '> ||w0\n>\n> w1|| w2\n> w3||', []],
     ['a list item running on', '- w0\n||w1\n\nw2|| w3\n||w4\nw5||', ['w0']],
+    ['a link title over lines', '[x](https://a.io "\n|| " ) ||w0\nw1||\nw2 ||w3||', []],
+    ['a link address over lines', '[x](https://a.io/(\n|| )) ||w0\nw1||\nw2 ||w3||', []],
+    ['a link title over lines, with the last bar next', '[x](https://a.io "\n|| " ) ||w0\nw1||', []],
+    ['an autolink over lines', '<x:/a\nb||c>||d||e||w0\nw1||', []],
+    ['a mailto autolink over lines', '<a\nb||c@d>||e||f||w0\nw1||', []],
   ])('%s', (_, src, shown) => {
     const all = src.match(WORD)
     expect(exposure(parse(src))).toEqual({ hidden: all.filter((w) => !shown.includes(w)).sort((a, b) => a.slice(1) - b.slice(1)), shown })
@@ -267,7 +280,7 @@ describe('unchanged where every bar pairs on its line', () => {
     }), { numRuns: 3000 })
   })
   it('parses every text whose lines with bars are all certain exactly as before', () => {
-    const tok = fc.constantFrom('W', 'W.', '||W||', '||W W||', '|| W ||', 'a | b', '#', '-', '>', '(x)', '!', '?', '@here', ':e:', '1.')
+    const tok = fc.constantFrom('W', 'W.', '||W||', '||W W||', '|| W ||', 'a | b', '#', '-', '(x', '!', '?', '@here', ':e:', '1.')
     const lineOf = fc.tuple(fc.constantFrom('', '', '> ', '>>> ', '- ', '1. ', '# ', '-# ', '  '), fc.array(tok, { maxLength: 6 }))
       .map(([prefix, parts]) => prefix + parts.join(' '))
     fc.assert(fc.property(fc.array(lineOf, { minLength: 1, maxLength: 10 }), (lines) => {
@@ -282,8 +295,10 @@ describe('fail closed', () => {
    * One reading of Discord over the whole message: a lazy scan in the way of its markdown rules, each spoiler a `||` and
    * the nearest `||` at least one character on, with the rules that may hold bars switched on or off: code blocks (none,
    * the site's fence lines, or open and close at any ```), inline code (none, on one line, or over lines), spans `**`
-   * `__` `~~` `*` `_` (none, on one line, or over lines; an em that may hold a `**` or not), escapes, and blocks (one
-   * flow, or each quote, heading, subtext and list item read alone and the lines around them apart).
+   * `__` `~~` `*` `_` (none, on one line, or over lines; an em that may hold a `**` or not), escapes, masked links and
+   * angle forms (none, on one line, or over lines: a link's label is read, its address, with `( … )` in it, and its
+   * title are not; an autolink `<…:/…>` or `<…@…>` is not read), and blocks (one flow, or each quote, heading, subtext
+   * and list item read alone and the lines around them apart).
    * → [start, end) of each stretch it hides.
    */
   function readingHides(lines, code, o) {
@@ -292,6 +307,26 @@ describe('fail closed', () => {
     const shown = lines.map((l, k) => (o.fence === 'lines' && code[k] ? 'x'.repeat(l.length) : l))
     const out = []
     const SPANS = ['**', '__', '~~', '*', '_']
+    // → where a masked link that starts at `at` ends (just past its `)`), or -1: `[label](address "title")`.
+    const linkEnd = (s, at, over) => {
+      const ok = (from, to) => over || !s.slice(from, to).includes('\n')
+      const close = s.indexOf(']', at + 1)
+      if (close === -1 || s[close + 1] !== '(' || !ok(at, close)) return -1
+      for (let k = close + 2; k < s.length; k++) {
+        if (s[k] === ')') return ok(close, k) ? k + 1 : -1
+        if (s[k] === '(') {
+          const inner = s.indexOf(')', k)
+          if (inner === -1) return -1
+          k = inner
+        } else if (/\s/.test(s[k]) && /["']/.test(s[k + 1] ?? '')) {
+          const end = s.indexOf(s[k + 1], k + 2)
+          const shut = end === -1 ? -1 : s.slice(end + 1).search(/\S/)
+          if (shut === -1 || s[end + 1 + shut] !== ')') return -1
+          return ok(close, end + 1 + shut) ? end + 2 + shut : -1
+        }
+      }
+      return -1
+    }
     const scan = (s, base) => {
       const closeOf = (d, from, over) => {
         const e = s.indexOf(d, from)
@@ -312,6 +347,22 @@ describe('fail closed', () => {
         if (o.code !== 'none' && s[i] === '`') {
           const e = closeOf('`', i + 1, o.code === 'over')
           if (e !== -1) {
+            i = e + 1
+            continue
+          }
+        }
+        if (o.raw !== 'none' && s[i] === '[') {
+          const end = linkEnd(s, i, o.raw === 'over')
+          if (end !== -1) {
+            scan(s.slice(i + 1, s.indexOf(']', i)), base + i + 1)
+            i = end
+            continue
+          }
+        }
+        if (o.raw !== 'none' && s[i] === '<') {
+          const e = s.indexOf('>', i + 1)
+          const inner = e === -1 ? '' : s.slice(i + 1, e)
+          if (inner && !inner.includes(' ') && (o.raw === 'over' || !inner.includes('\n')) && /:\/|@/.test(inner)) {
             i = e + 1
             continue
           }
@@ -362,19 +413,36 @@ describe('fail closed', () => {
   for (const fence of ['none', 'lines', 'mid']) {
     for (const code of ['none', 'line', 'over']) {
       for (const [spans, em] of [['none', 'near'], ['line', 'near'], ['line', 'skip'], ['over', 'near'], ['over', 'skip']]) {
-        for (const escapes of [true, false]) for (const blocks of ['flow', 'alone']) READINGS.push({ fence, code, spans, em, escapes, blocks })
+        for (const escapes of [true, false]) {
+          for (const blocks of ['flow', 'alone']) for (const raw of ['none', 'line', 'over']) READINGS.push({ fence, code, spans, em, escapes, blocks, raw })
+        }
       }
     }
   }
 
+  it('has readings that hide what the reviews found behind a link or an autolink over lines', () => {
+    for (const s of ['[x](https://a.io "\n|| " ) ||w0\nw1||\nw2 ||w3||', '[x](https://a.io/(\n|| )) ||w0\nw1||\nw2 ||w3||', '<x:/a\nb||c>||d||e||w0\nw1||', '<a\nb||c@d>||e||f||w0\nw1||']) {
+      const lines = s.split('\n')
+      const stretches = READINGS.flatMap((o) => readingHides(lines, lines.map(() => false), o))
+      expect(stretches.some(([a, b]) => s.indexOf('w0') >= a && s.indexOf('w0') < b), s).toBe(true)
+    }
+  })
+
   it('hides every word any reading of Discord, or the site line by line, hides', () => {
     const tok = fc.constantFrom('W', 'W', '||', '||', '||W||', '`W||W`', '`W`', '`', '```', '\\||', '\\|\\|', '**W ||W**', '*W ||W*', '**', '*', '_',
-      '~~', '[W ||W](https://a.io)', '**W**', '|||', '||||', '|||||', 'W|W')
+      '~~', '[W ||W](https://a.io)', '**W**', '|||', '||||', '|||||', 'W|W', '[W](https://a.io "', '" )', '[W](https://a.io/(', '))', ')',
+      '"', '[W', '](https://a.io)', '(W', '<x:/W', 'W>', '<W', '@W>', '>', ']')
     const text = fc.tuple(fc.constantFrom('', '', '> ', '>', '>>> ', '- ', '1. ', '# ', '-# '), fc.array(tok, { maxLength: 5 }))
       .map(([prefix, parts]) => ({ lines: [prefix + parts.join(' ')], code: [false] }))
     const fence = fc.tuple(fc.boolean(), fc.array(tok, { minLength: 1, maxLength: 4 })).map(([quoted, parts]) => ({ quoted, body: parts.join(' ') }))
     const blank = fc.constant({ lines: [''], code: [false] })
-    fc.assert(fc.property(fc.array(fc.oneof(text, text, fence, blank), { minLength: 1, maxLength: 7 }), (blocks) => {
+    // A link, a title or an autolink left open on a line with no bars, and the next line, which may close it among bars.
+    const runOn = fc.tuple(
+      fc.constantFrom('[W](https://a.io "', '[W](https://a.io/(', "[W](https://a.io '", '<x:/W', '<W', '[W'),
+      fc.array(fc.constantFrom('||', '||', 'W', '" )', "' )", '))', ')', 'W>', '@W>', '](https://a.io)'), { minLength: 2, maxLength: 7 }),
+      fc.constantFrom(' ', ''),
+    ).map(([open, parts, gap]) => ({ lines: [open, parts.join(gap)], code: [false, false] }))
+    fc.assert(fc.property(fc.array(fc.oneof(text, text, fence, blank, runOn), { minLength: 1, maxLength: 7 }), (blocks) => {
       let deep = false
       const all = blocks.map((b) => {
         if (b.body === undefined) {
@@ -402,8 +470,9 @@ describe('fail closed', () => {
         if (!onFrozen && (byLine.has(m[0]) || stretches.some(([a, b]) => m.index >= a && m.index < b))) expect(hidden, why).toContain(m[0])
         if (first === -1 || m.index < first || m.index > last + 1) expect(shown, why).toContain(m[0])
       }
-    }), { numRuns: 1500 })
-  })
+    }), { numRuns: globalThis.__stryker__ ? 150 : 1500 })
+    // 540 readings a document: well past vitest's 5 s default under coverage.
+  }, 300_000)
 
   it('hides exactly what lies between the first bar of the first uncertain line and the last bar, after certain lines', () => {
     const certainTok = fc.constantFrom('W', 'W', '||W||', '|| W ||', 'a | W')
