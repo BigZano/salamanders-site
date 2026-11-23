@@ -2179,12 +2179,13 @@ describe('repairSiteMessages', () => {
       }
     })
 
-    it('takes the name, the picture, the reply link and the text from the layout and the source, cut to 4000 characters', async () => {
+    it('takes the name, the picture, the reply link and the text from the layout and the source, the text the whole source', async () => {
       const text = await sql()
       expect(text).toContain("coalesce(m.layout->>'username', m.author_name) as author_name")
       // (the rig lowercases the statement)
       expect(text).toContain("case when m.layout->'avatarurl' is not null then m.layout->>'avatarurl' else m.author_avatar end as author_avatar")
-      expect(text).toContain('left(m.source, 4000) as content')
+      expect(text).toContain('m.source as content')
+      expect(text).not.toMatch(/\b(left|right|substr|substring|overlay|split_part)\s*\(/)
       expect(text).toContain("case when m.layout->'replyto' is not null then (m.layout->'replyto'->>'messageid')::bigint else m.reply_to end as reply_to")
     })
 

@@ -1743,7 +1743,7 @@ describe('who made a message: its origin and its source', () => {
   })
 
   it("answers a reply of the site's whole source, past what its content holds", async () => {
-    // The content is cut to what one Discord message holds (the outbox's contentOf); the source is the reply's, up to three of them.
+    // The source is the reply's, up to three Discord messages of it; the store answers both texts as they are stored.
     const long = `${'word '.repeat(2000)}<@200000000000000416>`
     const { pool } = answering([siteRow({ content: long.slice(0, 4000), source: long })])
     const [message] = (await store(pool).listMessages(POST, { limit: 5 })).rows

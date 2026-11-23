@@ -11,7 +11,7 @@ const NONE = Object.freeze([])
 // file is named SPOILER_ is blurred until it is clicked, or Enter or Space is pressed on it.
 //
 // A reply written on the site (`origin: 'site'`) has the "site" tag, and its text is read in the site's own markdown (the
-// extended dialect), from its whole source where the message has it (its content is cut to what one Discord message holds), so
+// extended dialect), from its whole source where the message has it (the outbox stores the same text as its content), so
 // that it reads as the composer previewed it. Its pictures (`upload:N` in the text, the files the site named picture-N.<type>)
 // are shown where the text puts them, not again under it. The reply line of a message that quotes one reads it the same way.
 //

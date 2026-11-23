@@ -130,8 +130,6 @@ const KINDS = ['send', 'edit', 'delete']
 const SET_STATES = ['pending', 'sent', 'blocked', 'failed']
 const MESSAGE_STATES = [null, 'sending', 'blocked']
 const MAX_ERROR = 500
-// What a site message keeps of its text in `content` (the outbox's contentOf cuts at the same number).
-const CONTENT_MAX = 4000
 const MAX_NOTE = 200
 const MAX_ACTION = 40
 const MAX_KEY = 64
@@ -328,8 +326,8 @@ async function goneOf(q, id, partIds) {
 // What a message of the site should say, from what the site knew when it made it, for the repair (repairSiteMessages). The author is the
 // one its layout names (finishSend writes it there), so that no history is needed; for a reply stored before the layout named it, the
 // member of the outbox entry that sent the message (its first part is the message), or else of the event the site noted when it did (the
-// entries are pruned after a day; the events are kept). The rest is in the message's own source and layout. The text is cut as the outbox
-// cuts it, to 4000 characters.
+// entries are pruned after a day; the events are kept). The rest is in the message's own source and layout. The text is the whole source,
+// as the outbox stores it: never a cut, which could read as a spoiler closed before words the whole reply hides.
 const INTENDED = `with sent as (
     select distinct on (mid) mid, author_id
       from (
@@ -346,7 +344,7 @@ const INTENDED = `with sent as (
            coalesce(case when m.layout->>'authorId' ~ '^[0-9]{17,19}$' then (m.layout->>'authorId')::bigint end, s.author_id, m.author_id) as author_id,
            coalesce(m.layout->>'username', m.author_name) as author_name,
            case when m.layout->'avatarUrl' is not null then m.layout->>'avatarUrl' else m.author_avatar end as author_avatar,
-           left(m.source, ${CONTENT_MAX}) as content,
+           m.source as content,
            case when m.layout->'replyTo' is not null then (m.layout->'replyTo'->>'messageId')::bigint else m.reply_to end as reply_to
       from librarius_messages m left join sent s on s.mid = m.id
      where m.origin = 'site' and m.source is not null and m.layout is not null

@@ -946,12 +946,16 @@ describe.skipIf(!runnable)('the outbox store on a real Postgres 16, as the data-
       expect((await message(A)).author_id).toBe(OTHER)
     })
 
-    it('cuts the text to 4000 characters as the worker does, by characters and not by bytes', async () => {
-      const long = `${'é'.repeat(3999)}😀tail`
-      await sentReply([A], { source: long, over: { content: Array.from(long).slice(0, 4000).join('') } })
+    it('writes the text again whole, the whole source, as the worker stores it', async () => {
+      const long = `${'é'.repeat(3999)}😀tail ${'x'.repeat(5000)}`
+      await sentReply([A], { source: long, over: { content: long } })
       await oldImageAs(A, { content: '' })
-      await store.repairSiteMessages()
-      expect((await message(A)).content).toBe(Array.from(long).slice(0, 4000).join(''))
+      expect(await store.repairSiteMessages()).toMatchObject({ restored: 1 })
+      expect((await message(A)).content).toBe(long)
+      // A row stored with a cut of its source, by an older worker, is written again whole too.
+      await sql('update librarius_messages set content = left(source, 4000) where id = $1', [A])
+      expect(await store.repairSiteMessages()).toEqual({ removed: 0, restored: 1 })
+      expect((await message(A)).content).toBe(long)
     })
 
     it('leaves a message of a person, a reply of the site that is whole, and a site message with no layout as they are', async () => {
@@ -1109,10 +1113,10 @@ describe.skipIf(!runnable)('the outbox store on a real Postgres 16, as the data-
       const MENTIONED = '200000000000000423'
       const D = snow(T0 + 7000, 1)
       const PICTURE = snow(T0 + 1000, 40)
-      // Three parts' worth: the content is cut to what one Discord message holds, and the mention is past the cut.
+      // Three parts' worth, the mention past the first 4000 characters: the content is the whole source, never a cut of it.
       const long = `![a map](upload:1)\n\n${'word '.repeat(1500)}<@${MENTIONED}>`
       const picture = { id: PICTURE, position: 0, filename: 'picture-1.png', contentType: 'image/png', size: 2048, width: 640, height: 480, url: `https://cdn.discordapp.com/attachments/${POST}/${PICTURE}/picture-1.png`, proxyUrl: null, expiresAt: null }
-      await sentReply([A, B, C], { source: long, over: { content: long.slice(0, 4000), attachments: [picture] } })
+      await sentReply([A, B, C], { source: long, over: { content: long, attachments: [picture] } })
       const discordRow = parseMessage({ id: D, channel_id: POST, type: 0, content: 'Written in Discord.', author: { id: OTHER, username: 'Invented Other', avatar: null }, timestamp: new Date(T0 + 7000).toISOString(), attachments: [] })
       await store.upsertMessages([{ ...discordRow, postId: POST }])
       // The source column of a message of Discord is null; one that held text anyway is never sent (the handler's rule).
@@ -1146,7 +1150,7 @@ describe.skipIf(!runnable)('the outbox store on a real Postgres 16, as the data-
         const { messages, people } = await res.json()
         expect(messages.map((m) => m.id)).toEqual([A, D])
         const [site, discord] = messages
-        expect(site).toMatchObject({ origin: 'site', source: long, content: long.slice(0, 4000), authorId: MEMBER })
+        expect(site).toMatchObject({ origin: 'site', source: long, content: long, authorId: MEMBER })
         // The page draws upload:1 from the attachment named picture-1.<type> (LibMessage.vue).
         expect(site.attachments.map((a) => a.filename)).toEqual(['picture-1.png'])
         expect(discord.origin).toBe('discord')

@@ -645,11 +645,12 @@ describe('a reply of several parts', () => {
     expect(w.messages.get(id).source).toBe(TWO())
   })
 
-  it('keeps the content to 4000 characters of the source, never cutting a pair', async () => {
-    const source = `${x(3999)}😀${x(3000)}`
+  it('keeps the content whole, the source as it is, never a cut of it', async () => {
+    // A cut copy can read as a spoiler closed before words the whole reply hides, or close a code block the whole leaves open.
+    const source = `${x(3999)}😀${x(3000)}\n\n||the end||`
     const id = await sentReply(source)
-    expect(Array.from(w.messages.get(id).content)).toHaveLength(4000)
-    expect(w.messages.get(id).content.endsWith('😀')).toBe(true)
+    expect(w.messages.get(id).content === source).toBe(true)
+    expect(Array.from(w.messages.get(id).content)).toHaveLength(7013)
   })
 
   it('stores the time from the id when Discord gave none', async () => {
@@ -2431,6 +2432,8 @@ describe('an edit', () => {
     expect(gaps()).toEqual([1500, 1500])
     expect(w.ours().map((m) => m.id)).toEqual(ids)
     expect(w.ours().map((m) => text(m).match(/\*\*\d\/3\*\* (\w)/)[1])).toEqual(['A', 'B', 'C'])
+    // The message keeps the new source whole, as its content too: never a cut of it.
+    expect(w.messages.get(id)).toMatchObject({ source: THREE('A', 'B', 'C'), content: THREE('A', 'B', 'C') })
     // The links forward are in the first from the start: every id is known.
     expect(text(w.ours()[0])).toContain(`[2/3](<https://discord.com/channels/${GUILD}/${THREAD}/${ids[1]}>)`)
     expect(w.parts.get(id)).toEqual(ids)

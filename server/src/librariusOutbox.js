@@ -32,8 +32,8 @@
  * - A reply (kind 'send'): payload { postId, source, replyTo: { messageId, authorId, url } | null, mentions: [ids], uploads:
  *   [upload ids], username, avatarUrl | null, siteUrl, form }. It is cut into parts by toDiscord, and the parts are sent in order,
  *   each carrying the link back to the first; once the last is sent, the first is edited to carry the links forward. Then, in
- *   one transaction, the message is stored (origin 'site', its source and its layout, which an edit needs), its parts are
- *   written and the uploads are deleted. A message has no id of its own: its id is its first part's. Every part is built, and
+ *   one transaction, the message is stored (origin 'site', its source and its layout, which an edit needs, and as its content
+ *   the whole source, never a cut of it), its parts are written and the uploads are deleted. A message has no id of its own: its id is its first part's. Every part is built, and
  *   checked by sendBody, before the first is sent, so that a reply that cannot go fails before any of it is in Discord. If the
  *   store learns, when it stores the reply, that a part was deleted in Discord meanwhile, the reply is not stored: the rest of its
  *   parts are removed, as when the links edit finds the first deleted. If its post is not stored, the reply fails.
@@ -142,7 +142,6 @@ const DISCORD_EPOCH_MS = 1420070400000
 // A longer wait than this is waited in steps, since a timer holds 24 days at most.
 const MAX_WAKE_MS = 3_600_000
 const ARCHIVED_CODE = 50083
-const CONTENT_MAX = 4000
 const EXTENSIONS = { 'image/png': 'png', 'image/jpeg': 'jpg', 'image/webp': 'webp', 'image/gif': 'gif' }
 
 const STORE_METHODS = [
@@ -203,9 +202,6 @@ function textOf(message) {
   walk(message.components)
   return texts.join('\n')
 }
-
-/** → at most CONTENT_MAX characters of the source, never cutting a pair. */
-const contentOf = (source) => Array.from(source).slice(0, CONTENT_MAX).join('')
 
 /** → the snowflake of a time (ms), as text: what messagesAfter reads from. A time before Discord's epoch is the start. */
 const snowflakeAt = (ms) => String(BigInt(Math.max(ms - DISCORD_EPOCH_MS, 0)) << 22n)
@@ -550,7 +546,8 @@ export function createOutbox({ store, webhook, discord, form = DEFAULT_FORM, gui
         authorName: p.username,
         authorAvatar: p.avatarUrl,
         webhookId: webhook.id,
-        content: contentOf(p.source),
+        // The whole source, never a cut: the site reads a spoiler over the whole text, and a cut copy could show a word it hides.
+        content: p.source,
         replyTo: p.replyTo === null ? null : p.replyTo.messageId,
         createdAt: head.at ?? snowflakeTime(head.id),
         source: p.source,
@@ -640,7 +637,7 @@ export function createOutbox({ store, webhook, discord, form = DEFAULT_FORM, gui
       done = await store.finishEdit(entry.id, {
         messageId: message.id,
         source,
-        content: contentOf(source),
+        content: source,
         partIds: known.slice(0, wanted),
         event: { action: 'edit', postId: p.postId, messageId: message.id, note: `${wanted} ${wanted === 1 ? 'part' : 'parts'}` },
         queue,

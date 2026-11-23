@@ -960,7 +960,7 @@ describe('LibMessage: a reply written on the site', () => {
     expect(mountMsg(message({ content: table })).find('.lb-body table').exists()).toBe(false)
   })
 
-  it('shows the whole of its source, which the content of a long reply is cut from', () => {
+  it('shows the whole of its source, even beside a content that holds less of it (as an older worker stored it)', () => {
     const source = `${'a'.repeat(4000)}\n\nThe end of a long reply`
     const w = mountMsg(site({ source, content: source.slice(0, 4000) }))
     expect(w.get('.lb-body').text()).toContain('The end of a long reply')
