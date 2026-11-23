@@ -669,10 +669,6 @@ export function createOutbox({ store, webhook, discord, form = DEFAULT_FORM, gui
     const unnoted = progress.partIds === undefined
     // What to remove is written down first: the store's parts go with the message, and a restart must not lose them.
     if (unnoted) progress.partIds = p.partIds ?? (message === null ? [] : message.parts)
-    // A delete keyed by no stored message (what an edit dropped, what an entry that ended for good left, what the gateway left of a reply it
-    // took) is shown on no reply of the site, which lists a member's entries under their message: if it ends for good, its parts are told (endFor).
-    // That is known before the note is written: a try that ends at the note, the last one, has removed none of them.
-    entry.strays = message === null ? progress.partIds : []
     // Stryker disable next-line ConditionalExpression: a note that is already written, written again, is the same progress in the store
     if (unnoted) await save(entry)
     // The parts of another webhook (one that was replaced) are removed through the bot: this webhook may not delete them.
@@ -701,18 +697,30 @@ export function createOutbox({ store, webhook, discord, form = DEFAULT_FORM, gui
   }
 
   /**
+   * → the parts of a delete that ended for good that no reply of the site shows: the site lists a member's entries under their message, so a
+   * delete keyed by no stored message is shown on none. It is one the worker queued (what an edit dropped, what an entry that ended for good
+   * left, what the gateway left of a reply it took), or a member's whose message the gateway took while it ran. The message is read at the
+   * end, not when the run began: the gateway may have taken it since, and a last try that failed at the first read did not learn it.
+   */
+  async function straysOf(entry) {
+    if (entry.kind !== 'delete' || (await store.outboxMessage(entry.messageKey)) !== null) return []
+    return entry.payload.progress?.partIds ?? entry.payload.partIds ?? []
+  }
+
+  /**
    * → what to write for an entry that ended for good in `state` ('failed' or 'blocked'): the member's words, and what puts Discord right. A
-   * delete whose parts no reply of the site shows (strays, see runDelete) is told once, when its end is written, to the log and to the
-   * moderators: what it was to remove and had not removed yet (its notes say what it did, progress.done) may still be in Discord, and only a
-   * moderator can take it now.
+   * delete whose parts no reply of the site shows (straysOf) is told once, when its end is written, to the log and to the moderators: what it
+   * was to remove and had not removed yet (its notes say what it did, progress.done) may still be in Discord, and only a moderator can take it
+   * now. The strays are read before the end is written, so a store that fails under that read has the whole end made again.
    */
   function endFor(entry, state, error, event, hold) {
     const queue = leftovers(entry)
     const messageState = state === 'blocked' ? 'blocked' : null
     return async () => {
+      const strays = await straysOf(entry)
       await store.outboxSet(entry.id, { state, error, messageState, queue, hold, event: { ...event, postId: entry.payload.postId, messageId: entry.kind === 'send' ? null : entry.messageKey } })
       const removed = new Set(entry.payload.progress?.done)
-      const left = (entry.strays ?? []).filter((id) => !removed.has(`remove:${id}`))
+      const left = strays.filter((id) => !removed.has(`remove:${id}`))
       if (left.length > 0) {
         const { postId, replyId } = entry.payload
         report(`the delete ${entry.id} ended for good (${error}), so these parts${replyId === undefined ? '' : ` of the reply ${replyId}`} in post ${postId} may still be in Discord, for a moderator to remove: ${left.join(', ')}.`)

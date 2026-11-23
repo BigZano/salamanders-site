@@ -8,6 +8,9 @@ const GUILD = '200000000000000400'
 const POST = '200000000000000410'
 const OTHER_POST = '200000000000000411'
 const MSG = '200000000000000430'
+// The later parts of the reply MSG, which the store knows as parts of it, not as messages.
+const PART2 = '200000000000000432'
+const PART3 = '200000000000000433'
 const APP = '200000000000000480'
 const COMMAND = '200000000000000481'
 const INTERACTION = '200000000000000490'
@@ -70,7 +73,7 @@ function fakeTimers() {
 function rig(over = {}) {
   const ft = fakeTimers()
   const w = { messages: new Map([[MSG, stored()]]), commands: [], callbackFails: false, listFails: false, createAnswer: true, ...over }
-  const calls = { list: [], create: [], callbacks: [], options: [], stored: [] }
+  const calls = { list: [], create: [], callbacks: [], options: [], stored: [], parts: [] }
   const discord = {
     interactionCallback: async (id, token, body, options) => {
       calls.callbacks.push({ id, token, body: structuredClone(body) })
@@ -89,6 +92,12 @@ function rig(over = {}) {
     },
   }
   const store = {
+    // The reply a part belongs to, or the id itself for one that is no part of a reply (librariusOutboxStore.js).
+    messageOfPart: async (id) => {
+      calls.parts.push(id)
+      if (w.partFails) throw new Error('the database is down')
+      return w.partOf?.get(id) ?? id
+    },
     outboxMessage: async (id) => {
       calls.stored.push(id)
       if (w.storeGate) return w.storeGate
@@ -104,7 +113,7 @@ function rig(over = {}) {
 const content = (t, i = 0) => t.calls.callbacks[i].body.data.content
 
 describe('createCommand: what it needs', () => {
-  const parts = () => ({ discord: { applicationCommands() {}, createMessageCommand() {}, interactionCallback() {} }, store: { outboxMessage() {} }, guildId: GUILD, repliesOn: () => true })
+  const parts = () => ({ discord: { applicationCommands() {}, createMessageCommand() {}, interactionCallback() {} }, store: { outboxMessage() {}, messageOfPart() {} }, guildId: GUILD, repliesOn: () => true })
 
   it('takes a Discord client and a store that have what it calls', () => {
     expect(() => createCommand(parts())).not.toThrow()
@@ -118,9 +127,11 @@ describe('createCommand: what it needs', () => {
         expect(() => createCommand(p), `${name} ${String(bad)}`).toThrow(new TypeError(`discord.${name} must be a function.`))
       }
     }
-    const p = parts()
-    p.store.outboxMessage = undefined
-    expect(() => createCommand(p)).toThrow(new TypeError('store.outboxMessage must be a function.'))
+    for (const name of ['outboxMessage', 'messageOfPart']) {
+      const p = parts()
+      p.store[name] = undefined
+      expect(() => createCommand(p), name).toThrow(new TypeError(`store.${name} must be a function.`))
+    }
     expect(() => createCommand({ ...parts(), discord: undefined })).toThrow(new TypeError('discord.applicationCommands must be a function.'))
     expect(() => createCommand({ ...parts(), store: null })).toThrow(new TypeError('store.outboxMessage must be a function.'))
   })
@@ -276,6 +287,39 @@ describe('INTERACTION_CREATE: the three answers', () => {
       { id: INTERACTION, token: TOKEN, body: { type: 4, data: { content: `${COPY_SITE} ${LINK}`, flags: 64, allowed_mentions: { parse: [] } } } },
     ])
     expect(t.calls.stored).toStrictEqual([MSG])
+  })
+
+  it.each([
+    ['second', PART2],
+    ['third', PART3],
+  ])('sends the author of a reply who asks about its %s part to the site, with the link to the reply', async (_, part) => {
+    const t = rig({ partOf: new Map([[PART2, MSG], [PART3, MSG]]) })
+    await t.command.dispatch('INTERACTION_CREATE', withData({ target_id: part, resolved: { messages: { [part]: { id: part, channel_id: POST } } } }))
+    expect(content(t)).toBe(`${COPY_SITE} ${LINK}`)
+    expect(t.calls.parts).toStrictEqual([part])
+    expect(t.calls.stored).toStrictEqual([MSG])
+  })
+
+  it('tells anyone but the author who asks about a later part of a reply of the site that only the author can delete it', async () => {
+    const t = rig({ partOf: new Map([[PART2, MSG]]), messages: new Map([[MSG, stored({ authorId: OTHER })]]) })
+    await t.command.dispatch('INTERACTION_CREATE', withData({ target_id: PART2 }))
+    expect(content(t)).toBe(COPY_OTHER)
+  })
+
+  it('asks the store of no message, and sends nobody anywhere, when the reply of a part is no message id', async () => {
+    for (const odd of ['', 5, 'x', `${MSG} `, '0', '123', {}, [MSG]]) {
+      const t = rig({ partOf: new Map([[PART2, odd]]), messages: new Map([[MSG, stored()], [odd, stored()]]) })
+      await t.command.dispatch('INTERACTION_CREATE', withData({ target_id: PART2 }))
+      expect(content(t), String(odd)).toBe(COPY_OTHER)
+      expect(t.calls.stored, String(odd)).toStrictEqual([])
+    }
+  })
+
+  it('answers the fallback when the store fails to say which reply a part is of', async () => {
+    const t = rig({ partFails: true })
+    await t.command.dispatch('INTERACTION_CREATE', interaction())
+    expect(content(t)).toBe(`${COPY_FALLBACK} ${LINK}`)
+    expect(t.calls.stored).toStrictEqual([])
   })
 
   it('tells anyone who asks about a message written in Discord to use Discord\'s own Delete, its author and others alike', async () => {
@@ -711,7 +755,7 @@ describe('INTERACTION_CREATE: the three seconds', () => {
 
   it('answers the fallback at once, with a link to the site, for a store that throws before it answers', async () => {
     const t = rig()
-    const own = createCommand({ discord: t.discord, store: { outboxMessage: () => { throw new Error('sync failure') } }, guildId: GUILD, repliesOn: () => true, timers: t.ft.timers, now: () => t.ft.now, log: () => {} })
+    const own = createCommand({ discord: t.discord, store: { messageOfPart: async (id) => id, outboxMessage: () => { throw new Error('sync failure') } }, guildId: GUILD, repliesOn: () => true, timers: t.ft.timers, now: () => t.ft.now, log: () => {} })
     await own.dispatch('INTERACTION_CREATE', interaction())
     expect(t.calls.callbacks.map((c) => c.body.data.content)).toStrictEqual([`${COPY_FALLBACK} ${LINK}`])
   })

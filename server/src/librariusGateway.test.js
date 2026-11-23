@@ -2466,7 +2466,7 @@ describe('"Delete on site" is answered within its budget however busy the gatewa
       return new Response(callback ? null : '{}', { status: callback ? 204 : 200 })
     }
     const discord = createLibrariusDiscord({ fetchImpl, apiBase: 'https://d.test/api', botToken: 'secret-bot-token', guildId: APP_GUILD, perSecond: 1 })
-    const command = createCommand({ discord, store: store ?? { outboxMessage: () => new Promise(() => {}) }, guildId: APP_GUILD, repliesOn: () => true })
+    const command = createCommand({ discord, store: store ?? { messageOfPart: async (id) => id, outboxMessage: () => new Promise(() => {}) }, guildId: APP_GUILD, repliesOn: () => true })
     const r = rig({ onDispatch: alongside(ingest ?? (() => undefined), command.dispatch, () => {}) })
     // Saturate the client: 30 calls that may each wait up to two minutes for its turn, one a second, are queued ahead of the callback.
     const busy = discord.withMaxWait(120_000)
@@ -2497,7 +2497,7 @@ describe('"Delete on site" is answered within its budget however busy the gatewa
 
   it('answers at once, with the answer the store has, when the store is quick, whatever the queue and the client are doing', async () => {
     const { r, fetched } = wired({
-      store: { outboxMessage: async () => ({ id: MSG, postId: POST, authorId: ME, origin: 'site' }) },
+      store: { messageOfPart: async (id) => id, outboxMessage: async () => ({ id: MSG, postId: POST, authorId: ME, origin: 'site' }) },
       ingest: (t) => (t === 'HANG_THING' ? new Promise(() => {}) : undefined),
     })
     const sock = await ready(r)
@@ -2553,7 +2553,7 @@ describe('"Delete on site" with the replies on and with them off, through the ga
       return Response.json(address.endsWith('/commands') ? commands : {})
     }
     const discord = createLibrariusDiscord({ fetchImpl, apiBase: 'https://d.test/api', botToken: 'secret-bot-token', guildId: APP_GUILD })
-    const store = { outboxMessage: held === 'never' ? () => new Promise(() => {}) : async (id) => (id === MSG ? held : null) }
+    const store = { messageOfPart: async (id) => id, outboxMessage: held === 'never' ? () => new Promise(() => {}) : async (id) => (id === MSG ? held : null) }
     const fed = []
     const command = createCommand({ discord, store, guildId: APP_GUILD, repliesOn: () => flag.on })
     const r = rig({ onDispatch: alongside(async (t) => void fed.push(t), command.dispatch, () => {}) })

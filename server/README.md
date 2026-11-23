@@ -560,6 +560,9 @@ logged as `Librarius: ...` (the step's name and what failed, with no token and n
    decided and could not write while the database was failing (a block, a step of the retries, the note of a part that
    landed), as it was decided, and a start after a stop does the same: a part that Discord blocked is never sent again, and
    its block counts towards the pause that two blocks bring.
+   **Never run a second API against the live database**, not even for a moment, and not a `bun run` test either: the lock keeps
+   two outboxes from sending at once, but one that takes the lock again writes what it had decided without checking that the
+   other has not taken those entries since. One API container, never two (`docker compose up -d` stops the old one first).
 4. With the webhook only: the upload sweeper. It deletes the pictures held for replies that were never sent, and those of a
    reply that failed or was blocked, once they are an hour old or the reply has ended (never a picture a queued reply names).
    On the same timer, at its first sweep and then once an hour, it prunes the `librarius_outbox` entries that are `sent` and

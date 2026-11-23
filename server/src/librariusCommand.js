@@ -7,7 +7,7 @@
  * createCommand({ discord, store, guildId, repliesOn, siteUrl = 'https://sm2salamanders.site', timers = { setTimeout, clearTimeout },
  *   now = Date.now, deadlineMs = 1500, log = console.error }) → { dispatch(type, data) → Promise<void> }
  *   `discord` is the Librarius's client (librariusDiscord.js: applicationCommands, createMessageCommand and interactionCallback, which goes
- *   around the client's limits and has a timeout of its own); `store` has outboxMessage (librariusOutboxStore.js). `repliesOn` is a
+ *   around the client's limits and has a timeout of its own); `store` has messageOfPart and outboxMessage (librariusOutboxStore.js). `repliesOn` is a
  *   function that says whether replying from the site is on now: the command is made whenever the Librarius is, and it is only with the
  *   replies on that it is made in the guild (Ruling B12). It is asked once when the command is made, and must answer true or false then
  *   (a TypeError otherwise): that is what READY goes by, for as long as the API runs. It is asked again for each answer about a reply of
@@ -28,7 +28,8 @@
  * INTERACTION_CREATE of that command in this guild: answers with `POST /interactions/<id>/<token>/callback`, type 4, `flags: 64`
  * (only they see it) and `allowed_mentions: { parse: [] }`, in one of these (the copy is the spec's and Ruling B12's):
  *   - the message is one this member wrote on the site, with the replies on: "This was written on the site. Delete it there:" and the
- *     link `<site>/reliquarium/librarius/<post>#m-<message>`, the post being the one the store has the message in;
+ *     link `<site>/reliquarium/librarius/<post>#m-<message>`, the post being the one the store has the message in. A later part of a
+ *     reply is answered as the reply (the store maps it first, in the same deadline), and linked to the reply;
  *   - the message was written on the site, with the replies off, whoever wrote it: "Deleting from the site is switched off right now. A
  *     moderator can delete this in Discord." Whether they are on is asked once the store has answered, so a member is not sent to a
  *     site whose delete would be refused;
@@ -73,7 +74,9 @@ export function createCommand({ discord, store, guildId, repliesOn, siteUrl = SI
   for (const name of ['applicationCommands', 'createMessageCommand', 'interactionCallback']) {
     if (typeof discord?.[name] !== 'function') throw new TypeError(`discord.${name} must be a function.`)
   }
-  if (typeof store?.outboxMessage !== 'function') throw new TypeError('store.outboxMessage must be a function.')
+  for (const name of ['outboxMessage', 'messageOfPart']) {
+    if (typeof store?.[name] !== 'function') throw new TypeError(`store.${name} must be a function.`)
+  }
   if (!isId(guildId)) throw new TypeError('guildId must be a Discord id.')
   if (typeof repliesOn !== 'function') throw new TypeError('repliesOn must be a function.')
   if (typeof now !== 'function') throw new TypeError('now must be a function.')
@@ -125,8 +128,14 @@ export function createCommand({ discord, store, guildId, repliesOn, siteUrl = SI
   /** → the link to a message on the site, or to the list of posts when the post is not known. */
   const linkTo = (postId, messageId) => (postId === null ? `${site}/reliquarium/librarius` : `${site}/reliquarium/librarius/${postId}#m-${messageId}`)
 
-  /** → the answer for a message the member asks about (`messageId` is a message id), from what the store holds of it. */
-  async function answerFor(messageId, memberId) {
+  /**
+   * → the answer for a message the member asks about (`targetId` is a message id), from what the store holds of it. A later part of a reply
+   * is no message of the store's: the reply it belongs to is what is asked about, and linked to.
+   */
+  async function answerFor(targetId, memberId) {
+    const messageId = await store.messageOfPart(targetId)
+    // What goes into a link is checked first.
+    if (!isStoreId(messageId)) return COPY.other
     const found = await store.outboxMessage(messageId)
     if (found === null) return COPY.other
     if (found.origin === 'discord') return COPY.discord

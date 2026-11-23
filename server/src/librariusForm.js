@@ -352,8 +352,13 @@ function cellText(nodes, cites) {
   return out
 }
 
-/** → the text with every run of three backticks kept from closing, or opening, a code block. */
-const defuse = (text) => text.replaceAll('```', `\`\`${ZWSP}\``)
+/**
+ * → the text with every run of three backticks kept from closing, or opening, a code block: a zero-width space after every pair of
+ * backticks that another follows, so that a run of any length is pairs of two and a last one or two (five are two, two and one).
+ * Writing each three as two, the space and one would not do: that ends with a backtick, which makes a run with the two that start
+ * the next three.
+ */
+const defuse = (text) => text.replace(/``(?=`)/g, `\`\`${ZWSP}`)
 
 /** → { text, cites, images } of a line, heading or subtext node; the text is '' when there is nothing to show but images. */
 function render(node, names) {

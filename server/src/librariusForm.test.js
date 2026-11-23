@@ -916,6 +916,21 @@ describe('toDiscord: flattening the extended markdown', () => {
     expect(body('```\n````\n```')).toBe('```\n``\u200b``\n```')
   })
 
+  it('keeps a run of five backticks or more apart in every pair, in a code block and in a table cell', () => {
+    expect(body('```\n`````\n```')).toBe('```\n``\u200b``\u200b`\n```')
+    expect(body('```\n``````\n```')).toBe('```\n``\u200b``\u200b``\n```')
+    expect(body('```\na```````b\n```')).toBe('```\na``\u200b``\u200b``\u200b`b\n```')
+    const cell = '``\u200b``\u200b`'
+    expect(body('| k |\n|---|\n| ````` |')).toBe(['```', `| ${'k'.padEnd(cell.length)} |`, `| ${'-'.repeat(cell.length)} |`, `| ${cell} |`, '```'].join('\n'))
+  })
+
+  it('does not let a run of five backticks close a code block, so a spoiler after it stays a spoiler in Discord', () => {
+    const src = 'see:\n```\n`````\n```\n||SECRET||\n```\nmore code\n```'
+    const want = 'see:\n```\n``\u200b``\u200b`\n```\n||SECRET||\n```\nmore code\n```'
+    expect(body(src)).toBe(want)
+    expect(v2(src).parts[0].text.startsWith(want)).toBe(true)
+  })
+
   it('keeps a language name of letters, digits, plus and hyphen', () => {
     for (const lang of ['c++', 'objective-c', 'js_2', 'X9']) expect(body(`\`\`\`${lang}\nx\n\`\`\``)).toBe(`\`\`\`${lang}\nx\n\`\`\``)
   })
@@ -2594,6 +2609,35 @@ describe('toDiscord: properties over hostile replies', () => {
         }
       }),
       { numRuns: 150 },
+    )
+  })
+
+  // Discord ends a code block at the first three backticks it finds, in the middle of a line too, so a run of them anywhere but where a
+  // fence line starts would open or close a block that the site does not show, and could take a spoiler into code, where it shows.
+  it('writes three backticks in a row only where a fence line starts, however many the reply has in its code, cells and text', () => {
+    const ticks = fc.integer({ min: 1, max: 9 }).map((n) => '`'.repeat(n))
+    const bit = fc.oneof({ weight: 3, arbitrary: ticks }, { weight: 2, arbitrary: fc.constantFrom('a', ' ', 'x y', '||s||', '>', '|', '\\', '*') }, { weight: 1, arbitrary: word })
+    const codeLine = fc.array(bit, { maxLength: 14 }).map((a) => a.join(''))
+    const long = fc.tuple(ticks, fc.integer({ min: 1, max: 4200 }), ticks).map(([a, n, b]) => `${a}${x(n)}${b}`)
+    const code = fc.array(fc.oneof({ weight: 4, arbitrary: codeLine }, { weight: 1, arbitrary: long }), { minLength: 1, maxLength: 8 })
+    const cell = fc.array(fc.oneof(ticks, fc.constantFrom('a', ' ', 'b c')), { minLength: 1, maxLength: 6 }).map((a) => a.join(''))
+    const tickBlock = fc.oneof(
+      code.map((l) => `\`\`\`\n${l.join('\n')}\n\`\`\``),
+      code.map((l) => `> \`\`\`js\n> ${l.join('\n> ')}\n> \`\`\``),
+      fc.tuple(cell, cell, fc.array(fc.tuple(cell, cell), { minLength: 1, maxLength: 6 })).map(([a, b, rows]) => `| ${a} | ${b} |\n| - | - |\n${rows.map(([c, d]) => `| ${c} | ${d} |`).join('\n')}`),
+      codeLine,
+      spoiler,
+    )
+    const tickDoc = fc.array(fc.oneof({ weight: 3, arbitrary: tickBlock }, { weight: 1, arbitrary: block }), { minLength: 1, maxLength: 8 }).chain((blocks) => fc.constantFrom('\n\n', '\n').map((sep) => blocks.join(sep)))
+    const FENCE_LINE = /^(?:[ \t]*>)*[ \t]*```[\w+-]*$/
+    fc.assert(
+      fc.property(tickDoc, options, (src, o) => {
+        for (const part of toDiscord(src, build(o)).parts) {
+          const texts = o.form === 'v2' ? displays(part) : [part.text]
+          for (const text of texts) for (const line of text.split('\n')) if (line.includes('```')) expect(line).toMatch(FENCE_LINE)
+        }
+      }),
+      { numRuns: 300 },
     )
   })
 

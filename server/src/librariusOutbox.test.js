@@ -80,8 +80,6 @@ function makeWorld() {
     postMissing: false,
     nextEntry: 1,
     nextUpload: 1,
-    // Whether the last read of each message (outboxMessage, by its id) was answered: a delete whose read failed did not learn whether its key is a stored message.
-    reads: new Map(),
     nextId,
   }
 
@@ -252,9 +250,7 @@ function makeWorld() {
       w.events.push({ at: Date.now(), actor: e.authorId, ...event })
     },
     async outboxMessage(messageId) {
-      w.reads.set(messageId, false)
       maybeFail('outboxMessage')
-      w.reads.set(messageId, true)
       const m = w.messages.get(messageId)
       return m === undefined ? null : { ...clone(m), parts: [...(w.parts.get(messageId) ?? [])] }
     },
@@ -378,6 +374,8 @@ function makeWorld() {
       const at = w.thread.findIndex((m) => m.id === req.messageId)
       if (at !== -1) w.thread.splice(at, 1)
     }
+    // What the gateway does to the store once Discord has answered, before the worker hears the answer.
+    next.echo?.()
     return respond(next)
   }
 
@@ -3571,6 +3569,54 @@ describe('a delete keyed by no stored message that ends for good is told, since 
     expect(tellings()).toEqual([told(w.entry(d), [p1, p3])])
   })
 
+  it('tells of the parts left when the gateway takes the reply while its delete is on its way, and the delete ends for good at its first try', async () => {
+    const id = await sentReply(THREE('a', 'b', 'c'))
+    const [p1, p2, p3] = w.ours().map((m) => m.id)
+    // The member deletes the reply on the site. The removal of part 1 lands, and its echo takes the reply and its parts out of the store
+    // (siteDeleted); then the post is locked, and the removal of part 2 is refused.
+    const gone = () => {
+      w.messages.delete(id)
+      w.parts.delete(id)
+    }
+    w.script.push({ status: 204, echo: gone }, forbidden())
+    const d = remove(id, { postId: THREAD })
+    outbox.kick()
+    await later(100_000)
+    expect(w.entry(d)).toMatchObject({ state: 'failed', attempts: 0, lastError: COPY.locked })
+    expect(w.ours().map((m) => m.id)).toEqual([p2, p3])
+    expect(tellings()).toEqual([told(w.entry(d), [p2, p3])])
+  })
+
+  it.each([
+    ['its end is written', 5],
+    ['the store fails under the first write of its end too', 6],
+  ])('tells, once, of a delete keyed by no stored message whose every try failed at the read of its message, when %s', async (_, failures) => {
+    const id = await sentReply(THREE('a', 'b', 'c'))
+    const [p1, , p3] = w.ours().map((m) => m.id)
+    w.messages.delete(id)
+    w.parts.delete(id)
+    w.storeFails.outboxMessage = Array.from({ length: failures }, () => new Error('connection lost'))
+    const d = remove(p1, { postId: THREAD, partIds: [p1, p3], webhookId: HOOK })
+    await run(1_000_000)
+    expect(w.entry(d)).toMatchObject({ state: 'failed', attempts: 4, lastError: COPY.unsendable })
+    expect(w.storeFails.outboxMessage).toEqual([])
+    expect(w.calls.filter((c) => c.kind === 'remove')).toEqual([])
+    expect(tellings()).toEqual([told(w.entry(d), [p1, p3])])
+  })
+
+  it("tells nothing of a member's delete whose tries all failed at the read, when the gateway took the message meanwhile: it never learnt the parts", async () => {
+    const id = await sentReply(THREE('a', 'b', 'c'))
+    w.storeFails.outboxMessage = Array.from({ length: 5 }, () => new Error('connection lost'))
+    const d = remove(id, { postId: THREAD })
+    // The store took the reply and its parts (siteDeleted), and what was left of it is a delete of its own, which names them.
+    w.messages.delete(id)
+    w.parts.delete(id)
+    await run(1_000_000)
+    expect(w.entry(d)).toMatchObject({ state: 'failed', attempts: 4, lastError: COPY.unsendable })
+    expect(w.calls.filter((c) => c.kind === 'remove')).toEqual([])
+    expect(tellings()).toEqual([])
+  })
+
   it('tells nothing of a delete of a stored message that ends for good: the site shows it on that reply, as before', async () => {
     const id = await sentReply(TWO())
     w.script.push(forbidden())
@@ -4161,13 +4207,13 @@ function everyEntryOver() {
  * What the worker told of the deletes that ended for good, in the log (`lines`) and to the moderators (`heard`): a delete keyed by no stored
  * message, which shows on no reply of the site, is told once, with the parts it was to remove and had not removed yet (its stored notes say
  * which it removed); no other delete is told, and none that removed them all. The ones of a property are the deletes the worker queued itself,
- * which name their parts (payload.partIds): what an edit dropped, and what an entry that ended for good left. One whose last run could not read
- * its message did not learn that it is keyed by none, and is not told (w.reads). The moderators are told no word of what a member wrote.
+ * which name their parts (payload.partIds): what an edit dropped, and what an entry that ended for good left. One whose tries all failed at the
+ * read of its message is told too: the message is read again when the end is written. The moderators are told no word of what a member wrote.
  */
 function toldOfStrays(lines, heard) {
   const told = lines.filter((line) => line.startsWith('Librarius outbox: the delete '))
   const strays = [...w.entries.values()]
-    .filter((e) => e.kind === 'delete' && ['failed', 'blocked'].includes(e.state) && e.payload.partIds !== undefined && w.reads.get(e.messageKey) === true)
+    .filter((e) => e.kind === 'delete' && ['failed', 'blocked'].includes(e.state) && e.payload.partIds !== undefined)
     .map((e) => ({ e, left: e.payload.partIds.filter((id) => !(e.payload.progress?.done ?? []).includes(`remove:${id}`)) }))
     .filter(({ left }) => left.length > 0)
   const of = (e) => (e.payload.replyId === undefined ? '' : ` of the reply ${e.payload.replyId}`)
