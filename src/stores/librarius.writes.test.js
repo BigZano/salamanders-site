@@ -1035,6 +1035,152 @@ describe('librarius store: trying again, and putting away', () => {
   })
 })
 
+// A double press of Retry, and a reload, a load() or another post after a Retry or a Dismiss, must not show the entry again with a
+// Retry that sends it once more: the server lists a failed or blocked entry for a day, whatever came after it.
+describe('librarius store: what was tried again or put away stays so', () => {
+  beforeEach(() => {
+    vi.useFakeTimers()
+    vi.setSystemTime(Date.parse('2026-11-18T12:00:00.000Z'))
+  })
+  const AT = '2026-11-18T10:00:00.000Z'
+  const asMember = (id = SELF) => useAuth().$patch({ member: { id, username: 'invented', isMember: true, librarius: true } })
+  /** The page is loaded again: a new store, with nothing in memory, over the same browser. */
+  const reload = () => {
+    s.reset()
+    setActivePinia(createPinia())
+    s = useLibrarius()
+    asMember()
+    seed()
+  }
+  const failed = (key, extra = {}) => entry(key, { state: 'failed', error: 'Discord did not take this reply. Try again in a little while.', createdAt: AT, ...extra })
+  const learnFailed = async (...entries) => {
+    getPending.mockResolvedValue(listed(...entries))
+    await s.pending('tok')
+  }
+
+  it('sends a failed reply once when Retry is pressed twice before the first answer, and both presses get its entry', async () => {
+    asMember()
+    seed()
+    await learnFailed(failed('k-1'))
+    const answer = deferred()
+    postReply.mockReturnValueOnce(answer.promise)
+    const first = s.retry('tok', { kind: 'send', key: 'k-1' })
+    const second = s.retry('tok', { kind: 'send', key: 'k-1' })
+    expect(postReply).toHaveBeenCalledTimes(1)
+    answer.resolve(queued('k-2'))
+    const [a, b] = await Promise.all([first, second])
+    expect(a).toEqual(b)
+    expect(a).toMatchObject({ key: 'k-2', state: 'sending' })
+    expect(postReply).toHaveBeenCalledTimes(1)
+    expect(states()).toEqual([['send', 'k-2', 'sending']])
+  })
+
+  it('lets a Retry that was refused be pressed again, and sends that one', async () => {
+    asMember()
+    seed()
+    await learnFailed(failed('k-1'))
+    postReply.mockRejectedValueOnce(apiError(429, 'Slow down.'))
+    await expect(s.retry('tok', { kind: 'send', key: 'k-1' })).rejects.toMatchObject({ status: 429 })
+    postReply.mockResolvedValueOnce(queued('k-2'))
+    await expect(s.retry('tok', { kind: 'send', key: 'k-1' })).resolves.toMatchObject({ key: 'k-2' })
+    expect(postReply).toHaveBeenCalledTimes(2)
+  })
+
+  it.each([
+    ['a reload', () => reload()],
+    ['a new load()', async () => {
+      getMe.mockResolvedValue({ access: true, ready: true, tags: [], roles: [], guildId: mid(399), forumId: mid(398), can: {} })
+      await s.load('tok')
+      seed()
+    }],
+    ['another post and back', async () => {
+      getPost.mockResolvedValue(found({ post: info({ id: OTHER }) }))
+      listMessages.mockResolvedValue(pageOf([]))
+      await s.openPost('tok', OTHER)
+      seed()
+    }],
+  ])('shows neither a failed reply that was tried again nor one that was dismissed after %s', async (_, leave) => {
+    asMember()
+    seed()
+    await learnFailed(failed('k-1'), failed('k-3', { kind: 'edit', key: MSG, source: null }), entry('k-4', { state: 'blocked', error: 'x', createdAt: AT }))
+    postReply.mockResolvedValueOnce(queued('k-2'))
+    await s.retry('tok', { kind: 'send', key: 'k-1' })
+    s.dismiss({ kind: 'edit', key: MSG })
+    s.dismiss({ kind: 'send', key: 'k-4' })
+    await leave()
+    // The server still lists the three that ended, and the retry has gone out (it is sent: no longer listed).
+    await learnFailed(failed('k-1'), failed(MSG, { kind: 'edit', source: null }), entry('k-4', { state: 'blocked', error: 'x', createdAt: AT }))
+    const ended = () => states().filter(([, , state]) => state !== 'sent')
+    expect(ended()).toEqual([])
+    // A newer failure of the same edit is news, and shows.
+    await learnFailed(failed(MSG, { kind: 'edit', source: null, createdAt: '2026-11-18T11:00:00.000Z' }))
+    expect(ended()).toEqual([['edit', MSG, 'failed']])
+  })
+
+  it('keeps a Retry put away when the post was left before the server answered it', async () => {
+    asMember()
+    seed()
+    await learnFailed(failed('k-1'))
+    const answer = deferred()
+    postReply.mockReturnValueOnce(answer.promise)
+    const retried = s.retry('tok', { kind: 'send', key: 'k-1' })
+    getPost.mockResolvedValue(found({ post: info({ id: OTHER }) }))
+    listMessages.mockResolvedValue(pageOf([]))
+    await s.openPost('tok', OTHER)
+    answer.resolve(queued('k-2'))
+    await retried
+    reload()
+    await learnFailed(failed('k-1'))
+    expect(states()).toEqual([])
+  })
+
+  it('keeps what one member put away for that member only, and nothing for a reader not signed in', async () => {
+    asMember(SELF)
+    seed()
+    await learnFailed(failed('k-1'))
+    s.dismiss({ kind: 'send', key: 'k-1' })
+    reload()
+    asMember(FRIEND)
+    await learnFailed(failed('k-1'))
+    expect(states()).toEqual([['send', 'k-1', 'failed']])
+    useAuth().$patch({ member: null })
+    s.dismiss({ kind: 'send', key: 'k-1' })
+    expect(states()).toEqual([])
+    expect(Object.keys(localStorage).filter((k) => k.startsWith('lb-done:'))).toEqual([`lb-done:${SELF}:${POST}`])
+  })
+
+  it('keeps going in memory when the browser keeps nothing, or keeps something that is not a list of times', async () => {
+    asMember()
+    seed()
+    localStorage.setItem(`lb-done:${SELF}:${POST}`, '{not json')
+    await learnFailed(failed('k-1'), failed('k-2'))
+    expect(states()).toEqual([['send', 'k-1', 'failed'], ['send', 'k-2', 'failed']])
+    localStorage.setItem(`lb-done:${SELF}:${POST}`, JSON.stringify({ 'send:k-1': 'soon', 'send:k-2': Date.parse(AT) }))
+    await learnFailed(failed('k-1'), failed('k-2'))
+    expect(states()).toEqual([['send', 'k-1', 'failed']])
+    localStorage.setItem(`lb-done:${SELF}:${POST}`, '[1, 2]')
+    await learnFailed(failed('k-1'))
+    expect(states()).toEqual([['send', 'k-1', 'failed']])
+    const setItem = vi.spyOn(Storage.prototype, 'setItem').mockImplementation(() => {
+      throw new Error('QuotaExceededError')
+    })
+    s.dismiss({ kind: 'send', key: 'k-1' })
+    expect(states()).toEqual([])
+    await learnFailed(failed('k-1'))
+    expect(states()).toEqual([])
+    setItem.mockRestore()
+  })
+
+  it('forgets what it put away once it is two days old, which the server no longer lists', async () => {
+    asMember()
+    seed()
+    await learnFailed(failed('k-old', { createdAt: '2026-11-16T11:00:00.000Z' }), failed('k-1'))
+    s.dismiss({ kind: 'send', key: 'k-old' })
+    s.dismiss({ kind: 'send', key: 'k-1' })
+    expect(JSON.parse(localStorage.getItem(`lb-done:${SELF}:${POST}`))).toEqual({ 'send:k-1': Date.parse(AT) })
+  })
+})
+
 describe('librarius store: a 401 in the middle of reading asks to sign in again', () => {
   const signIn = () => {
     localStorage.setItem(SIGNED_IN, JSON.stringify({ id: SELF, username: 'invented', accessToken: 'tok', expiresAt: Date.now() + 60_000 }))

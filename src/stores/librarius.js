@@ -3,6 +3,7 @@ import { toRaw } from 'vue'
 import * as api from '../lib/librarius/api'
 import { STALE, attempt, statusOf, unlessStale } from './asking'
 import { useAuth } from './auth'
+import { draftStorage } from '../lib/librarius/composer'
 
 // What the Librarius pages show: whether the signed-in user may read it (the answer to GET /librarius/me), the topic
 // list, the people it names, and the one post that is open with the messages loaded so far. It only decides what to
@@ -43,6 +44,9 @@ export const PENDING_MS = 3_000
 const INFO_EVERY = 6
 // The places a reply's pictures go in, 1 to 10 (the server's cap).
 const MAX_PICTURES = 10
+// What the reader put away is kept in their browser for two days: the server lists an entry that ended for a day, by its own clock.
+const DONE_KEPT_MS = 2 * 86_400_000
+const DONE = 'lb-done:'
 
 const COPY = {
   noPost: 'There is no post open to write in.',
@@ -460,12 +464,13 @@ function pickedIn(mentions, source) {
  *   changes: the polls for changes, and the reopenings, begun; an entry seen sent is let go of once one begun after it lands (`sentAt`);
  *   cutoff: by entry, the time of the newest of it that is done with (put away, tried again, or older than another of it): the server
  *     lists those for a day, and they are never shown again;
- *   bodies: by entry, what was sent for it, so that a failed one can be sent again as it was.
+ *   bodies: by entry, what was sent for it, so that a failed one can be sent again as it was;
+ *   retrying: by entry, the retry() of it on its way, which a second press is answered by.
  */
 function follow(store) {
   let f = follows.get(store)
   if (f === undefined) {
-    f = { timer: null, inFlight: null, token: null, asked: 0, changes: 0, after: new Map(), sentAt: new Map(), cutoff: new Map(), bodies: new Map() }
+    f = { timer: null, inFlight: null, token: null, asked: 0, changes: 0, after: new Map(), sentAt: new Map(), cutoff: new Map(), bodies: new Map(), retrying: new Map() }
     follows.set(store, f)
   }
   return f
@@ -483,9 +488,44 @@ function leavePost(store) {
   store.outbox = []
 }
 
-/** The entry is done with: the server's listing of it, and of anything older of it, is never shown again. */
-function putAway(f, e) {
-  if (e.createdAt !== null) f.cutoff.set(identity(e), timeOf(e))
+/**
+ * What the reader has put away in a post (tried again, dismissed, or replaced by a newer write of theirs), kept in their own browser under
+ * the member and the post, `lb-done:<member>:<post>`, as { [kind:key]: the time of the newest of it that is done with }: the server
+ * lists an entry that ended for a day, whatever came after it, so without this a reload, a new load() or another post would show it again,
+ * with a Retry that sends it once more. A reader who is not signed in, or a browser that keeps nothing (or keeps something that is not
+ * such a list), keeps it in memory only, as before. The keys hold no words of a reply.
+ */
+function doneKey(postId) {
+  const member = useAuth().member?.id
+  return typeof member === 'string' && member !== '' ? `${DONE}${member}:${postId}` : null
+}
+function doneWith(postId) {
+  const key = doneKey(postId)
+  try {
+    const kept = key === null ? null : JSON.parse(draftStorage()?.getItem(key) ?? 'null')
+    return new Map(isObject(kept) ? Object.entries(kept).filter(([, time]) => Number.isFinite(time)) : [])
+  } catch {
+    return new Map()
+  }
+}
+function keepDone(postId, id, time) {
+  const key = doneKey(postId)
+  if (key === null) return
+  const kept = doneWith(postId)
+  kept.set(id, Math.max(time, kept.get(id) ?? -Infinity))
+  const since = Date.now() - DONE_KEPT_MS
+  try {
+    draftStorage()?.setItem(key, JSON.stringify(Object.fromEntries([...kept].filter(([, at]) => at >= since))))
+  } catch {
+    // A browser that keeps nothing keeps it in memory, for this page.
+  }
+}
+
+/** The entry of the post `postId` is done with: the server's listing of it, and of anything older of it, is never shown again. */
+function putAway(f, e, postId) {
+  if (e.createdAt === null) return
+  f.cutoff.set(identity(e), timeOf(e))
+  keepDone(postId, identity(e), timeOf(e))
 }
 
 /** Asks again in PENDING_MS, when something is sending and no ask is waiting or on its way. */
@@ -533,11 +573,12 @@ function ask(store, token) {
  */
 function takePending(store, f, n, answer) {
   if (!Array.isArray(answer?.pending)) return
+  const kept = doneWith(store.post.id)
   const newest = new Map()
   for (const e of answer.pending) {
     if (!isEntry(e)) continue
     const id = identity(e)
-    if (timeOf(e) <= (f.cutoff.get(id) ?? -Infinity)) continue
+    if (timeOf(e) <= Math.max(f.cutoff.get(id) ?? -Infinity, kept.get(id) ?? -Infinity)) continue
     const other = newest.get(id)
     if (other === undefined) {
       newest.set(id, e)
@@ -610,7 +651,7 @@ async function queue(store, token, postId, kind, send, { source = null, body, re
       const heldId = identity(held)
       if (!replaced.has(heldId)) next.push(held)
       else {
-        putAway(f, held)
+        putAway(f, held, postId)
         if (heldId === id) {
           next.push(entry)
           placed = true
@@ -623,6 +664,19 @@ async function queue(store, token, postId, kind, send, { source = null, body, re
     schedule(store, f)
   }
   return { ...entry }
+}
+
+/** Sends `held`, a failed entry of the post `postId`, again: a reply or an edit as it was sent (`body`), a delete as it is. → the new entry. */
+function again(store, token, postId, held, body) {
+  if (held.kind === 'send') {
+    const sent = body ?? { source: held.source, replyTo: null, pingReply: false, mentions: mentionsIn(held.source), uploads: [] }
+    return queue(store, token, postId, 'send', () => api.postReply(token, postId, sent), { source: sent.source, body: sent, replacing: [identity(held)] })
+  }
+  if (held.kind === 'edit') {
+    if (body === undefined) throw new RangeError(COPY.editUnknown)
+    return queue(store, token, postId, 'edit', () => api.editMessage(token, held.key, body), { source: body.source, body })
+  }
+  return queue(store, token, postId, 'delete', () => api.deleteMessage(token, held.key))
 }
 
 /** → the entry of the queue that `which` ({ kind, key }) names, or undefined. */
@@ -803,21 +857,27 @@ export const useLibrarius = defineStore('librarius', {
 
     // Sends again an entry that failed, `which` being { kind, key }: a reply or an edit as it was sent (a reply the store did not send
     // itself, with its text and the people it mentions), a delete as it is. → the new entry, which takes the failed one's place.
+    // A second press while the first is on its way is answered by the first: the entry is sent once. Once the server has taken it, the
+    // failed one is put away for good (see doneWith), even when the post was left meanwhile.
     async retry(token, which) {
       const held = heldEntry(this, which)
       if (held?.state !== 'failed') throw new RangeError(COPY.notFailed)
-      const postId = this.post.id
+      const f = follow(this)
       const id = identity(held)
-      const body = follow(this).bodies.get(id)
-      if (held.kind === 'send') {
-        const sent = body ?? { source: held.source, replyTo: null, pingReply: false, mentions: mentionsIn(held.source), uploads: [] }
-        return queue(this, token, postId, 'send', () => api.postReply(token, postId, sent), { source: sent.source, body: sent, replacing: [id] })
-      }
-      if (held.kind === 'edit') {
-        if (body === undefined) throw new RangeError(COPY.editUnknown)
-        return queue(this, token, postId, 'edit', () => api.editMessage(token, held.key, body), { source: body.source, body })
-      }
-      return queue(this, token, postId, 'delete', () => api.deleteMessage(token, held.key))
+      const going = f.retrying.get(id)
+      if (going !== undefined) return going
+      const postId = this.post.id
+      const run = (async () => {
+        try {
+          const entry = await again(this, token, postId, held, f.bodies.get(id))
+          keepDone(postId, id, timeOf(held))
+          return entry
+        } finally {
+          f.retrying.delete(id)
+        }
+      })()
+      f.retrying.set(id, run)
+      return run
     },
 
     // Puts away an entry that was blocked or failed, `which` being { kind, key }, for good. One that is not held is gone already.
@@ -825,7 +885,7 @@ export const useLibrarius = defineStore('librarius', {
       const held = heldEntry(this, which)
       if (held === undefined) return
       if (held.state !== 'blocked' && held.state !== 'failed') throw new RangeError(COPY.notEnded)
-      putAway(follow(this), held)
+      putAway(follow(this), held, this.post.id)
       this.outbox = this.outbox.filter((e) => e !== held)
     },
   },
