@@ -43,7 +43,7 @@ describe.skipIf(!present)('real export (local only)', () => {
         if (!name.startsWith('threads/')) continue
         for (const m of JSON.parse(text).messages) {
           const s = m.content ?? ''
-          expect(alnum(plainText(parse(s), { raw: true })), `message ${m.id}`).toBe(alnum(s))
+          expect(alnum(plainText(parse(s, { oneLine: true }), { raw: true })), `message ${m.id}`).toBe(alnum(s))
         }
       }
     }

@@ -1,21 +1,25 @@
 import { describe, it, expect } from 'vitest'
 import fc from 'fast-check'
-import { parse, parseInline, plainText, walk } from './markdown'
+import { parse, plainText, walk } from './markdown'
 import { parse as parseBefore } from './markdown-22b6793.fixture'
 
-// A spoiler that runs over lines: a `||` the line it is on leaves open, closed by a `||` on a later line.
+// A spoiler that runs over lines, read so that it fails closed (the default), and the Legion Archive's one-line reading.
 const E = '123456789012345678'
+const ONE = { oneLine: true }
+const LS = String.fromCharCode(0x2028)
+const ZWSP = String.fromCharCode(0x200b)
 const t = (value) => ({ type: 'text', value })
 const line = (...children) => ({ type: 'line', children })
 const quote = (...children) => ({ type: 'quote', children })
 const spoiler = (...children) => ({ type: 'spoiler', children })
-// One that closes at the message's last bar, because no later line leaves a bar open.
-const last = (...children) => ({ type: 'spoiler', children, lastBar: true })
+// The one spoiler over lines: from the first bar of the first uncertain line to the last bar of the message.
+const unit = (...children) => ({ type: 'spoiler', children, lastBar: true })
 const list = (...texts) => ({ type: 'list', ordered: false, items: texts.map((text) => ({ marker: '-', children: [line(t(text))] })) })
 const blank = { type: 'blank' }
+const code = (text) => ({ type: 'code', text })
 const WORD = /w\d+/g
 
-/** → { hidden, shown }: the words (w0, w1, …) the nodes hold, by whether a spoiler holds them. */
+/** → { hidden, shown }: the words (w0, w1, …) the nodes hold, by whether a spoiler holds them, each sorted. */
 function exposure(nodes) {
   const hidden = []
   const shown = []
@@ -28,7 +32,8 @@ function exposure(nodes) {
     }
   }
   visit(nodes, false)
-  return { hidden, shown }
+  const order = (a, b) => Number(a.slice(1)) - Number(b.slice(1))
+  return { hidden: hidden.sort(order), shown: shown.sort(order) }
 }
 
 /** Numbers each `W` in the text, in order: w0, w1, … */
@@ -37,128 +42,146 @@ function numbered(text) {
   return text.replace(/W/g, () => `w${n++}`)
 }
 
-const spansLines = (nodes) => nodes.some((n) => n.type === 'spoiler')
+const words = (from, to) => Array.from({ length: to - from + 1 }, (_, k) => `w${from + k}`)
+
+describe('the two readings', () => {
+  it('fails closed by default, and reads each line alone, as at 22b6793, with { oneLine: true }', () => {
+    expect(parse('||a\nb||')).toEqual([unit(line(t('a')), line(t('b')))])
+    expect(parse('||a\nb||', {})).toEqual(parse('||a\nb||'))
+    expect(parse('||a\nb||', { oneLine: false })).toEqual(parse('||a\nb||'))
+    expect(parse('||a\nb||', ONE)).toEqual([line(t('||a')), line(t('b||'))])
+  })
+
+  it.each([[null], ['yes'], [1], [true]])('refuses options %j that are no object', (options) => {
+    expect(() => parse('a', options)).toThrow(new TypeError('markdown options must be an object'))
+  })
+
+  it.each([['yes'], [1], [null], [{}]])('refuses a oneLine %j that is no boolean', (oneLine) => {
+    expect(() => parse('a', { oneLine })).toThrow(new TypeError('oneLine must be true or false'))
+  })
+
+  it('reads every text in the archive reading exactly as 22b6793 did', () => {
+    const tokens = ['**', '*', '_', '__', '~~', '||', '|', '|||', '`', '```', '> ', '>>> ', '# ', '-# ', '- ', '1. ', '[', '](', ')', '<', '>',
+      '\\', `<:e:${E}>`, `<@&${E}>`, 'https://a.io/x', 'word', ' ', '\\|', ZWSP, LS, '\n', '\n', '\r\n', '\r']
+    fc.assert(fc.property(fc.array(fc.constantFrom(...tokens), { maxLength: 80 }), (parts) => {
+      const s = parts.join('')
+      expect(parse(s, ONE)).toEqual(parseBefore(s))
+    }), { numRuns: 4000 })
+    fc.assert(fc.property(fc.string({ maxLength: 300 }), (s) => {
+      expect(parse(s, ONE)).toEqual(parseBefore(s))
+    }), { numRuns: 2000 })
+  })
+})
 
 describe('a spoiler that runs over lines', () => {
   it.each([
-    ['two lines', '||ALPHA\nBRAVO||', [spoiler(line(t('ALPHA')), line(t('BRAVO')))]],
-    ['a blank line between', '||ALPHA\n\nBRAVO||', [spoiler(line(t('ALPHA')), blank, line(t('BRAVO')))]],
-    ['a quote between (read alone, it hides to the last bar)', '||ALPHA\n> quote\nBRAVO||', [last(line(t('ALPHA')), quote(line(t('quote'))), line(t('BRAVO')))]],
-    ['a list between (the same)', '||ALPHA\n- item\nBRAVO||', [last(line(t('ALPHA')), list('item'), line(t('BRAVO')))]],
-    ['a heading between (the same)', '||ALPHA\n## Head\nBRAVO||', [last(line(t('ALPHA')), { type: 'heading', level: 2, children: [t('Head')] }, line(t('BRAVO')))]],
-    ['a whole fence between, bars and all', '||a\n```\nx || y\n```\nb||', [last(line(t('a')), { type: 'codeblock', lang: '', text: 'x || y' }, line(t('b')))]],
+    ['two lines', '||ALPHA\nBRAVO||', [unit(line(t('ALPHA')), line(t('BRAVO')))]],
+    ['a blank line between', '||ALPHA\n\nBRAVO||', [unit(line(t('ALPHA')), blank, line(t('BRAVO')))]],
+    ['a quote between', '||ALPHA\n> quote\nBRAVO||', [unit(line(t('ALPHA')), quote(line(t('quote'))), line(t('BRAVO')))]],
+    ['a list between', '||ALPHA\n- item\nBRAVO||', [unit(line(t('ALPHA')), list('item'), line(t('BRAVO')))]],
+    ['a heading between', '||ALPHA\n## Head\nBRAVO||', [unit(line(t('ALPHA')), { type: 'heading', level: 2, children: [t('Head')] }, line(t('BRAVO')))]],
+    ['a whole fence between, bars and all', '||a\n```\nx || y\n```\nb||', [unit(line(t('a')), { type: 'codeblock', lang: '', text: 'x || y' }, line(t('b')))]],
   ])('is one spoiler node: %s', (_, src, nodes) => {
     expect(parse(src)).toEqual(nodes)
   })
 
-  it('keeps the words before the opener and after the closer outside it, on lines of their own', () => {
-    expect(parse('before ||ALPHA\nBRAVO|| after')).toEqual([line(t('before ')), spoiler(line(t('ALPHA')), line(t('BRAVO'))), line(t(' after'))])
-    expect(parse('||ALPHA\nBRAVO||\nCHARLIE')).toEqual([spoiler(line(t('ALPHA')), line(t('BRAVO'))), line(t('CHARLIE'))])
-    expect(parse('x\n||a\nb||')).toEqual([line(t('x')), spoiler(line(t('a')), line(t('b')))])
+  it('keeps the words before its first bar and after its last outside it, on lines of their own', () => {
+    expect(parse('before ||ALPHA\nBRAVO|| after')).toEqual([line(t('before ')), unit(line(t('ALPHA')), line(t('BRAVO'))), line(t(' after'))])
+    expect(parse('||ALPHA\nBRAVO||\nCHARLIE')).toEqual([unit(line(t('ALPHA')), line(t('BRAVO'))), line(t('CHARLIE'))])
+    expect(parse('x\n||a\nb||')).toEqual([line(t('x')), unit(line(t('a')), line(t('b')))])
   })
 
-  it('hides to the last bar when the closing line holds more bars before its closer', () => {
-    // Discord may read "b" closing the first and "||c||" as a second spoiler, with the space shown; this hides it all.
-    expect(parse('||a\nb|| ||c||')).toEqual([last(line(t('a')), line(t('b'), spoiler(t(' ')), t('c')))])
-    expect(parse('||a\nb|| ||c\nd||')).toEqual([last(line(t('a')), line(t('b'), spoiler(t(' ')), t('c')), line(t('d')))])
-  })
-
-  it('hides to the last bar when the closer sits in a span (the span may be read first)', () => {
-    expect(parse('||a\n**b||** ||c||')).toEqual([last(line(t('a')), line({ type: 'strong', children: [t('b||')] }, t(' ||c')))])
-    expect(parse('||a\n**b||** ||c\nd||')).toEqual([last(line(t('a')), line({ type: 'strong', children: [t('b||')] }, t(' ||c')), line(t('d')))])
-  })
-
-  it('keeps one-line spoilers before the opener as they were', () => {
-    expect(parse('||x|| ||a\nb||')).toEqual([line(spoiler(t('x')), t(' ')), spoiler(line(t('a')), line(t('b')))])
-  })
-
-  it('hides to the last bar over one-line spoilers on the lines between, which sit inside it (nesting)', () => {
-    // Nesting is unclear in Discord: two spoilers with "b" shown, or one with "b" inside. Both are hidden.
-    expect(parse('||a\n||b||\nc||')).toEqual([last(line(t('a')), line(spoiler(t('b'))), line(t('c')))])
-    expect(parse('||a\nx ||b|| y ||c||\nd||')).toEqual([last(line(t('a')), line(t('x '), spoiler(t('b')), t(' y '), spoiler(t('c'))), line(t('d')))])
-  })
-
-  it('hides to the last bar when a bar in inline code or a fence lies between (a closer inside code)', () => {
-    expect(parse('||a\n`b||`\nc||')).toEqual([last(line(t('a')), line({ type: 'code', text: 'b||' }), line(t('c')))])
-    expect(parse('||a\n`b||`')).toEqual([last(line(t('a')), line(t('`b'))), line(t('`'))])
-    expect(parse('||a\n```\nx||\n```')).toEqual([last(line(t('a')), line(t('```')), line(t('x'))), line(t('```'))])
-  })
-
-  it('takes the last bar of the message when no later line leaves one open', () => {
-    expect(parse('||a\nx ||b|| y')).toEqual([last(line(t('a')), line(t('x ||b'))), line(t(' y'))])
-    expect(parse('||a\nb\n||c||\nd\n||e||\nf')).toEqual([
-      last(line(t('a')), line(t('b')), line(spoiler(t('c'))), line(t('d')), line(t('||e'))),
-      line(t('f')),
+  it('reads the certain lines before the first uncertain one as they were', () => {
+    expect(parse('a ||b|| c\n> ||d|| e\n||f\ng||')).toEqual([
+      line(t('a '), spoiler(t('b')), t(' c')),
+      quote(line(spoiler(t('d')), t(' e'))),
+      unit(line(t('f')), line(t('g'))),
     ])
   })
 
-  it('never opens at bars inside inline code or a fence (code is read first)', () => {
-    for (const src of ['`||`\nb||', '```\n||a\n```\nb||', '> ```\n> ||a\n> ```\nb||', '`x ||` y\nz||']) {
-      expect(parse(src), src).toEqual(parseBefore(src))
-    }
+  it('hides from the first bar of the first uncertain line to the last bar, certain lines and words between them too', () => {
+    expect(exposure(parse('w0 ||w1\nw2|| w3\n||w4|| w5\n**w6** ||w7\nw8|| w9'))).toEqual({ hidden: words(1, 8), shown: ['w0', 'w9'] })
+    expect(exposure(parse('w0 ||w1|| **w2** ||w3\nw4|| w5'))).toEqual({ hidden: words(1, 4), shown: ['w0', 'w5'] })
   })
 
-  it('cuts a quote at the opener and keeps the quote on both sides (an opener on a quote line)', () => {
-    expect(parse('> a ||b\n> c||\n> d')).toEqual([quote(line(t('a '))), spoiler(quote(line(t('b')), line(t('c')))), quote(line(t('d')))])
-    expect(parse('> ||a\n> b||\n> c')).toEqual([spoiler(quote(line(t('a')), line(t('b')))), quote(line(t('c')))])
-    expect(parse('> ||a\n> b||')).toEqual([spoiler(quote(line(t('a')), line(t('b'))))])
+  it('leaves the one-line parse when the first uncertain line holds the last bar', () => {
+    for (const src of ['||a\nb', 'a ||b|| c\n**x ||y', 'a\n||', '**a ||b**\nc', 'x\n`a||b` ||c']) expect(parse(src), src).toEqual(parseBefore(src))
   })
 
-  it("hides to the last bar from an opener on a quote's last line (Discord may end the spoiler with the quote)", () => {
-    expect(parse('> a ||b\nc||')).toEqual([quote(line(t('a '))), last(quote(line(t('b'))), line(t('c')))])
-    expect(parse('> ||a\nb||')).toEqual([last(quote(line(t('a'))), line(t('b')))])
-    expect(parse('a ||b\n> c||\nd')).toEqual([line(t('a ')), last(line(t('b')), quote(line(t('c')))), line(t('d'))])
+  it.each([
+    ['inline code', '`c`'], ['a backslash', '\\x'], ['italics', '*e*'], ['underscores', 'snake_case'], ['a strike', '~~s~~'],
+    ['a link', '[l](https://a.io)'], ['a mention', `<@${E}>`], ['an address', 'https://a.io/x'], ['three bars', 'a|||b'],
+    ['four bars', 'a||||b'], ['a line separator', `a${LS}b`], ['an odd bar', '||'], ['a blank pair', '|| ||'],
+  ])('reads a line with %s as uncertain', (_, x) => {
+    expect(exposure(parse(`w0 ${x} ||w1|| w2\nw3 ||w4|| w5`))).toEqual({ hidden: words(1, 4), shown: ['w0', 'w5'] })
   })
 
-  it('keeps a >>> quote around what comes after the closer', () => {
-    expect(parse('>>> a ||b\nc||\nd')).toEqual([quote(line(t('a '))), spoiler(quote(line(t('b')), line(t('c')))), quote(line(t('d')))])
-    expect(parse('>>> a\nb ||c\nd||\ne')).toEqual([quote(line(t('a')), line(t('b '))), spoiler(quote(line(t('c')), line(t('d')))), quote(line(t('e')))])
-    expect(parse('>>> a\n||b\nc||')).toEqual([quote(line(t('a'))), spoiler(quote(line(t('b')), line(t('c'))))])
-    expect(parse('||a\n>>> b|| c\nd')).toEqual([last(line(t('a')), quote(line(t('b')))), quote(line(t(' c')), line(t('d')))])
+  it('reads a line with bars inside a fence as uncertain', () => {
+    expect(exposure(parse('```\nw0 ||w1||\n```\nw2 ||w3|| w4'))).toEqual({ hidden: words(1, 3), shown: ['w0', 'w4'] })
   })
 
-  it('leaves out a quote that the cut leaves empty', () => {
-    expect(parse('||a\n> b||')).toEqual([last(line(t('a')), quote(line(t('b'))))])
-    expect(parse('||a\n>>> b||')).toEqual([last(line(t('a')), quote(line(t('b'))))])
+  it.each([['plain', ''], ['quote', '> '], ['heading', '# '], ['list item', '- '], ['numbered item', '1. '], ['subtext', '-# '], ['>>> quote', '>>> ']])(
+    'reads a %s line whose bars pair within it as certain', (_, prefix) => {
+      for (const src of [`${prefix}w0 ||w1|| w2\nw3 ||w4|| w5`, `${prefix}a | b ||w0|| || w1 || c\n||w2||`, `x\n${prefix}w0 ||w1||`]) {
+        expect(parse(src), src).toEqual(parseBefore(src))
+      }
+    },
+  )
+
+  it('cuts a quote at the first bar and keeps the quote on both sides', () => {
+    expect(parse('> a ||b\n> c||\n> d')).toEqual([quote(line(t('a '))), unit(quote(line(t('b')), line(t('c')))), quote(line(t('d')))])
+    expect(parse('> ||a\n> b||\n> c')).toEqual([unit(quote(line(t('a')), line(t('b')))), quote(line(t('c')))])
+    expect(parse("> a ||b\nc||")).toEqual([quote(line(t('a '))), unit(quote(line(t('b'))), line(t('c')))])
+    expect(parse('a ||b\n> c||\nd')).toEqual([line(t('a ')), unit(line(t('b')), quote(line(t('c')))), line(t('d'))])
+    expect(parse('||a\n> b||')).toEqual([unit(line(t('a')), quote(line(t('b'))))])
   })
 
-  it('reads the markers alone before an opener as words in it, and keeps a list item or heading with words before it (read alone, it hides to the last bar)', () => {
-    expect(parse('- ||a\nb||')).toEqual([last(line(t('- a')), line(t('b')))])
-    expect(parse('# ||a\nb||')).toEqual([last(line(t('# a')), line(t('b')))])
-    expect(parse('1. ||a\nb||')).toEqual([last(line(t('1. a')), line(t('b')))])
-    expect(parse('  ||a\nb||')).toEqual([spoiler(line(t('  a')), line(t('b')))])
-    expect(parse('> - ||a\n> b||')).toEqual([last(quote(line(t('- a')), line(t('b'))))])
-    expect(parse('- one ||a\n- two||')).toEqual([list('one '), last(line(t('a')), list('two'))])
-    expect(parse('# Title ||a\nb||')).toEqual([{ type: 'heading', level: 1, children: [t('Title ')] }, last(line(t('a')), line(t('b')))])
-    expect(parse('-# small ||a\nb||')).toEqual([{ type: 'subtext', children: [t('small ')] }, last(line(t('a')), line(t('b')))])
+  it('keeps a >>> quote around what comes after the last bar', () => {
+    expect(parse('>>> a ||b\nc||\nd')).toEqual([quote(line(t('a '))), unit(quote(line(t('b')), line(t('c')))), quote(line(t('d')))])
+    expect(parse('>>> a\nb ||c\nd||\ne')).toEqual([quote(line(t('a')), line(t('b '))), unit(quote(line(t('c')), line(t('d')))), quote(line(t('e')))])
+    expect(parse('||a\n>>> b|| c\nd')).toEqual([unit(line(t('a')), quote(line(t('b')))), quote(line(t(' c')), line(t('d')))])
+    expect(parse('||a\n>>> b||')).toEqual([unit(line(t('a')), quote(line(t('b'))))])
   })
 
-  it('drops a closing line that is blank before its closer, and keeps one with markers', () => {
-    expect(parse('||a\n  ||')).toEqual([spoiler(line(t('a')))])
-    expect(parse('||a\n> ||\nb')).toEqual([last(line(t('a'))), line(t('b'))])
-    expect(parse('||a\n1. ||')).toEqual([last(line(t('a')), { type: 'list', ordered: true, items: [{ marker: '1.', children: [line()] }] })])
+  it('reads the markers alone before the first bar as words in it, and keeps a list item or heading with words before it', () => {
+    expect(parse('- ||a\nb||')).toEqual([unit(line(t('- a')), line(t('b')))])
+    expect(parse('# ||a\nb||')).toEqual([unit(line(t('# a')), line(t('b')))])
+    expect(parse('1. ||a\nb||')).toEqual([unit(line(t('1. a')), line(t('b')))])
+    expect(parse('  ||a\nb||')).toEqual([unit(line(t('  a')), line(t('b')))])
+    expect(parse('> - ||a\n> b||')).toEqual([unit(quote(line(t('- a')), line(t('b'))))])
+    expect(parse('- one ||a\n- two||')).toEqual([list('one '), unit(line(t('a')), list('two'))])
+    expect(parse('# Title ||a\nb||')).toEqual([{ type: 'heading', level: 1, children: [t('Title ')] }, unit(line(t('a')), line(t('b')))])
+    expect(parse('-# small ||a\nb||')).toEqual([{ type: 'subtext', children: [t('small ')] }, unit(line(t('a')), line(t('b')))])
   })
 
-  it('reads the piece after an opener or a closer as words, never as a block', () => {
-    expect(parse('||- a\nb||')).toEqual([spoiler(line(t('- a')), line(t('b')))])
-    expect(parse('||a\nb|| # c')).toEqual([spoiler(line(t('a')), line(t('b'))), line(t(' # c'))])
-    expect(parse('||a\nb||> c\nd')).toEqual([spoiler(line(t('a')), line(t('b'))), line(t('> c')), line(t('d'))])
-    expect(parse('||a\nb||```\nc\n```')).toEqual([spoiler(line(t('a')), line(t('b'))), line(t('```')), line(t('c')), line(t('```'))])
+  it('drops a last line that is blank before its last bar, and keeps one with markers', () => {
+    expect(parse('||a\n  ||')).toEqual([unit(line(t('a')))])
+    expect(parse('||a\n> ||\nb')).toEqual([unit(line(t('a'))), line(t('b'))])
+    expect(parse('||a\n1. ||')).toEqual([unit(line(t('a')), { type: 'list', ordered: true, items: [{ marker: '1.', children: [line()] }] })])
+  })
+
+  it('reads the pieces the bars cut as words, never as blocks', () => {
+    expect(parse('||- a\nb||')).toEqual([unit(line(t('- a')), line(t('b')))])
+    expect(parse('||a\nb|| # c')).toEqual([unit(line(t('a')), line(t('b'))), line(t(' # c'))])
+    expect(parse('||a\nb||> c\nd')).toEqual([unit(line(t('a')), line(t('b'))), line(t('> c')), line(t('d'))])
+    expect(parse('||a\nb||```\nc\n```')).toEqual([unit(line(t('a')), line(t('b'))), line(t('```')), line(t('c')), line(t('```'))])
   })
 })
 
 describe('hostile input', () => {
   it.each([
-    ['`||` at the end of a line and the start of the next', 'a ||\nb\n|| c', [line(t('a ')), spoiler(line(t('b'))), line(t(' c'))]],
-    ['`||` on a line of its own, twice', '||\n||', [spoiler()]],
-    ['`|||` on both lines', '|||a\nb|||', [spoiler(line(t('|a')), line(t('b'))), line(t('|'))]],
-    ['`||||` opens at its first bar', '||||\nx||', [spoiler(line(t('||')), line(t('x')))]],
-    ['a closer escaped by half', '||a\nb\\||', [last(line(t('a')), line(t('b\\')))]],
-    ['CRLF', '||a\r\nb||', [spoiler(line(t('a')), line(t('b')))]],
-    ['a lone CR', '||a\rb||', [spoiler(line(t('a')), line(t('b')))]],
-    ['ZWSP inside the bars', '||\u200ba\nb\u200b||', [spoiler(line(t('\u200ba')), line(t('b\u200b')))]],
-    ['an opener at EOF after a closed one', '||a\nb||\n||', [spoiler(line(t('a')), line(t('b'))), line(t('||'))]],
-    ['bars in inline code inside it', '||a `x`\n`||` b||', [last(line(t('a '), { type: 'code', text: 'x' }), line({ type: 'code', text: '||' }, t(' b')))]],
+    ['`||` at the end of a line and the start of the next', 'a ||\nb\n|| c', [line(t('a ')), unit(line(t('b'))), line(t(' c'))]],
+    ['`||` on a line of its own, twice', '||\n||', [unit()]],
+    ['`|||` on both lines', '|||a\nb|||', [unit(line(t('|a')), line(t('b|')))]],
+    ['`||||` opens at its first bar', '||||\nx||', [unit(line(t('||')), line(t('x')))]],
+    ['a last bar escaped by half', '||a\nb\\||', [unit(line(t('a')), line(t('b\\')))]],
+    ['a first bar escaped by half', '\\||a\nb||', [line(t('\\')), unit(line(t('a')), line(t('b')))]],
+    ['CRLF', '||a\r\nb||', [unit(line(t('a')), line(t('b')))]],
+    ['a lone CR', '||a\rb||', [unit(line(t('a')), line(t('b')))]],
+    ['ZWSP inside the bars', `||${ZWSP}a\nb${ZWSP}||`, [unit(line(t(`${ZWSP}a`)), line(t(`b${ZWSP}`)))]],
+    ['an opener at EOF after a closed one', '||a\nb||\n||', [unit(line(t('a')), line(t('b||')))]],
+    ['bars in inline code inside it', '||a `x`\n`||` b||', [unit(line(t('a '), code('x')), line(code('||'), t(' b')))]],
+    ['bars on two lines of a fence (Discord may not read it as code)', '```\n||a\nb||\n```', [line(t('```')), unit(line(t('a')), line(t('b'))), line(t('```'))]],
   ])('%s', (_, src, nodes) => {
     expect(parse(src)).toEqual(nodes)
   })
@@ -168,9 +191,8 @@ describe('hostile input', () => {
     ['an opener at EOF', 'a\n||'],
     ['an opener with only blank lines after it', 'a ||b\n\nc'],
     ['escaped bars', '\\|\\|a\nb||'],
-    ['escaped bars at the close', '||a\nb\\|\\|'],
-    ['half an escaped opener', '\\||a\nb||'],
-    ['ZWSP between the bars', '|\u200b|a\nb||'],
+    ['escaped bars at the end', '||a\nb\\|\\|'],
+    ['ZWSP between the bars', `|${ZWSP}|a\nb||`],
     ['one-line spoilers on each line', '||a|| b\nc ||d||'],
     ['`||||` alone', '||||'],
   ])('%s stays as it was', (_, src) => {
@@ -182,7 +204,7 @@ describe('hostile input', () => {
     ['100k lines of `||` alone', Array.from({ length: 100_000 }, () => '||').join('\n')],
     ['an opener, then 100k lines of one-line spoilers', '||open\n' + Array.from({ length: 100_000 }, () => '||x|| y').join('\n')],
     ['100k mixed lines', Array.from({ length: 100_000 }, (_, i) => ['||a', '> b ||c||', '- d||', '```', 'x || y', '```', '`||` e', '>>> f ||'][i % 8]).join('\n')],
-    ['100k lines that open and never close', Array.from({ length: 100_000 }, () => 'a ||b').join('\n') + '\nz'],
+    ['100k certain lines', Array.from({ length: 100_000 }, () => 'a ||b|| c').join('\n')],
   ])('%s parse in bounded time', (_, s) => {
     const budget = globalThis.__stryker__ ? 60_000 : 6000
     const at = performance.now()
@@ -191,9 +213,39 @@ describe('hostile input', () => {
   }, 120_000)
 })
 
-describe('unchanged where no spoiler runs over lines', () => {
+describe('what the reviews found shown, hidden now', () => {
+  it.each([
+    ['an opener in bold', '**w0 ||w1**\n||w2\nw3||', ['w0']],
+    ['an opener on a quote line', '> ||w0\n||w1\nw2||', []],
+    ['an opener in a heading', '# w0 ||w1\n||w2\nw3||', ['w0']],
+    ['a bar in inline code between', '||w0\n`w1||` ||w2\nw3|| w4', ['w4']],
+    ['a bar in a fence between', '||w0\n```\nw1||\n```\n||w2\nw3||', []],
+    ['a half-escaped bar between', '||w0\nw1 \\|| w2 ||w3\nw4||', []],
+    ['a bar in code, then words after it', '||w0\n`w1||w2`\nw3|| w4\n||w5\nw6||', []],
+    ['a bar in a link label between', '||w0\n[w1 ||w2](https://a.io) w3||\n||w4\nw5|| w6', ['w6']],
+    ['four bars before the opener', '||||w0||\nw1|| w2\n||w3', ['w3']],
+    ['five bars', '|||||w0\nw1|| w2\n||w3\nw4||', []],
+    ['bold over lines round the opener', '**w0\n||w1**\nw2|| w3\nw4||', ['w0']],
+    ['italics over lines round the opener', '*w0\n||w1*\nw2|| w3\nw4||', ['w0']],
+    ['bold over lines after the opener', '**w0 ||w1\nw2** w3|| w4\n||w5', ['w0', 'w5']],
+    ['inline code over lines', '`w0\nw1 ||w2`\nw3|| w4\nw5||', ['w0', 'w1']],
+    ['bold over lines between two spoilers', '||w0\nw1|| **w2\n||w3**\nw4|| w5\nw6||', []],
+    ['a code block that closes mid-line', '```\nx ||w0\ny```\nw1 ||w2\nw3||', []],
+    ['a code block that opens mid-line', 'see ```\nx ||w0\n```\nw1 ||w2\nw3||', []],
+    ['a bar in a fence the site reads as code', '```\na``` ||w0\n```\nw1 ||w2\nw3||', []],
+    ['the one-line code rule', '`a ||w0``\nw1|| w2\n||w3\nw4||', []],
+    ['the one-line em rule', '*w0 **x** ||w1*\nw2|| w3\nw4||', ['w0']],
+    ['a bare > in a quote', '> ||w0\n>\n> w1|| w2\n> w3||', []],
+    ['a list item running on', '- w0\n||w1\n\nw2|| w3\n||w4\nw5||', ['w0']],
+  ])('%s', (_, src, shown) => {
+    const all = src.match(WORD)
+    expect(exposure(parse(src))).toEqual({ hidden: all.filter((w) => !shown.includes(w)).sort((a, b) => a.slice(1) - b.slice(1)), shown })
+  })
+})
+
+describe('unchanged where every bar pairs on its line', () => {
   const tokens = ['**', '*', '_', '__', '~~', '||', '|', '`', '```', '> ', '>>> ', '# ', '-# ', '- ', '1. ', '[', '](', ')', '<', '>', '\\',
-    `<:e:${E}>`, `<@&${E}>`, 'https://a.io/x', 'word', ' ', '\\|', '\u200b']
+    `<:e:${E}>`, `<@&${E}>`, 'https://a.io/x', 'word', ' ', '\\|', ZWSP]
   it('parses every text with no line break exactly as before', () => {
     fc.assert(fc.property(fc.array(fc.constantFrom(...tokens), { maxLength: 60 }), (parts) => {
       const s = parts.join('')
@@ -214,162 +266,115 @@ describe('unchanged where no spoiler runs over lines', () => {
       expect(parse(s)).toEqual(parseBefore(s))
     }), { numRuns: 3000 })
   })
-  it('parses every text exactly as before when it finds no spoiler that runs over lines', () => {
-    fc.assert(fc.property(fc.array(fc.constantFrom(...tokens, '\n', '\n', '\r\n'), { maxLength: 60 }), (parts) => {
-      const s = parts.join('')
-      const now = parse(s)
-      if (!spansLines(now)) expect(now).toEqual(parseBefore(s))
-    }), { numRuns: 4000 })
-  })
-})
-
-describe('a spoiler after one over lines, where the readings of Discord pair the bars differently', () => {
-  // Each row: words a reading of Discord hides after the first spoiler, and that reading. The site hides them all.
-  it.each([
-    ['an opener in bold (a span is read first, so `||w2` opens)', '**w0 ||w1**\n||w2\nw3||', ['w1', 'w2', 'w3'], ['w0']],
-    ['an opener on a quote line (a quote is read alone)', '> ||w0\n||w1\nw2||', ['w0', 'w1', 'w2'], []],
-    ['an opener in a heading', '# w0 ||w1\n||w2\nw3||', ['w1', 'w2', 'w3'], ['w0']],
-    ['an opener in a subtext', '-# w0 ||w1\n||w2\nw3||', ['w1', 'w2', 'w3'], ['w0']],
-    ['an opener in a list item', '- w0 ||w1\n||w2\nw3||', ['w1', 'w2', 'w3'], ['w0']],
-    ['a bar in inline code between (it may close, and `||w2` open)', '||w0\n`w1||` ||w2\nw3|| w4', ['w0', 'w1', 'w2', 'w3'], ['w4']],
-    ['a bar in a fence between', '||w0\n```\nw1||\n```\n||w2\nw3||', ['w0', 'w1', 'w2', 'w3'], []],
-    ['a half-escaped bar between', '||w0\nw1 \\|| w2 ||w3\nw4||', ['w0', 'w1', 'w2', 'w3', 'w4'], []],
-    ['a bar in code, then words after the closer', '||w0\n`w1||w2`\nw3|| w4\n||w5\nw6||', ['w0', 'w1', 'w2', 'w3', 'w4', 'w5', 'w6'], []],
-    ['a bar in a link label between', '||w0\n[w1 ||w2](https://a.io) w3||\n||w4\nw5|| w6', ['w0', 'w1', 'w2', 'w3', 'w4', 'w5'], ['w6']],
-  ])('%s', (_, src, hidden, shown) => {
-    const seen = exposure(parse(src))
-    expect(seen.hidden.sort()).toEqual(hidden)
-    expect(seen.shown.sort()).toEqual(shown)
-  })
-
-  it('still shows what follows a closer every reading agrees on', () => {
-    expect(exposure(parse('||w0\nw1|| w2\n||w3\nw4|| w5'))).toEqual({ hidden: ['w0', 'w1', 'w3', 'w4'], shown: ['w2', 'w5'] })
-    expect(exposure(parse('||w0\n||w1||\n> ||w2||\nw3|| w4'))).toEqual({ hidden: ['w0', 'w1', 'w2', 'w3'], shown: ['w4'] })
-    expect(exposure(parse('> ||w0\n> w1|| w2\n> w3'))).toEqual({ hidden: ['w0', 'w1'], shown: ['w2', 'w3'] })
-    expect(exposure(parse('>>> ||w0\nw1|| w2'))).toEqual({ hidden: ['w0', 'w1'], shown: ['w2'] })
-  })
-
-  it('hides to the last bar when a > quote it opens in ends before its closer', () => {
-    expect(exposure(parse('> ||w0\n> w1\nw2\n> w3|| w4\n||w5|| w6'))).toEqual({ hidden: ['w0', 'w1', 'w2', 'w3', 'w4', 'w5'], shown: ['w6'] })
-  })
-})
-
-describe('what a line leaves, as parseInline tells it', () => {
-  it('gives where each open bar, one-line spoiler, code span and escape starts, spans included', () => {
-    const s = 'a ||b|| `c||` \\| **d ||e** [f ||g](https://a.io) *h ||i* ***j ||k*** ~~l ||m~~ __n ||o__ ||p'
-    const seen = { open: [], pairs: [], code: [], escaped: [] }
-    parseInline(s, seen)
-    expect(seen).toEqual({
-      open: [
-        { at: 21, top: false }, { at: 30, top: false }, { at: 52, top: false }, { at: 62, top: false },
-        { at: 73, top: false }, { at: 83, top: false }, { at: 89, top: true },
-      ],
-      pairs: [{ from: 2, to: 5, top: true }],
-      code: [[8, 13]],
-      escaped: [15],
-    })
-    expect(seen.open.map(({ at }) => s.slice(at, at + 3))).toEqual(['||e', '||g', '||i', '||k', '||m', '||o', '||p'])
-    const inner = { open: [], pairs: [], code: [], escaped: [] }
-    parseInline('**||a|| ||b**', inner)
-    expect(inner).toEqual({ open: [{ at: 8, top: false }], pairs: [{ from: 2, to: 5, top: false }], code: [], escaped: [] })
+  it('parses every text whose lines with bars are all certain exactly as before', () => {
+    const tok = fc.constantFrom('W', 'W.', '||W||', '||W W||', '|| W ||', 'a | b', '#', '-', '>', '(x)', '!', '?', '@here', ':e:', '1.')
+    const lineOf = fc.tuple(fc.constantFrom('', '', '> ', '>>> ', '- ', '1. ', '# ', '-# ', '  '), fc.array(tok, { maxLength: 6 }))
+      .map(([prefix, parts]) => prefix + parts.join(' '))
+    fc.assert(fc.property(fc.array(lineOf, { minLength: 1, maxLength: 10 }), (lines) => {
+      const s = numbered(lines.join('\n'))
+      expect(parse(s)).toEqual(parseBefore(s))
+    }), { numRuns: 3000 })
   })
 })
 
 describe('fail closed', () => {
   /**
-   * The plausible readings of Discord, each run on its own. While no spoiler over lines is open, each reads a line as the
-   * site's one-line parser does (the one-line readings are frozen as they were at 22b6793). They differ in which `||` a
-   * line leaves open may open one, and which later `||` closes it, and each reads the rest of the closing line again:
-   *   opener: any the line leaves open | only one no span holds | only on a line that is no heading, subtext or list item
-   *   closer: the first a later line leaves open | the first `||` of all | the first outside code and not escaped |
-   *           the first no span holds | (blocks read alone) the first a later line of the same block leaves open, with
-   *           the lines around a block one block, or each run of them apart.
-   * → [start, end) of every stretch any of them hides. `code` says which lines a fence holds.
+   * One reading of Discord over the whole message: a lazy scan in the way of its markdown rules, each spoiler a `||` and
+   * the nearest `||` at least one character on, with the rules that may hold bars switched on or off: code blocks (none,
+   * the site's fence lines, or open and close at any ```), inline code (none, on one line, or over lines), spans `**`
+   * `__` `~~` `*` `_` (none, on one line, or over lines; an em that may hold a `**` or not), escapes, and blocks (one
+   * flow, or each quote, heading, subtext and list item read alone and the lines around them apart).
+   * → [start, end) of each stretch it hides.
    */
-  function hiddenByAnyReading(lines, code) {
+  function readingHides(lines, code, o) {
     const starts = []
-    lines.reduce((at, line) => (starts.push(at), at + line.length + 1), 0)
-    const seenOf = (text) => {
-      const seen = { open: [], pairs: [], code: [], escaped: [] }
-      parseInline(text, seen)
-      return seen
+    lines.reduce((at, l, k) => (starts.push(at), at + l.length + 1), 0)
+    const shown = lines.map((l, k) => (o.fence === 'lines' && code[k] ? 'x'.repeat(l.length) : l))
+    const out = []
+    const SPANS = ['**', '__', '~~', '*', '_']
+    const scan = (s, base) => {
+      const closeOf = (d, from, over) => {
+        const e = s.indexOf(d, from)
+        return e === -1 || (!over && s.slice(from, e).includes('\n')) ? -1 : e
+      }
+      for (let i = 0; i < s.length; ) {
+        if (o.escapes && s[i] === '\\') {
+          i += 2
+          continue
+        }
+        if (o.fence === 'mid' && s.startsWith('```', i)) {
+          const e = s.indexOf('```', i + 3)
+          if (e !== -1) {
+            i = e + 3
+            continue
+          }
+        }
+        if (o.code !== 'none' && s[i] === '`') {
+          const e = closeOf('`', i + 1, o.code === 'over')
+          if (e !== -1) {
+            i = e + 1
+            continue
+          }
+        }
+        if (s.startsWith('||', i)) {
+          const e = s.indexOf('||', i + 3)
+          if (e !== -1) {
+            out.push([base + i, base + e + 2])
+            i = e + 2
+            continue
+          }
+        }
+        const d = o.spans === 'none' ? undefined : SPANS.find((x) => s.startsWith(x, i))
+        if (d) {
+          let e = closeOf(d, i + d.length, o.spans === 'over')
+          while (d === '*' && o.em === 'skip' && e !== -1 && s[e + 1] === '*') e = closeOf('*', e + 2, o.spans === 'over')
+          if (e > i + d.length) {
+            scan(s.slice(i + d.length, e), base + i + d.length)
+            i = e + d.length
+            continue
+          }
+        }
+        i++
+      }
+    }
+    if (o.blocks === 'flow') {
+      scan(shown.join('\n'), 0)
+      return out
     }
     let deep = false
-    let group = -1
-    const block = lines.map((line, k) => {
-      const start = !deep && !code[k] && line.startsWith('>>> ')
-      deep ||= start
-      const quoted = !deep && (line.startsWith('> ') || line === '>')
-      group = quoted ? (group === -1 ? k : group) : -1
-      const own = start ? line.slice(4) : quoted ? line.slice(2) : line
-      if (code[k]) return 'code'
-      if (/^[ \t]*(?:#{1,3} +\S|-# +\S|(?:[-*]|\d{1,9}\.) +)/.test(own)) return `alone${k}`
-      return deep ? 'deep' : quoted ? `quote${group}` : 'plain'
+    const key = lines.map((l, k) => {
+      deep ||= !code[k] && l.startsWith('>>> ')
+      const quoted = !deep && (l.startsWith('> ') || l === '>')
+      const own = quoted ? l.slice(2) : l.replace(/^>>> /, '')
+      if (!code[k] && /^[ \t]*(?:#{1,3} +\S|-# +\S|(?:[-*]|\d{1,9}\.) +)/.test(own)) return `alone${k}`
+      return deep ? 'deep' : quoted ? 'quote' : 'plain'
     })
-    // The same, with the lines around a block read apart: a run of lines of one block, broken by any other.
-    let run = 0
-    const runs = block.map((b, k) => (k > 0 && b === block[k - 1] && b !== 'code' && !b.startsWith('alone') ? run : ++run))
-    const later = (i, find) => {
-      for (let j = i + 1; j < lines.length; j++) {
-        const at = find(j)
-        if (at !== undefined && at !== -1) return [j, at]
-      }
-      return null
+    for (let k = 0; k < lines.length; ) {
+      let end = k + 1
+      while (end < lines.length && key[end] === key[k] && !key[k].startsWith('alone')) end++
+      scan(shown.slice(k, end).join('\n'), starts[k])
+      k = end
     }
-    const firstOpen = (j) => (code[j] ? undefined : seenOf(lines[j]).open[0]?.at)
-    const closers = {
-      open: (i) => later(i, firstOpen),
-      raw: (i) => later(i, (j) => lines[j].indexOf('||')),
-      outside: (i) => later(i, (j) => {
-        if (code[j]) return undefined
-        const seen = seenOf(lines[j])
-        for (let at = lines[j].indexOf('||'); at !== -1; at = lines[j].indexOf('||', at + 1)) {
-          if (!seen.escaped.includes(at) && !seen.code.some(([a, b]) => at >= a && at < b)) return at
-        }
-        return undefined
-      }),
-      top: (i) => later(i, (j) => (code[j] ? undefined : seenOf(lines[j]).open.find((b) => b.top)?.at)),
-      alone: (i) => later(i, (j) => (block[j] === block[i] ? firstOpen(j) : undefined)),
-      apart: (i) => later(i, (j) => (runs[j] === runs[i] ? firstOpen(j) : undefined)),
-    }
-    const openers = { any: () => true, top: (bar) => bar.top, shared: (_, i) => !block[i].startsWith('alone') }
-    const readings = [
-      ['any', 'open'], ['any', 'raw'], ['any', 'outside'], ['any', 'top'],
-      ['top', 'open'], ['top', 'raw'], ['top', 'outside'], ['top', 'top'],
-      ['shared', 'alone'], ['shared', 'apart'],
-    ]
-    const hidden = []
-    for (const [opens, closes] of readings) {
-      for (let i = 0, from = 0; i < lines.length; ) {
-        if (code[i] && from === 0) {
-          i++
-          continue
-        }
-        const seen = seenOf(lines[i].slice(from))
-        for (const pair of seen.pairs) hidden.push([starts[i] + from + pair.from, starts[i] + from + pair.to + 2])
-        const bar = seen.open.find((b) => openers[opens](b, i))
-        const end = bar && closers[closes](i)
-        if (!end) {
-          i++
-          from = 0
-          continue
-        }
-        hidden.push([starts[i] + from + bar.at, starts[end[0]] + end[1] + 2])
-        i = end[0]
-        from = end[1] + 2
-      }
-    }
-    return hidden
+    return out
   }
 
-  it('hides every word any reading of Discord hides, with bars in and out of code, fences, escapes, spans, quotes and headings', () => {
-    const tok = fc.constantFrom('W', 'W', '||', '||', '||W||', '`W||W`', '`W`', '\\||', '\\|\\|', '**W ||W**', '*W ||W*', '[W ||W](https://a.io)', '**W**')
-    const text = fc.tuple(fc.constantFrom('', '', '> ', '>>> ', '- ', '1. ', '# ', '-# '), fc.array(tok, { maxLength: 5 }))
+  const READINGS = []
+  for (const fence of ['none', 'lines', 'mid']) {
+    for (const code of ['none', 'line', 'over']) {
+      for (const [spans, em] of [['none', 'near'], ['line', 'near'], ['line', 'skip'], ['over', 'near'], ['over', 'skip']]) {
+        for (const escapes of [true, false]) for (const blocks of ['flow', 'alone']) READINGS.push({ fence, code, spans, em, escapes, blocks })
+      }
+    }
+  }
+
+  it('hides every word any reading of Discord, or the site line by line, hides', () => {
+    const tok = fc.constantFrom('W', 'W', '||', '||', '||W||', '`W||W`', '`W`', '`', '```', '\\||', '\\|\\|', '**W ||W**', '*W ||W*', '**', '*', '_',
+      '~~', '[W ||W](https://a.io)', '**W**', '|||', '||||', '|||||', 'W|W')
+    const text = fc.tuple(fc.constantFrom('', '', '> ', '>', '>>> ', '- ', '1. ', '# ', '-# '), fc.array(tok, { maxLength: 5 }))
       .map(([prefix, parts]) => ({ lines: [prefix + parts.join(' ')], code: [false] }))
     const fence = fc.tuple(fc.boolean(), fc.array(tok, { minLength: 1, maxLength: 4 })).map(([quoted, parts]) => ({ quoted, body: parts.join(' ') }))
     const blank = fc.constant({ lines: [''], code: [false] })
-    fc.assert(fc.property(fc.array(fc.oneof(text, text, fence, blank), { minLength: 1, maxLength: 8 }), (blocks) => {
-      // Inside a >>> quote a fence in a > quote is no fence, so after one it is a plain fence.
+    fc.assert(fc.property(fc.array(fc.oneof(text, text, fence, blank), { minLength: 1, maxLength: 7 }), (blocks) => {
       let deep = false
       const all = blocks.map((b) => {
         if (b.body === undefined) {
@@ -380,50 +385,51 @@ describe('fail closed', () => {
         return { lines: [`${q}\`\`\``, q + b.body, `${q}\`\`\``], code: [true, true, true] }
       })
       const s = numbered(all.flatMap((b) => b.lines).join('\n'))
-      const stretches = hiddenByAnyReading(s.split('\n'), all.flatMap((b) => b.code))
-      const { hidden, shown } = exposure(parse(s))
+      const lines = s.split('\n')
+      const codeLines = all.flatMap((b) => b.code)
+      const stretches = READINGS.flatMap((o) => readingHides(lines, codeLines, o))
+      const byLine = new Set(exposure(parseBefore(s)).hidden)
+      const nodes = parse(s)
+      const { hidden, shown } = exposure(nodes)
       const first = s.indexOf('||')
       const last = s.lastIndexOf('||')
+      // With no spoiler over lines, every bar off the last line with bars is on a certain line, and that last line's
+      // one-line parse stands as it was (the ruling: a reading may differ within one line there, as before).
+      const frozen = nodes.some((n) => n.lastBar) ? [] : [s.lastIndexOf('\n', last) + 1, (s.indexOf('\n', last) + 1 || s.length + 1) - 1]
       for (const m of s.matchAll(WORD)) {
-        if (stretches.some(([a, b]) => m.index >= a && m.index < b)) expect(hidden, `${m[0]} in ${JSON.stringify(s)}`).toContain(m[0])
-        if (first === -1 || m.index < first || m.index > last) expect(shown, `${m[0]} in ${JSON.stringify(s)}`).toContain(m[0])
+        const why = `${m[0]} in ${JSON.stringify(s)}`
+        const onFrozen = frozen.length > 0 && m.index >= frozen[0] && m.index < frozen[1]
+        if (!onFrozen && (byLine.has(m[0]) || stretches.some(([a, b]) => m.index >= a && m.index < b))) expect(hidden, why).toContain(m[0])
+        if (first === -1 || m.index < first || m.index > last + 1) expect(shown, why).toContain(m[0])
       }
-    }), { numRuns: 3000 })
+    }), { numRuns: 1500 })
   })
 
-  it('hides exactly the words between each pair of bars when every reading agrees on them, and shows the rest', () => {
-    // A piece is text and, for each W in it, whether a spoiler on its own line hides it.
-    const piece = (text, ...hide) => ({ text, hide })
-    const quietTokens = fc.array(fc.constantFrom(piece('W', false), piece('||W||', true), piece('`W`', false), piece('\\|\\|'), piece('**W**', false)), { minLength: 1, maxLength: 3 })
-    const loudTokens = fc.array(fc.constantFrom(piece('W', false), piece('||W||', true), piece('`W||W`', false, false), piece('\\|\\|'), piece('**W**', false)), { minLength: 1, maxLength: 3 })
-    const plainTokens = fc.array(fc.constantFrom(piece('W', false), piece('\\|\\|'), piece('**W**', false)), { maxLength: 3 })
-    const join = (pieces, prefix = '') => ({ lines: [prefix + pieces.map((p) => p.text).join(' ')], hide: pieces.flatMap((p) => p.hide) })
-    const prefix = fc.constantFrom('', '', '> ', '- ', '1. ', '# ')
-    const fence = (tokens) => fc.tuple(tokens, fc.boolean()).map(([pieces, quoted]) => {
-      const q = quoted ? '> ' : ''
-      return { lines: [`${q}\`\`\``, q + pieces.map((p) => p.text).join(' '), `${q}\`\`\``], hide: pieces.flatMap((p) => p.hide.map(() => false)) }
-    })
-    const blank = fc.constant({ lines: [''], hide: [] })
-    const calm = fc.array(fc.constantFrom(piece('W', false), piece('`W`', false), piece('\\|\\|'), piece('**W**', false)), { minLength: 1, maxLength: 3 })
-    // Between the bars: plain lines of words, inline code and escaped bars, and blank lines; no bar, no other block.
-    const quiet = fc.oneof(calm.map((pieces) => join(pieces)), blank)
-    // Outside them, bars in code and fences too.
-    const loud = fc.oneof(fc.tuple(loudTokens, prefix).map(([pieces, pre]) => join(pieces, pre)), fence(loudTokens), blank)
-    const region = fc.tuple(fc.option(quietTokens), plainTokens, fc.array(quiet, { maxLength: 3 }), fc.option(calm), plainTokens)
-      .map(([before, after, inner, closeBefore, tail]) => {
-        const head = before ? before.map((p) => p.text).join(' ') + ' ' : ''
-        const closing = closeBefore ? closeBefore.map((p) => p.text).join(' ') + ' ' : ''
-        return {
-          lines: [`${head}||${after.map((p) => p.text).join(' ')}`, ...inner.flatMap((b) => b.lines), `${closing}W||${tail.map((p) => p.text).join(' ')}`],
-          hide: [...(before ?? []).flatMap((p) => p.hide), ...after.flatMap((p) => p.hide.map(() => true)), ...inner.flatMap((b) => b.hide.map(() => true)), ...(closeBefore ?? []).flatMap((p) => p.hide.map(() => true)), true, ...tail.flatMap((p) => p.hide)],
-        }
-      })
-    fc.assert(fc.property(fc.array(fc.oneof(loud, region, region), { minLength: 1, maxLength: 5 }), (blocks) => {
-      const s = numbered(blocks.flatMap((b) => b.lines).join('\n'))
+  it('hides exactly what lies between the first bar of the first uncertain line and the last bar, after certain lines', () => {
+    const certainTok = fc.constantFrom('W', 'W', '||W||', '|| W ||', 'a | W')
+    const certainLine = fc.tuple(fc.constantFrom('', '> ', '- ', '# '), fc.array(certainTok, { maxLength: 4 })).map(([p, parts]) => p + parts.join(' '))
+    const unsure = fc.constantFrom('||', '**W**', '`W`', 'W_W', '\\x', '[W](https://a.io)', '|||')
+    const uncertainLine = fc.tuple(fc.array(certainTok, { maxLength: 2 }), unsure, fc.array(certainTok, { maxLength: 2 }))
+      .map(([a, x, b]) => [...a, x, ...b, '||W||'].join(' '))
+    const anyLine = fc.oneof(certainLine, uncertainLine, fc.constantFrom('', 'W', 'W ||W', 'W|| W'))
+    fc.assert(fc.property(fc.array(certainLine, { maxLength: 3 }), uncertainLine, fc.array(anyLine, { minLength: 1, maxLength: 4 }), (before, u, after) => {
+      const s = numbered([...before, u, ...after].join('\n'))
+      const lines = s.split('\n')
+      const uStart = lines.slice(0, before.length).reduce((n, l) => n + l.length + 1, 0)
+      const first = s.indexOf('||', uStart)
+      const last = s.lastIndexOf('||')
+      if (last < uStart + lines[before.length].length) {
+        expect(parse(s)).toEqual(parseBefore(s))
+        return
+      }
+      const oldHidden = new Set(exposure(parseBefore(lines.slice(0, before.length).join('\n'))).hidden)
       const expected = { hidden: [], shown: [] }
-      blocks.flatMap((b) => b.hide).forEach((h, i) => (h ? expected.hidden : expected.shown).push(`w${i}`))
-      const { hidden, shown } = exposure(parse(s))
-      expect({ hidden: hidden.sort(), shown: shown.sort() }, JSON.stringify(s)).toEqual({ hidden: expected.hidden.sort(), shown: expected.shown.sort() })
+      for (const m of s.matchAll(WORD)) {
+        const inside = m.index > first && m.index < last
+        ;(inside || (m.index < uStart && oldHidden.has(m[0])) ? expected.hidden : expected.shown).push(m[0])
+      }
+      const order = (a, b) => a.slice(1) - b.slice(1)
+      expect(exposure(parse(s)), JSON.stringify(s)).toEqual({ hidden: expected.hidden.sort(order), shown: expected.shown.sort(order) })
     }), { numRuns: 2000 })
   })
 })

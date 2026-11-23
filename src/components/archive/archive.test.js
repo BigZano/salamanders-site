@@ -187,6 +187,17 @@ describe('ArchiveView', () => {
     const { w } = await mountView(`/ranks/${IDS.A_T2}`)
     expect(w.text()).toContain("isn't in the archive")
   })
+  it('reads each line of a message alone, as it always has: bars over lines are no spoiler in the archive', async () => {
+    const index = makeIndex()
+    const file = `threads/${IDS.A_T2}.json`
+    const thread = JSON.parse(index.collections.accolades.files[file])
+    thread.messages[1].content = 'seen ||hidden one\n**more** hidden|| after'
+    index.collections.accolades.files[file] = JSON.stringify(thread)
+    const { w } = await mountView(`/accolades/${IDS.A_T2}`, { index })
+    const msg = w.find(`#m-${IDS.A_T2_M}`)
+    expect(msg.findAll('.md-spoiler')).toHaveLength(0)
+    expect(msg.findAll('p.md-line').map((p) => p.text())).toEqual(['seen ||hidden one', 'more hidden|| after'])
+  })
   it('spoilers start hidden and reveal on click and on keyboard', async () => {
     const { w } = await mountView(`/accolades/${IDS.A_T2}`)
     const s = w.find('.md-spoiler')

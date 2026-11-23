@@ -354,12 +354,9 @@ describe('LibMessage: the reply line', () => {
     expect(w.find('.lb-reply').text()).not.toContain('secret')
   })
 
-  it('masks a spoiler that runs over lines in the quote as one mask, and shows the words after it', () => {
-    const w = mountMsg(message({ replyTo: replyTo({ content: 'the answer is ||the secret\nmore secret|| and more' }) }))
-    expect(w.find('.lb-reply').text()).toBe('↪ replying to Ixen Calloway: the answer is ▒▒▒ and more')
-  })
-
-  it('masks the rest of the quote after a spoiler over lines that Discord may read more than one way', () => {
+  it('masks a spoiler that runs over lines in the quote, and the rest of the quote, as one mask', () => {
+    const plain = mountMsg(message({ replyTo: replyTo({ content: 'the answer is ||the secret\nmore secret|| and more' }) }))
+    expect(plain.find('.lb-reply').text()).toBe('↪ replying to Ixen Calloway: the answer is ▒▒▒')
     const w = mountMsg(message({ replyTo: replyTo({ content: 'the answer is ||the secret\n> quoted secret\n- listed secret|| and more' }) }))
     expect(w.find('.lb-reply').text()).toBe('↪ replying to Ixen Calloway: the answer is ▒▒▒')
   })
@@ -825,6 +822,17 @@ describe('LibMessage: Discord content is untrusted (hostile battery)', () => {
 
 
 describe('LibMessage: a spoiler that runs over lines', () => {
+  it('hides what the archive would show line by line: the same text is one hidden toggle here', () => {
+    const w = mountMsg(message({ content: 'seen ||hidden one\n**more** hidden|| after' }))
+    const units = w.findAll('.lb-body .md-spoiler')
+    expect(units).toHaveLength(1)
+    expect(units[0].attributes('aria-expanded')).toBe('false')
+    expect(units[0].text()).toContain('hidden one')
+    expect(units[0].text()).toContain('more hidden')
+    const shown = w.findAll('.lb-body p.md-line').filter((p) => !p.element.closest('.md-spoiler')).map((p) => p.text())
+    expect(shown).toEqual(['seen', 'after'])
+  })
+
   it('is one hidden toggle, with every line, link and mention of it inside', () => {
     const w = mountMsg(message({ content: `seen ||hidden one\n[the road](https://discord.com/channels/${GUILD}/${POST})\n- <@${IXEN}>|| seen too` }))
     const units = w.findAll('.lb-body .md-spoiler')

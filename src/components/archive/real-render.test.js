@@ -72,7 +72,7 @@ describe.skipIf(!present)('real export renders (local only)', () => {
         // Pruning never drops a live link: every one in the source is rendered (plus the ToC overlay's entries).
         const kind = (h) => classifyHref(h, archive.archive).kind
         const isToc = threadId === col.tocThreadId
-        const want = col.threads.get(threadId).messages.reduce((n, m) => n + liveRefs(parse(m.content ?? ''), kind).length, 0) + (isToc ? col.toc.insert.length : 0)
+        const want = col.threads.get(threadId).messages.reduce((n, m) => n + liveRefs(parse(m.content ?? '', { oneLine: true }), kind).length, 0) + (isToc ? col.toc.insert.length : 0)
         expect(w.findAll('.arch-msg a').length, `thread ${threadId}`).toBe(want)
         if (isToc) {
           expect(w.find('.arch-img-attachment').exists(), `toc ${threadId}`).toBe(false)

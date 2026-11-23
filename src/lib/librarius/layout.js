@@ -16,10 +16,10 @@
  *   with "…" so that it is no more than `max` characters (code points: no pair is cut in two). `max` is a whole number
  *   from 1; anything else is a RangeError. An excerpt is a preview, and a preview never shows a spoiler: each spoiler,
  *   wherever it sits (in bold, a quote, a list, a link's label), is "▒▒▒" whatever it hides, and the cut is made after.
- *   A spoiler that runs over lines is one "▒▒▒", and what follows its closer is shown. It fails closed: a `||` that no
- *   `||` closes (a preview cut the spoiler open, or it was escaped or is a lone bar) is masked from there to the end, and
- *   nothing after it is shown; so is all after a spoiler over lines closed at the last `||` of the message, which may be
- *   such an opener. In code a `||` is only text.
+ *   A spoiler that runs over lines is one "▒▒▒", and nothing after it is shown: it runs to the last `||` of the message,
+ *   which may open a spoiler a cut took the close of. It fails closed: a `||` that no `||` closes (a preview cut the
+ *   spoiler open, or it was escaped or is a lone bar) is masked from there to the end, and nothing after it is shown.
+ *   In code a `||` is only text.
  * firstUnread(messages, lastRead) → the id of the first message in the list that is newer than `lastRead`, or null.
  *   `lastRead` null or undefined means the reader has read nothing: null, and there is no divider.
  * isSpoilerFile(nameOrUrl) → whether a file name, or the last segment of an address's path (before any ? or #), begins

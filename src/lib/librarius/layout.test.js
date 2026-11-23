@@ -487,16 +487,18 @@ describe('excerpt', () => {
       // A secret begins with ZQ and plain text is digits, so no word of the plain text can be mistaken for one.
       const secret = fc.stringMatching(/^[a-z]{4,10}$/).map((word) => `ZQ${word}`)
       const plain = fc.stringMatching(/^[0-9]{1,8}$/)
-      const spoiler = secret.map((word) => ({ text: `||${word}||`, spoilers: 1 }))
+      // `sure`: the piece leaves its line certain (see markdown.js), so a spoiler over lines can't start there.
+      const spoiler = secret.map((word) => ({ text: `||${word}||`, spoilers: 1, sure: true }))
       const wrapped = fc.tuple(secret, fc.constantFrom('**', '__', '~~', '*', '_')).map(([word, mark]) => ({ text: `${mark}7 ||${word}|| x${mark}`, spoilers: 1 }))
       const linked = secret.map((word) => ({ text: `[a ||${word}|| b](https://example.org/${'q'.repeat(3)})`, spoilers: 1 }))
       const rich = secret.map((word) => ({ text: `||**${word}** https://${word.toLowerCase()}.example <@200000000000000410> \`${word}\`||`, spoilers: 1 }))
-      const words = plain.map((text) => ({ text, spoilers: 0 }))
+      const words = plain.map((text) => ({ text, spoilers: 0, sure: true }))
       const piece = fc.oneof(spoiler, wrapped, linked, rich, words)
       const prefix = fc.constantFrom('', '', '> ', '- ', '1. ', '# ', '-# ')
       const line = fc.tuple(prefix, fc.array(piece, { minLength: 1, maxLength: 5 })).map(([lead, pieces]) => ({
         text: lead + pieces.map((p) => p.text).join(' '),
         spoilers: pieces.reduce((n, p) => n + p.spoilers, 0),
+        sure: pieces.every((p) => p.sure),
       }))
       fc.assert(
         fc.property(fc.array(line, { minLength: 1, maxLength: 6 }), fc.integer({ min: 1, max: 200 }), (lines, max) => {
@@ -504,7 +506,10 @@ describe('excerpt', () => {
           expect(excerpt(content, max)).not.toMatch(/ZQ|zq/)
           const all = excerpt(content, 100_000)
           expect(all).not.toMatch(/ZQ|zq|secret/i)
-          expect(all.split(MASK).length - 1).toBe(lines.reduce((n, l) => n + l.spoilers, 0))
+          // A spoiler each, up to the first uncertain line; from there one mask to the end, if a later line has bars.
+          const u = lines.findIndex((l) => !l.sure)
+          const counted = u === -1 || u === lines.findLastIndex((l) => l.spoilers > 0) ? lines : lines.slice(0, u)
+          expect(all.split(MASK).length - 1).toBe(counted.reduce((n, l) => n + l.spoilers, 0) + (counted === lines ? 0 : 1))
         }),
         { numRuns: 300 },
       )
@@ -540,9 +545,10 @@ describe('excerpt', () => {
         expect(excerpt('first\n\n||second\n\nthird\n\nfourth||')).toBe(`first ${MASK}`)
       })
 
-      it('masks a spoiler that runs over lines as one mask, and shows what follows its closer', () => {
-        expect(excerpt('a ||secret\nmore secret|| after')).toBe(`a ${MASK} after`)
-        expect(excerpt('> a ||secret\n> more secret|| after')).toBe(`a ${MASK} after`)
+      it('masks a spoiler that runs over lines, and all after it, as one mask', () => {
+        expect(excerpt('a ||secret\nmore secret|| after')).toBe(`a ${MASK}`)
+        expect(excerpt('> a ||secret\n> more secret|| after')).toBe(`a ${MASK}`)
+        expect(excerpt('x ||b|| y\na ||secret\nmore secret|| after')).toBe(`x ${MASK} y a ${MASK}`)
       })
 
       it('masks to the end from a spoiler over lines the readings of Discord pair differently, closed at the last bar', () => {
