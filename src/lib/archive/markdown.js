@@ -15,7 +15,10 @@
  *     under every reading: it is no code, its pipes come in runs of one or two,
  *     it has an even number of bars with words (not blank) between each pair,
  *     it holds none of `` ` \ * _ ~ [ < ``, `://` or another line break, and
- *     none of `) > ]` from its first `||` on.
+ *     none of `) > ]` from its first `||` on. A Discord mention, channel, role,
+ *     emoji, timestamp or slash command (TOKEN) is a word there when it comes
+ *     before the first `||`, or after it with a space before its `>` on the
+ *     line and no `_` in it.
  *   - The lines before the first line that is not certain parse as they always
  *     did. From the first `||` of that line to the last `||` of the message,
  *     when that is on a later line, all is one `spoiler` node (`lastBar: true`,
@@ -28,16 +31,26 @@
  * address, a title) or pairs them within the line, each bar with the next, as
  * the site's one-line parse does, and ends the line with none open. So before
  * U a reading hides at most what the site hides there. Nothing else can, as a
- * certain line has no mark that starts a construct, nor one that ends one
- * after its first bar (what ends before it held none of the line's bars):
+ * certain line has no mark that starts a construct (but in a token, below),
+ * nor one that ends one after its first bar (what ends before it held none of
+ * the line's bars):
  *   code and code blocks start and end at `` ` ``; spans at `*`, `_` (`__`),
  *   `~` (`~~`); an escape is `\`; a link or an image starts at `[` (`![`) and
  *   ends at `)`, its title and its `( … )` address lying between the brackets
  *   and that `)`, so `"`, `'` and `(` need no place; an angle form (autolink,
- *   mailto, mention, emoji, timestamp) starts at `<` and ends at `>`; a
- *   reference link would end at `]`; a bare address starts at `://`, cannot
- *   cross a line break, but may hold bars; a quote, heading, subtext or list
- *   item is a block of whole lines, which ends no spoiler a line leaves closed.
+ *   mailto) starts at `<` and ends at `>`; a reference link would end at `]`; a
+ *   bare address starts at `://`, cannot cross a line break, but may hold bars;
+ *   a quote, heading, subtext or list item is a block of whole lines, which
+ *   ends no spoiler a line leaves closed.
+ *   A token lies on one line and holds no bar, and of those marks only `<`,
+ *   `>` and, in a name, `_`. Read whole, it is a word. A reading that reads
+ *   into it may start an angle form at its `<`, which ends at its own `>` and
+ *   is neither (no `:/`, nothing before its `@`), or a span at a `_`; a `_` may
+ *   end a span, and its `>` an angle form, begun before it. Before the first
+ *   bar, what it ends held none of the bars, and a span it starts ends before
+ *   them too, or covers the rest of the line (no `_` comes after the first
+ *   bar). After the first bar it has no `_`, and an angle form ending at its
+ *   `>` would hold the space before that `>`, which no autolink or mailto can.
  * (2) No reading hides anything after the last `||` L: a hidden stretch ends at
  * a bar. (3) Nor anything on U before its first `||`, by (1). So all a reading
  * hides lies before U, where the site hides as much, or from the first `||` of
@@ -137,12 +150,21 @@ function rolesOf(lines) {
 const UNSURE = /[`\\*_~[<\u2028\u2029\u0085\v\f]|:\/\//
 // Marks that only end one: a link's `)`, an angle form's `>`, a reference link's `]`. They start with `[` or `<`.
 const ENDS = /[)>\]]/
+// A Discord mention, channel, role, emoji, timestamp or slash command (see the comment at the top).
+const TOKEN = /<(?:@[!&]?\d{17,20}|#\d{17,20}|a?:[A-Za-z0-9_-]{1,32}:\d{17,20}|t:-?\d{1,17}(?::[tTdDfFR])?|\/[A-Za-z0-9_-]{1,32}(?: [A-Za-z0-9_-]{1,32})?:\d{17,20})>/g
 
 /** Whether every reading pairs the line's bars within it (see the comment at the top). */
 function certain(line, role) {
   if (!line.includes('||')) return true
-  if (role === CODE || UNSURE.test(line) || line.includes('|||') || ENDS.test(line.slice(line.indexOf('||')))) return false
-  const pieces = line.split('||')
+  const at = line.indexOf('||')
+  const space = line.indexOf(' ')
+  // A token that ends by the first bar, or one after it with a space before its `>` and no `_` in it, is read as a word.
+  const read = line.replace(TOKEN, (token, from) => {
+    const end = from + token.length
+    return end <= at || (space !== -1 && space < end && !token.includes('_')) ? 'x' : token
+  })
+  if (role === CODE || UNSURE.test(read) || read.includes('|||') || ENDS.test(read.slice(read.indexOf('||')))) return false
+  const pieces = read.split('||')
   return pieces.length % 2 === 1 && pieces.every((piece, k) => k % 2 === 0 || /\S/.test(piece))
 }
 
