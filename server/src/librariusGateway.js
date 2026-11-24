@@ -9,7 +9,8 @@
  * discord.gatewayBot() says where to connect and how many new sessions are left, and discord.isGatewayUrl(url) whether
  * an address is one the gateway may connect to (Discord's own gateways, wss:// on discord.gg: see librariusDiscord). Every
  * address is held to it before a socket is opened on it, the one gatewayBot() gives and the resume address READY gives
- * alike, so the token is sent nowhere else. onDispatch(t, d) is called, and
+ * alike, so the token is sent nowhere else; and the socket's address is built from the parsed, URL-encoded parts of
+ * the one taken, never from the text Discord sent (socketAddress, below). onDispatch(t, d) is called, and
  * awaited, for every dispatch (READY and RESUMED included), one at a time and in the order Discord sent them, with one
  * exception: INTERACTION_CREATE (the "Delete on site" command, which has to be answered within 3 seconds of the event) is
  * handed over the moment it comes, outside that line, since waiting behind the events before it (each may take up to
@@ -120,6 +121,44 @@ const needDelay = (value, name) => {
 
 // Stryker disable next-line BlockStatement: a message that is not JSON reads as null, or as undefined; the reader takes both for a message with no op
 const parse = (data) => { try { return JSON.parse(data) } catch { return null } }
+
+/**
+ * The address a socket is opened on for `base`, an address Discord sent (gatewayBot's url, or READY's
+ * resume_gateway_url) and isGatewayUrl took. It is built from the parts the URL parser reads in `base`, never from the
+ * text itself: the scheme is one of two constants, and the host, the port and each segment of the path go through
+ * encodeURIComponent, so that nothing in them can end the host or start a user part, a query or a fragment. The user
+ * part, query and fragment of `base` are dropped. Trailing slashes come off the path, as they always have, and QUERY goes
+ * after it. ws:// is there for the e2e mock, which serves its gateway over plain http; whether it may be used is for
+ * isGatewayUrl to say.
+ *
+ * An address of the form scheme://host[:port][/path] comes out as it was given, with QUERY after it. The host is the
+ * parser's: in lower case, and an IDNA host in punycode. A port that is the scheme's own (443, or 80 for ws://) goes
+ * without saying, as the parser leaves it out. An escape in the path (a % the parser left, or one it wrote for a space) is
+ * encoded again, so it names another path on the same host; Discord's addresses have no path, and the mock's, /gateway,
+ * has no escape.
+ * An IPv6 literal keeps its brackets in the parser's hostname, which encodeURIComponent writes out too, so the address no
+ * longer parses and the socket cannot be opened: that fails closed, and no address of Discord's is one.
+ *
+ * Throws a TypeError for a base that is not text, does not parse, or is not ws:// or wss://.
+ */
+function socketAddress(base) {
+  if (typeof base !== 'string') throw new TypeError('A gateway address must be text.')
+  let url
+  try {
+    url = new URL(base)
+  } catch {
+    // The parser's own error may quote the text it could not parse (Bun's does), and that text came from Discord.
+    throw new TypeError('A gateway address must be a URL.')
+  }
+  let scheme
+  if (url.protocol === 'wss:') scheme = 'wss://'
+  else if (url.protocol === 'ws:') scheme = 'ws://'
+  else throw new TypeError('A gateway address must be of the ws or wss scheme.')
+  const host = encodeURIComponent(url.hostname)
+  const port = url.port === '' ? '' : `:${encodeURIComponent(url.port)}`
+  const path = url.pathname.split('/').map((segment) => encodeURIComponent(segment)).join('/').replace(/\/+$/, '')
+  return `${scheme}${host}${port}${path}${QUERY}`
+}
 
 export function createGateway({
   discord,
@@ -249,7 +288,7 @@ export function createGateway({
     state = 'connecting'
     let ws
     try {
-      ws = new WebSocketImpl(`${base.replace(/\/+$/, '')}${QUERY}`)
+      ws = new WebSocketImpl(socketAddress(base))
     } catch (err) {
       couldNotConnect(err)
       return

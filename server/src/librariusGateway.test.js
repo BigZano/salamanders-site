@@ -820,6 +820,328 @@ describe("the addresses it connects to: Discord's own gateways only", () => {
   })
 })
 
+describe('the address a socket is opened on: built from the parsed, URL-encoded parts of the one Discord sent', () => {
+  // The address as it was built before: the text Discord sent, its trailing slashes cut off, and the query after it.
+  // Every ordinary address still comes out exactly so.
+  const before = (base) => `${base.replace(/\/+$/, '')}${QUERY}`
+  // A rule that takes anything, so that what is tested here is how the gateway builds an address that a client's rule
+  // has let through. The rule itself is tested above, and in librariusDiscord.
+  const ANYTHING = () => true
+  // What encodeURIComponent leaves as it is.
+  const PLAIN = /^[A-Za-z0-9_.!~*'()-]*$/
+  const DISCORD_HOST = /^(?:[a-z\d-]+\.)*discord\.gg$/
+  const refusal = (why) => `The Librarius gateway could not connect: TypeError: A gateway address must be ${why}`
+
+  /** A gateway under a rule that takes anything, started on `url` as gatewayBot gives it. */
+  async function startedOn(url) {
+    const r = rig({ isGatewayUrl: ANYTHING })
+    r.plan.push({ url, remaining: 1000, resetAfterMs: 0 })
+    await r.gateway.start()
+    return r
+  }
+
+  /** A gateway under a rule that takes anything, made ready with `url` as READY's resume address, then dropped. */
+  async function resumingOn(url) {
+    const r = rig({ isGatewayUrl: ANYTHING })
+    const sock = await ready(r, { url })
+    sock.drop(1006)
+    await tick(1000)
+    return r
+  }
+
+  // A host of DNS labels in lower case, a port that is not the scheme's own, and a path of segments of characters that
+  // neither the URL parser nor encodeURIComponent changes (and no `.` or `..` segment, which the parser resolves).
+  const ordinaryAddress = () => {
+    const label = fc.stringMatching(/^[a-z][a-z0-9-]{0,14}$/).filter((l) => !l.startsWith('xn--'))
+    const segment = fc.string({ unit: fc.constantFrom(...("ABCXYZabcxyz0189-_.!~*'()")), maxLength: 8 }).filter((s) => s !== '.' && s !== '..')
+    return fc
+      .record({
+        scheme: fc.constantFrom('ws', 'wss'),
+        labels: fc.array(label, { minLength: 1, maxLength: 4 }),
+        port: fc.option(fc.integer({ min: 0, max: 65535 }), { nil: null }),
+        segments: fc.array(segment, { maxLength: 4 }),
+        trailing: fc.nat(3),
+      })
+      .filter(({ scheme, port }) => port !== (scheme === 'wss' ? 443 : 80))
+      .map(({ scheme, labels, port, segments, trailing }) =>
+        `${scheme}://${labels.join('.')}${port === null ? '' : `:${port}`}${segments.map((s) => `/${s}`).join('')}${'/'.repeat(trailing)}`,
+      )
+  }
+
+  // Any text at all, and text after a scheme made of the pieces an address that smuggles a host would be made of.
+  const anyAddress = () => {
+    const pieces = [
+      'a', 'b', 'Z', '0', '9', '.', '-', '_', '~', '@', ':', '/', '\\', '?', '#', '[', ']', '%', '%2e', '%2E', '%40', '%5B', '%3A',
+      '%2F', '%00', ' ', '\t', '\n', '\r', '\u0000', '$', '&', '+', ',', ';', '=', '"', '{', '}', '`', "'", '(', ')', '*', '!',
+      '|', '^', '<', '>', '．', '。', 'ı', 'ß', 'і', 'á', '­', '​', '�', '\ud800',
+      'discord.gg', 'evil.test', '443', '65536', 'xn--', '::1',
+    ]
+    const schemes = ['wss://', 'ws://', 'WSS://', 'wss:', 'wss:/', 'wss:\\\\', 'wss:///', ' wss://', 'https://', 'http://', 'blob:wss://', '']
+    return fc.oneof(
+      fc.string({ unit: 'grapheme', maxLength: 40 }),
+      fc.tuple(fc.constantFrom(...schemes), fc.string({ unit: fc.constantFrom(...pieces), maxLength: 30 })).map(([scheme, rest]) => scheme + rest),
+    )
+  }
+
+  it('opens every ordinary address exactly as it was opened before: scheme, host, port and path, without trailing slashes', async () => {
+    await fc.assert(
+      fc.asyncProperty(ordinaryAddress(), async (base) => {
+        const r = await startedOn(base)
+        expect(r.sockets.map((s) => s.url)).toEqual([before(base)])
+        r.gateway.stop()
+      }),
+      { numRuns: 300 },
+    )
+  })
+
+  it('resumes on every ordinary address exactly as it resumed before', async () => {
+    await fc.assert(
+      fc.asyncProperty(ordinaryAddress(), async (base) => {
+        const r = await resumingOn(base)
+        expect(r.sockets.map((s) => s.url)).toEqual([`${GATEWAY}${QUERY}`, before(base)])
+        r.gateway.stop()
+      }),
+      { numRuns: 100 },
+    )
+  })
+
+  it("names, for any text, the very host the text names and no other, with no user part or fragment and only the gateway's query", async () => {
+    await fc.assert(
+      fc.asyncProperty(anyAddress(), async (raw) => {
+        const r = await startedOn(raw)
+        const parsed = URL.canParse(raw) ? new URL(raw) : null
+        if (parsed === null || (parsed.protocol !== 'ws:' && parsed.protocol !== 'wss:')) {
+          // Text that is not a ws:// or wss:// address opens nothing: the try fails, and is tried again after the backoff.
+          expect(r.sockets).toEqual([])
+          expect(r.gateway.status().state).toBe('waiting')
+          expect(r.gateway.status().lastError).toBe(refusal(parsed === null ? 'a URL.' : 'of the ws or wss scheme.'))
+          r.gateway.stop()
+          return
+        }
+        expect(r.sockets).toHaveLength(1)
+        const address = r.sockets[0].url
+        // Printable ASCII only: nothing a WebSocket would strip out of it, or read as the end of it.
+        expect(address).toMatch(/^[!-~]+$/)
+        expect(address.startsWith(`${parsed.protocol}//`)).toBe(true)
+        expect(address.endsWith(QUERY)).toBe(true)
+        const { hostname } = parsed
+        const port = parsed.port === '' ? '' : `:${parsed.port}`
+        if (hostname.startsWith('[')) {
+          // An IPv6 literal. A socket is made, but on an address that holds the host percent-encoded (its brackets and
+          // colons are written out), which does not parse: a WebSocket refuses it, and nothing is ever sent.
+          expect(address.startsWith(`${parsed.protocol}//${hostname}`)).toBe(false)
+          expect(URL.canParse(address)).toBe(false)
+          r.gateway.stop()
+          return
+        }
+        if (PLAIN.test(hostname)) {
+          // The host is written as the parser read it, and the port and a slash come straight after it.
+          expect(address.startsWith(`${parsed.protocol}//${hostname}${port}/`)).toBe(true)
+        } else {
+          // The host holds characters a host may hold but encodeURIComponent writes out ($, &, +, a comma, ;, =, ", {, },
+          // `). A socket is made, and the host in its address differs from the input's: it is percent-encoded.
+          expect(address.startsWith(`${parsed.protocol}//${hostname}`)).toBe(false)
+        }
+        // Read back, the address names the very host and port the text did (the parser decodes what was encoded), and
+        // nothing else: no user part, no fragment, and the gateway's query only.
+        const back = new URL(address)
+        expect(back.protocol).toBe(parsed.protocol)
+        expect(back.hostname).toBe(hostname)
+        expect(back.port).toBe(parsed.port)
+        expect(back.username).toBe('')
+        expect(back.password).toBe('')
+        expect(back.hash).toBe('')
+        expect(back.search).toBe('?v=10&encoding=json')
+        r.gateway.stop()
+      }),
+      { numRuns: 600 },
+    )
+  })
+
+  it("sends the token, under the client's real rule, only to Discord's hosts, whatever READY gives as the resume address", async () => {
+    const around = ['', '@', '#', '?', '/', '\\', '.', ':443', '%2e', '%40', '\t', '\r', ' ', 'evil.test', 'gateway.', '．', '[::1]']
+    const address = fc
+      .tuple(
+        fc.constantFrom('wss://', 'ws://', 'WSS://', 'wss:', 'wss:///'),
+        fc.array(fc.constantFrom(...around), { maxLength: 4 }),
+        fc.constantFrom('discord.gg', 'gateway.discord.gg', 'gateway-us-east1-b.discord.gg', 'evil.test'),
+        fc.array(fc.constantFrom(...around), { maxLength: 4 }),
+      )
+      .map(([scheme, lead, host, tail]) => `${scheme}${lead.join('')}${host}${tail.join('')}`)
+    await fc.assert(
+      fc.asyncProperty(address, async (url) => {
+        const r = rig({ isGatewayUrl: realRule() })
+        const LIVE = { url: 'wss://gateway.discord.gg', remaining: 1000, resetAfterMs: 0 }
+        r.plan.push(LIVE, LIVE)
+        const sock = await ready(r, { url })
+        sock.drop(1006)
+        await tick(1000)
+        const next = r.sockets.at(-1)
+        next.open()
+        hello(next)
+        expect(r.sockets).toHaveLength(2)
+        for (const s of r.sockets.filter((s) => s.raw.some((text) => text.includes(TOKEN)))) {
+          const { protocol, hostname } = new URL(s.url)
+          expect(protocol).toBe('wss:')
+          expect(hostname).toMatch(DISCORD_HOST)
+        }
+        // A resume address the rule took is resumed on, on the host it names.
+        if (resumes(next).length) expect(new URL(next.url).hostname).toBe(new URL(url).hostname)
+        r.gateway.stop()
+      }),
+      { numRuns: 300 },
+    )
+  })
+
+  // [what it holds, the address Discord sent, the address a socket is opened on, or null for none]
+  const hostile = [
+    ['a user part that names Discord before another host', 'wss://gateway.discord.gg@evil.test', `wss://evil.test${QUERY}`],
+    ['a user and a password', 'wss://member:secret@one.test:9000/gateway', `wss://one.test:9000/gateway${QUERY}`],
+    ['an empty user part', 'wss://@one.test', `wss://one.test${QUERY}`],
+    ['a backslash before an @', 'wss://evil.test\\@gateway.discord.gg', `wss://evil.test/%40gateway.discord.gg${QUERY}`],
+    ['a fragment that names another host', 'wss://gateway.discord.gg#@evil.test', `wss://gateway.discord.gg${QUERY}`],
+    ['a query that names another host', 'wss://gateway.discord.gg?x=@evil.test', `wss://gateway.discord.gg${QUERY}`],
+    ['a query of its own', 'wss://one.test/?v=6&encoding=etf', `wss://one.test${QUERY}`],
+    ['a path that names another host', 'wss://gateway.discord.gg/@evil.test', `wss://gateway.discord.gg/%40evil.test${QUERY}`],
+    ['a colon and an @ in the path', 'wss://one.test/a:b@c', `wss://one.test/a%3Ab%40c${QUERY}`],
+    ['percent-encoded dots in the host', 'wss://gateway%2Ediscord%2egg', `wss://gateway.discord.gg${QUERY}`],
+    ['a percent-encoded @ in the host', 'wss://gateway.discord.gg%40evil.test', null],
+    ['a percent-encoded colon in the host', 'wss://one.test%3A9000', null],
+    ['a percent-encoded slash in the host', 'wss://evil.test%2F.discord.gg', null],
+    ['fullwidth letters', 'wss://ｇａｔｅｗａｙ.discord.gg', `wss://gateway.discord.gg${QUERY}`],
+    ['a fullwidth full stop', 'wss://evil.test．discord.gg', `wss://evil.test.discord.gg${QUERY}`],
+    ['an ideographic full stop', 'wss://gateway。discord.gg', `wss://gateway.discord.gg${QUERY}`],
+    ['a Cyrillic letter that looks like a Latin one', 'wss://gateway.dіscord.gg', `wss://gateway.xn--dscord-pvf.gg${QUERY}`],
+    ['an accented letter', 'wss://gáteway.discord.gg', `wss://xn--gteway-pta.discord.gg${QUERY}`],
+    ['an IDNA host in punycode', 'wss://xn--gteway-pta.discord.gg', `wss://xn--gteway-pta.discord.gg${QUERY}`],
+    ['a soft hyphen, which IDNA drops', 'wss://gate­way.discord.gg', `wss://gateway.discord.gg${QUERY}`],
+    ['a host in upper case', 'wss://Gateway.Discord.GG', `wss://gateway.discord.gg${QUERY}`],
+    ['a scheme in upper case', 'WSS://one.test', `wss://one.test${QUERY}`],
+    ['no slashes after the scheme', 'wss:one.test', `wss://one.test${QUERY}`],
+    ['backslashes after the scheme', 'ws:\\\\one.test', `ws://one.test${QUERY}`],
+    ['no host', 'wss://', null],
+    ['three slashes before the host', 'wss:///x', `wss://x${QUERY}`],
+    ['a port and no host', 'wss://:443', null],
+    ['a user part and no host', 'wss://member@', null],
+    ['port 0', 'wss://one.test:0', `wss://one.test:0${QUERY}`],
+    ['port 65535', 'wss://one.test:65535', `wss://one.test:65535${QUERY}`],
+    ['port 65536', 'wss://one.test:65536', null],
+    ['a port of letters', 'wss://one.test:abc', null],
+    ['a port with a letter after it', 'wss://one.test:12a', null],
+    ['a negative port', 'wss://one.test:-1', null],
+    ['a port with a leading zero', 'wss://one.test:08080', `wss://one.test:8080${QUERY}`],
+    ["wss's own port, which goes without saying", 'wss://one.test:443', `wss://one.test${QUERY}`],
+    ["ws's own port, which goes without saying", 'ws://one.test:80', `ws://one.test${QUERY}`],
+    ["wss's port on ws", 'ws://one.test:443', `ws://one.test:443${QUERY}`],
+    ['a tab in the host', 'wss://gate\tway.discord.gg', `wss://gateway.discord.gg${QUERY}`],
+    ['a newline in the host', 'wss://gate\nway.discord.gg', `wss://gateway.discord.gg${QUERY}`],
+    ['a carriage return before an @', 'wss://gateway.discord.gg\r@evil.test', `wss://evil.test${QUERY}`],
+    ['a space in the host', 'wss://gate way.discord.gg', null],
+    ['a NUL in the host', 'wss://gate\u0000way.discord.gg', null],
+    ['a NUL before an @', 'wss://gateway.discord.gg\u0000@evil.test', `wss://evil.test${QUERY}`],
+    ['spaces around it', '  wss://one.test  ', `wss://one.test${QUERY}`],
+    ['a space in the path, which the parser escapes and the escape is encoded', 'wss://one.test/a b', `wss://one.test/a%2520b${QUERY}`],
+    ['an IPv4 address', 'wss://127.0.0.1:9000', `wss://127.0.0.1:9000${QUERY}`],
+    ['an IPv4 address in hex', 'wss://0x7f.1', `wss://127.0.0.1${QUERY}`],
+    ['dot segments in the path', 'wss://one.test/a/../../b/./c', `wss://one.test/b/c${QUERY}`],
+    ["the e2e mock's address with a slash after it", 'ws://discord-mock:4400/gateway/', `ws://discord-mock:4400/gateway${QUERY}`],
+    ['an https address', 'https://one.test', null],
+    ['an http address', 'http://one.test', null],
+    ['a file address', 'file:///etc/passwd', null],
+    ['a javascript address', 'javascript:alert(1)', null],
+    ['a blob of a wss address', 'blob:wss://one.test', null],
+    ['an empty string', '', null],
+    ['a scheme word alone', 'wss', null],
+  ]
+  const why = (url) => (URL.canParse(url) ? 'of the ws or wss scheme.' : 'a URL.')
+
+  it.each(hostile)('opens, for an address with %s, only the parsed host, or nothing', async (_what, url, expected) => {
+    const r = await startedOn(url)
+    if (expected === null) {
+      expect(r.sockets).toEqual([])
+      expect(r.gateway.status().state).toBe('waiting')
+      expect(r.gateway.status().lastError).toBe(refusal(why(url)))
+      // It is a failure like any other: the next try asks gatewayBot again, after the backoff.
+      await tick(1000)
+      expect(r.sockets.map((s) => s.url)).toEqual([`${GATEWAY}${QUERY}`])
+      return
+    }
+    expect(r.sockets.map((s) => s.url)).toEqual([expected])
+    expect(new URL(expected).hostname).toBe(new URL(url).hostname)
+    const sock = r.sockets[0]
+    sock.open()
+    hello(sock)
+    expect(identifies(sock)).toHaveLength(1)
+  })
+
+  it.each(hostile)('resumes, on a resume address with %s, on the parsed host only, or not at all', async (_what, url, expected) => {
+    const r = await resumingOn(url)
+    if (expected === null) {
+      expect(r.sockets).toHaveLength(1)
+      expect(r.gateway.status().state).toBe('waiting')
+      expect(r.gateway.status().lastError).toBe(refusal(why(url)))
+      expect(resumes(r.sockets[0])).toEqual([])
+      return
+    }
+    expect(r.sockets.map((s) => s.url)).toEqual([`${GATEWAY}${QUERY}`, expected])
+    const next = r.sockets[1]
+    next.open()
+    hello(next)
+    expect(resumes(next)).toEqual([{ op: 6, d: { token: TOKEN, session_id: SESSION, seq: 1 } }])
+  })
+
+  it.each([
+    ['a number', () => 5],
+    ['null', () => null],
+    ['nothing', () => undefined],
+    ['a list holding an address', () => ['wss://one.test']],
+    ['an object that prints as an address', () => ({ toString: () => 'wss://one.test' })],
+    ['a String object', () => new String('wss://one.test')],
+    ['a URL object', () => new URL('wss://one.test')],
+  ])('opens nothing for an address that is %s, even when the rule takes it', async (_what, make) => {
+    const r = await startedOn(make())
+    expect(r.sockets).toEqual([])
+    expect(r.gateway.status().state).toBe('waiting')
+    expect(r.gateway.status().lastError).toBe(refusal('text.'))
+  })
+
+  it('keeps the host of a very long address, and only that host', async () => {
+    const long = `wss://${`${'a'.repeat(63)}.`.repeat(4)}test${'/x'.repeat(50_000)}`
+    const label = `wss://${'b'.repeat(100_000)}.test:9000`
+    const users = `wss://${'gateway.discord.gg@'.repeat(10_000)}evil.test`
+    const r = await startedOn(long)
+    expect(r.sockets.map((s) => s.url)).toEqual([before(long)])
+    const s = await startedOn(label)
+    expect(s.sockets.map((sock) => sock.url)).toEqual([before(label)])
+    const t = await startedOn(users)
+    expect(t.sockets.map((sock) => sock.url)).toEqual([`wss://evil.test${QUERY}`])
+  })
+
+  it('fails closed on an IPv6 literal: its brackets are encoded, so the address does not parse and a WebSocket refuses it', async () => {
+    const r = await startedOn('wss://[::1]:9000/gateway')
+    expect(r.sockets.map((s) => s.url)).toEqual([`wss://%5B%3A%3A1%5D:9000/gateway${QUERY}`])
+    expect(URL.canParse(r.sockets[0].url)).toBe(false)
+
+    // A socket that, like a real WebSocket, throws a SyntaxError for an address it cannot parse.
+    const made = []
+    class Parsing extends FakeSocket {
+      constructor(url) {
+        if (!URL.canParse(url)) throw new SyntaxError('The address cannot be parsed.')
+        super(url)
+        made.push(this)
+      }
+    }
+    const p = rig({ isGatewayUrl: ANYTHING, WebSocketImpl: Parsing })
+    p.plan.push({ url: 'wss://[::1]', remaining: 1000, resetAfterMs: 0 })
+    await p.gateway.start()
+    expect(made).toEqual([])
+    expect(p.gateway.status().state).toBe('waiting')
+    expect(p.gateway.status().lastError).toBe('The Librarius gateway could not connect: SyntaxError: The address cannot be parsed.')
+    await tick(1000)
+    expect(made.map((sock) => sock.url)).toEqual([`${GATEWAY}${QUERY}`])
+  })
+})
+
 describe('identifying and resuming', () => {
   it('identifies at HELLO with the token, the intents and the client properties', async () => {
     const r = rig()
