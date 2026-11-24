@@ -1545,7 +1545,7 @@ describe('scanInWorker: the one child process, the real one', () => {
   const IPC = { stdio: ['ignore', 'ignore', 'inherit', 'ipc'], serialization: 'json', env: {} }
   const WORKER = new URL('./librariusRegexWorker.js', import.meta.url).href
   // A child that is made by a script of the test, in place of the one of the module.
-  const standIn = (script) => () => spawn(process.execPath, ['--input-type=module', '-e', script], IPC)
+  const standIn = (script, ...args) => () => spawn(process.execPath, ['--input-type=module', '-e', script, ...args], IPC)
   // The module's own child, with what the test needs to know of each: its pid, and the time it was over.
   function recording(make = spawnRegexWorker) {
     const children = []
@@ -1627,7 +1627,7 @@ describe('scanInWorker: the one child process, the real one', () => {
   })
 
   it('does not count the time a child takes to start in the budget of its first job', async () => {
-    const { children, scan } = recording(standIn(`setTimeout(() => import(${JSON.stringify(WORKER)}), 600)`))
+    const { children, scan } = recording(standIn('setTimeout(() => import(process.argv[1]), 600)', WORKER))
     const started = performance.now()
     expect(await scan(FAST)).toEqual(FAST_FOUND)
     expect(performance.now() - started).toBeGreaterThanOrEqual(600)

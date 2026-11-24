@@ -280,7 +280,7 @@ describe('DeathwatchNavSheet: its CSS and its JS agree', () => {
   const tokens = readFileSync(join(here, '..', '..', 'style.css'), 'utf8')
   const token = (name) => Number(tokens.match(new RegExp(`--${name}:\\s*(\\d+)ms;`))?.[1])
   const rule = (selector) =>
-    sheet.match(new RegExp(`(^|\\n)${selector.replace(/[.[\]():]/g, '\\$&')}\\s*\\{([^}]*)\\}`))?.[2] ?? ''
+    sheet.match(new RegExp(`(^|\\n)${selector.replace(/[\\.[\]():]/g, '\\$&')}\\s*\\{([^}]*)\\}`))?.[2] ?? ''
 
   it('slides out for as long as --dur-view, which is SLIDE_MS', () => {
     expect(Number(sheet.match(/const SLIDE_MS = (\d+)/)?.[1])).toBe(token('dur-view'))

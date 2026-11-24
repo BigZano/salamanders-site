@@ -127,7 +127,7 @@ describe('deathwatch.css', () => {
 
 // One copy of the spoiler's look, for every page (Notable Members, the Fortress Lore, Recruitment).
 describe('a spoiler in a page text', () => {
-  const rule = (sel) => css.match(new RegExp(`(^|\\n)${sel.replace(/[.()]/g, '\\$&')}\\s*\\{([^}]*)\\}`))?.[2] ?? ''
+  const rule = (sel) => css.match(new RegExp(`(^|\\n)${sel.replace(/[\\.()]/g, '\\$&')}\\s*\\{([^}]*)\\}`))?.[2] ?? ''
   it('is blurred until opened, and shows a focus ring', () => {
     expect(rule('.dw .nm-spl')).toMatch(/filter:\s*blur\(/)
     expect(rule('.dw .nm-spl.open')).toMatch(/filter:\s*none/)

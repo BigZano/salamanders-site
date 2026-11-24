@@ -6,7 +6,7 @@ import { withoutHoverMedia } from '../../test-utils/css'
 // The layout promises of the Reliquarium (single column on a phone, 16px gutters, 44px tap targets, no control that
 // needs a hover) live in one stylesheet, so they are pinned there. The motion rules are swept by motionPolicy.test.js.
 const css = readFileSync(fileURLToPath(new URL('./gallery.css', import.meta.url)), 'utf8')
-const rule = (selector) => new RegExp(`(?:^|\\n)${selector.replace(/[.[\]()]/g, '\\$&')}\\s*\\{([^}]*)\\}`).exec(css)?.[1] ?? ''
+const rule = (selector) => new RegExp(`(?:^|\\n)${selector.replace(/[\\.[\]()]/g, '\\$&')}\\s*\\{([^}]*)\\}`).exec(css)?.[1] ?? ''
 const media = (query) => {
   const at = css.indexOf(`@media ${query} {`)
   if (at === -1) return ''

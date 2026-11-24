@@ -7,7 +7,7 @@ import { withoutHoverMedia } from '../../test-utils/css'
 // and how text from Discord is kept from disturbing what is beside it, pinned in the one stylesheet. The motion rules
 // are swept by motionPolicy.test.js.
 const css = readFileSync(fileURLToPath(new URL('./librarius.css', import.meta.url)), 'utf8')
-const rule = (selector) => new RegExp(`(?:^|\\n)${selector.replace(/[.[\]()*>:]/g, '\\$&')}\\s*\\{([^}]*)\\}`).exec(css)?.[1] ?? ''
+const rule = (selector) => new RegExp(`(?:^|\\n)${selector.replace(/[\\.[\]()*>:]/g, '\\$&')}\\s*\\{([^}]*)\\}`).exec(css)?.[1] ?? ''
 const withoutComments = css.replace(/\/\*[\s\S]*?\*\//g, '')
 
 describe('librarius.css', () => {
