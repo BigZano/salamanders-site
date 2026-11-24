@@ -2107,7 +2107,8 @@ describe('automodMatcher: keywords of several pieces and joiners that are no let
     // Not a property that holds for want of the cases it is about: replies the allow list held before and refuses now, and replies it holds.
     expect(flips).toBeGreaterThan(30)
     expect(held).toBeGreaterThan(300)
-  })
+    // 3,000 runs, each checked against the plain list of every span three times: some 6 s under coverage, past vitest's 5 s default.
+  }, 25_000)
 
   it('answers as it did for an allow list whose entries have no `*` inside, or one, which have no middle piece (the property)', () => {
     let held = 0

@@ -1987,7 +1987,8 @@ describe('toDiscord: a part that starts inside a line', () => {
       // The cut fell before the piece in some of the texts, or the test says nothing.
       expect(cutBefore).toBeGreaterThan(0)
     }
-  })
+    // 360 replies of 6,000 to 10,000 characters, each cut: under 3 s in the whole suite under coverage, too near vitest's 5 s default.
+  }, 15_000)
 
   it('writes the start of a part that starts inside a line after its mark on the same line, escaped as a line start is', () => {
     // 1774 characters of part 1 are `rank NNN - brother ` of 19: the cut before `- brother` comes after `rank 0.. `.
@@ -2527,7 +2528,8 @@ describe('toDiscord: a reply with no place to cut that leaves each mark somethin
         }
       }
     }
-  })
+    // 1,200 replies near the room of a part, each cut: some 5 s in the whole suite under coverage, past vitest's 5 s default.
+  }, 25_000)
 })
 
 describe('budget', () => {
